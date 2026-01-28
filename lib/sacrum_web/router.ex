@@ -32,6 +32,16 @@ defmodule SacrumWeb.Router do
       resources "/workflows", WorkflowController, except: [:new, :edit] do
         resources "/steps", WorkflowStepController, except: [:new, :edit, :show]
       end
+
+      resources "/tasks", TaskController, except: [:new, :edit] do
+        resources "/sections", TaskSectionController, except: [:new, :edit, :show]
+        resources "/refs", CodeRefController, only: [:index, :create, :delete]
+
+        put "/parent", TaskRelationshipController, :set_parent
+        delete "/parent", TaskRelationshipController, :remove_parent
+        resources "/dependencies", TaskRelationshipController, only: [:create, :delete]
+        get "/blockers", TaskRelationshipController, :blockers
+      end
     end
   end
 

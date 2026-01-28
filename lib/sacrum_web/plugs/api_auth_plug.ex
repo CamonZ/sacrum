@@ -30,8 +30,7 @@ defmodule SacrumWeb.Plugs.ApiAuthPlug do
   def call(conn, _opts) do
     with {:ok, token} <- extract_token(conn),
          {:ok, user} <- Auth.verify_token(token) do
-      # Update last_used_at asynchronously to not block the request
-      Task.start(fn -> Auth.update_token_last_used(token) end)
+      Auth.update_token_last_used(token)
 
       conn
       |> assign(:current_user, user)
