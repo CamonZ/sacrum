@@ -28,7 +28,11 @@ defmodule SacrumWeb.Router do
   scope "/api", SacrumWeb do
     pipe_through :api_authenticated
 
-    resources "/projects", ProjectController, except: [:new, :edit]
+    resources "/projects", ProjectController, except: [:new, :edit] do
+      resources "/workflows", WorkflowController, except: [:new, :edit] do
+        resources "/steps", WorkflowStepController, except: [:new, :edit, :show]
+      end
+    end
   end
 
   # Enable LiveDashboard and Swoosh mailbox preview in development
