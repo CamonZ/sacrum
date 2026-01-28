@@ -14,6 +14,7 @@ defmodule Sacrum.Repo.Schemas.User do
     field :password, :string, virtual: true, redact: true
 
     has_many :api_tokens, Sacrum.Repo.Schemas.ApiToken
+    has_many :projects, Sacrum.Repo.Schemas.Project
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -27,7 +28,9 @@ defmodule Sacrum.Repo.Schemas.User do
     |> validate_required([:email, :username, :password])
     |> validate_format(:email, ~r/^[^\s]+@[^\s]+$/, message: "must be a valid email")
     |> validate_length(:username, min: 3, max: 30)
-    |> validate_format(:username, ~r/^[a-zA-Z0-9_]+$/, message: "must contain only letters, numbers, and underscores")
+    |> validate_format(:username, ~r/^[a-zA-Z0-9_]+$/,
+      message: "must contain only letters, numbers, and underscores"
+    )
     |> validate_length(:password, min: 8)
     |> unique_constraint(:email)
     |> unique_constraint(:username)
@@ -42,7 +45,9 @@ defmodule Sacrum.Repo.Schemas.User do
     |> cast(attrs, [:email, :username, :name])
     |> validate_format(:email, ~r/^[^\s]+@[^\s]+$/, message: "must be a valid email")
     |> validate_length(:username, min: 3, max: 30)
-    |> validate_format(:username, ~r/^[a-zA-Z0-9_]+$/, message: "must contain only letters, numbers, and underscores")
+    |> validate_format(:username, ~r/^[a-zA-Z0-9_]+$/,
+      message: "must contain only letters, numbers, and underscores"
+    )
     |> unique_constraint(:email)
     |> unique_constraint(:username)
   end

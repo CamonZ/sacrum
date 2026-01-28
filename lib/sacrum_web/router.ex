@@ -25,10 +25,11 @@ defmodule SacrumWeb.Router do
     get "/", PageController, :home
   end
 
-  # Other scopes may use custom stacks.
-  # scope "/api", SacrumWeb do
-  #   pipe_through :api
-  # end
+  scope "/api", SacrumWeb do
+    pipe_through :api_authenticated
+
+    resources "/projects", ProjectController, except: [:new, :edit]
+  end
 
   # Enable LiveDashboard and Swoosh mailbox preview in development
   if Application.compile_env(:sacrum, :dev_routes) do
