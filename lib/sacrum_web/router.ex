@@ -14,6 +14,11 @@ defmodule SacrumWeb.Router do
     plug :accepts, ["json"]
   end
 
+  pipeline :api_authenticated do
+    plug :accepts, ["json"]
+    plug SacrumWeb.Plugs.ApiAuthPlug
+  end
+
   scope "/", SacrumWeb do
     pipe_through :browser
 
