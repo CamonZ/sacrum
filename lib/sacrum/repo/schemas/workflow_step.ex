@@ -1,0 +1,38 @@
+defmodule Sacrum.Repo.Schemas.WorkflowStep do
+  use Ecto.Schema
+  import Ecto.Changeset
+
+  @primary_key {:id, :binary_id, autogenerate: true}
+  @foreign_key_type :binary_id
+
+  schema "workflow_steps" do
+    field :name, :string
+    field :goal, :string
+    field :agents, {:array, :string}, default: []
+    field :skills, {:array, :string}, default: []
+    field :agent_config, :map, default: %{}
+    field :is_final, :boolean, default: false
+    field :step_order, :integer
+
+    belongs_to :workflow, Sacrum.Repo.Schemas.Workflow
+
+    timestamps(type: :utc_datetime_usec)
+  end
+
+  @create_fields ~w(name goal agents skills agent_config is_final step_order)a
+  @update_fields ~w(name goal agents skills agent_config is_final step_order)a
+
+  def create_changeset(step, attrs) do
+    step
+    |> cast(attrs, @create_fields)
+    |> validate_required([:name])
+    |> validate_length(:name, min: 1, max: 255)
+    |> foreign_key_constraint(:workflow_id)
+  end
+
+  def update_changeset(step, attrs) do
+    step
+    |> cast(attrs, @update_fields)
+    |> validate_length(:name, min: 1, max: 255)
+  end
+end

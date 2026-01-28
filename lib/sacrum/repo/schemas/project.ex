@@ -11,6 +11,7 @@ defmodule Sacrum.Repo.Schemas.Project do
     field :description, :string
 
     belongs_to :user, Sacrum.Repo.Schemas.User
+    has_many :workflows, Sacrum.Repo.Schemas.Workflow
 
     timestamps(type: :utc_datetime_usec)
   end
