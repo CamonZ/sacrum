@@ -14,4 +14,11 @@ defmodule SacrumWeb.FallbackController do
     |> put_view(json: SacrumWeb.ErrorJSON)
     |> render(:"404")
   end
+
+  def call(conn, {:error, :unprocessable_entity, message}) do
+    conn
+    |> put_status(:unprocessable_entity)
+    |> put_view(json: SacrumWeb.ErrorJSON)
+    |> json(%{errors: %{detail: message}})
+  end
 end
