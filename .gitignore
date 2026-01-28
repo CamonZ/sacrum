@@ -35,3 +35,7 @@ sacrum-*.tar
 npm-debug.log
 /assets/node_modules/
 /.vtb
+/PROMPT.md
+/DONE.txt
+/ITERATION.txt
+/ralph.sh
