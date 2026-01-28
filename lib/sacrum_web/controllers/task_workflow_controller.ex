@@ -27,7 +27,11 @@ defmodule SacrumWeb.TaskWorkflowController do
     end
   end
 
-  def assign(conn, %{"project_id" => project_id, "task_id" => task_id, "workflow_id" => workflow_id}) do
+  def assign(conn, %{
+        "project_id" => project_id,
+        "task_id" => task_id,
+        "workflow_id" => workflow_id
+      }) do
     with {:ok, _project} <- authorize_project(project_id, conn.assigns.current_user),
          {:ok, %Task{} = task} <- find_task(task_id),
          {:ok, workflow} <- Workflows.get(workflow_id),

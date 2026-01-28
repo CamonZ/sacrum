@@ -108,13 +108,43 @@ defmodule Sacrum.Repo.Tasks do
     %Task{project_id: project_id}
     |> Task.create_changeset(attrs)
     |> Repo.insert()
+    |> broadcast(:task_created)
   end
 
   def update(%Task{} = task, attrs) do
     task
     |> Task.update_changeset(attrs)
     |> Repo.update()
+    |> broadcast(:task_updated)
   end
 
-  def delete(%Task{} = task), do: Repo.delete(task)
+  def delete(%Task{} = task) do
+    case Repo.delete(task) do
+      {:ok, deleted_task} ->
+        broadcast_event(deleted_task, :task_deleted)
+        {:ok, deleted_task}
+
+      error ->
+        error
+    end
+  end
+
+  defp broadcast({:ok, task}, event) do
+    broadcast_event(task, event)
+    {:ok, task}
+  end
+
+  defp broadcast({:error, _} = error, _event), do: error
+
+  defp broadcast_event(task, event) do
+    task = Repo.preload(task, :project)
+
+    case task.project do
+      %Project{slug: slug} ->
+        apply(SacrumWeb.ProjectChannel, :"broadcast_#{event}", [slug, task])
+
+      _ ->
+        :ok
+    end
+  end
 end

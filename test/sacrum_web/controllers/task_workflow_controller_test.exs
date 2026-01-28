@@ -57,9 +57,13 @@ defmodule SacrumWeb.TaskWorkflowControllerTest do
 
     test "assigns workflow and returns task with workflow_id", ctx do
       conn =
-        post(ctx.conn, ~p"/api/projects/#{ctx.project.id}/tasks/#{ctx.task.id}/assign_workflow", %{
-          workflow_id: ctx.workflow.id
-        })
+        post(
+          ctx.conn,
+          ~p"/api/projects/#{ctx.project.id}/tasks/#{ctx.task.id}/assign_workflow",
+          %{
+            workflow_id: ctx.workflow.id
+          }
+        )
 
       assert %{
                "data" => %{

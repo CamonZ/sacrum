@@ -7,6 +7,7 @@ defmodule Sacrum.Repo.TaskWorkflows do
   alias Ecto.Multi
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{Task, Workflow, WorkflowStep, StepExecution, StepTransition}
+  alias Sacrum.Repo.Schemas.Project
 
   @doc """
   Assigns a workflow to a task, setting current_step_id to the workflow's initial step.
@@ -21,8 +22,12 @@ defmodule Sacrum.Repo.TaskWorkflows do
       |> Multi.insert(:step_execution, step_execution_attrs(task.id, workflow.id, initial_step))
       |> Repo.transaction()
       |> case do
-        {:ok, %{task: task}} -> {:ok, task}
-        {:error, _op, changeset, _changes} -> {:error, changeset}
+        {:ok, %{task: task}} ->
+          broadcast_workflow_changed(task)
+          {:ok, task}
+
+        {:error, _op, changeset, _changes} ->
+          {:error, changeset}
       end
     end
   end
@@ -79,8 +84,12 @@ defmodule Sacrum.Repo.TaskWorkflows do
         |> Multi.insert(:step_execution, step_execution_attrs(task.id, task.workflow_id, to_step))
         |> Repo.transaction()
         |> case do
-          {:ok, %{task: task}} -> {:ok, task}
-          {:error, _op, changeset, _changes} -> {:error, changeset}
+          {:ok, %{task: task}} ->
+            broadcast_workflow_changed(task)
+            {:ok, task}
+
+          {:error, _op, changeset, _changes} ->
+            {:error, changeset}
         end
     end
   end
@@ -114,8 +123,12 @@ defmodule Sacrum.Repo.TaskWorkflows do
         )
         |> Repo.transaction()
         |> case do
-          {:ok, %{task: task}} -> {:ok, task}
-          {:error, _op, changeset, _changes} -> {:error, changeset}
+          {:ok, %{task: task}} ->
+            broadcast_workflow_changed(task)
+            {:ok, task}
+
+          {:error, _op, changeset, _changes} ->
+            {:error, changeset}
         end
     end
   end
@@ -175,10 +188,26 @@ defmodule Sacrum.Repo.TaskWorkflows do
           )
           |> Repo.transaction()
           |> case do
-            {:ok, %{task: task}} -> {:ok, task}
-            {:error, _op, changeset, _changes} -> {:error, changeset}
+            {:ok, %{task: task}} ->
+              broadcast_workflow_changed(task)
+              {:ok, task}
+
+            {:error, _op, changeset, _changes} ->
+              {:error, changeset}
           end
         end
+    end
+  end
+
+  defp broadcast_workflow_changed(task) do
+    task = Repo.preload(task, :project)
+
+    case task.project do
+      %Project{slug: slug} ->
+        SacrumWeb.ProjectChannel.broadcast_workflow_changed(slug, task)
+
+      _ ->
+        :ok
     end
   end
 end
