@@ -49,7 +49,11 @@ defmodule SacrumWeb.Router do
         post "/advance", TaskWorkflowController, :advance
         post "/retreat", TaskWorkflowController, :retreat
         post "/reject", TaskWorkflowController, :reject
+
+        resources "/executions", StepExecutionController, only: [:index]
       end
+
+      resources "/executions", StepExecutionController, only: [:show]
     end
   end
 
