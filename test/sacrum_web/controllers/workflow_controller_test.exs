@@ -151,6 +151,80 @@ defmodule SacrumWeb.WorkflowControllerTest do
     end
   end
 
+  describe "PATCH /api/workflows/:id with transitions" do
+    setup :setup_authenticated
+
+    test "returns workflow with transitions in response", %{conn: conn, project: project} do
+      {:ok, wf1} = Workflows.insert(project, %{name: "Source"})
+      {:ok, wf2} = Workflows.insert(project, %{name: "Target"})
+
+      conn =
+        patch(conn, ~p"/api/workflows/#{wf1.id}", %{
+          transitions: [
+            %{to_workflow_id: wf2.id, label: "on_done"}
+          ]
+        })
+
+      assert %{
+               "data" => %{
+                 "transitions" => [
+                   %{
+                     "to_workflow_id" => to_id,
+                     "label" => "on_done"
+                   }
+                 ]
+               }
+             } = json_response(conn, 200)
+
+      assert to_id == wf2.id
+    end
+
+    test "empty transitions list removes all existing transitions", %{
+      conn: conn,
+      project: project
+    } do
+      {:ok, wf1} = Workflows.insert(project, %{name: "Source"})
+      {:ok, wf2} = Workflows.insert(project, %{name: "Target"})
+
+      alias Sacrum.Repo.WorkflowTransitions
+
+      {:ok, _} =
+        WorkflowTransitions.insert(%{from_workflow_id: wf1.id, to_workflow_id: wf2.id})
+
+      conn = patch(conn, ~p"/api/workflows/#{wf1.id}", %{transitions: []})
+
+      assert %{"data" => %{"transitions" => []}} = json_response(conn, 200)
+    end
+
+    test "returns 422 for duplicate to_workflow_id entries", %{conn: conn, project: project} do
+      {:ok, wf1} = Workflows.insert(project, %{name: "Source"})
+      {:ok, wf2} = Workflows.insert(project, %{name: "Target"})
+
+      conn =
+        patch(conn, ~p"/api/workflows/#{wf1.id}", %{
+          transitions: [
+            %{to_workflow_id: wf2.id, label: "first"},
+            %{to_workflow_id: wf2.id, label: "second"}
+          ]
+        })
+
+      assert json_response(conn, 422)
+    end
+
+    test "returns 422 for non-existent to_workflow_id", %{conn: conn, project: project} do
+      {:ok, wf1} = Workflows.insert(project, %{name: "Source"})
+
+      conn =
+        patch(conn, ~p"/api/workflows/#{wf1.id}", %{
+          transitions: [
+            %{to_workflow_id: Ecto.UUID.generate(), label: "broken"}
+          ]
+        })
+
+      assert json_response(conn, 422)
+    end
+  end
+
   describe "DELETE /api/workflows/:id" do
     setup :setup_authenticated
 

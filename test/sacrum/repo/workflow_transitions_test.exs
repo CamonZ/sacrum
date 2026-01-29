@@ -73,4 +73,94 @@ defmodule Sacrum.Repo.WorkflowTransitionsTest do
       assert {:error, :not_found} = WorkflowTransitions.get(transition.id)
     end
   end
+
+  describe "sync_transitions/2" do
+    test "adds new transitions" do
+      {_project, w1, w2} = create_workflows()
+
+      {:ok, transitions} =
+        Workflows.sync_transitions(w1, [
+          %{"to_workflow_id" => w2.id, "label" => "promote"}
+        ])
+
+      assert length(transitions) == 1
+      assert hd(transitions).to_workflow_id == w2.id
+      assert hd(transitions).label == "promote"
+    end
+
+    test "removes transitions not in the incoming list" do
+      {_project, w1, w2} = create_workflows()
+
+      {:ok, _} =
+        WorkflowTransitions.insert(%{
+          from_workflow_id: w1.id,
+          to_workflow_id: w2.id,
+          label: "old"
+        })
+
+      {:ok, transitions} = Workflows.sync_transitions(w1, [])
+
+      assert transitions == []
+    end
+
+    test "updates changed transitions" do
+      {_project, w1, w2} = create_workflows()
+
+      {:ok, _} =
+        WorkflowTransitions.insert(%{
+          from_workflow_id: w1.id,
+          to_workflow_id: w2.id,
+          label: "old_label"
+        })
+
+      {:ok, transitions} =
+        Workflows.sync_transitions(w1, [
+          %{"to_workflow_id" => w2.id, "label" => "new_label"}
+        ])
+
+      assert length(transitions) == 1
+      assert hd(transitions).label == "new_label"
+    end
+
+    test "handles mixed add/remove/update in one call" do
+      {:ok, user} =
+        Users.insert(%{email: "mix@example.com", username: "mixuser", password: "password123"})
+
+      {:ok, project} = Projects.insert(user, %{name: "Mix Project"})
+      {:ok, w1} = Workflows.insert(project, %{name: "Source"})
+      {:ok, w2} = Workflows.insert(project, %{name: "Target A"})
+      {:ok, w3} = Workflows.insert(project, %{name: "Target B"})
+      {:ok, w4} = Workflows.insert(project, %{name: "Target C"})
+
+      # Start with transitions to w2 and w3
+      {:ok, _} =
+        WorkflowTransitions.insert(%{from_workflow_id: w1.id, to_workflow_id: w2.id, label: "a"})
+
+      {:ok, _} =
+        WorkflowTransitions.insert(%{from_workflow_id: w1.id, to_workflow_id: w3.id, label: "b"})
+
+      # Sync: keep w3 (updated label), remove w2, add w4
+      {:ok, transitions} =
+        Workflows.sync_transitions(w1, [
+          %{"to_workflow_id" => w3.id, "label" => "updated_b"},
+          %{"to_workflow_id" => w4.id, "label" => "c"}
+        ])
+
+      target_ids = Enum.map(transitions, & &1.to_workflow_id) |> Enum.sort()
+      assert target_ids == Enum.sort([w3.id, w4.id])
+
+      updated = Enum.find(transitions, &(&1.to_workflow_id == w3.id))
+      assert updated.label == "updated_b"
+    end
+
+    test "returns error for duplicate to_workflow_id in transitions" do
+      {_project, w1, w2} = create_workflows()
+
+      {:error, _changeset} =
+        Workflows.sync_transitions(w1, [
+          %{"to_workflow_id" => w2.id, "label" => "first"},
+          %{"to_workflow_id" => w2.id, "label" => "second"}
+        ])
+    end
+  end
 end

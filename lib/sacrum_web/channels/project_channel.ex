@@ -64,24 +64,6 @@ defmodule SacrumWeb.ProjectChannel do
     )
   end
 
-  # Workflow transition broadcasts
-
-  def broadcast_workflow_transition_created(project_slug, transition) do
-    SacrumWeb.Endpoint.broadcast(
-      "project:#{project_slug}",
-      "workflow_transition_created",
-      workflow_transition_payload(transition)
-    )
-  end
-
-  def broadcast_workflow_transition_deleted(project_slug, transition) do
-    SacrumWeb.Endpoint.broadcast(
-      "project:#{project_slug}",
-      "workflow_transition_deleted",
-      %{id: transition.id}
-    )
-  end
-
   # Step broadcasts
 
   def broadcast_step_created(project_slug, step) do
@@ -200,18 +182,6 @@ defmodule SacrumWeb.ProjectChannel do
       project_id: workflow.project_id,
       inserted_at: workflow.inserted_at,
       updated_at: workflow.updated_at
-    }
-  end
-
-  defp workflow_transition_payload(transition) do
-    %{
-      id: transition.id,
-      from_workflow_id: transition.from_workflow_id,
-      to_workflow_id: transition.to_workflow_id,
-      target_step_id: transition.target_step_id,
-      label: transition.label,
-      inserted_at: transition.inserted_at,
-      updated_at: transition.updated_at
     }
   end
 

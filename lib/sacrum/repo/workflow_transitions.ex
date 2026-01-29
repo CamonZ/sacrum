@@ -42,36 +42,9 @@ defmodule Sacrum.Repo.WorkflowTransitions do
     %WorkflowTransition{}
     |> WorkflowTransition.create_changeset(attrs)
     |> Repo.insert()
-    |> broadcast(:workflow_transition_created)
   end
 
   def delete(%WorkflowTransition{} = transition) do
-    case Repo.delete(transition) do
-      {:ok, deleted} ->
-        broadcast_event(deleted, :workflow_transition_deleted)
-        {:ok, deleted}
-
-      error ->
-        error
-    end
-  end
-
-  defp broadcast({:ok, transition}, event) do
-    broadcast_event(transition, event)
-    {:ok, transition}
-  end
-
-  defp broadcast({:error, _} = error, _event), do: error
-
-  defp broadcast_event(transition, event) do
-    transition = Repo.preload(transition, from_workflow: :project)
-
-    case transition do
-      %{from_workflow: %{project: %{slug: slug}}} ->
-        apply(SacrumWeb.ProjectChannel, :"broadcast_#{event}", [slug, transition])
-
-      _ ->
-        :ok
-    end
+    Repo.delete(transition)
   end
 end

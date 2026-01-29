@@ -51,9 +51,6 @@ defmodule SacrumWeb.Router do
       resources "/executions", StepExecutionController, only: [:index]
     end
 
-    resources "/workflow-transitions", WorkflowTransitionController,
-      only: [:index, :create, :delete]
-
     resources "/executions", StepExecutionController, only: [:show] do
       resources "/logs", SessionLogController, only: [:index]
     end

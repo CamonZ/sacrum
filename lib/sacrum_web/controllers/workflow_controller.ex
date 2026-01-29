@@ -44,7 +44,8 @@ defmodule SacrumWeb.WorkflowController do
   def update(conn, %{"id" => id} = params) do
     with {:ok, %Workflow{} = workflow} <- Workflows.get(id),
          :ok <- authorize_workflow_owner(workflow, conn.assigns.current_user),
-         {:ok, %Workflow{} = updated} <- Workflows.update(workflow, params) do
+         {:ok, %Workflow{} = updated} <- Workflows.update(workflow, params),
+         {:ok, updated} <- maybe_sync_transitions(updated, params) do
       render(conn, :show, workflow: updated)
     end
   end
@@ -76,4 +77,17 @@ defmodule SacrumWeb.WorkflowController do
       {:error, :not_found}
     end
   end
+
+  defp maybe_sync_transitions(workflow, %{"transitions" => transitions})
+       when is_list(transitions) do
+    case Workflows.sync_transitions(workflow, transitions) do
+      {:ok, _transitions} ->
+        {:ok, Sacrum.Repo.preload(workflow, :transitions, force: true)}
+
+      {:error, changeset} ->
+        {:error, changeset}
+    end
+  end
+
+  defp maybe_sync_transitions(workflow, _params), do: {:ok, workflow}
 end
