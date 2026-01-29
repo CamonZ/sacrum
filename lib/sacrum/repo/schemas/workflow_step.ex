@@ -16,6 +16,8 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
 
     belongs_to :workflow, Sacrum.Repo.Schemas.Workflow
 
+    has_many :transitions, Sacrum.Repo.Schemas.StepTransition, foreign_key: :from_step_id
+
     timestamps(type: :utc_datetime_usec)
   end
 

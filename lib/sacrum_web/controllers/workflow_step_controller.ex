@@ -11,7 +11,10 @@ defmodule SacrumWeb.WorkflowStepController do
   def index(conn, %{"workflow_id" => workflow_id}) do
     with {:ok, workflow} <- Workflows.get(workflow_id),
          :ok <- authorize_step_owner_via_workflow(workflow, conn.assigns.current_user) do
-      steps = WorkflowSteps.list(workflow)
+      steps =
+        WorkflowSteps.list(workflow)
+        |> Sacrum.Repo.preload(:transitions)
+
       render(conn, :index, steps: steps)
     end
   end
@@ -19,6 +22,7 @@ defmodule SacrumWeb.WorkflowStepController do
   def show(conn, %{"id" => id}) do
     with {:ok, %WorkflowStep{} = step} <- WorkflowSteps.get(id),
          :ok <- authorize_step_owner(step, conn.assigns.current_user) do
+      step = Sacrum.Repo.preload(step, :transitions)
       render(conn, :show, step: step)
     end
   end
@@ -36,8 +40,19 @@ defmodule SacrumWeb.WorkflowStepController do
   def update(conn, %{"id" => id} = params) do
     with {:ok, %WorkflowStep{} = step} <- WorkflowSteps.get(id),
          :ok <- authorize_step_owner(step, conn.assigns.current_user),
-         {:ok, %WorkflowStep{} = updated} <- WorkflowSteps.update(step, params) do
+         {:ok, %WorkflowStep{} = updated} <- WorkflowSteps.update(step, params),
+         {:ok, %WorkflowStep{} = updated} <- maybe_sync_transitions(updated, params) do
+      updated = Sacrum.Repo.preload(updated, :transitions)
       render(conn, :show, step: updated)
+    else
+      {:error, :duplicate_to_step_ids} ->
+        {:error, :unprocessable_entity, "transitions array contains duplicate to_step_id entries"}
+
+      {:error, :different_workflows} ->
+        {:error, :unprocessable_entity, "to_step_id must belong to the same workflow"}
+
+      other ->
+        other
     end
   end
 
@@ -68,4 +83,13 @@ defmodule SacrumWeb.WorkflowStepController do
       {:error, :not_found}
     end
   end
+
+  defp maybe_sync_transitions(step, %{"transitions" => transitions}) when is_list(transitions) do
+    case WorkflowSteps.sync_transitions(step, transitions) do
+      {:ok, _transitions} -> {:ok, step}
+      error -> error
+    end
+  end
+
+  defp maybe_sync_transitions(step, _params), do: {:ok, step}
 end
