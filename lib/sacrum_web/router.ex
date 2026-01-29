@@ -33,6 +33,9 @@ defmodule SacrumWeb.Router do
         resources "/steps", WorkflowStepController, except: [:new, :edit, :show]
       end
 
+      resources "/workflow-transitions", WorkflowTransitionController,
+        only: [:index, :create, :delete]
+
       get "/tasks/ready", TaskController, :ready
 
       resources "/tasks", TaskController, except: [:new, :edit] do

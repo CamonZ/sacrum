@@ -27,6 +27,17 @@ defmodule Sacrum.Repo.WorkflowTransitions do
     |> Repo.all()
   end
 
+  def list_for_project(project_id) when is_binary(project_id) do
+    from(t in WorkflowTransition,
+      join: w in Workflow,
+      on: w.id == t.from_workflow_id,
+      where: w.project_id == ^project_id,
+      preload: [:from_workflow, :to_workflow],
+      order_by: [asc: t.inserted_at]
+    )
+    |> Repo.all()
+  end
+
   def insert(attrs) do
     %WorkflowTransition{}
     |> WorkflowTransition.create_changeset(attrs)
