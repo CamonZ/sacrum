@@ -58,4 +58,39 @@ defmodule SacrumWeb.WorkflowStepController do
       send_resp(conn, :no_content, "")
     end
   end
+
+  # Flat routes
+
+  def show_flat(conn, %{"id" => id}) do
+    with {:ok, %WorkflowStep{} = step} <- WorkflowSteps.get(id),
+         :ok <- authorize_step_owner(step, conn.assigns.current_user) do
+      render(conn, :show, step: step)
+    end
+  end
+
+  def update_flat(conn, %{"id" => id} = params) do
+    with {:ok, %WorkflowStep{} = step} <- WorkflowSteps.get(id),
+         :ok <- authorize_step_owner(step, conn.assigns.current_user),
+         {:ok, %WorkflowStep{} = updated} <- WorkflowSteps.update(step, params) do
+      render(conn, :show, step: updated)
+    end
+  end
+
+  def delete_flat(conn, %{"id" => id}) do
+    with {:ok, %WorkflowStep{} = step} <- WorkflowSteps.get(id),
+         :ok <- authorize_step_owner(step, conn.assigns.current_user),
+         {:ok, _} <- WorkflowSteps.delete(step) do
+      send_resp(conn, :no_content, "")
+    end
+  end
+
+  defp authorize_step_owner(%WorkflowStep{} = step, user) do
+    step = Sacrum.Repo.preload(step, workflow: :project)
+
+    if step.workflow && step.workflow.project && step.workflow.project.user_id == user.id do
+      :ok
+    else
+      {:error, :not_found}
+    end
+  end
 end

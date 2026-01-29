@@ -62,6 +62,19 @@ defmodule SacrumWeb.Router do
         resources "/logs", SessionLogController, only: [:index]
       end
     end
+
+    # Flat routes for individual resource access (no project_id in URL)
+    get "/tasks/:id", TaskController, :show_flat
+    patch "/tasks/:id", TaskController, :update_flat
+    delete "/tasks/:id", TaskController, :delete_flat
+
+    get "/workflows/:id", WorkflowController, :show_flat
+    patch "/workflows/:id", WorkflowController, :update_flat
+    delete "/workflows/:id", WorkflowController, :delete_flat
+
+    get "/workflow-steps/:id", WorkflowStepController, :show_flat
+    patch "/workflow-steps/:id", WorkflowStepController, :update_flat
+    delete "/workflow-steps/:id", WorkflowStepController, :delete_flat
   end
 
   # Enable LiveDashboard and Swoosh mailbox preview in development

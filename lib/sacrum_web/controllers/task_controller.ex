@@ -71,7 +71,8 @@ defmodule SacrumWeb.TaskController do
   def update(conn, %{"project_id" => project_id, "id" => id} = params) do
     with {:ok, _project} <- authorize_project(project_id, conn.assigns.current_user),
          {:ok, %Task{} = task} <- find_task(id),
-         {:ok, %Task{} = updated} <- Tasks.update(task, params) do
+         {:ok, %Task{} = updated} <- Tasks.update(task, params),
+         :ok <- handle_nested_updates(updated, params) do
       render(conn, :show, task: updated)
     end
   end
@@ -81,6 +82,42 @@ defmodule SacrumWeb.TaskController do
          {:ok, %Task{} = task} <- find_task(id),
          {:ok, _} <- Tasks.delete(task) do
       send_resp(conn, :no_content, "")
+    end
+  end
+
+  # Flat routes (no project_id in URL, ownership validated via task.project)
+
+  def show_flat(conn, %{"id" => id}) do
+    with {:ok, %Task{} = task} <- find_task(id),
+         :ok <- authorize_task_owner(task, conn.assigns.current_user) do
+      render(conn, :show, task: task)
+    end
+  end
+
+  def update_flat(conn, %{"id" => id} = params) do
+    with {:ok, %Task{} = task} <- find_task(id),
+         :ok <- authorize_task_owner(task, conn.assigns.current_user),
+         {:ok, %Task{} = updated} <- Tasks.update(task, params),
+         :ok <- handle_nested_updates(updated, params) do
+      render(conn, :show, task: updated)
+    end
+  end
+
+  def delete_flat(conn, %{"id" => id}) do
+    with {:ok, %Task{} = task} <- find_task(id),
+         :ok <- authorize_task_owner(task, conn.assigns.current_user),
+         {:ok, _} <- Tasks.delete(task) do
+      send_resp(conn, :no_content, "")
+    end
+  end
+
+  defp authorize_task_owner(%Task{} = task, user) do
+    task = Sacrum.Repo.preload(task, :project)
+
+    if task.project && task.project.user_id == user.id do
+      :ok
+    else
+      {:error, :not_found}
     end
   end
 
@@ -110,4 +147,71 @@ defmodule SacrumWeb.TaskController do
 
   defp maybe_add_root_only_filter(opts, "true"), do: Keyword.put(opts, :root_only, true)
   defp maybe_add_root_only_filter(opts, _), do: opts
+
+  defp handle_nested_updates(task, params) do
+    with :ok <- maybe_set_parent(task, params),
+         :ok <- maybe_set_dependencies(task, params) do
+      :ok
+    end
+  end
+
+  defp maybe_set_parent(_task, %{"parent_id" => nil}) do
+    :ok
+  end
+
+  defp maybe_set_parent(task, %{"parent_id" => parent_id}) do
+    case Tasks.get(parent_id) do
+      {:ok, parent} ->
+        # Remove existing parent first if any
+        Sacrum.Repo.TaskHierarchy.remove_parent(task)
+
+        case Sacrum.Repo.TaskHierarchy.set_parent(task, parent) do
+          {:ok, _} -> :ok
+          error -> error
+        end
+
+      error ->
+        error
+    end
+  end
+
+  defp maybe_set_parent(_task, _params), do: :ok
+
+  defp maybe_set_dependencies(task, %{"depends_on_ids" => ids}) when is_list(ids) do
+    # Get current dependencies
+    current = Sacrum.Repo.TaskDependencies.get_direct_blockers(task)
+    current_ids = MapSet.new(Enum.map(current, & &1.id))
+    desired_ids = MapSet.new(ids)
+
+    # Remove dependencies that are no longer desired
+    to_remove = MapSet.difference(current_ids, desired_ids)
+
+    for id <- to_remove do
+      case Tasks.get(id) do
+        {:ok, dep} -> Sacrum.Repo.TaskDependencies.remove_dependency(task, dep)
+        _ -> :ok
+      end
+    end
+
+    # Add new dependencies
+    to_add = MapSet.difference(desired_ids, current_ids)
+
+    results =
+      for id <- to_add do
+        case Tasks.get(id) do
+          {:ok, dep} -> Sacrum.Repo.TaskDependencies.add_dependency(task, dep)
+          error -> error
+        end
+      end
+
+    case Enum.find(results, fn
+           {:error, _} -> true
+           _ -> false
+         end) do
+      nil -> :ok
+      error -> error
+    end
+  end
+
+  defp maybe_set_dependencies(_task, _params), do: :ok
 end

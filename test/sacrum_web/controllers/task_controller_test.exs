@@ -143,6 +143,7 @@ defmodule SacrumWeb.TaskControllerTest do
     setup :setup_authenticated
 
     test "filters by status (workflow step name)", %{conn: conn, project: project} do
+      # Create a workflow with a step
       {:ok, workflow} = Sacrum.Repo.Workflows.insert(project, %{name: "Test Workflow"})
 
       {:ok, step} =
@@ -305,6 +306,96 @@ defmodule SacrumWeb.TaskControllerTest do
         )
 
       assert json_response(conn, 404)
+    end
+  end
+
+  describe "flat routes - GET/PATCH/DELETE /api/tasks/:id" do
+    setup :setup_authenticated
+
+    test "GET /api/tasks/:id returns task", %{conn: conn, project: project} do
+      {:ok, task} = Tasks.insert(project, %{title: "Flat Task"})
+
+      conn = get(conn, ~p"/api/tasks/#{task.id}")
+      assert %{"data" => %{"title" => "Flat Task"}} = json_response(conn, 200)
+    end
+
+    test "PATCH /api/tasks/:id updates task", %{conn: conn, project: project} do
+      {:ok, task} = Tasks.insert(project, %{title: "Original"})
+
+      conn = patch(conn, ~p"/api/tasks/#{task.id}", %{title: "Updated"})
+      assert %{"data" => %{"title" => "Updated"}} = json_response(conn, 200)
+    end
+
+    test "DELETE /api/tasks/:id deletes task", %{conn: conn, project: project} do
+      {:ok, task} = Tasks.insert(project, %{title: "To Delete"})
+
+      conn = delete(conn, ~p"/api/tasks/#{task.id}")
+      assert response(conn, 204)
+    end
+
+    test "returns 404 for another user's task", %{conn: _conn, project: _project} do
+      # Create a different user's task
+      {:ok, other_user} =
+        Sacrum.Repo.Users.insert(%{
+          email: "other@example.com",
+          username: "other",
+          password: "password123"
+        })
+
+      {:ok, other_project} = Sacrum.Repo.Projects.insert(other_user, %{name: "Other"})
+      {:ok, other_task} = Tasks.insert(other_project, %{title: "Other Task"})
+
+      # Authenticate as the first user
+      {:ok, user} =
+        Sacrum.Repo.Users.insert(%{
+          email: "me@example.com",
+          username: "meuser",
+          password: "password123"
+        })
+
+      {:ok, token, _} = Sacrum.Auth.create_api_token(user)
+      conn = build_conn() |> put_req_header("authorization", "Bearer #{token}")
+
+      conn = get(conn, ~p"/api/tasks/#{other_task.id}")
+      assert json_response(conn, 404)
+    end
+  end
+
+  describe "PATCH with nested parent_id and depends_on_ids" do
+    setup :setup_authenticated
+
+    test "sets parent_id via task update", %{conn: conn, project: project} do
+      {:ok, parent} = Tasks.insert(project, %{title: "Parent"})
+      {:ok, child} = Tasks.insert(project, %{title: "Child"})
+
+      conn =
+        put(conn, ~p"/api/projects/#{project.id}/tasks/#{child.id}", %{
+          title: "Child",
+          parent_id: parent.id
+        })
+
+      assert json_response(conn, 200)
+
+      # Verify parent was set
+      {:ok, found_parent} = Sacrum.Repo.TaskHierarchy.get_parent(child)
+      assert found_parent.id == parent.id
+    end
+
+    test "sets depends_on_ids via task update", %{conn: conn, project: project} do
+      {:ok, dep1} = Tasks.insert(project, %{title: "Dep 1"})
+      {:ok, dep2} = Tasks.insert(project, %{title: "Dep 2"})
+      {:ok, task} = Tasks.insert(project, %{title: "Task"})
+
+      conn =
+        put(conn, ~p"/api/projects/#{project.id}/tasks/#{task.id}", %{
+          title: "Task",
+          depends_on_ids: [dep1.id, dep2.id]
+        })
+
+      assert json_response(conn, 200)
+
+      blockers = Sacrum.Repo.TaskDependencies.get_direct_blockers(task)
+      assert length(blockers) == 2
     end
   end
 end
