@@ -133,7 +133,64 @@ defmodule Sacrum.Repo.TaskWorkflows do
     end
   end
 
+  @doc """
+  Rejects a task by setting rejection_reason and transitioning to a rejected step.
+  If the workflow has an on_reject_workflow, transitions to that workflow's initial step.
+  Otherwise, looks for a step named "rejected" in the current workflow.
+  """
+  def reject_task(%Task{workflow_id: nil}, _reason), do: {:error, :no_workflow}
+
+  def reject_task(%Task{} = task, reason) do
+    task = Repo.preload(task, workflow: [:on_reject_workflow, :workflow_steps])
+
+    case resolve_reject_target(task.workflow) do
+      {:ok, target_workflow_id, target_step} ->
+        Multi.new()
+        |> Multi.update(
+          :task,
+          task
+          |> Ecto.Changeset.change(%{
+            rejection_reason: reason,
+            workflow_id: target_workflow_id,
+            current_step_id: target_step.id
+          })
+        )
+        |> Multi.insert(
+          :step_execution,
+          step_execution_attrs(task.id, target_workflow_id, target_step)
+        )
+        |> Repo.transaction()
+        |> case do
+          {:ok, %{task: task}} ->
+            broadcast_workflow_changed(task)
+            {:ok, task}
+
+          {:error, _op, changeset, _changes} ->
+            {:error, changeset}
+        end
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
   # Private helpers
+
+  defp resolve_reject_target(%Workflow{on_reject_workflow: %Workflow{} = reject_wf}) do
+    reject_wf = Repo.preload(reject_wf, :workflow_steps)
+
+    case resolve_initial_step(reject_wf) do
+      {:ok, step} -> {:ok, reject_wf.id, step}
+      error -> error
+    end
+  end
+
+  defp resolve_reject_target(%Workflow{id: workflow_id, workflow_steps: steps}) do
+    case Enum.find(steps, &(&1.name == "rejected")) do
+      nil -> {:error, :no_rejected_step}
+      step -> {:ok, workflow_id, step}
+    end
+  end
 
   defp resolve_initial_step(%Workflow{initial_step_id: step_id})
        when not is_nil(step_id) do

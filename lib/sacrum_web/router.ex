@@ -48,6 +48,7 @@ defmodule SacrumWeb.Router do
         delete "/assign_workflow", TaskWorkflowController, :unassign
         post "/advance", TaskWorkflowController, :advance
         post "/retreat", TaskWorkflowController, :retreat
+        post "/reject", TaskWorkflowController, :reject
       end
     end
   end

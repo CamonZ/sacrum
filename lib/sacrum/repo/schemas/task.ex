@@ -15,7 +15,8 @@ defmodule Sacrum.Repo.Schemas.Task do
     :needs_human_review,
     :review_comment,
     :started_at,
-    :completed_at
+    :completed_at,
+    :revision_feedback
   ]
 
   schema "tasks" do
@@ -27,6 +28,8 @@ defmodule Sacrum.Repo.Schemas.Task do
     field :tags, {:array, :string}, default: []
     field :needs_human_review, :boolean, default: false
     field :review_comment, :string
+    field :rejection_reason, :string
+    field :revision_feedback, :string
     field :started_at, :utc_datetime_usec
     field :completed_at, :utc_datetime_usec
 

@@ -89,4 +89,25 @@ defmodule SacrumWeb.TaskWorkflowController do
         other
     end
   end
+
+  def reject(conn, %{"project_id" => project_id, "task_id" => task_id} = params) do
+    reason = params["reason"] || params["rejection_reason"]
+
+    with {:ok, _project} <- authorize_project(project_id, conn.assigns.current_user),
+         {:ok, %Task{} = task} <- find_task(task_id),
+         {:ok, %Task{} = updated} <- TaskWorkflows.reject_task(task, reason) do
+      conn
+      |> put_view(json: SacrumWeb.TaskJSON)
+      |> render(:show, task: updated)
+    else
+      {:error, :no_workflow} ->
+        {:error, :unprocessable_entity, "task has no workflow assigned"}
+
+      {:error, :no_rejected_step} ->
+        {:error, :unprocessable_entity, "workflow has no rejected step or on_reject_workflow"}
+
+      other ->
+        other
+    end
+  end
 end

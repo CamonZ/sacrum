@@ -158,4 +158,61 @@ defmodule SacrumWeb.TaskWorkflowControllerTest do
       assert %{"errors" => %{"detail" => _}} = json_response(conn, 422)
     end
   end
+
+  describe "POST /api/projects/:pid/tasks/:tid/reject" do
+    setup [:setup_authenticated]
+
+    setup %{project: project} = context do
+      {:ok, workflow} = Workflows.insert(project, %{name: "Rejectable Workflow"})
+      {:ok, step1} = WorkflowSteps.insert(workflow, %{name: "backlog", step_order: 1})
+
+      {:ok, rejected_step} =
+        WorkflowSteps.insert(workflow, %{name: "rejected", step_order: 99, is_final: true})
+
+      {:ok, workflow} = Workflows.update(workflow, %{initial_step_id: step1.id})
+      {:ok, task} = Tasks.insert(project, %{title: "Rejectable Task"})
+
+      Map.merge(context, %{
+        workflow: workflow,
+        rejected_step: rejected_step,
+        task: task
+      })
+    end
+
+    test "rejects task and sets rejection_reason", ctx do
+      # Assign workflow first
+      post(
+        ctx.conn,
+        ~p"/api/projects/#{ctx.project.id}/tasks/#{ctx.task.id}/assign_workflow",
+        %{workflow_id: ctx.workflow.id}
+      )
+
+      conn =
+        post(
+          ctx.conn,
+          ~p"/api/projects/#{ctx.project.id}/tasks/#{ctx.task.id}/reject",
+          %{reason: "Does not meet requirements"}
+        )
+
+      assert %{
+               "data" => %{
+                 "rejection_reason" => "Does not meet requirements",
+                 "current_step_id" => step_id
+               }
+             } = json_response(conn, 200)
+
+      assert step_id == ctx.rejected_step.id
+    end
+
+    test "returns 422 when task has no workflow", ctx do
+      conn =
+        post(
+          ctx.conn,
+          ~p"/api/projects/#{ctx.project.id}/tasks/#{ctx.task.id}/reject",
+          %{reason: "Bad"}
+        )
+
+      assert %{"errors" => %{"detail" => _}} = json_response(conn, 422)
+    end
+  end
 end

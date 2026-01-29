@@ -23,6 +23,8 @@ defmodule SacrumWeb.TaskJSON do
       current_step_id: task.current_step_id,
       needs_human_review: task.needs_human_review,
       review_comment: task.review_comment,
+      rejection_reason: task.rejection_reason,
+      revision_feedback: task.revision_feedback,
       started_at: task.started_at,
       completed_at: task.completed_at,
       inserted_at: task.inserted_at,
