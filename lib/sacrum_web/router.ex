@@ -37,7 +37,6 @@ defmodule SacrumWeb.Router do
     get "/tasks/ready", TaskController, :ready
 
     resources "/tasks", TaskController, except: [:new, :edit] do
-      resources "/sections", TaskSectionController, except: [:new, :edit, :show]
       resources "/refs", CodeRefController, only: [:index, :create, :delete]
 
       get "/blockers", TaskController, :blockers

@@ -2,6 +2,8 @@ defmodule Sacrum.Repo.Schemas.Task do
   use Ecto.Schema
   import Ecto.Changeset
 
+  alias Sacrum.Repo.Schemas.TaskSection
+
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
@@ -37,7 +39,7 @@ defmodule Sacrum.Repo.Schemas.Task do
     belongs_to :workflow, Sacrum.Repo.Schemas.Workflow
     belongs_to :current_step, Sacrum.Repo.Schemas.WorkflowStep
 
-    has_many :sections, Sacrum.Repo.Schemas.TaskSection
+    has_many :sections, Sacrum.Repo.Schemas.TaskSection, on_replace: :delete
     has_many :code_refs, Sacrum.Repo.Schemas.CodeRef
 
     timestamps(type: :utc_datetime_usec)
@@ -47,6 +49,7 @@ defmodule Sacrum.Repo.Schemas.Task do
     task
     |> cast(attrs, @create_fields)
     |> validate_required([:title])
+    |> cast_assoc(:sections, with: &TaskSection.changeset/2)
     |> maybe_generate_short_id()
     |> unique_constraint(:short_id)
     |> foreign_key_constraint(:project_id)
@@ -56,6 +59,7 @@ defmodule Sacrum.Repo.Schemas.Task do
     task
     |> cast(attrs, @update_fields)
     |> validate_required([:title])
+    |> cast_assoc(:sections, with: &TaskSection.changeset/2)
   end
 
   defp maybe_generate_short_id(changeset) do

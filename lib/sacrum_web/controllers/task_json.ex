@@ -38,6 +38,7 @@ defmodule SacrumWeb.TaskJSON do
       revision_feedback: task.revision_feedback,
       parent_id: get_parent_id(task),
       dependency_ids: get_dependency_ids(task),
+      sections: render_sections(task),
       started_at: task.started_at,
       completed_at: task.completed_at,
       inserted_at: task.inserted_at,
@@ -57,6 +58,23 @@ defmodule SacrumWeb.TaskJSON do
     |> TaskDependencies.get_direct_blockers()
     |> Enum.map(& &1.id)
   end
+
+  defp render_sections(%Task{sections: sections}) when is_list(sections) do
+    Enum.map(sections, fn section ->
+      %{
+        id: section.id,
+        section_type: section.section_type,
+        content: section.content,
+        section_order: section.section_order,
+        done: section.done,
+        done_at: section.done_at,
+        inserted_at: section.inserted_at,
+        updated_at: section.updated_at
+      }
+    end)
+  end
+
+  defp render_sections(_), do: []
 
   def blockers(%{tasks: tasks}) do
     %{data: for(task <- tasks, do: blocker_data(task))}

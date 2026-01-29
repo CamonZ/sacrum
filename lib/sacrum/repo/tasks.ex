@@ -12,16 +12,16 @@ defmodule Sacrum.Repo.Tasks do
   def get(id) do
     case Repo.get(Task, id) do
       nil -> {:error, :not_found}
-      task -> {:ok, task}
+      task -> {:ok, Repo.preload(task, :sections)}
     end
   end
 
-  def get!(id), do: Repo.get!(Task, id)
+  def get!(id), do: Repo.get!(Task, id) |> Repo.preload(:sections)
 
   def get_by_short_id(short_id) do
     case Repo.get_by(Task, short_id: short_id) do
       nil -> {:error, :not_found}
-      task -> {:ok, task}
+      task -> {:ok, Repo.preload(task, :sections)}
     end
   end
 
@@ -58,6 +58,7 @@ defmodule Sacrum.Repo.Tasks do
     |> apply_filter(:root_only, opts[:root_only])
     |> apply_filter(:workflow_id, opts[:workflow_id])
     |> order_by([t], asc: t.inserted_at)
+    |> preload(:sections)
     |> Repo.all()
   end
 
@@ -160,14 +161,20 @@ defmodule Sacrum.Repo.Tasks do
     %Task{project_id: project_id}
     |> Task.create_changeset(attrs)
     |> Repo.insert()
+    |> preload_sections()
     |> broadcast(:task_created)
   end
 
   def update(%Task{} = task, attrs) do
-    task
-    |> Task.update_changeset(attrs)
-    |> Repo.update()
-    |> broadcast(:task_updated)
+    task = Repo.preload(task, :sections)
+
+    with :ok <- validate_section_ownership(task, attrs) do
+      task
+      |> Task.update_changeset(attrs)
+      |> Repo.update()
+      |> preload_sections()
+      |> broadcast(:task_updated)
+    end
   end
 
   def delete(%Task{} = task) do
@@ -180,6 +187,35 @@ defmodule Sacrum.Repo.Tasks do
         error
     end
   end
+
+  defp validate_section_ownership(%Task{} = task, %{"sections" => sections})
+       when is_list(sections) do
+    existing_ids = MapSet.new(Enum.map(task.sections, &to_string(&1.id)))
+
+    incoming_ids =
+      sections
+      |> Enum.map(& &1["id"])
+      |> Enum.reject(&is_nil/1)
+      |> MapSet.new(&to_string/1)
+
+    foreign_ids = MapSet.difference(incoming_ids, existing_ids)
+
+    if MapSet.size(foreign_ids) == 0 do
+      :ok
+    else
+      changeset =
+        task
+        |> Ecto.Changeset.change()
+        |> Ecto.Changeset.add_error(:sections, "contain IDs not belonging to this task")
+
+      {:error, changeset}
+    end
+  end
+
+  defp validate_section_ownership(_task, _attrs), do: :ok
+
+  defp preload_sections({:ok, task}), do: {:ok, Repo.preload(task, :sections, force: true)}
+  defp preload_sections(error), do: error
 
   defp broadcast({:ok, task}, event) do
     broadcast_event(task, event)

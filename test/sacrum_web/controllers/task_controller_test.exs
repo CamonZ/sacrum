@@ -141,6 +141,209 @@ defmodule SacrumWeb.TaskControllerTest do
     end
   end
 
+  describe "POST /api/tasks with inline sections" do
+    setup :setup_authenticated
+
+    test "creates task with sections array", %{conn: conn, project: project} do
+      conn =
+        post(conn, ~p"/api/tasks", %{
+          project_id: project.id,
+          title: "Task with sections",
+          sections: [
+            %{section_type: "goal", content: "Build the thing", section_order: 1},
+            %{section_type: "step", content: "Step one", section_order: 2}
+          ]
+        })
+
+      assert %{
+               "data" => %{
+                 "title" => "Task with sections",
+                 "sections" => sections
+               }
+             } = json_response(conn, 201)
+
+      assert length(sections) == 2
+      assert Enum.any?(sections, &(&1["section_type"] == "goal"))
+      assert Enum.any?(sections, &(&1["section_type"] == "step"))
+    end
+
+    test "creates task without sections (optional)", %{conn: conn, project: project} do
+      conn =
+        post(conn, ~p"/api/tasks", %{
+          project_id: project.id,
+          title: "No sections"
+        })
+
+      assert %{"data" => %{"sections" => []}} = json_response(conn, 201)
+    end
+
+    test "returns 422 when section missing required fields", %{conn: conn, project: project} do
+      conn =
+        post(conn, ~p"/api/tasks", %{
+          project_id: project.id,
+          title: "Bad sections",
+          sections: [%{content: "missing section_type"}]
+        })
+
+      assert json_response(conn, 422)
+    end
+  end
+
+  describe "PATCH /api/tasks/:id with inline sections" do
+    setup :setup_authenticated
+
+    test "adds new sections to task", %{conn: conn, project: project} do
+      {:ok, task} = Tasks.insert(project, %{title: "Task"})
+
+      conn =
+        patch(conn, ~p"/api/tasks/#{task.id}", %{
+          title: "Task",
+          sections: [
+            %{section_type: "goal", content: "New goal", section_order: 1}
+          ]
+        })
+
+      assert %{"data" => %{"sections" => [section]}} = json_response(conn, 200)
+      assert section["section_type"] == "goal"
+      assert section["content"] == "New goal"
+    end
+
+    test "updates existing sections by id", %{conn: conn, project: project} do
+      {:ok, task} =
+        Tasks.insert(project, %{
+          "title" => "Task",
+          "sections" => [%{"section_type" => "goal", "content" => "Original"}]
+        })
+
+      section_id = hd(task.sections).id
+
+      conn =
+        patch(conn, ~p"/api/tasks/#{task.id}", %{
+          title: "Task",
+          sections: [
+            %{id: section_id, section_type: "goal", content: "Updated"}
+          ]
+        })
+
+      assert %{"data" => %{"sections" => [section]}} = json_response(conn, 200)
+      assert section["id"] == section_id
+      assert section["content"] == "Updated"
+    end
+
+    test "removes sections not in the list", %{conn: conn, project: project} do
+      {:ok, task} =
+        Tasks.insert(project, %{
+          "title" => "Task",
+          "sections" => [
+            %{"section_type" => "goal", "content" => "Keep"},
+            %{"section_type" => "step", "content" => "Remove"}
+          ]
+        })
+
+      keep_section = Enum.find(task.sections, &(&1.section_type == "goal"))
+
+      conn =
+        patch(conn, ~p"/api/tasks/#{task.id}", %{
+          title: "Task",
+          sections: [
+            %{id: keep_section.id, section_type: "goal", content: "Keep"}
+          ]
+        })
+
+      assert %{"data" => %{"sections" => sections}} = json_response(conn, 200)
+      assert length(sections) == 1
+      assert hd(sections)["content"] == "Keep"
+    end
+
+    test "omitting sections param does not change sections", %{conn: conn, project: project} do
+      {:ok, task} =
+        Tasks.insert(project, %{
+          "title" => "Task",
+          "sections" => [%{"section_type" => "goal", "content" => "Stays"}]
+        })
+
+      conn = patch(conn, ~p"/api/tasks/#{task.id}", %{title: "Updated title"})
+
+      assert %{"data" => %{"title" => "Updated title", "sections" => [section]}} =
+               json_response(conn, 200)
+
+      assert section["content"] == "Stays"
+    end
+
+    test "returns 422 for section id not belonging to this task", %{
+      conn: conn,
+      project: project
+    } do
+      {:ok, task1} =
+        Tasks.insert(project, %{
+          "title" => "Task 1",
+          "sections" => [%{"section_type" => "goal", "content" => "Task 1 section"}]
+        })
+
+      {:ok, task2} = Tasks.insert(project, %{title: "Task 2"})
+      foreign_section_id = hd(task1.sections).id
+
+      conn =
+        patch(conn, ~p"/api/tasks/#{task2.id}", %{
+          title: "Task 2",
+          sections: [
+            %{id: foreign_section_id, section_type: "goal", content: "Stolen"}
+          ]
+        })
+
+      assert json_response(conn, 422)
+    end
+
+    test "returns 422 when section missing required fields", %{conn: conn, project: project} do
+      {:ok, task} = Tasks.insert(project, %{title: "Task"})
+
+      conn =
+        patch(conn, ~p"/api/tasks/#{task.id}", %{
+          title: "Task",
+          sections: [%{content: "missing section_type"}]
+        })
+
+      assert json_response(conn, 422)
+    end
+  end
+
+  describe "section cascade deletion" do
+    setup :setup_authenticated
+
+    test "deleting a section via sync also deletes its code_refs", %{
+      conn: conn,
+      project: project
+    } do
+      {:ok, task} =
+        Tasks.insert(project, %{
+          "title" => "Task",
+          "sections" => [%{"section_type" => "goal", "content" => "Has refs"}]
+        })
+
+      section = hd(task.sections)
+
+      # Create a code_ref for this section
+      {:ok, _ref} =
+        Sacrum.Repo.CodeRefs.insert_for_section(section, %{
+          path: "lib/foo.ex",
+          line_start: 1,
+          line_end: 10
+        })
+
+      # Now update the task with empty sections, removing the section
+      conn =
+        patch(conn, ~p"/api/tasks/#{task.id}", %{
+          title: "Task",
+          sections: []
+        })
+
+      assert %{"data" => %{"sections" => []}} = json_response(conn, 200)
+
+      # Verify code_ref was cascade deleted
+      assert Sacrum.Repo.all(Sacrum.Repo.Schemas.CodeRef) == []
+    end
+  end
+
   describe "GET /api/tasks filters" do
     setup :setup_authenticated
 
