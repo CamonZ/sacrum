@@ -61,6 +61,14 @@ defmodule Sacrum.Repo.Tasks do
     |> Repo.all()
   end
 
+  @doc """
+  Returns root tasks (no parent) with no incomplete blockers for a project.
+  These are the highest-level actionable items ready for work.
+  """
+  def ready(project_id) do
+    list_tasks(project_id: project_id, root_only: true, blocked: false)
+  end
+
   defp apply_filter(query, :project_id, nil), do: query
 
   defp apply_filter(query, :project_id, project_id) do

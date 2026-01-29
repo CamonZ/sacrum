@@ -36,6 +36,13 @@ defmodule SacrumWeb.TaskController do
     end
   end
 
+  def ready(conn, %{"project_id" => project_id}) do
+    with {:ok, project} <- authorize_project(project_id, conn.assigns.current_user) do
+      tasks = Tasks.ready(project.id)
+      render(conn, :index, tasks: tasks)
+    end
+  end
+
   def show(conn, %{"project_id" => project_id, "id" => id}) do
     with {:ok, _project} <- authorize_project(project_id, conn.assigns.current_user),
          {:ok, %Task{} = task} <- find_task(id) do

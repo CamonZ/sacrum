@@ -222,4 +222,49 @@ defmodule SacrumWeb.TaskControllerTest do
       assert length(tasks) == 1
     end
   end
+
+  describe "GET /api/projects/:project_id/tasks/ready" do
+    setup :setup_authenticated
+
+    test "returns root tasks with no incomplete blockers", %{conn: conn, project: project} do
+      {:ok, root} = Tasks.insert(project, %{title: "Root Task"})
+      {:ok, child} = Tasks.insert(project, %{title: "Child Task"})
+      {:ok, _} = Sacrum.Repo.TaskHierarchy.set_parent(child, root)
+
+      conn = get(conn, ~p"/api/projects/#{project.id}/tasks/ready")
+      assert %{"data" => tasks} = json_response(conn, 200)
+      assert length(tasks) == 1
+      assert hd(tasks)["title"] == "Root Task"
+    end
+
+    test "excludes tasks with incomplete blockers", %{conn: conn, project: project} do
+      {:ok, blocker} = Tasks.insert(project, %{title: "Blocker"})
+      {:ok, blocked} = Tasks.insert(project, %{title: "Blocked"})
+      {:ok, _} = Sacrum.Repo.TaskDependencies.add_dependency(blocked, blocker)
+
+      conn = get(conn, ~p"/api/projects/#{project.id}/tasks/ready")
+      assert %{"data" => tasks} = json_response(conn, 200)
+      titles = Enum.map(tasks, & &1["title"])
+      assert "Blocker" in titles
+      refute "Blocked" in titles
+    end
+
+    test "includes tasks whose blockers are all completed", %{conn: conn, project: project} do
+      {:ok, blocker} = Tasks.insert(project, %{title: "Done Blocker"})
+      {:ok, _} = Tasks.update(blocker, %{completed_at: DateTime.utc_now()})
+      {:ok, task} = Tasks.insert(project, %{title: "Unblocked"})
+      {:ok, _} = Sacrum.Repo.TaskDependencies.add_dependency(task, blocker)
+
+      conn = get(conn, ~p"/api/projects/#{project.id}/tasks/ready")
+      assert %{"data" => tasks} = json_response(conn, 200)
+      titles = Enum.map(tasks, & &1["title"])
+      assert "Unblocked" in titles
+    end
+
+    test "returns 401 without auth token", %{conn: _conn} do
+      conn = build_conn()
+      conn = get(conn, ~p"/api/projects/#{Ecto.UUID.generate()}/tasks/ready")
+      assert json_response(conn, 401)
+    end
+  end
 end
