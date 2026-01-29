@@ -42,6 +42,38 @@ defmodule Sacrum.Repo.TaskWorkflows do
   end
 
   @doc """
+  Moves a task to a specific step within its current workflow.
+  Validates that the target step belongs to the task's current workflow and
+  that a StepTransition exists between the current step and the target step
+  (in either direction).
+
+  Creates a StepExecution audit record for the new step.
+  """
+  def move_to_step(%Task{workflow_id: nil}, _step_id), do: {:error, :no_workflow}
+  def move_to_step(%Task{current_step_id: nil}, _step_id), do: {:error, :no_current_step}
+
+  def move_to_step(%Task{} = task, step_id) do
+    with {:ok, target_step} <- get_workflow_step(task.workflow_id, step_id),
+         :ok <- validate_transition_exists(task.current_step_id, target_step.id) do
+      Multi.new()
+      |> Multi.update(:task, task_workflow_changeset(task, task.workflow_id, target_step.id))
+      |> Multi.insert(
+        :step_execution,
+        step_execution_attrs(task.id, task.workflow_id, target_step)
+      )
+      |> Repo.transaction()
+      |> case do
+        {:ok, %{task: task}} ->
+          broadcast_workflow_changed(task)
+          {:ok, task}
+
+        {:error, _op, changeset, _changes} ->
+          {:error, changeset}
+      end
+    end
+  end
+
+  @doc """
   Returns the current WorkflowStep for a task, or {:error, :no_current_step}.
   """
   def get_current_step(%Task{current_step_id: nil}), do: {:error, :no_current_step}
@@ -53,144 +85,7 @@ defmodule Sacrum.Repo.TaskWorkflows do
     end
   end
 
-  @doc """
-  Advances a task to the next step via a valid StepTransition.
-  Creates a StepExecution audit record for the new step.
-
-  If the task is on a final step and the workflow has an on_done_workflow,
-  transitions to that workflow's initial step.
-  """
-  def advance_step(%Task{current_step_id: nil}), do: {:error, :no_current_step}
-
-  def advance_step(%Task{} = task) do
-    task = Repo.preload(task, [:workflow, current_step: []])
-
-    transitions =
-      from(t in StepTransition,
-        where: t.from_step_id == ^task.current_step_id,
-        preload: [:to_step]
-      )
-      |> Repo.all()
-
-    case transitions do
-      [] ->
-        maybe_chain_workflow(task)
-
-      [transition | _] ->
-        to_step = transition.to_step
-
-        Multi.new()
-        |> Multi.update(:task, task_workflow_changeset(task, task.workflow_id, to_step.id))
-        |> Multi.insert(:step_execution, step_execution_attrs(task.id, task.workflow_id, to_step))
-        |> Repo.transaction()
-        |> case do
-          {:ok, %{task: task}} ->
-            broadcast_workflow_changed(task)
-            {:ok, task}
-
-          {:error, _op, changeset, _changes} ->
-            {:error, changeset}
-        end
-    end
-  end
-
-  @doc """
-  Retreats a task to the previous step via a reverse StepTransition.
-  Creates a StepExecution audit record for the new step.
-  """
-  def retreat_step(%Task{current_step_id: nil}), do: {:error, :no_current_step}
-
-  def retreat_step(%Task{} = task) do
-    reverse_transitions =
-      from(t in StepTransition,
-        where: t.to_step_id == ^task.current_step_id,
-        preload: [:from_step]
-      )
-      |> Repo.all()
-
-    case reverse_transitions do
-      [] ->
-        {:error, :no_retreat_transition}
-
-      [transition | _] ->
-        from_step = transition.from_step
-
-        Multi.new()
-        |> Multi.update(:task, task_workflow_changeset(task, task.workflow_id, from_step.id))
-        |> Multi.insert(
-          :step_execution,
-          step_execution_attrs(task.id, task.workflow_id, from_step)
-        )
-        |> Repo.transaction()
-        |> case do
-          {:ok, %{task: task}} ->
-            broadcast_workflow_changed(task)
-            {:ok, task}
-
-          {:error, _op, changeset, _changes} ->
-            {:error, changeset}
-        end
-    end
-  end
-
-  @doc """
-  Rejects a task by setting rejection_reason and transitioning to a rejected step.
-  If the workflow has an on_reject_workflow, transitions to that workflow's initial step.
-  Otherwise, looks for a step named "rejected" in the current workflow.
-  """
-  def reject_task(%Task{workflow_id: nil}, _reason), do: {:error, :no_workflow}
-
-  def reject_task(%Task{} = task, reason) do
-    task = Repo.preload(task, workflow: [:on_reject_workflow, :workflow_steps])
-
-    case resolve_reject_target(task.workflow) do
-      {:ok, target_workflow_id, target_step} ->
-        Multi.new()
-        |> Multi.update(
-          :task,
-          task
-          |> Ecto.Changeset.change(%{
-            rejection_reason: reason,
-            workflow_id: target_workflow_id,
-            current_step_id: target_step.id
-          })
-        )
-        |> Multi.insert(
-          :step_execution,
-          step_execution_attrs(task.id, target_workflow_id, target_step)
-        )
-        |> Repo.transaction()
-        |> case do
-          {:ok, %{task: task}} ->
-            broadcast_workflow_changed(task)
-            {:ok, task}
-
-          {:error, _op, changeset, _changes} ->
-            {:error, changeset}
-        end
-
-      {:error, _} = error ->
-        error
-    end
-  end
-
   # Private helpers
-
-  defp resolve_reject_target(%Workflow{on_reject_workflow: %Workflow{} = reject_wf}) do
-    reject_wf = Repo.preload(reject_wf, :workflow_steps)
-
-    case resolve_initial_step(reject_wf) do
-      {:ok, step} -> {:ok, reject_wf.id, step}
-      error -> error
-    end
-  end
-
-  defp resolve_reject_target(%Workflow{id: workflow_id, workflow_steps: steps}) do
-    case Enum.find(steps, &(&1.name == "rejected")) do
-      nil -> {:error, :no_rejected_step}
-      step -> {:ok, workflow_id, step}
-    end
-  end
 
   defp resolve_initial_step(%Workflow{initial_step_id: step_id})
        when not is_nil(step_id) do
@@ -223,36 +118,32 @@ defmodule Sacrum.Repo.TaskWorkflows do
     })
   end
 
-  defp maybe_chain_workflow(%Task{} = task) do
-    workflow = Repo.preload(task.workflow, :on_done_workflow)
-
-    case workflow.on_done_workflow do
+  defp get_workflow_step(workflow_id, step_id) do
+    case Repo.get(WorkflowStep, step_id) do
       nil ->
-        {:error, :no_transition}
+        {:error, :step_not_found}
 
-      next_workflow ->
-        next_workflow = Repo.preload(next_workflow, :workflow_steps)
-
-        with {:ok, initial_step} <- resolve_initial_step(next_workflow) do
-          Multi.new()
-          |> Multi.update(
-            :task,
-            task_workflow_changeset(task, next_workflow.id, initial_step.id)
-          )
-          |> Multi.insert(
-            :step_execution,
-            step_execution_attrs(task.id, next_workflow.id, initial_step)
-          )
-          |> Repo.transaction()
-          |> case do
-            {:ok, %{task: task}} ->
-              broadcast_workflow_changed(task)
-              {:ok, task}
-
-            {:error, _op, changeset, _changes} ->
-              {:error, changeset}
-          end
+      %WorkflowStep{} = step ->
+        if step.workflow_id == workflow_id do
+          {:ok, step}
+        else
+          {:error, :step_not_in_workflow}
         end
+    end
+  end
+
+  defp validate_transition_exists(from_step_id, to_step_id) do
+    query =
+      from(t in StepTransition,
+        where:
+          (t.from_step_id == ^from_step_id and t.to_step_id == ^to_step_id) or
+            (t.from_step_id == ^to_step_id and t.to_step_id == ^from_step_id)
+      )
+
+    if Repo.exists?(query) do
+      :ok
+    else
+      {:error, :no_transition}
     end
   end
 

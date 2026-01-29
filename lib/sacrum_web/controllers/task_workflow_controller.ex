@@ -46,50 +46,10 @@ defmodule SacrumWeb.TaskWorkflowController do
     end
   end
 
-  def advance(conn, %{"task_id" => task_id}) do
+  def move_to(conn, %{"task_id" => task_id, "step_id" => step_id}) do
     with {:ok, %Task{} = task} <- find_task(task_id),
          :ok <- authorize_task_owner(task, conn.assigns.current_user),
-         {:ok, %Task{} = updated} <- TaskWorkflows.advance_step(task) do
-      conn
-      |> put_view(json: SacrumWeb.TaskJSON)
-      |> render(:show, task: updated)
-    else
-      {:error, :no_current_step} ->
-        {:error, :unprocessable_entity, "task has no current workflow step"}
-
-      {:error, :no_transition} ->
-        {:error, :unprocessable_entity, "no valid transition from current step"}
-
-      other ->
-        other
-    end
-  end
-
-  def retreat(conn, %{"task_id" => task_id}) do
-    with {:ok, %Task{} = task} <- find_task(task_id),
-         :ok <- authorize_task_owner(task, conn.assigns.current_user),
-         {:ok, %Task{} = updated} <- TaskWorkflows.retreat_step(task) do
-      conn
-      |> put_view(json: SacrumWeb.TaskJSON)
-      |> render(:show, task: updated)
-    else
-      {:error, :no_current_step} ->
-        {:error, :unprocessable_entity, "task has no current workflow step"}
-
-      {:error, :no_retreat_transition} ->
-        {:error, :unprocessable_entity, "no valid retreat transition from current step"}
-
-      other ->
-        other
-    end
-  end
-
-  def reject(conn, %{"task_id" => task_id} = params) do
-    reason = params["reason"] || params["rejection_reason"]
-
-    with {:ok, %Task{} = task} <- find_task(task_id),
-         :ok <- authorize_task_owner(task, conn.assigns.current_user),
-         {:ok, %Task{} = updated} <- TaskWorkflows.reject_task(task, reason) do
+         {:ok, %Task{} = updated} <- TaskWorkflows.move_to_step(task, step_id) do
       conn
       |> put_view(json: SacrumWeb.TaskJSON)
       |> render(:show, task: updated)
@@ -97,8 +57,17 @@ defmodule SacrumWeb.TaskWorkflowController do
       {:error, :no_workflow} ->
         {:error, :unprocessable_entity, "task has no workflow assigned"}
 
-      {:error, :no_rejected_step} ->
-        {:error, :unprocessable_entity, "workflow has no rejected step or on_reject_workflow"}
+      {:error, :no_current_step} ->
+        {:error, :unprocessable_entity, "task has no current workflow step"}
+
+      {:error, :step_not_found} ->
+        {:error, :unprocessable_entity, "step not found"}
+
+      {:error, :step_not_in_workflow} ->
+        {:error, :unprocessable_entity, "step does not belong to the task's current workflow"}
+
+      {:error, :no_transition} ->
+        {:error, :unprocessable_entity, "no valid transition from current step to target step"}
 
       other ->
         other

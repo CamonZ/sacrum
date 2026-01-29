@@ -44,11 +44,9 @@ defmodule SacrumWeb.Router do
       get "/path", TaskController, :path
       get "/tree", TaskController, :tree
 
-      post "/assign_workflow", TaskWorkflowController, :assign
-      delete "/assign_workflow", TaskWorkflowController, :unassign
-      post "/advance", TaskWorkflowController, :advance
-      post "/retreat", TaskWorkflowController, :retreat
-      post "/reject", TaskWorkflowController, :reject
+      post "/assign-workflow", TaskWorkflowController, :assign
+      delete "/assign-workflow", TaskWorkflowController, :unassign
+      post "/move-to", TaskWorkflowController, :move_to
 
       resources "/executions", StepExecutionController, only: [:index]
     end

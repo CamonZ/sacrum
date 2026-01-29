@@ -21,6 +21,11 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
     user
   end
 
+  defp create_user_with_email(email) do
+    {:ok, user} = Users.insert(%{@valid_user_attrs | email: email, username: "other_user"})
+    user
+  end
+
   defp create_project(user) do
     {:ok, project} = Projects.insert(user, %{name: "Test Project"})
     project
@@ -148,88 +153,90 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
     end
   end
 
-  describe "advance_step/1" do
-    test "moves task to next step via valid transition" do
+  describe "move_to_step/2" do
+    test "moves to a valid forward transition target" do
       %{workflow: workflow, steps: steps, task: task} = setup_workflow_with_steps()
       {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
 
-      {:ok, advanced} = TaskWorkflows.advance_step(assigned)
+      {:ok, moved} = TaskWorkflows.move_to_step(assigned, steps.in_progress.id)
 
-      assert advanced.current_step_id == steps.in_progress.id
+      assert moved.current_step_id == steps.in_progress.id
     end
 
-    test "creates StepExecution record for new step" do
-      %{workflow: workflow, task: task} = setup_workflow_with_steps()
+    test "moves to a valid backward transition target" do
+      %{workflow: workflow, steps: steps, task: task} = setup_workflow_with_steps()
+      {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
+      {:ok, at_in_progress} = TaskWorkflows.move_to_step(assigned, steps.in_progress.id)
+
+      {:ok, moved_back} = TaskWorkflows.move_to_step(at_in_progress, steps.backlog.id)
+
+      assert moved_back.current_step_id == steps.backlog.id
+    end
+
+    test "creates StepExecution record for the move" do
+      %{workflow: workflow, steps: steps, task: task} = setup_workflow_with_steps()
       {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
 
-      {:ok, _advanced} = TaskWorkflows.advance_step(assigned)
+      {:ok, _moved} = TaskWorkflows.move_to_step(assigned, steps.in_progress.id)
 
       executions = StepExecutions.list_for_task(task.id)
       assert length(executions) == 2
       assert List.last(executions).step_name == "in_progress"
     end
 
-    test "returns error when no transition exists from current step" do
+    test "returns error when no transition exists between steps" do
       %{workflow: workflow, steps: steps, task: task} = setup_workflow_with_steps()
       {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
 
-      # Advance to in_progress, then to done (final step, no outgoing transitions)
-      {:ok, at_in_progress} = TaskWorkflows.advance_step(assigned)
-      {:ok, at_done} = TaskWorkflows.advance_step(at_in_progress)
+      # backlog -> done has no direct transition
+      assert {:error, :no_transition} = TaskWorkflows.move_to_step(assigned, steps.done.id)
+    end
 
-      assert at_done.current_step_id == steps.done.id
-      assert {:error, :no_transition} = TaskWorkflows.advance_step(at_done)
+    test "returns error when step does not belong to workflow" do
+      %{workflow: workflow, task: task} = setup_workflow_with_steps()
+      {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
+
+      # Create a step in a different workflow
+      user = create_user_with_email("other@example.com")
+      project = create_project(user)
+      other_workflow = create_workflow(project)
+      other_step = create_step(other_workflow, %{name: "other", step_order: 1})
+
+      assert {:error, :step_not_in_workflow} =
+               TaskWorkflows.move_to_step(assigned, other_step.id)
+    end
+
+    test "returns error when step_id does not exist" do
+      %{workflow: workflow, task: task} = setup_workflow_with_steps()
+      {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
+
+      assert {:error, :step_not_found} =
+               TaskWorkflows.move_to_step(assigned, Ecto.UUID.generate())
+    end
+
+    test "returns error when task has no workflow" do
+      user = create_user()
+      project = create_project(user)
+      task = create_task(project)
+
+      assert {:error, :no_workflow} =
+               TaskWorkflows.move_to_step(task, Ecto.UUID.generate())
     end
 
     test "returns error when task has no current step" do
       user = create_user()
       project = create_project(user)
       task = create_task(project)
+      # Manually set workflow_id but no current_step_id (edge case)
+      workflow = create_workflow(project)
 
-      assert {:error, :no_current_step} = TaskWorkflows.advance_step(task)
-    end
-  end
+      {:ok, task} =
+        task
+        |> Ecto.Changeset.change(%{workflow_id: workflow.id})
+        |> Sacrum.Repo.update()
 
-  describe "retreat_step/1" do
-    test "moves task to previous step via reverse transition" do
-      %{workflow: workflow, steps: steps, task: task} = setup_workflow_with_steps()
-      {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
-      {:ok, advanced} = TaskWorkflows.advance_step(assigned)
-
-      assert advanced.current_step_id == steps.in_progress.id
-
-      {:ok, retreated} = TaskWorkflows.retreat_step(advanced)
-
-      assert retreated.current_step_id == steps.backlog.id
-    end
-
-    test "creates StepExecution record for retreat" do
-      %{workflow: workflow, task: task} = setup_workflow_with_steps()
-      {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
-      {:ok, advanced} = TaskWorkflows.advance_step(assigned)
-
-      {:ok, _retreated} = TaskWorkflows.retreat_step(advanced)
-
-      executions = StepExecutions.list_for_task(task.id)
-      # assign + advance + retreat = 3
-      assert length(executions) == 3
-      assert List.last(executions).step_name == "backlog"
-    end
-
-    test "returns error when no retreat transition exists" do
-      %{workflow: workflow, task: task} = setup_workflow_with_steps()
-      {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
-
-      # At backlog (first step), no incoming transitions
-      assert {:error, :no_retreat_transition} = TaskWorkflows.retreat_step(assigned)
-    end
-
-    test "returns error when task has no current step" do
-      user = create_user()
-      project = create_project(user)
-      task = create_task(project)
-
-      assert {:error, :no_current_step} = TaskWorkflows.retreat_step(task)
+      assert {:error, :no_current_step} =
+               TaskWorkflows.move_to_step(task, Ecto.UUID.generate())
     end
   end
 end

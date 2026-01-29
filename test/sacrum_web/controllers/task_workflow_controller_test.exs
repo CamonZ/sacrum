@@ -52,14 +52,14 @@ defmodule SacrumWeb.TaskWorkflowControllerTest do
     })
   end
 
-  describe "POST /api/tasks/:tid/assign_workflow" do
+  describe "POST /api/tasks/:tid/assign-workflow" do
     setup [:setup_authenticated, :setup_workflow]
 
     test "assigns workflow and returns task with workflow_id", ctx do
       conn =
         post(
           ctx.conn,
-          ~p"/api/tasks/#{ctx.task.id}/assign_workflow",
+          ~p"/api/tasks/#{ctx.task.id}/assign-workflow",
           %{workflow_id: ctx.workflow.id}
         )
 
@@ -75,16 +75,16 @@ defmodule SacrumWeb.TaskWorkflowControllerTest do
     end
   end
 
-  describe "DELETE /api/tasks/:tid/assign_workflow" do
+  describe "DELETE /api/tasks/:tid/assign-workflow" do
     setup [:setup_authenticated, :setup_workflow]
 
     test "unassigns workflow and clears step", ctx do
       # First assign
-      post(ctx.conn, ~p"/api/tasks/#{ctx.task.id}/assign_workflow", %{
+      post(ctx.conn, ~p"/api/tasks/#{ctx.task.id}/assign-workflow", %{
         workflow_id: ctx.workflow.id
       })
 
-      conn = delete(ctx.conn, ~p"/api/tasks/#{ctx.task.id}/assign_workflow")
+      conn = delete(ctx.conn, ~p"/api/tasks/#{ctx.task.id}/assign-workflow")
 
       assert %{
                "data" => %{
@@ -95,16 +95,19 @@ defmodule SacrumWeb.TaskWorkflowControllerTest do
     end
   end
 
-  describe "POST /api/tasks/:tid/advance" do
+  describe "POST /api/tasks/:tid/move-to" do
     setup [:setup_authenticated, :setup_workflow]
 
-    test "advances task to next step", ctx do
+    test "moves task to a valid forward step", ctx do
       # Assign workflow first
-      post(ctx.conn, ~p"/api/tasks/#{ctx.task.id}/assign_workflow", %{
+      post(ctx.conn, ~p"/api/tasks/#{ctx.task.id}/assign-workflow", %{
         workflow_id: ctx.workflow.id
       })
 
-      conn = post(ctx.conn, ~p"/api/tasks/#{ctx.task.id}/advance")
+      conn =
+        post(ctx.conn, ~p"/api/tasks/#{ctx.task.id}/move-to", %{
+          step_id: ctx.steps.in_progress.id
+        })
 
       assert %{
                "data" => %{
@@ -115,25 +118,20 @@ defmodule SacrumWeb.TaskWorkflowControllerTest do
       assert step_id == ctx.steps.in_progress.id
     end
 
-    test "returns 422 when task has no workflow", ctx do
-      conn = post(ctx.conn, ~p"/api/tasks/#{ctx.task.id}/advance")
-
-      assert %{"errors" => %{"detail" => _}} = json_response(conn, 422)
-    end
-  end
-
-  describe "POST /api/tasks/:tid/retreat" do
-    setup [:setup_authenticated, :setup_workflow]
-
-    test "retreats task to previous step", ctx do
-      # Assign and advance
-      post(ctx.conn, ~p"/api/tasks/#{ctx.task.id}/assign_workflow", %{
+    test "moves task to a valid backward step", ctx do
+      # Assign and move forward first
+      post(ctx.conn, ~p"/api/tasks/#{ctx.task.id}/assign-workflow", %{
         workflow_id: ctx.workflow.id
       })
 
-      post(ctx.conn, ~p"/api/tasks/#{ctx.task.id}/advance")
+      post(ctx.conn, ~p"/api/tasks/#{ctx.task.id}/move-to", %{
+        step_id: ctx.steps.in_progress.id
+      })
 
-      conn = post(ctx.conn, ~p"/api/tasks/#{ctx.task.id}/retreat")
+      conn =
+        post(ctx.conn, ~p"/api/tasks/#{ctx.task.id}/move-to", %{
+          step_id: ctx.steps.backlog.id
+        })
 
       assert %{
                "data" => %{
@@ -144,70 +142,39 @@ defmodule SacrumWeb.TaskWorkflowControllerTest do
       assert step_id == ctx.steps.backlog.id
     end
 
-    test "returns 422 when no retreat transition exists", ctx do
-      # Assign but don't advance — at initial step, no reverse transition
-      post(ctx.conn, ~p"/api/tasks/#{ctx.task.id}/assign_workflow", %{
-        workflow_id: ctx.workflow.id
-      })
-
-      conn = post(ctx.conn, ~p"/api/tasks/#{ctx.task.id}/retreat")
+    test "returns 422 when task has no workflow", ctx do
+      conn =
+        post(ctx.conn, ~p"/api/tasks/#{ctx.task.id}/move-to", %{
+          step_id: ctx.steps.in_progress.id
+        })
 
       assert %{"errors" => %{"detail" => _}} = json_response(conn, 422)
     end
-  end
 
-  describe "POST /api/tasks/:tid/reject" do
-    setup [:setup_authenticated]
-
-    setup %{project: project} = context do
-      {:ok, workflow} = Workflows.insert(project, %{name: "Rejectable Workflow"})
-      {:ok, step1} = WorkflowSteps.insert(workflow, %{name: "backlog", step_order: 1})
-
-      {:ok, rejected_step} =
-        WorkflowSteps.insert(workflow, %{name: "rejected", step_order: 99, is_final: true})
-
-      {:ok, workflow} = Workflows.update(workflow, %{initial_step_id: step1.id})
-      {:ok, task} = Tasks.insert(project, %{title: "Rejectable Task"})
-
-      Map.merge(context, %{
-        workflow: workflow,
-        rejected_step: rejected_step,
-        task: task
+    test "returns 422 when no transition exists to target step", ctx do
+      # Assign workflow — task is at backlog
+      post(ctx.conn, ~p"/api/tasks/#{ctx.task.id}/assign-workflow", %{
+        workflow_id: ctx.workflow.id
       })
+
+      # Try to jump from backlog to done (no direct transition)
+      conn =
+        post(ctx.conn, ~p"/api/tasks/#{ctx.task.id}/move-to", %{
+          step_id: ctx.steps.done.id
+        })
+
+      assert %{"errors" => %{"detail" => _}} = json_response(conn, 422)
     end
 
-    test "rejects task and sets rejection_reason", ctx do
-      # Assign workflow first
-      post(
-        ctx.conn,
-        ~p"/api/tasks/#{ctx.task.id}/assign_workflow",
-        %{workflow_id: ctx.workflow.id}
-      )
+    test "returns 422 when step_id does not exist", ctx do
+      post(ctx.conn, ~p"/api/tasks/#{ctx.task.id}/assign-workflow", %{
+        workflow_id: ctx.workflow.id
+      })
 
       conn =
-        post(
-          ctx.conn,
-          ~p"/api/tasks/#{ctx.task.id}/reject",
-          %{reason: "Does not meet requirements"}
-        )
-
-      assert %{
-               "data" => %{
-                 "rejection_reason" => "Does not meet requirements",
-                 "current_step_id" => step_id
-               }
-             } = json_response(conn, 200)
-
-      assert step_id == ctx.rejected_step.id
-    end
-
-    test "returns 422 when task has no workflow", ctx do
-      conn =
-        post(
-          ctx.conn,
-          ~p"/api/tasks/#{ctx.task.id}/reject",
-          %{reason: "Bad"}
-        )
+        post(ctx.conn, ~p"/api/tasks/#{ctx.task.id}/move-to", %{
+          step_id: Ecto.UUID.generate()
+        })
 
       assert %{"errors" => %{"detail" => _}} = json_response(conn, 422)
     end
