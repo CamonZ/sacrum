@@ -4,6 +4,8 @@ defmodule SacrumWeb.TaskControllerTest do
   alias Sacrum.Repo.Users
   alias Sacrum.Repo.Projects
   alias Sacrum.Repo.Tasks
+  alias Sacrum.Repo.TaskDependencies
+  alias Sacrum.Repo.TaskHierarchy
   alias Sacrum.Auth
 
   @valid_user_attrs %{
@@ -348,10 +350,35 @@ defmodule SacrumWeb.TaskControllerTest do
           parent_id: parent.id
         })
 
-      assert json_response(conn, 200)
+      assert %{"data" => %{"parent_id" => parent_id}} = json_response(conn, 200)
+      assert parent_id == parent.id
+    end
 
-      {:ok, found_parent} = Sacrum.Repo.TaskHierarchy.get_parent(child)
-      assert found_parent.id == parent.id
+    test "null parent_id removes parent", %{conn: conn, project: project} do
+      {:ok, parent} = Tasks.insert(project, %{title: "Parent"})
+      {:ok, child} = Tasks.insert(project, %{title: "Child"})
+      {:ok, _} = TaskHierarchy.set_parent(child, parent)
+
+      conn =
+        patch(conn, ~p"/api/tasks/#{child.id}", %{
+          title: "Child",
+          parent_id: nil
+        })
+
+      assert %{"data" => %{"parent_id" => nil}} = json_response(conn, 200)
+      assert {:error, :not_found} = TaskHierarchy.get_parent(child)
+    end
+
+    test "null parent_id succeeds when no parent exists", %{conn: conn, project: project} do
+      {:ok, task} = Tasks.insert(project, %{title: "Orphan"})
+
+      conn =
+        patch(conn, ~p"/api/tasks/#{task.id}", %{
+          title: "Orphan",
+          parent_id: nil
+        })
+
+      assert json_response(conn, 200)
     end
 
     test "sets depends_on_ids via task update", %{conn: conn, project: project} do
@@ -365,10 +392,137 @@ defmodule SacrumWeb.TaskControllerTest do
           depends_on_ids: [dep1.id, dep2.id]
         })
 
-      assert json_response(conn, 200)
+      assert %{"data" => %{"dependency_ids" => dep_ids}} = json_response(conn, 200)
+      assert length(dep_ids) == 2
+    end
 
-      blockers = Sacrum.Repo.TaskDependencies.get_direct_blockers(task)
+    test "returns 422 for self dependency", %{conn: conn, project: project} do
+      {:ok, task} = Tasks.insert(project, %{title: "Task"})
+
+      conn =
+        patch(conn, ~p"/api/tasks/#{task.id}", %{
+          title: "Task",
+          depends_on_ids: [task.id]
+        })
+
+      assert %{"errors" => _} = json_response(conn, 422)
+    end
+
+    test "returns 422 for circular dependency", %{conn: conn, project: project} do
+      {:ok, a} = Tasks.insert(project, %{title: "A"})
+      {:ok, b} = Tasks.insert(project, %{title: "B"})
+      {:ok, _} = TaskDependencies.add_dependency(b, a)
+
+      conn =
+        patch(conn, ~p"/api/tasks/#{a.id}", %{
+          title: "A",
+          depends_on_ids: [b.id]
+        })
+
+      assert %{"errors" => _} = json_response(conn, 422)
+    end
+
+    test "returns 422 for cross-project dependency", %{conn: conn, user: user, project: project} do
+      {:ok, other_project} = Projects.insert(user, %{name: "Other Project"})
+      {:ok, task} = Tasks.insert(project, %{title: "Task"})
+      {:ok, other_task} = Tasks.insert(other_project, %{title: "Other"})
+
+      conn =
+        patch(conn, ~p"/api/tasks/#{task.id}", %{
+          title: "Task",
+          depends_on_ids: [other_task.id]
+        })
+
+      assert %{"errors" => _} = json_response(conn, 422)
+    end
+  end
+
+  describe "JSON response includes parent_id and dependency_ids" do
+    setup :setup_authenticated
+
+    test "show includes parent_id and dependency_ids", %{conn: conn, project: project} do
+      {:ok, task} = Tasks.insert(project, %{title: "Task"})
+
+      conn = get(conn, ~p"/api/tasks/#{task.id}")
+      assert %{"data" => data} = json_response(conn, 200)
+      assert Map.has_key?(data, "parent_id")
+      assert Map.has_key?(data, "dependency_ids")
+      assert data["parent_id"] == nil
+      assert data["dependency_ids"] == []
+    end
+
+    test "index includes parent_id and dependency_ids", %{conn: conn, project: project} do
+      {:ok, _} = Tasks.insert(project, %{title: "Task"})
+
+      conn = get(conn, ~p"/api/tasks?project_id=#{project.id}")
+      assert %{"data" => [data]} = json_response(conn, 200)
+      assert Map.has_key?(data, "parent_id")
+      assert Map.has_key?(data, "dependency_ids")
+    end
+  end
+
+  describe "GET /api/tasks/:task_id/blockers" do
+    setup :setup_authenticated
+
+    test "returns transitive blockers", %{conn: conn, project: project} do
+      {:ok, task} = Tasks.insert(project, %{title: "Task A"})
+      {:ok, blocker1} = Tasks.insert(project, %{title: "Blocker 1"})
+      {:ok, blocker2} = Tasks.insert(project, %{title: "Blocker 2"})
+      {:ok, _} = TaskDependencies.add_dependency(task, blocker1)
+      {:ok, _} = TaskDependencies.add_dependency(blocker1, blocker2)
+
+      conn = get(conn, ~p"/api/tasks/#{task.id}/blockers")
+
+      assert %{"data" => blockers} = json_response(conn, 200)
       assert length(blockers) == 2
+    end
+  end
+
+  describe "GET /api/tasks/:task_id/path" do
+    setup :setup_authenticated
+
+    test "returns shortest dependency path", %{conn: conn, project: project} do
+      {:ok, a} = Tasks.insert(project, %{title: "A"})
+      {:ok, b} = Tasks.insert(project, %{title: "B"})
+      {:ok, c} = Tasks.insert(project, %{title: "C"})
+      {:ok, _} = TaskDependencies.add_dependency(a, b)
+      {:ok, _} = TaskDependencies.add_dependency(b, c)
+
+      conn = get(conn, ~p"/api/tasks/#{a.id}/path?to=#{c.id}")
+      assert %{"data" => %{"path" => path}} = json_response(conn, 200)
+      assert length(path) == 3
+      assert path == [a.id, b.id, c.id]
+    end
+
+    test "returns empty path when no dependency path exists", %{conn: conn, project: project} do
+      {:ok, a} = Tasks.insert(project, %{title: "A"})
+      {:ok, b} = Tasks.insert(project, %{title: "B"})
+
+      conn = get(conn, ~p"/api/tasks/#{a.id}/path?to=#{b.id}")
+      assert %{"data" => %{"path" => []}} = json_response(conn, 200)
+    end
+
+    test "returns single-element path for direct dependency", %{conn: conn, project: project} do
+      {:ok, a} = Tasks.insert(project, %{title: "A"})
+      {:ok, b} = Tasks.insert(project, %{title: "B"})
+      {:ok, _} = TaskDependencies.add_dependency(a, b)
+
+      conn = get(conn, ~p"/api/tasks/#{a.id}/path?to=#{b.id}")
+      assert %{"data" => %{"path" => path}} = json_response(conn, 200)
+      assert path == [a.id, b.id]
+    end
+
+    test "returns 404 if target task does not exist", %{conn: conn, project: project} do
+      {:ok, a} = Tasks.insert(project, %{title: "A"})
+
+      conn = get(conn, ~p"/api/tasks/#{a.id}/path?to=#{Ecto.UUID.generate()}")
+      assert json_response(conn, 404)
+    end
+
+    test "returns 422 when to param is missing", %{conn: conn, project: project} do
+      {:ok, task} = Tasks.insert(project, %{title: "Task"})
+      conn = get(conn, ~p"/api/tasks/#{task.id}/path")
+      assert json_response(conn, 422)
     end
   end
 end

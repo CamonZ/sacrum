@@ -4,6 +4,7 @@ defmodule SacrumWeb.TaskController do
   alias Sacrum.Repo.Projects
   alias Sacrum.Repo.Tasks
   alias Sacrum.Repo.TaskHierarchy
+  alias Sacrum.Repo.TaskDependencies
   alias Sacrum.Repo.Schemas.Project
   alias Sacrum.Repo.Schemas.Task
 
@@ -75,6 +76,32 @@ defmodule SacrumWeb.TaskController do
     end
   end
 
+  def blockers(conn, %{"task_id" => task_id}) do
+    with {:ok, %Task{} = task} <- find_task(task_id),
+         :ok <- authorize_task_owner(task, conn.assigns.current_user) do
+      blockers = TaskDependencies.get_blockers(task)
+      render(conn, :blockers, tasks: blockers)
+    end
+  end
+
+  def path(conn, %{"task_id" => task_id, "to" => target_id}) do
+    with {:ok, %Task{} = task} <- find_task(task_id),
+         :ok <- authorize_task_owner(task, conn.assigns.current_user),
+         {:ok, %Task{} = target} <- Tasks.get(target_id),
+         {:ok, path_ids} <- TaskDependencies.find_path(task, target) do
+      json(conn, %{data: %{path: path_ids}})
+    end
+  end
+
+  def path(conn, %{"task_id" => task_id}) do
+    with {:ok, %Task{} = task} <- find_task(task_id),
+         :ok <- authorize_task_owner(task, conn.assigns.current_user) do
+      conn
+      |> put_status(:unprocessable_entity)
+      |> json(%{errors: %{to: ["query parameter is required"]}})
+    end
+  end
+
   defp authorize_project(project_id, user) do
     with {:ok, %Project{} = project} <- Projects.get(project_id),
          true <- project.user_id == user.id do
@@ -129,8 +156,12 @@ defmodule SacrumWeb.TaskController do
     end
   end
 
-  defp maybe_set_parent(_task, %{"parent_id" => nil}) do
-    :ok
+  defp maybe_set_parent(task, %{"parent_id" => nil}) do
+    case TaskHierarchy.remove_parent(task) do
+      {:ok, _} -> :ok
+      {:error, :not_found} -> :ok
+      error -> error
+    end
   end
 
   defp maybe_set_parent(task, %{"parent_id" => parent_id}) do
@@ -178,12 +209,21 @@ defmodule SacrumWeb.TaskController do
         end
       end
 
-    case Enum.find(results, fn
-           {:error, _} -> true
-           _ -> false
-         end) do
-      nil -> :ok
-      error -> error
+    case Enum.find(results, &match?({:error, _}, &1)) do
+      nil ->
+        :ok
+
+      {:error, :different_projects} ->
+        {:error, :unprocessable_entity, "depends_on_ids must be in the same project"}
+
+      {:error, :self_dependency} ->
+        {:error, :unprocessable_entity, "a task cannot depend on itself"}
+
+      {:error, :circular_dependency} ->
+        {:error, :unprocessable_entity, "would create a circular dependency"}
+
+      error ->
+        error
     end
   end
 

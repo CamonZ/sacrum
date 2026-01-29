@@ -1,5 +1,7 @@
 defmodule SacrumWeb.TaskJSON do
   alias Sacrum.Repo.Schemas.Task
+  alias Sacrum.Repo.TaskHierarchy
+  alias Sacrum.Repo.TaskDependencies
 
   def index(%{tasks: tasks}) do
     %{data: for(task <- tasks, do: data(task))}
@@ -34,10 +36,39 @@ defmodule SacrumWeb.TaskJSON do
       review_comment: task.review_comment,
       rejection_reason: task.rejection_reason,
       revision_feedback: task.revision_feedback,
+      parent_id: get_parent_id(task),
+      dependency_ids: get_dependency_ids(task),
       started_at: task.started_at,
       completed_at: task.completed_at,
       inserted_at: task.inserted_at,
       updated_at: task.updated_at
+    }
+  end
+
+  defp get_parent_id(task) do
+    case TaskHierarchy.get_parent(task) do
+      {:ok, parent} -> parent.id
+      {:error, :not_found} -> nil
+    end
+  end
+
+  defp get_dependency_ids(task) do
+    task
+    |> TaskDependencies.get_direct_blockers()
+    |> Enum.map(& &1.id)
+  end
+
+  def blockers(%{tasks: tasks}) do
+    %{data: for(task <- tasks, do: blocker_data(task))}
+  end
+
+  defp blocker_data(%Task{} = task) do
+    %{
+      id: task.id,
+      short_id: task.short_id,
+      title: task.title,
+      level: task.level,
+      completed_at: task.completed_at
     }
   end
 end

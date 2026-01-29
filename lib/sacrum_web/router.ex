@@ -40,11 +40,8 @@ defmodule SacrumWeb.Router do
       resources "/sections", TaskSectionController, except: [:new, :edit, :show]
       resources "/refs", CodeRefController, only: [:index, :create, :delete]
 
-      put "/parent", TaskRelationshipController, :set_parent
-      delete "/parent", TaskRelationshipController, :remove_parent
-      resources "/dependencies", TaskRelationshipController, only: [:create, :delete]
-      get "/blockers", TaskRelationshipController, :blockers
-      get "/path", TaskRelationshipController, :path
+      get "/blockers", TaskController, :blockers
+      get "/path", TaskController, :path
       get "/tree", TaskController, :tree
 
       post "/assign_workflow", TaskWorkflowController, :assign
