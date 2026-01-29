@@ -33,13 +33,43 @@ defmodule Sacrum.Repo.WorkflowSteps do
     %WorkflowStep{workflow_id: workflow_id}
     |> WorkflowStep.create_changeset(attrs)
     |> Repo.insert()
+    |> broadcast(:step_created)
   end
 
   def update(%WorkflowStep{} = step, attrs) do
     step
     |> WorkflowStep.update_changeset(attrs)
     |> Repo.update()
+    |> broadcast(:step_updated)
   end
 
-  def delete(%WorkflowStep{} = step), do: Repo.delete(step)
+  def delete(%WorkflowStep{} = step) do
+    case Repo.delete(step) do
+      {:ok, deleted} ->
+        broadcast_event(deleted, :step_deleted)
+        {:ok, deleted}
+
+      error ->
+        error
+    end
+  end
+
+  defp broadcast({:ok, step}, event) do
+    broadcast_event(step, event)
+    {:ok, step}
+  end
+
+  defp broadcast({:error, _} = error, _event), do: error
+
+  defp broadcast_event(step, event) do
+    step = Repo.preload(step, workflow: :project)
+
+    case step do
+      %{workflow: %{project: %{slug: slug}}} ->
+        apply(SacrumWeb.ProjectChannel, :"broadcast_#{event}", [slug, step])
+
+      _ ->
+        :ok
+    end
+  end
 end
