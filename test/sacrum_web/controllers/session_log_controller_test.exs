@@ -47,18 +47,14 @@ defmodule SacrumWeb.SessionLogControllerTest do
     Map.merge(context, %{task: task, execution: execution})
   end
 
-  describe "GET /api/projects/:project_id/executions/:execution_id/logs" do
+  describe "GET /api/executions/:execution_id/logs" do
     setup [:setup_authenticated, :setup_with_execution]
 
     test "returns chronological list of session logs", ctx do
       {:ok, _} = SessionLogs.insert(%{step_execution_id: ctx.execution.id, content: "Log line 1"})
       {:ok, _} = SessionLogs.insert(%{step_execution_id: ctx.execution.id, content: "Log line 2"})
 
-      conn =
-        get(
-          ctx.conn,
-          ~p"/api/projects/#{ctx.project.id}/executions/#{ctx.execution.id}/logs"
-        )
+      conn = get(ctx.conn, ~p"/api/executions/#{ctx.execution.id}/logs")
 
       assert %{"data" => logs} = json_response(conn, 200)
       assert length(logs) == 2
@@ -66,11 +62,7 @@ defmodule SacrumWeb.SessionLogControllerTest do
     end
 
     test "returns empty list for execution with no logs", ctx do
-      conn =
-        get(
-          ctx.conn,
-          ~p"/api/projects/#{ctx.project.id}/executions/#{ctx.execution.id}/logs"
-        )
+      conn = get(ctx.conn, ~p"/api/executions/#{ctx.execution.id}/logs")
 
       assert %{"data" => []} = json_response(conn, 200)
     end
@@ -78,11 +70,9 @@ defmodule SacrumWeb.SessionLogControllerTest do
 
   describe "authentication" do
     test "returns 401 without auth token", %{conn: conn} do
-      project_id = Ecto.UUID.generate()
       execution_id = Ecto.UUID.generate()
 
-      conn =
-        get(conn, ~p"/api/projects/#{project_id}/executions/#{execution_id}/logs")
+      conn = get(conn, ~p"/api/executions/#{execution_id}/logs")
 
       assert json_response(conn, 401)
     end

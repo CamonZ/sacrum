@@ -36,7 +36,7 @@ defmodule SacrumWeb.WorkflowTransitionControllerTest do
     Map.merge(context, %{wf1: wf1, wf2: wf2})
   end
 
-  describe "GET /api/projects/:project_id/workflow-transitions" do
+  describe "GET /api/workflow-transitions" do
     setup [:setup_authenticated, :setup_workflows]
 
     test "returns all transitions for the project", ctx do
@@ -47,8 +47,7 @@ defmodule SacrumWeb.WorkflowTransitionControllerTest do
           label: "on_done"
         })
 
-      conn =
-        get(ctx.conn, ~p"/api/projects/#{ctx.project.id}/workflow-transitions")
+      conn = get(ctx.conn, ~p"/api/workflow-transitions?project_id=#{ctx.project.id}")
 
       assert %{"data" => transitions} = json_response(conn, 200)
       assert length(transitions) == 1
@@ -57,19 +56,19 @@ defmodule SacrumWeb.WorkflowTransitionControllerTest do
     end
 
     test "returns empty list when no transitions exist", ctx do
-      conn =
-        get(ctx.conn, ~p"/api/projects/#{ctx.project.id}/workflow-transitions")
+      conn = get(ctx.conn, ~p"/api/workflow-transitions?project_id=#{ctx.project.id}")
 
       assert %{"data" => []} = json_response(conn, 200)
     end
   end
 
-  describe "POST /api/projects/:project_id/workflow-transitions" do
+  describe "POST /api/workflow-transitions" do
     setup [:setup_authenticated, :setup_workflows]
 
     test "creates a transition between workflows", ctx do
       conn =
-        post(ctx.conn, ~p"/api/projects/#{ctx.project.id}/workflow-transitions", %{
+        post(ctx.conn, ~p"/api/workflow-transitions", %{
+          project_id: ctx.project.id,
           from_workflow_id: ctx.wf1.id,
           to_workflow_id: ctx.wf2.id,
           label: "on_done"
@@ -87,7 +86,8 @@ defmodule SacrumWeb.WorkflowTransitionControllerTest do
         })
 
       conn =
-        post(ctx.conn, ~p"/api/projects/#{ctx.project.id}/workflow-transitions", %{
+        post(ctx.conn, ~p"/api/workflow-transitions", %{
+          project_id: ctx.project.id,
           from_workflow_id: ctx.wf1.id,
           to_workflow_id: ctx.wf2.id
         })
@@ -96,7 +96,7 @@ defmodule SacrumWeb.WorkflowTransitionControllerTest do
     end
   end
 
-  describe "DELETE /api/projects/:project_id/workflow-transitions/:id" do
+  describe "DELETE /api/workflow-transitions/:id" do
     setup [:setup_authenticated, :setup_workflows]
 
     test "deletes a transition", ctx do
@@ -106,19 +106,14 @@ defmodule SacrumWeb.WorkflowTransitionControllerTest do
           to_workflow_id: ctx.wf2.id
         })
 
-      conn =
-        delete(
-          ctx.conn,
-          ~p"/api/projects/#{ctx.project.id}/workflow-transitions/#{transition.id}"
-        )
-
+      conn = delete(ctx.conn, ~p"/api/workflow-transitions/#{transition.id}")
       assert response(conn, 204)
     end
   end
 
   describe "authentication" do
     test "returns 401 without auth token", %{conn: conn} do
-      conn = get(conn, ~p"/api/projects/#{Ecto.UUID.generate()}/workflow-transitions")
+      conn = get(conn, ~p"/api/workflow-transitions?project_id=#{Ecto.UUID.generate()}")
       assert json_response(conn, 401)
     end
   end

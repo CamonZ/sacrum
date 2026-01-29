@@ -1,26 +1,25 @@
 defmodule SacrumWeb.SessionLogController do
   use SacrumWeb, :controller
 
-  alias Sacrum.Repo.Projects
   alias Sacrum.Repo.StepExecutions
   alias Sacrum.Repo.SessionLogs
-  alias Sacrum.Repo.Schemas.Project
 
   action_fallback SacrumWeb.FallbackController
 
-  defp authorize_project(project_id, user) do
-    with {:ok, %Project{} = project} <- Projects.get(project_id),
-         true <- project.user_id == user.id do
-      {:ok, project}
+  defp authorize_execution_owner(execution, user) do
+    execution = Sacrum.Repo.preload(execution, workflow: :project)
+
+    if execution.workflow && execution.workflow.project &&
+         execution.workflow.project.user_id == user.id do
+      :ok
     else
-      false -> {:error, :not_found}
-      error -> error
+      {:error, :not_found}
     end
   end
 
-  def index(conn, %{"project_id" => project_id, "step_execution_id" => execution_id}) do
-    with {:ok, _project} <- authorize_project(project_id, conn.assigns.current_user),
-         {:ok, _execution} <- StepExecutions.get(execution_id) do
+  def index(conn, %{"step_execution_id" => execution_id}) do
+    with {:ok, execution} <- StepExecutions.get(execution_id),
+         :ok <- authorize_execution_owner(execution, conn.assigns.current_user) do
       logs = SessionLogs.list_for_execution(execution_id)
       render(conn, :index, logs: logs)
     end

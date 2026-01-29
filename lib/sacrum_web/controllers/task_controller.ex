@@ -9,16 +9,6 @@ defmodule SacrumWeb.TaskController do
 
   action_fallback SacrumWeb.FallbackController
 
-  defp authorize_project(project_id, user) do
-    with {:ok, %Project{} = project} <- Projects.get(project_id),
-         true <- project.user_id == user.id do
-      {:ok, project}
-    else
-      false -> {:error, :not_found}
-      error -> error
-    end
-  end
-
   def index(conn, %{"project_id" => project_id} = params) do
     with {:ok, project} <- authorize_project(project_id, conn.assigns.current_user) do
       opts =
@@ -44,17 +34,17 @@ defmodule SacrumWeb.TaskController do
     end
   end
 
-  def tree(conn, %{"project_id" => project_id, "task_id" => task_id}) do
-    with {:ok, _project} <- authorize_project(project_id, conn.assigns.current_user),
-         {:ok, %Task{} = task} <- find_task(task_id) do
+  def tree(conn, %{"task_id" => task_id}) do
+    with {:ok, %Task{} = task} <- find_task(task_id),
+         :ok <- authorize_task_owner(task, conn.assigns.current_user) do
       tree = TaskHierarchy.build_tree(task)
       render(conn, :tree, tree: tree)
     end
   end
 
-  def show(conn, %{"project_id" => project_id, "id" => id}) do
-    with {:ok, _project} <- authorize_project(project_id, conn.assigns.current_user),
-         {:ok, %Task{} = task} <- find_task(id) do
+  def show(conn, %{"id" => id}) do
+    with {:ok, %Task{} = task} <- find_task(id),
+         :ok <- authorize_task_owner(task, conn.assigns.current_user) do
       render(conn, :show, task: task)
     end
   end
@@ -68,33 +58,7 @@ defmodule SacrumWeb.TaskController do
     end
   end
 
-  def update(conn, %{"project_id" => project_id, "id" => id} = params) do
-    with {:ok, _project} <- authorize_project(project_id, conn.assigns.current_user),
-         {:ok, %Task{} = task} <- find_task(id),
-         {:ok, %Task{} = updated} <- Tasks.update(task, params),
-         :ok <- handle_nested_updates(updated, params) do
-      render(conn, :show, task: updated)
-    end
-  end
-
-  def delete(conn, %{"project_id" => project_id, "id" => id}) do
-    with {:ok, _project} <- authorize_project(project_id, conn.assigns.current_user),
-         {:ok, %Task{} = task} <- find_task(id),
-         {:ok, _} <- Tasks.delete(task) do
-      send_resp(conn, :no_content, "")
-    end
-  end
-
-  # Flat routes (no project_id in URL, ownership validated via task.project)
-
-  def show_flat(conn, %{"id" => id}) do
-    with {:ok, %Task{} = task} <- find_task(id),
-         :ok <- authorize_task_owner(task, conn.assigns.current_user) do
-      render(conn, :show, task: task)
-    end
-  end
-
-  def update_flat(conn, %{"id" => id} = params) do
+  def update(conn, %{"id" => id} = params) do
     with {:ok, %Task{} = task} <- find_task(id),
          :ok <- authorize_task_owner(task, conn.assigns.current_user),
          {:ok, %Task{} = updated} <- Tasks.update(task, params),
@@ -103,11 +67,21 @@ defmodule SacrumWeb.TaskController do
     end
   end
 
-  def delete_flat(conn, %{"id" => id}) do
+  def delete(conn, %{"id" => id}) do
     with {:ok, %Task{} = task} <- find_task(id),
          :ok <- authorize_task_owner(task, conn.assigns.current_user),
          {:ok, _} <- Tasks.delete(task) do
       send_resp(conn, :no_content, "")
+    end
+  end
+
+  defp authorize_project(project_id, user) do
+    with {:ok, %Project{} = project} <- Projects.get(project_id),
+         true <- project.user_id == user.id do
+      {:ok, project}
+    else
+      false -> {:error, :not_found}
+      error -> error
     end
   end
 

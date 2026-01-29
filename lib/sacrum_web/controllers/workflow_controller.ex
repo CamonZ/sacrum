@@ -8,26 +8,26 @@ defmodule SacrumWeb.WorkflowController do
 
   action_fallback SacrumWeb.FallbackController
 
-  defp authorize_project(project_id, user) do
-    with {:ok, %Project{} = project} <- Projects.get(project_id),
-         true <- project.user_id == user.id do
-      {:ok, project}
-    else
-      false -> {:error, :not_found}
-      error -> error
+  def index(conn, params) do
+    user = conn.assigns.current_user
+
+    case params do
+      %{"project_id" => project_id} ->
+        with {:ok, project} <- authorize_project(project_id, user) do
+          workflows = Workflows.list(project)
+          render(conn, :index, workflows: workflows)
+        end
+
+      _ ->
+        projects = Projects.list(user)
+        workflows = Enum.flat_map(projects, &Workflows.list/1)
+        render(conn, :index, workflows: workflows)
     end
   end
 
-  def index(conn, %{"project_id" => project_id}) do
-    with {:ok, project} <- authorize_project(project_id, conn.assigns.current_user) do
-      workflows = Workflows.list(project)
-      render(conn, :index, workflows: workflows)
-    end
-  end
-
-  def show(conn, %{"project_id" => project_id, "id" => id}) do
-    with {:ok, _project} <- authorize_project(project_id, conn.assigns.current_user),
-         {:ok, %Workflow{} = workflow} <- Workflows.get(id) do
+  def show(conn, %{"id" => id}) do
+    with {:ok, %Workflow{} = workflow} <- Workflows.get(id),
+         :ok <- authorize_workflow_owner(workflow, conn.assigns.current_user) do
       render(conn, :show, workflow: workflow)
     end
   end
@@ -41,32 +41,7 @@ defmodule SacrumWeb.WorkflowController do
     end
   end
 
-  def update(conn, %{"project_id" => project_id, "id" => id} = params) do
-    with {:ok, _project} <- authorize_project(project_id, conn.assigns.current_user),
-         {:ok, %Workflow{} = workflow} <- Workflows.get(id),
-         {:ok, %Workflow{} = updated} <- Workflows.update(workflow, params) do
-      render(conn, :show, workflow: updated)
-    end
-  end
-
-  def delete(conn, %{"project_id" => project_id, "id" => id}) do
-    with {:ok, _project} <- authorize_project(project_id, conn.assigns.current_user),
-         {:ok, %Workflow{} = workflow} <- Workflows.get(id),
-         {:ok, _} <- Workflows.delete(workflow) do
-      send_resp(conn, :no_content, "")
-    end
-  end
-
-  # Flat routes
-
-  def show_flat(conn, %{"id" => id}) do
-    with {:ok, %Workflow{} = workflow} <- Workflows.get(id),
-         :ok <- authorize_workflow_owner(workflow, conn.assigns.current_user) do
-      render(conn, :show, workflow: workflow)
-    end
-  end
-
-  def update_flat(conn, %{"id" => id} = params) do
+  def update(conn, %{"id" => id} = params) do
     with {:ok, %Workflow{} = workflow} <- Workflows.get(id),
          :ok <- authorize_workflow_owner(workflow, conn.assigns.current_user),
          {:ok, %Workflow{} = updated} <- Workflows.update(workflow, params) do
@@ -74,11 +49,21 @@ defmodule SacrumWeb.WorkflowController do
     end
   end
 
-  def delete_flat(conn, %{"id" => id}) do
+  def delete(conn, %{"id" => id}) do
     with {:ok, %Workflow{} = workflow} <- Workflows.get(id),
          :ok <- authorize_workflow_owner(workflow, conn.assigns.current_user),
          {:ok, _} <- Workflows.delete(workflow) do
       send_resp(conn, :no_content, "")
+    end
+  end
+
+  defp authorize_project(project_id, user) do
+    with {:ok, %Project{} = project} <- Projects.get(project_id),
+         true <- project.user_id == user.id do
+      {:ok, project}
+    else
+      false -> {:error, :not_found}
+      error -> error
     end
   end
 

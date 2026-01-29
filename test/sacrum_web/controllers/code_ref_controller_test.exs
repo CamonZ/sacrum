@@ -31,23 +31,23 @@ defmodule SacrumWeb.CodeRefControllerTest do
     %{conn: conn, user: user, project: project, task: task}
   end
 
-  describe "GET /api/projects/:pid/tasks/:tid/refs" do
+  describe "GET /api/tasks/:tid/refs" do
     setup :setup_authenticated
 
-    test "returns 200 with refs list", %{conn: conn, project: project, task: task} do
+    test "returns 200 with refs list", %{conn: conn, task: task} do
       {:ok, _} = CodeRefs.insert_for_task(task, %{path: "lib/foo.ex"})
 
-      conn = get(conn, ~p"/api/projects/#{project.id}/tasks/#{task.id}/refs")
+      conn = get(conn, ~p"/api/tasks/#{task.id}/refs")
       assert %{"data" => [%{"path" => "lib/foo.ex"}]} = json_response(conn, 200)
     end
   end
 
-  describe "POST /api/projects/:pid/tasks/:tid/refs" do
+  describe "POST /api/tasks/:tid/refs" do
     setup :setup_authenticated
 
-    test "creates code ref and returns 201", %{conn: conn, project: project, task: task} do
+    test "creates code ref and returns 201", %{conn: conn, task: task} do
       conn =
-        post(conn, ~p"/api/projects/#{project.id}/tasks/#{task.id}/refs", %{
+        post(conn, ~p"/api/tasks/#{task.id}/refs", %{
           path: "lib/bar.ex",
           line_start: 5,
           line_end: 15,
@@ -59,13 +59,13 @@ defmodule SacrumWeb.CodeRefControllerTest do
     end
   end
 
-  describe "DELETE /api/projects/:pid/tasks/:tid/refs/:id" do
+  describe "DELETE /api/tasks/:tid/refs/:id" do
     setup :setup_authenticated
 
-    test "removes code ref and returns 204", %{conn: conn, project: project, task: task} do
+    test "removes code ref and returns 204", %{conn: conn, task: task} do
       {:ok, ref} = CodeRefs.insert_for_task(task, %{path: "lib/temp.ex"})
 
-      conn = delete(conn, ~p"/api/projects/#{project.id}/tasks/#{task.id}/refs/#{ref.id}")
+      conn = delete(conn, ~p"/api/tasks/#{task.id}/refs/#{ref.id}")
       assert response(conn, 204)
     end
   end

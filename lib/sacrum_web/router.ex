@@ -28,53 +28,40 @@ defmodule SacrumWeb.Router do
   scope "/api", SacrumWeb do
     pipe_through :api_authenticated
 
-    resources "/projects", ProjectController, except: [:new, :edit] do
-      resources "/workflows", WorkflowController, except: [:new, :edit] do
-        resources "/steps", WorkflowStepController, except: [:new, :edit, :show]
-      end
+    resources "/projects", ProjectController, except: [:new, :edit]
 
-      resources "/workflow-transitions", WorkflowTransitionController,
-        only: [:index, :create, :delete]
+    resources "/workflows", WorkflowController, except: [:new, :edit]
 
-      get "/tasks/ready", TaskController, :ready
+    resources "/workflow-steps", WorkflowStepController, except: [:new, :edit]
 
-      resources "/tasks", TaskController, except: [:new, :edit] do
-        resources "/sections", TaskSectionController, except: [:new, :edit, :show]
-        resources "/refs", CodeRefController, only: [:index, :create, :delete]
+    get "/tasks/ready", TaskController, :ready
 
-        put "/parent", TaskRelationshipController, :set_parent
-        delete "/parent", TaskRelationshipController, :remove_parent
-        resources "/dependencies", TaskRelationshipController, only: [:create, :delete]
-        get "/blockers", TaskRelationshipController, :blockers
-        get "/path", TaskRelationshipController, :path
-        get "/tree", TaskController, :tree
+    resources "/tasks", TaskController, except: [:new, :edit] do
+      resources "/sections", TaskSectionController, except: [:new, :edit, :show]
+      resources "/refs", CodeRefController, only: [:index, :create, :delete]
 
-        post "/assign_workflow", TaskWorkflowController, :assign
-        delete "/assign_workflow", TaskWorkflowController, :unassign
-        post "/advance", TaskWorkflowController, :advance
-        post "/retreat", TaskWorkflowController, :retreat
-        post "/reject", TaskWorkflowController, :reject
+      put "/parent", TaskRelationshipController, :set_parent
+      delete "/parent", TaskRelationshipController, :remove_parent
+      resources "/dependencies", TaskRelationshipController, only: [:create, :delete]
+      get "/blockers", TaskRelationshipController, :blockers
+      get "/path", TaskRelationshipController, :path
+      get "/tree", TaskController, :tree
 
-        resources "/executions", StepExecutionController, only: [:index]
-      end
+      post "/assign_workflow", TaskWorkflowController, :assign
+      delete "/assign_workflow", TaskWorkflowController, :unassign
+      post "/advance", TaskWorkflowController, :advance
+      post "/retreat", TaskWorkflowController, :retreat
+      post "/reject", TaskWorkflowController, :reject
 
-      resources "/executions", StepExecutionController, only: [:show] do
-        resources "/logs", SessionLogController, only: [:index]
-      end
+      resources "/executions", StepExecutionController, only: [:index]
     end
 
-    # Flat routes for individual resource access (no project_id in URL)
-    get "/tasks/:id", TaskController, :show_flat
-    patch "/tasks/:id", TaskController, :update_flat
-    delete "/tasks/:id", TaskController, :delete_flat
+    resources "/workflow-transitions", WorkflowTransitionController,
+      only: [:index, :create, :delete]
 
-    get "/workflows/:id", WorkflowController, :show_flat
-    patch "/workflows/:id", WorkflowController, :update_flat
-    delete "/workflows/:id", WorkflowController, :delete_flat
-
-    get "/workflow-steps/:id", WorkflowStepController, :show_flat
-    patch "/workflow-steps/:id", WorkflowStepController, :update_flat
-    delete "/workflow-steps/:id", WorkflowStepController, :delete_flat
+    resources "/executions", StepExecutionController, only: [:show] do
+      resources "/logs", SessionLogController, only: [:index]
+    end
   end
 
   # Enable LiveDashboard and Swoosh mailbox preview in development

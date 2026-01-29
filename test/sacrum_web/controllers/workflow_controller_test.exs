@@ -31,27 +31,40 @@ defmodule SacrumWeb.WorkflowControllerTest do
 
   describe "unauthenticated requests" do
     test "returns 401 without auth header", %{conn: conn} do
-      project_id = Ecto.UUID.generate()
-      conn = get(conn, ~p"/api/projects/#{project_id}/workflows")
+      conn = get(conn, ~p"/api/workflows")
       assert json_response(conn, 401)
     end
   end
 
-  describe "GET /api/projects/:project_id/workflows" do
+  describe "GET /api/workflows" do
     setup :setup_authenticated
 
-    test "returns 200 with workflow list", %{conn: conn, project: project} do
+    test "returns 200 with workflow list filtered by project_id", %{
+      conn: conn,
+      project: project
+    } do
       {:ok, _} = Workflows.insert(project, %{name: "Workflow 1"})
       {:ok, _} = Workflows.insert(project, %{name: "Workflow 2"})
 
-      conn = get(conn, ~p"/api/projects/#{project.id}/workflows")
+      conn = get(conn, ~p"/api/workflows?project_id=#{project.id}")
 
       assert %{"data" => workflows} = json_response(conn, 200)
       assert length(workflows) == 2
     end
 
+    test "returns all workflows across projects when no project_id", %{
+      conn: conn,
+      project: project
+    } do
+      {:ok, _} = Workflows.insert(project, %{name: "Workflow 1"})
+
+      conn = get(conn, ~p"/api/workflows")
+      assert %{"data" => workflows} = json_response(conn, 200)
+      assert length(workflows) >= 1
+    end
+
     test "returns empty list when no workflows", %{conn: conn, project: project} do
-      conn = get(conn, ~p"/api/projects/#{project.id}/workflows")
+      conn = get(conn, ~p"/api/workflows?project_id=#{project.id}")
       assert %{"data" => []} = json_response(conn, 200)
     end
 
@@ -61,18 +74,18 @@ defmodule SacrumWeb.WorkflowControllerTest do
 
       {:ok, other_project} = Projects.insert(other_user, %{name: "Other"})
 
-      conn = get(conn, ~p"/api/projects/#{other_project.id}/workflows")
+      conn = get(conn, ~p"/api/workflows?project_id=#{other_project.id}")
       assert json_response(conn, 404)
     end
   end
 
-  describe "GET /api/projects/:project_id/workflows/:id" do
+  describe "GET /api/workflows/:id" do
     setup :setup_authenticated
 
     test "returns 200 with workflow JSON", %{conn: conn, project: project} do
       {:ok, workflow} = Workflows.insert(project, %{name: "My Workflow", description: "Desc"})
 
-      conn = get(conn, ~p"/api/projects/#{project.id}/workflows/#{workflow.id}")
+      conn = get(conn, ~p"/api/workflows/#{workflow.id}")
 
       assert %{
                "data" => %{
@@ -85,18 +98,19 @@ defmodule SacrumWeb.WorkflowControllerTest do
       assert id == workflow.id
     end
 
-    test "returns 404 for nonexistent workflow", %{conn: conn, project: project} do
-      conn = get(conn, ~p"/api/projects/#{project.id}/workflows/#{Ecto.UUID.generate()}")
+    test "returns 404 for nonexistent workflow", %{conn: conn} do
+      conn = get(conn, ~p"/api/workflows/#{Ecto.UUID.generate()}")
       assert json_response(conn, 404)
     end
   end
 
-  describe "POST /api/projects/:project_id/workflows" do
+  describe "POST /api/workflows" do
     setup :setup_authenticated
 
     test "returns 201 with workflow JSON for valid params", %{conn: conn, project: project} do
       conn =
-        post(conn, ~p"/api/projects/#{project.id}/workflows", %{
+        post(conn, ~p"/api/workflows", %{
+          project_id: project.id,
           name: "New Workflow",
           description: "A new workflow"
         })
@@ -111,19 +125,19 @@ defmodule SacrumWeb.WorkflowControllerTest do
     end
 
     test "returns 422 with missing name", %{conn: conn, project: project} do
-      conn = post(conn, ~p"/api/projects/#{project.id}/workflows", %{})
+      conn = post(conn, ~p"/api/workflows", %{project_id: project.id})
       assert %{"errors" => %{"name" => _}} = json_response(conn, 422)
     end
   end
 
-  describe "PUT /api/projects/:project_id/workflows/:id" do
+  describe "PATCH /api/workflows/:id" do
     setup :setup_authenticated
 
     test "updates and returns 200", %{conn: conn, project: project} do
       {:ok, workflow} = Workflows.insert(project, %{name: "Original"})
 
       conn =
-        put(conn, ~p"/api/projects/#{project.id}/workflows/#{workflow.id}", %{
+        patch(conn, ~p"/api/workflows/#{workflow.id}", %{
           name: "Updated",
           description: "New desc"
         })
@@ -137,23 +151,23 @@ defmodule SacrumWeb.WorkflowControllerTest do
     end
   end
 
-  describe "DELETE /api/projects/:project_id/workflows/:id" do
+  describe "DELETE /api/workflows/:id" do
     setup :setup_authenticated
 
     test "returns 204", %{conn: conn, project: project} do
       {:ok, workflow} = Workflows.insert(project, %{name: "To Delete"})
-      conn = delete(conn, ~p"/api/projects/#{project.id}/workflows/#{workflow.id}")
+      conn = delete(conn, ~p"/api/workflows/#{workflow.id}")
       assert response(conn, 204)
     end
 
-    test "returns 404 for another user's project", %{conn: conn} do
+    test "returns 404 for another user's workflow", %{conn: conn} do
       other_user =
         create_user(%{email: "other@example.com", username: "other", password: "password123"})
 
       {:ok, other_project} = Projects.insert(other_user, %{name: "Other"})
       {:ok, workflow} = Workflows.insert(other_project, %{name: "Secret"})
 
-      conn = delete(conn, ~p"/api/projects/#{other_project.id}/workflows/#{workflow.id}")
+      conn = delete(conn, ~p"/api/workflows/#{workflow.id}")
       assert json_response(conn, 404)
     end
   end

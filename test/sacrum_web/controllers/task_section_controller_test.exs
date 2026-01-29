@@ -31,23 +31,23 @@ defmodule SacrumWeb.TaskSectionControllerTest do
     %{conn: conn, user: user, project: project, task: task}
   end
 
-  describe "GET /api/projects/:pid/tasks/:tid/sections" do
+  describe "GET /api/tasks/:tid/sections" do
     setup :setup_authenticated
 
-    test "returns 200 with sections list", %{conn: conn, project: project, task: task} do
+    test "returns 200 with sections list", %{conn: conn, task: task} do
       {:ok, _} = TaskSections.insert(task, %{section_type: "goal", content: "Goal 1"})
 
-      conn = get(conn, ~p"/api/projects/#{project.id}/tasks/#{task.id}/sections")
+      conn = get(conn, ~p"/api/tasks/#{task.id}/sections")
       assert %{"data" => [%{"section_type" => "goal"}]} = json_response(conn, 200)
     end
   end
 
-  describe "POST /api/projects/:pid/tasks/:tid/sections" do
+  describe "POST /api/tasks/:tid/sections" do
     setup :setup_authenticated
 
-    test "creates section and returns 201", %{conn: conn, project: project, task: task} do
+    test "creates section and returns 201", %{conn: conn, task: task} do
       conn =
-        post(conn, ~p"/api/projects/#{project.id}/tasks/#{task.id}/sections", %{
+        post(conn, ~p"/api/tasks/#{task.id}/sections", %{
           section_type: "step",
           content: "Do the thing"
         })
@@ -57,14 +57,14 @@ defmodule SacrumWeb.TaskSectionControllerTest do
     end
   end
 
-  describe "PATCH /api/projects/:pid/tasks/:tid/sections/:id" do
+  describe "PATCH /api/tasks/:tid/sections/:id" do
     setup :setup_authenticated
 
-    test "updates section and returns 200", %{conn: conn, project: project, task: task} do
+    test "updates section and returns 200", %{conn: conn, task: task} do
       {:ok, section} = TaskSections.insert(task, %{section_type: "goal", content: "Original"})
 
       conn =
-        patch(conn, ~p"/api/projects/#{project.id}/tasks/#{task.id}/sections/#{section.id}", %{
+        patch(conn, ~p"/api/tasks/#{task.id}/sections/#{section.id}", %{
           content: "Updated"
         })
 
@@ -72,15 +72,13 @@ defmodule SacrumWeb.TaskSectionControllerTest do
     end
   end
 
-  describe "DELETE /api/projects/:pid/tasks/:tid/sections/:id" do
+  describe "DELETE /api/tasks/:tid/sections/:id" do
     setup :setup_authenticated
 
-    test "removes section and returns 204", %{conn: conn, project: project, task: task} do
+    test "removes section and returns 204", %{conn: conn, task: task} do
       {:ok, section} = TaskSections.insert(task, %{section_type: "goal", content: "Temp"})
 
-      conn =
-        delete(conn, ~p"/api/projects/#{project.id}/tasks/#{task.id}/sections/#{section.id}")
-
+      conn = delete(conn, ~p"/api/tasks/#{task.id}/sections/#{section.id}")
       assert response(conn, 204)
     end
   end

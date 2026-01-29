@@ -31,37 +31,36 @@ defmodule SacrumWeb.TaskControllerTest do
 
   describe "unauthenticated requests" do
     test "returns 401 without auth header", %{conn: conn} do
-      project_id = Ecto.UUID.generate()
-      conn = get(conn, ~p"/api/projects/#{project_id}/tasks")
+      conn = get(conn, ~p"/api/tasks?project_id=#{Ecto.UUID.generate()}")
       assert json_response(conn, 401)
     end
   end
 
-  describe "GET /api/projects/:project_id/tasks" do
+  describe "GET /api/tasks" do
     setup :setup_authenticated
 
     test "returns 200 with task list", %{conn: conn, project: project} do
       {:ok, _} = Tasks.insert(project, %{title: "Task 1"})
       {:ok, _} = Tasks.insert(project, %{title: "Task 2"})
 
-      conn = get(conn, ~p"/api/projects/#{project.id}/tasks")
+      conn = get(conn, ~p"/api/tasks?project_id=#{project.id}")
       assert %{"data" => tasks} = json_response(conn, 200)
       assert length(tasks) == 2
     end
 
     test "returns empty list for project with no tasks", %{conn: conn, project: project} do
-      conn = get(conn, ~p"/api/projects/#{project.id}/tasks")
+      conn = get(conn, ~p"/api/tasks?project_id=#{project.id}")
       assert %{"data" => []} = json_response(conn, 200)
     end
   end
 
-  describe "GET /api/projects/:project_id/tasks/:id" do
+  describe "GET /api/tasks/:id" do
     setup :setup_authenticated
 
     test "returns 200 with task JSON", %{conn: conn, project: project} do
       {:ok, task} = Tasks.insert(project, %{title: "My Task"})
 
-      conn = get(conn, ~p"/api/projects/#{project.id}/tasks/#{task.id}")
+      conn = get(conn, ~p"/api/tasks/#{task.id}")
 
       assert %{
                "data" => %{
@@ -75,18 +74,19 @@ defmodule SacrumWeb.TaskControllerTest do
       assert short_id =~ ~r/^x[a-f0-9]{6}$/
     end
 
-    test "returns 404 for nonexistent task", %{conn: conn, project: project} do
-      conn = get(conn, ~p"/api/projects/#{project.id}/tasks/#{Ecto.UUID.generate()}")
+    test "returns 404 for nonexistent task", %{conn: conn} do
+      conn = get(conn, ~p"/api/tasks/#{Ecto.UUID.generate()}")
       assert json_response(conn, 404)
     end
   end
 
-  describe "POST /api/projects/:project_id/tasks" do
+  describe "POST /api/tasks" do
     setup :setup_authenticated
 
     test "returns 201 with valid params", %{conn: conn, project: project} do
       conn =
-        post(conn, ~p"/api/projects/#{project.id}/tasks", %{
+        post(conn, ~p"/api/tasks", %{
+          project_id: project.id,
           title: "New Task",
           description: "A description",
           level: "ticket"
@@ -103,19 +103,19 @@ defmodule SacrumWeb.TaskControllerTest do
     end
 
     test "returns 422 with missing title", %{conn: conn, project: project} do
-      conn = post(conn, ~p"/api/projects/#{project.id}/tasks", %{})
+      conn = post(conn, ~p"/api/tasks", %{project_id: project.id})
       assert %{"errors" => %{"title" => _}} = json_response(conn, 422)
     end
   end
 
-  describe "PUT /api/projects/:project_id/tasks/:id" do
+  describe "PATCH /api/tasks/:id" do
     setup :setup_authenticated
 
     test "updates and returns 200", %{conn: conn, project: project} do
       {:ok, task} = Tasks.insert(project, %{title: "Original"})
 
       conn =
-        put(conn, ~p"/api/projects/#{project.id}/tasks/#{task.id}", %{
+        patch(conn, ~p"/api/tasks/#{task.id}", %{
           title: "Updated",
           description: "New desc"
         })
@@ -129,21 +129,20 @@ defmodule SacrumWeb.TaskControllerTest do
     end
   end
 
-  describe "DELETE /api/projects/:project_id/tasks/:id" do
+  describe "DELETE /api/tasks/:id" do
     setup :setup_authenticated
 
     test "returns 204", %{conn: conn, project: project} do
       {:ok, task} = Tasks.insert(project, %{title: "To Delete"})
-      conn = delete(conn, ~p"/api/projects/#{project.id}/tasks/#{task.id}")
+      conn = delete(conn, ~p"/api/tasks/#{task.id}")
       assert response(conn, 204)
     end
   end
 
-  describe "GET /api/projects/:project_id/tasks filters" do
+  describe "GET /api/tasks filters" do
     setup :setup_authenticated
 
     test "filters by status (workflow step name)", %{conn: conn, project: project} do
-      # Create a workflow with a step
       {:ok, workflow} = Sacrum.Repo.Workflows.insert(project, %{name: "Test Workflow"})
 
       {:ok, step} =
@@ -155,7 +154,7 @@ defmodule SacrumWeb.TaskControllerTest do
       {:ok, _task1} = Sacrum.Repo.TaskWorkflows.assign_workflow(task1, workflow)
       {:ok, _task2} = Tasks.insert(project, %{title: "Task without workflow"})
 
-      conn = get(conn, ~p"/api/projects/#{project.id}/tasks?status=in_progress")
+      conn = get(conn, ~p"/api/tasks?project_id=#{project.id}&status=in_progress")
       assert %{"data" => tasks} = json_response(conn, 200)
       assert length(tasks) == 1
       assert hd(tasks)["title"] == "Task with workflow"
@@ -166,7 +165,7 @@ defmodule SacrumWeb.TaskControllerTest do
       {:ok, _} = Tasks.insert(project, %{title: "Other", tags: ["frontend"]})
       {:ok, _} = Tasks.insert(project, %{title: "No tags"})
 
-      conn = get(conn, ~p"/api/projects/#{project.id}/tasks?tags=backend")
+      conn = get(conn, ~p"/api/tasks?project_id=#{project.id}&tags=backend")
       assert %{"data" => tasks} = json_response(conn, 200)
       assert length(tasks) == 1
       assert hd(tasks)["title"] == "Tagged"
@@ -177,7 +176,7 @@ defmodule SacrumWeb.TaskControllerTest do
       {:ok, child} = Tasks.insert(project, %{title: "Child"})
       {:ok, _} = Sacrum.Repo.TaskHierarchy.set_parent(child, parent)
 
-      conn = get(conn, ~p"/api/projects/#{project.id}/tasks?root_only=true")
+      conn = get(conn, ~p"/api/tasks?project_id=#{project.id}&root_only=true")
       assert %{"data" => tasks} = json_response(conn, 200)
       assert length(tasks) == 1
       assert hd(tasks)["title"] == "Parent"
@@ -195,7 +194,7 @@ defmodule SacrumWeb.TaskControllerTest do
       {:ok, _} = Sacrum.Repo.TaskWorkflows.assign_workflow(task1, workflow)
       {:ok, _} = Tasks.insert(project, %{title: "Not in workflow"})
 
-      conn = get(conn, ~p"/api/projects/#{project.id}/tasks?workflow_id=#{workflow.id}")
+      conn = get(conn, ~p"/api/tasks?project_id=#{project.id}&workflow_id=#{workflow.id}")
       assert %{"data" => tasks} = json_response(conn, 200)
       assert length(tasks) == 1
       assert hd(tasks)["title"] == "In workflow"
@@ -207,7 +206,9 @@ defmodule SacrumWeb.TaskControllerTest do
       {:ok, _} = Sacrum.Repo.TaskHierarchy.set_parent(child, parent)
       {:ok, _} = Tasks.insert(project, %{title: "Root untagged"})
 
-      conn = get(conn, ~p"/api/projects/#{project.id}/tasks?root_only=true&tags=backend")
+      conn =
+        get(conn, ~p"/api/tasks?project_id=#{project.id}&root_only=true&tags=backend")
+
       assert %{"data" => tasks} = json_response(conn, 200)
       assert length(tasks) == 1
       assert hd(tasks)["title"] == "Root tagged"
@@ -217,14 +218,17 @@ defmodule SacrumWeb.TaskControllerTest do
       {:ok, _} = Tasks.insert(project, %{title: "Task 1"})
 
       conn =
-        get(conn, ~p"/api/projects/#{project.id}/tasks?status=&tags=&root_only=&workflow_id=")
+        get(
+          conn,
+          ~p"/api/tasks?project_id=#{project.id}&status=&tags=&root_only=&workflow_id="
+        )
 
       assert %{"data" => tasks} = json_response(conn, 200)
       assert length(tasks) == 1
     end
   end
 
-  describe "GET /api/projects/:project_id/tasks/ready" do
+  describe "GET /api/tasks/ready" do
     setup :setup_authenticated
 
     test "returns root tasks with no incomplete blockers", %{conn: conn, project: project} do
@@ -232,7 +236,7 @@ defmodule SacrumWeb.TaskControllerTest do
       {:ok, child} = Tasks.insert(project, %{title: "Child Task"})
       {:ok, _} = Sacrum.Repo.TaskHierarchy.set_parent(child, root)
 
-      conn = get(conn, ~p"/api/projects/#{project.id}/tasks/ready")
+      conn = get(conn, ~p"/api/tasks/ready?project_id=#{project.id}")
       assert %{"data" => tasks} = json_response(conn, 200)
       assert length(tasks) == 1
       assert hd(tasks)["title"] == "Root Task"
@@ -243,7 +247,7 @@ defmodule SacrumWeb.TaskControllerTest do
       {:ok, blocked} = Tasks.insert(project, %{title: "Blocked"})
       {:ok, _} = Sacrum.Repo.TaskDependencies.add_dependency(blocked, blocker)
 
-      conn = get(conn, ~p"/api/projects/#{project.id}/tasks/ready")
+      conn = get(conn, ~p"/api/tasks/ready?project_id=#{project.id}")
       assert %{"data" => tasks} = json_response(conn, 200)
       titles = Enum.map(tasks, & &1["title"])
       assert "Blocker" in titles
@@ -256,7 +260,7 @@ defmodule SacrumWeb.TaskControllerTest do
       {:ok, task} = Tasks.insert(project, %{title: "Unblocked"})
       {:ok, _} = Sacrum.Repo.TaskDependencies.add_dependency(task, blocker)
 
-      conn = get(conn, ~p"/api/projects/#{project.id}/tasks/ready")
+      conn = get(conn, ~p"/api/tasks/ready?project_id=#{project.id}")
       assert %{"data" => tasks} = json_response(conn, 200)
       titles = Enum.map(tasks, & &1["title"])
       assert "Unblocked" in titles
@@ -264,12 +268,12 @@ defmodule SacrumWeb.TaskControllerTest do
 
     test "returns 401 without auth token", %{conn: _conn} do
       conn = build_conn()
-      conn = get(conn, ~p"/api/projects/#{Ecto.UUID.generate()}/tasks/ready")
+      conn = get(conn, ~p"/api/tasks/ready?project_id=#{Ecto.UUID.generate()}")
       assert json_response(conn, 401)
     end
   end
 
-  describe "GET /api/projects/:project_id/tasks/:task_id/tree" do
+  describe "GET /api/tasks/:task_id/tree" do
     setup :setup_authenticated
 
     test "returns tree with root task and nested children", %{conn: conn, project: project} do
@@ -279,7 +283,7 @@ defmodule SacrumWeb.TaskControllerTest do
       {:ok, _} = Sacrum.Repo.TaskHierarchy.set_parent(child, root)
       {:ok, _} = Sacrum.Repo.TaskHierarchy.set_parent(grandchild, child)
 
-      conn = get(conn, ~p"/api/projects/#{project.id}/tasks/#{root.id}/tree")
+      conn = get(conn, ~p"/api/tasks/#{root.id}/tree")
       assert %{"data" => tree} = json_response(conn, 200)
       assert tree["title"] == "Root"
       assert length(tree["children"]) == 1
@@ -292,49 +296,20 @@ defmodule SacrumWeb.TaskControllerTest do
     test "leaf task has empty children array", %{conn: conn, project: project} do
       {:ok, leaf} = Tasks.insert(project, %{title: "Leaf"})
 
-      conn = get(conn, ~p"/api/projects/#{project.id}/tasks/#{leaf.id}/tree")
+      conn = get(conn, ~p"/api/tasks/#{leaf.id}/tree")
       assert %{"data" => tree} = json_response(conn, 200)
       assert tree["title"] == "Leaf"
       assert tree["children"] == []
     end
 
-    test "returns 404 for nonexistent task", %{conn: conn, project: project} do
-      conn =
-        get(
-          conn,
-          ~p"/api/projects/#{project.id}/tasks/#{Ecto.UUID.generate()}/tree"
-        )
-
+    test "returns 404 for nonexistent task", %{conn: conn} do
+      conn = get(conn, ~p"/api/tasks/#{Ecto.UUID.generate()}/tree")
       assert json_response(conn, 404)
     end
   end
 
-  describe "flat routes - GET/PATCH/DELETE /api/tasks/:id" do
-    setup :setup_authenticated
-
-    test "GET /api/tasks/:id returns task", %{conn: conn, project: project} do
-      {:ok, task} = Tasks.insert(project, %{title: "Flat Task"})
-
-      conn = get(conn, ~p"/api/tasks/#{task.id}")
-      assert %{"data" => %{"title" => "Flat Task"}} = json_response(conn, 200)
-    end
-
-    test "PATCH /api/tasks/:id updates task", %{conn: conn, project: project} do
-      {:ok, task} = Tasks.insert(project, %{title: "Original"})
-
-      conn = patch(conn, ~p"/api/tasks/#{task.id}", %{title: "Updated"})
-      assert %{"data" => %{"title" => "Updated"}} = json_response(conn, 200)
-    end
-
-    test "DELETE /api/tasks/:id deletes task", %{conn: conn, project: project} do
-      {:ok, task} = Tasks.insert(project, %{title: "To Delete"})
-
-      conn = delete(conn, ~p"/api/tasks/#{task.id}")
-      assert response(conn, 204)
-    end
-
-    test "returns 404 for another user's task", %{conn: _conn, project: _project} do
-      # Create a different user's task
+  describe "returns 404 for another user's task" do
+    test "GET /api/tasks/:id", %{conn: _conn} do
       {:ok, other_user} =
         Sacrum.Repo.Users.insert(%{
           email: "other@example.com",
@@ -345,7 +320,6 @@ defmodule SacrumWeb.TaskControllerTest do
       {:ok, other_project} = Sacrum.Repo.Projects.insert(other_user, %{name: "Other"})
       {:ok, other_task} = Tasks.insert(other_project, %{title: "Other Task"})
 
-      # Authenticate as the first user
       {:ok, user} =
         Sacrum.Repo.Users.insert(%{
           email: "me@example.com",
@@ -369,14 +343,13 @@ defmodule SacrumWeb.TaskControllerTest do
       {:ok, child} = Tasks.insert(project, %{title: "Child"})
 
       conn =
-        put(conn, ~p"/api/projects/#{project.id}/tasks/#{child.id}", %{
+        patch(conn, ~p"/api/tasks/#{child.id}", %{
           title: "Child",
           parent_id: parent.id
         })
 
       assert json_response(conn, 200)
 
-      # Verify parent was set
       {:ok, found_parent} = Sacrum.Repo.TaskHierarchy.get_parent(child)
       assert found_parent.id == parent.id
     end
@@ -387,7 +360,7 @@ defmodule SacrumWeb.TaskControllerTest do
       {:ok, task} = Tasks.insert(project, %{title: "Task"})
 
       conn =
-        put(conn, ~p"/api/projects/#{project.id}/tasks/#{task.id}", %{
+        patch(conn, ~p"/api/tasks/#{task.id}", %{
           title: "Task",
           depends_on_ids: [dep1.id, dep2.id]
         })

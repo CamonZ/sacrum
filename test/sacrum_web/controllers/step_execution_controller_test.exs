@@ -42,12 +42,11 @@ defmodule SacrumWeb.StepExecutionControllerTest do
     Map.merge(context, %{task: task, workflow: workflow, step: step})
   end
 
-  describe "GET /api/projects/:project_id/tasks/:task_id/executions" do
+  describe "GET /api/tasks/:task_id/executions" do
     setup [:setup_authenticated, :setup_with_execution]
 
     test "returns chronological list of step executions", ctx do
-      conn =
-        get(ctx.conn, ~p"/api/projects/#{ctx.project.id}/tasks/#{ctx.task.id}/executions")
+      conn = get(ctx.conn, ~p"/api/tasks/#{ctx.task.id}/executions")
 
       assert %{"data" => executions} = json_response(conn, 200)
       assert length(executions) >= 1
@@ -57,36 +56,29 @@ defmodule SacrumWeb.StepExecutionControllerTest do
     test "returns empty list for task with no executions", ctx do
       {:ok, task2} = Tasks.insert(ctx.project, %{title: "No Executions"})
 
-      conn =
-        get(ctx.conn, ~p"/api/projects/#{ctx.project.id}/tasks/#{task2.id}/executions")
+      conn = get(ctx.conn, ~p"/api/tasks/#{task2.id}/executions")
 
       assert %{"data" => []} = json_response(conn, 200)
     end
   end
 
-  describe "GET /api/projects/:project_id/executions/:id" do
+  describe "GET /api/executions/:id" do
     setup [:setup_authenticated, :setup_with_execution]
 
     test "returns single execution with full details", ctx do
       # Get the execution created during workflow assignment
-      conn =
-        get(ctx.conn, ~p"/api/projects/#{ctx.project.id}/tasks/#{ctx.task.id}/executions")
+      conn = get(ctx.conn, ~p"/api/tasks/#{ctx.task.id}/executions")
 
       %{"data" => [execution | _]} = json_response(conn, 200)
 
-      conn =
-        get(ctx.conn, ~p"/api/projects/#{ctx.project.id}/executions/#{execution["id"]}")
+      conn = get(ctx.conn, ~p"/api/executions/#{execution["id"]}")
 
       assert %{"data" => %{"id" => _, "step_name" => "start", "status" => "entered"}} =
                json_response(conn, 200)
     end
 
     test "returns 404 for nonexistent execution", ctx do
-      conn =
-        get(
-          ctx.conn,
-          ~p"/api/projects/#{ctx.project.id}/executions/#{Ecto.UUID.generate()}"
-        )
+      conn = get(ctx.conn, ~p"/api/executions/#{Ecto.UUID.generate()}")
 
       assert json_response(conn, 404)
     end
@@ -94,11 +86,9 @@ defmodule SacrumWeb.StepExecutionControllerTest do
 
   describe "authentication" do
     test "returns 401 without auth token", %{conn: conn} do
-      project_id = Ecto.UUID.generate()
       task_id = Ecto.UUID.generate()
 
-      conn =
-        get(conn, ~p"/api/projects/#{project_id}/tasks/#{task_id}/executions")
+      conn = get(conn, ~p"/api/tasks/#{task_id}/executions")
 
       assert json_response(conn, 401)
     end

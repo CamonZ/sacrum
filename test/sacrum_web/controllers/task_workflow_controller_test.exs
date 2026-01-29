@@ -52,17 +52,15 @@ defmodule SacrumWeb.TaskWorkflowControllerTest do
     })
   end
 
-  describe "POST /api/projects/:pid/tasks/:tid/assign_workflow" do
+  describe "POST /api/tasks/:tid/assign_workflow" do
     setup [:setup_authenticated, :setup_workflow]
 
     test "assigns workflow and returns task with workflow_id", ctx do
       conn =
         post(
           ctx.conn,
-          ~p"/api/projects/#{ctx.project.id}/tasks/#{ctx.task.id}/assign_workflow",
-          %{
-            workflow_id: ctx.workflow.id
-          }
+          ~p"/api/tasks/#{ctx.task.id}/assign_workflow",
+          %{workflow_id: ctx.workflow.id}
         )
 
       assert %{
@@ -77,17 +75,16 @@ defmodule SacrumWeb.TaskWorkflowControllerTest do
     end
   end
 
-  describe "DELETE /api/projects/:pid/tasks/:tid/assign_workflow" do
+  describe "DELETE /api/tasks/:tid/assign_workflow" do
     setup [:setup_authenticated, :setup_workflow]
 
     test "unassigns workflow and clears step", ctx do
       # First assign
-      post(ctx.conn, ~p"/api/projects/#{ctx.project.id}/tasks/#{ctx.task.id}/assign_workflow", %{
+      post(ctx.conn, ~p"/api/tasks/#{ctx.task.id}/assign_workflow", %{
         workflow_id: ctx.workflow.id
       })
 
-      conn =
-        delete(ctx.conn, ~p"/api/projects/#{ctx.project.id}/tasks/#{ctx.task.id}/assign_workflow")
+      conn = delete(ctx.conn, ~p"/api/tasks/#{ctx.task.id}/assign_workflow")
 
       assert %{
                "data" => %{
@@ -98,16 +95,16 @@ defmodule SacrumWeb.TaskWorkflowControllerTest do
     end
   end
 
-  describe "POST /api/projects/:pid/tasks/:tid/advance" do
+  describe "POST /api/tasks/:tid/advance" do
     setup [:setup_authenticated, :setup_workflow]
 
     test "advances task to next step", ctx do
       # Assign workflow first
-      post(ctx.conn, ~p"/api/projects/#{ctx.project.id}/tasks/#{ctx.task.id}/assign_workflow", %{
+      post(ctx.conn, ~p"/api/tasks/#{ctx.task.id}/assign_workflow", %{
         workflow_id: ctx.workflow.id
       })
 
-      conn = post(ctx.conn, ~p"/api/projects/#{ctx.project.id}/tasks/#{ctx.task.id}/advance")
+      conn = post(ctx.conn, ~p"/api/tasks/#{ctx.task.id}/advance")
 
       assert %{
                "data" => %{
@@ -119,24 +116,24 @@ defmodule SacrumWeb.TaskWorkflowControllerTest do
     end
 
     test "returns 422 when task has no workflow", ctx do
-      conn = post(ctx.conn, ~p"/api/projects/#{ctx.project.id}/tasks/#{ctx.task.id}/advance")
+      conn = post(ctx.conn, ~p"/api/tasks/#{ctx.task.id}/advance")
 
       assert %{"errors" => %{"detail" => _}} = json_response(conn, 422)
     end
   end
 
-  describe "POST /api/projects/:pid/tasks/:tid/retreat" do
+  describe "POST /api/tasks/:tid/retreat" do
     setup [:setup_authenticated, :setup_workflow]
 
     test "retreats task to previous step", ctx do
       # Assign and advance
-      post(ctx.conn, ~p"/api/projects/#{ctx.project.id}/tasks/#{ctx.task.id}/assign_workflow", %{
+      post(ctx.conn, ~p"/api/tasks/#{ctx.task.id}/assign_workflow", %{
         workflow_id: ctx.workflow.id
       })
 
-      post(ctx.conn, ~p"/api/projects/#{ctx.project.id}/tasks/#{ctx.task.id}/advance")
+      post(ctx.conn, ~p"/api/tasks/#{ctx.task.id}/advance")
 
-      conn = post(ctx.conn, ~p"/api/projects/#{ctx.project.id}/tasks/#{ctx.task.id}/retreat")
+      conn = post(ctx.conn, ~p"/api/tasks/#{ctx.task.id}/retreat")
 
       assert %{
                "data" => %{
@@ -149,17 +146,17 @@ defmodule SacrumWeb.TaskWorkflowControllerTest do
 
     test "returns 422 when no retreat transition exists", ctx do
       # Assign but don't advance — at initial step, no reverse transition
-      post(ctx.conn, ~p"/api/projects/#{ctx.project.id}/tasks/#{ctx.task.id}/assign_workflow", %{
+      post(ctx.conn, ~p"/api/tasks/#{ctx.task.id}/assign_workflow", %{
         workflow_id: ctx.workflow.id
       })
 
-      conn = post(ctx.conn, ~p"/api/projects/#{ctx.project.id}/tasks/#{ctx.task.id}/retreat")
+      conn = post(ctx.conn, ~p"/api/tasks/#{ctx.task.id}/retreat")
 
       assert %{"errors" => %{"detail" => _}} = json_response(conn, 422)
     end
   end
 
-  describe "POST /api/projects/:pid/tasks/:tid/reject" do
+  describe "POST /api/tasks/:tid/reject" do
     setup [:setup_authenticated]
 
     setup %{project: project} = context do
@@ -183,14 +180,14 @@ defmodule SacrumWeb.TaskWorkflowControllerTest do
       # Assign workflow first
       post(
         ctx.conn,
-        ~p"/api/projects/#{ctx.project.id}/tasks/#{ctx.task.id}/assign_workflow",
+        ~p"/api/tasks/#{ctx.task.id}/assign_workflow",
         %{workflow_id: ctx.workflow.id}
       )
 
       conn =
         post(
           ctx.conn,
-          ~p"/api/projects/#{ctx.project.id}/tasks/#{ctx.task.id}/reject",
+          ~p"/api/tasks/#{ctx.task.id}/reject",
           %{reason: "Does not meet requirements"}
         )
 
@@ -208,7 +205,7 @@ defmodule SacrumWeb.TaskWorkflowControllerTest do
       conn =
         post(
           ctx.conn,
-          ~p"/api/projects/#{ctx.project.id}/tasks/#{ctx.task.id}/reject",
+          ~p"/api/tasks/#{ctx.task.id}/reject",
           %{reason: "Bad"}
         )
 

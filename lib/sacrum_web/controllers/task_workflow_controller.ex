@@ -1,24 +1,12 @@
 defmodule SacrumWeb.TaskWorkflowController do
   use SacrumWeb, :controller
 
-  alias Sacrum.Repo.Projects
   alias Sacrum.Repo.Tasks
   alias Sacrum.Repo.Workflows
   alias Sacrum.Repo.TaskWorkflows
-  alias Sacrum.Repo.Schemas.Project
   alias Sacrum.Repo.Schemas.Task
 
   action_fallback SacrumWeb.FallbackController
-
-  defp authorize_project(project_id, user) do
-    with {:ok, %Project{} = project} <- Projects.get(project_id),
-         true <- project.user_id == user.id do
-      {:ok, project}
-    else
-      false -> {:error, :not_found}
-      error -> error
-    end
-  end
 
   defp find_task(id) do
     case Ecto.UUID.cast(id) do
@@ -27,13 +15,19 @@ defmodule SacrumWeb.TaskWorkflowController do
     end
   end
 
-  def assign(conn, %{
-        "project_id" => project_id,
-        "task_id" => task_id,
-        "workflow_id" => workflow_id
-      }) do
-    with {:ok, _project} <- authorize_project(project_id, conn.assigns.current_user),
-         {:ok, %Task{} = task} <- find_task(task_id),
+  defp authorize_task_owner(%Task{} = task, user) do
+    task = Sacrum.Repo.preload(task, :project)
+
+    if task.project && task.project.user_id == user.id do
+      :ok
+    else
+      {:error, :not_found}
+    end
+  end
+
+  def assign(conn, %{"task_id" => task_id, "workflow_id" => workflow_id}) do
+    with {:ok, %Task{} = task} <- find_task(task_id),
+         :ok <- authorize_task_owner(task, conn.assigns.current_user),
          {:ok, workflow} <- Workflows.get(workflow_id),
          {:ok, %Task{} = updated} <- TaskWorkflows.assign_workflow(task, workflow) do
       conn
@@ -42,9 +36,9 @@ defmodule SacrumWeb.TaskWorkflowController do
     end
   end
 
-  def unassign(conn, %{"project_id" => project_id, "task_id" => task_id}) do
-    with {:ok, _project} <- authorize_project(project_id, conn.assigns.current_user),
-         {:ok, %Task{} = task} <- find_task(task_id),
+  def unassign(conn, %{"task_id" => task_id}) do
+    with {:ok, %Task{} = task} <- find_task(task_id),
+         :ok <- authorize_task_owner(task, conn.assigns.current_user),
          {:ok, %Task{} = updated} <- TaskWorkflows.unassign_workflow(task) do
       conn
       |> put_view(json: SacrumWeb.TaskJSON)
@@ -52,9 +46,9 @@ defmodule SacrumWeb.TaskWorkflowController do
     end
   end
 
-  def advance(conn, %{"project_id" => project_id, "task_id" => task_id}) do
-    with {:ok, _project} <- authorize_project(project_id, conn.assigns.current_user),
-         {:ok, %Task{} = task} <- find_task(task_id),
+  def advance(conn, %{"task_id" => task_id}) do
+    with {:ok, %Task{} = task} <- find_task(task_id),
+         :ok <- authorize_task_owner(task, conn.assigns.current_user),
          {:ok, %Task{} = updated} <- TaskWorkflows.advance_step(task) do
       conn
       |> put_view(json: SacrumWeb.TaskJSON)
@@ -71,9 +65,9 @@ defmodule SacrumWeb.TaskWorkflowController do
     end
   end
 
-  def retreat(conn, %{"project_id" => project_id, "task_id" => task_id}) do
-    with {:ok, _project} <- authorize_project(project_id, conn.assigns.current_user),
-         {:ok, %Task{} = task} <- find_task(task_id),
+  def retreat(conn, %{"task_id" => task_id}) do
+    with {:ok, %Task{} = task} <- find_task(task_id),
+         :ok <- authorize_task_owner(task, conn.assigns.current_user),
          {:ok, %Task{} = updated} <- TaskWorkflows.retreat_step(task) do
       conn
       |> put_view(json: SacrumWeb.TaskJSON)
@@ -90,11 +84,11 @@ defmodule SacrumWeb.TaskWorkflowController do
     end
   end
 
-  def reject(conn, %{"project_id" => project_id, "task_id" => task_id} = params) do
+  def reject(conn, %{"task_id" => task_id} = params) do
     reason = params["reason"] || params["rejection_reason"]
 
-    with {:ok, _project} <- authorize_project(project_id, conn.assigns.current_user),
-         {:ok, %Task{} = task} <- find_task(task_id),
+    with {:ok, %Task{} = task} <- find_task(task_id),
+         :ok <- authorize_task_owner(task, conn.assigns.current_user),
          {:ok, %Task{} = updated} <- TaskWorkflows.reject_task(task, reason) do
       conn
       |> put_view(json: SacrumWeb.TaskJSON)
