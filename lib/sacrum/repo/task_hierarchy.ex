@@ -76,4 +76,17 @@ defmodule Sacrum.Repo.TaskHierarchy do
     child_ids = Enum.map(children, & &1.id)
     get_descendants_recursive(child_ids, acc ++ children)
   end
+
+  @doc """
+  Builds a recursive tree structure from a root task.
+  Returns a map with the task data and a :children list.
+  """
+  def build_tree(%Task{} = task) do
+    children = get_children(task)
+
+    %{
+      task: task,
+      children: Enum.map(children, &build_tree/1)
+    }
+  end
 end

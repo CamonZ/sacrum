@@ -9,6 +9,15 @@ defmodule SacrumWeb.TaskJSON do
     %{data: data(task)}
   end
 
+  def tree(%{tree: tree}) do
+    %{data: tree_data(tree)}
+  end
+
+  defp tree_data(%{task: task, children: children}) do
+    data(task)
+    |> Map.put(:children, Enum.map(children, &tree_data/1))
+  end
+
   defp data(%Task{} = task) do
     %{
       id: task.id,

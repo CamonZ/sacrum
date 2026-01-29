@@ -267,4 +267,44 @@ defmodule SacrumWeb.TaskControllerTest do
       assert json_response(conn, 401)
     end
   end
+
+  describe "GET /api/projects/:project_id/tasks/:task_id/tree" do
+    setup :setup_authenticated
+
+    test "returns tree with root task and nested children", %{conn: conn, project: project} do
+      {:ok, root} = Tasks.insert(project, %{title: "Root"})
+      {:ok, child} = Tasks.insert(project, %{title: "Child"})
+      {:ok, grandchild} = Tasks.insert(project, %{title: "Grandchild"})
+      {:ok, _} = Sacrum.Repo.TaskHierarchy.set_parent(child, root)
+      {:ok, _} = Sacrum.Repo.TaskHierarchy.set_parent(grandchild, child)
+
+      conn = get(conn, ~p"/api/projects/#{project.id}/tasks/#{root.id}/tree")
+      assert %{"data" => tree} = json_response(conn, 200)
+      assert tree["title"] == "Root"
+      assert length(tree["children"]) == 1
+      child_node = hd(tree["children"])
+      assert child_node["title"] == "Child"
+      assert length(child_node["children"]) == 1
+      assert hd(child_node["children"])["title"] == "Grandchild"
+    end
+
+    test "leaf task has empty children array", %{conn: conn, project: project} do
+      {:ok, leaf} = Tasks.insert(project, %{title: "Leaf"})
+
+      conn = get(conn, ~p"/api/projects/#{project.id}/tasks/#{leaf.id}/tree")
+      assert %{"data" => tree} = json_response(conn, 200)
+      assert tree["title"] == "Leaf"
+      assert tree["children"] == []
+    end
+
+    test "returns 404 for nonexistent task", %{conn: conn, project: project} do
+      conn =
+        get(
+          conn,
+          ~p"/api/projects/#{project.id}/tasks/#{Ecto.UUID.generate()}/tree"
+        )
+
+      assert json_response(conn, 404)
+    end
+  end
 end

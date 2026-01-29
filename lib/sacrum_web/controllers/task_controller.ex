@@ -3,6 +3,7 @@ defmodule SacrumWeb.TaskController do
 
   alias Sacrum.Repo.Projects
   alias Sacrum.Repo.Tasks
+  alias Sacrum.Repo.TaskHierarchy
   alias Sacrum.Repo.Schemas.Project
   alias Sacrum.Repo.Schemas.Task
 
@@ -40,6 +41,14 @@ defmodule SacrumWeb.TaskController do
     with {:ok, project} <- authorize_project(project_id, conn.assigns.current_user) do
       tasks = Tasks.ready(project.id)
       render(conn, :index, tasks: tasks)
+    end
+  end
+
+  def tree(conn, %{"project_id" => project_id, "task_id" => task_id}) do
+    with {:ok, _project} <- authorize_project(project_id, conn.assigns.current_user),
+         {:ok, %Task{} = task} <- find_task(task_id) do
+      tree = TaskHierarchy.build_tree(task)
+      render(conn, :tree, tree: tree)
     end
   end
 
