@@ -53,7 +53,9 @@ defmodule SacrumWeb.Router do
         resources "/executions", StepExecutionController, only: [:index]
       end
 
-      resources "/executions", StepExecutionController, only: [:show]
+      resources "/executions", StepExecutionController, only: [:show] do
+        resources "/logs", SessionLogController, only: [:index]
+      end
     end
   end
 
