@@ -117,4 +117,57 @@ defmodule SacrumWeb.TaskRelationshipControllerTest do
       assert length(blockers) == 2
     end
   end
+
+  describe "GET /api/projects/:pid/tasks/:tid/path" do
+    setup :setup_authenticated
+
+    test "returns shortest dependency path", %{conn: conn, project: project} do
+      {:ok, a} = Tasks.insert(project, %{title: "A"})
+      {:ok, b} = Tasks.insert(project, %{title: "B"})
+      {:ok, c} = Tasks.insert(project, %{title: "C"})
+      {:ok, _} = TaskDependencies.add_dependency(a, b)
+      {:ok, _} = TaskDependencies.add_dependency(b, c)
+
+      conn = get(conn, ~p"/api/projects/#{project.id}/tasks/#{a.id}/path?to=#{c.id}")
+      assert %{"data" => %{"path" => path}} = json_response(conn, 200)
+      assert length(path) == 3
+      assert path == [a.id, b.id, c.id]
+    end
+
+    test "returns empty path when no dependency path exists", %{conn: conn, project: project} do
+      {:ok, a} = Tasks.insert(project, %{title: "A"})
+      {:ok, b} = Tasks.insert(project, %{title: "B"})
+
+      conn = get(conn, ~p"/api/projects/#{project.id}/tasks/#{a.id}/path?to=#{b.id}")
+      assert %{"data" => %{"path" => []}} = json_response(conn, 200)
+    end
+
+    test "returns single-element path for direct dependency", %{conn: conn, project: project} do
+      {:ok, a} = Tasks.insert(project, %{title: "A"})
+      {:ok, b} = Tasks.insert(project, %{title: "B"})
+      {:ok, _} = TaskDependencies.add_dependency(a, b)
+
+      conn = get(conn, ~p"/api/projects/#{project.id}/tasks/#{a.id}/path?to=#{b.id}")
+      assert %{"data" => %{"path" => path}} = json_response(conn, 200)
+      assert path == [a.id, b.id]
+    end
+
+    test "returns 404 if target task does not exist", %{conn: conn, project: project} do
+      {:ok, a} = Tasks.insert(project, %{title: "A"})
+
+      conn =
+        get(
+          conn,
+          ~p"/api/projects/#{project.id}/tasks/#{a.id}/path?to=#{Ecto.UUID.generate()}"
+        )
+
+      assert json_response(conn, 404)
+    end
+
+    test "returns 422 when to param is missing", %{conn: conn, project: project} do
+      {:ok, a} = Tasks.insert(project, %{title: "A"})
+      conn = get(conn, ~p"/api/projects/#{project.id}/tasks/#{a.id}/path")
+      assert json_response(conn, 422)
+    end
+  end
 end

@@ -99,4 +99,20 @@ defmodule SacrumWeb.TaskRelationshipController do
       render(conn, :index, tasks: blockers)
     end
   end
+
+  def path(conn, %{"project_id" => project_id, "task_id" => task_id, "to" => target_id}) do
+    with {:ok, task} <- authorize_task(project_id, task_id, conn.assigns.current_user),
+         {:ok, %Task{} = target} <- Tasks.get(target_id),
+         {:ok, path_ids} <- TaskDependencies.find_path(task, target) do
+      json(conn, %{data: %{path: path_ids}})
+    end
+  end
+
+  def path(conn, %{"project_id" => project_id, "task_id" => task_id}) do
+    with {:ok, _task} <- authorize_task(project_id, task_id, conn.assigns.current_user) do
+      conn
+      |> put_status(:unprocessable_entity)
+      |> json(%{errors: %{to: ["query parameter is required"]}})
+    end
+  end
 end

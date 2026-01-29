@@ -84,6 +84,47 @@ defmodule Sacrum.Repo.TaskDependencies do
     |> Repo.all()
   end
 
+  @doc """
+  Finds the shortest dependency path between two tasks using BFS.
+  Returns {:ok, [task_ids]} or {:ok, []} if no path exists.
+  """
+  def find_path(%Task{id: from_id}, %Task{id: to_id}) do
+    bfs_path(from_id, to_id)
+  end
+
+  defp bfs_path(from_id, to_id) do
+    queue = :queue.in({from_id, [from_id]}, :queue.new())
+    visited = MapSet.new([from_id])
+    do_bfs(queue, visited, to_id)
+  end
+
+  defp do_bfs(queue, visited, target) do
+    case :queue.out(queue) do
+      {:empty, _} ->
+        {:ok, []}
+
+      {{:value, {current, path}}, rest_queue} ->
+        if current == target do
+          {:ok, path}
+        else
+          neighbor_ids =
+            from(d in TaskDependency, where: d.task_id == ^current, select: d.depends_on_id)
+            |> Repo.all()
+
+          {new_queue, new_visited} =
+            Enum.reduce(neighbor_ids, {rest_queue, visited}, fn nid, {q, v} ->
+              if MapSet.member?(v, nid) do
+                {q, v}
+              else
+                {:queue.in({nid, path ++ [nid]}, q), MapSet.put(v, nid)}
+              end
+            end)
+
+          do_bfs(new_queue, new_visited, target)
+        end
+    end
+  end
+
   defp would_create_cycle?(task_id, depends_on_id) do
     # Check if depends_on can reach task_id through existing dependencies
     # (i.e., task_id is already a transitive blocker of depends_on)

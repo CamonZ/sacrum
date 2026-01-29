@@ -46,6 +46,7 @@ defmodule SacrumWeb.Router do
         delete "/parent", TaskRelationshipController, :remove_parent
         resources "/dependencies", TaskRelationshipController, only: [:create, :delete]
         get "/blockers", TaskRelationshipController, :blockers
+        get "/path", TaskRelationshipController, :path
 
         post "/assign_workflow", TaskWorkflowController, :assign
         delete "/assign_workflow", TaskWorkflowController, :unassign
