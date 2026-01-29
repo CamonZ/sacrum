@@ -41,6 +41,10 @@ defmodule Sacrum.Repo.Tasks do
     - `:parent_id` - filter by parent task (via hierarchy)
     - `:blocked` - when false, exclude tasks with incomplete dependencies
     - `:search` - text search on title/description
+    - `:status` - filter by workflow step name
+    - `:tags` - filter by tags (any match)
+    - `:root_only` - when true, exclude tasks that have a parent
+    - `:workflow_id` - filter by assigned workflow
   """
   def list_tasks(opts \\ []) do
     Task
@@ -49,6 +53,10 @@ defmodule Sacrum.Repo.Tasks do
     |> apply_filter(:parent_id, opts[:parent_id])
     |> apply_filter(:blocked, opts[:blocked])
     |> apply_filter(:search, opts[:search])
+    |> apply_filter(:status, opts[:status])
+    |> apply_filter(:tags, opts[:tags])
+    |> apply_filter(:root_only, opts[:root_only])
+    |> apply_filter(:workflow_id, opts[:workflow_id])
     |> order_by([t], asc: t.inserted_at)
     |> Repo.all()
   end
@@ -100,6 +108,42 @@ defmodule Sacrum.Repo.Tasks do
   defp apply_filter(query, :search, term) do
     pattern = "%#{term}%"
     where(query, [t], ilike(t.title, ^pattern) or ilike(t.description, ^pattern))
+  end
+
+  defp apply_filter(query, :status, nil), do: query
+
+  defp apply_filter(query, :status, step_name) do
+    from(t in query,
+      join: ws in Sacrum.Repo.Schemas.WorkflowStep,
+      on: ws.id == t.current_step_id,
+      where: ws.name == ^step_name
+    )
+  end
+
+  defp apply_filter(query, :tags, nil), do: query
+
+  defp apply_filter(query, :tags, tags) when is_list(tags) do
+    where(query, [t], fragment("? && ?", t.tags, ^tags))
+  end
+
+  defp apply_filter(query, :root_only, nil), do: query
+  defp apply_filter(query, :root_only, false), do: query
+
+  defp apply_filter(query, :root_only, true) do
+    from(t in query,
+      where:
+        t.id not in subquery(
+          from(h in Sacrum.Repo.Schemas.TaskHierarchy,
+            select: h.child_id
+          )
+        )
+    )
+  end
+
+  defp apply_filter(query, :workflow_id, nil), do: query
+
+  defp apply_filter(query, :workflow_id, workflow_id) do
+    where(query, [t], t.workflow_id == ^workflow_id)
   end
 
   def insert(%Project{id: project_id}, attrs), do: insert(project_id, attrs)

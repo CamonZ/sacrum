@@ -26,6 +26,10 @@ defmodule SacrumWeb.TaskController do
         |> maybe_add_filter(:parent_id, params["parent_id"])
         |> maybe_add_filter(:search, params["search"])
         |> maybe_add_blocked_filter(params["blocked"])
+        |> maybe_add_filter(:status, params["status"])
+        |> maybe_add_tags_filter(params["tags"])
+        |> maybe_add_root_only_filter(params["root_only"])
+        |> maybe_add_filter(:workflow_id, params["workflow_id"])
 
       tasks = Tasks.list_tasks(opts)
       render(conn, :index, tasks: tasks)
@@ -73,8 +77,21 @@ defmodule SacrumWeb.TaskController do
   end
 
   defp maybe_add_filter(opts, _key, nil), do: opts
+  defp maybe_add_filter(opts, _key, ""), do: opts
   defp maybe_add_filter(opts, key, value), do: Keyword.put(opts, key, value)
 
   defp maybe_add_blocked_filter(opts, "false"), do: Keyword.put(opts, :blocked, false)
   defp maybe_add_blocked_filter(opts, _), do: opts
+
+  defp maybe_add_tags_filter(opts, nil), do: opts
+  defp maybe_add_tags_filter(opts, ""), do: opts
+
+  defp maybe_add_tags_filter(opts, tags) when is_list(tags),
+    do: Keyword.put(opts, :tags, tags)
+
+  defp maybe_add_tags_filter(opts, tags) when is_binary(tags),
+    do: Keyword.put(opts, :tags, String.split(tags, ",", trim: true))
+
+  defp maybe_add_root_only_filter(opts, "true"), do: Keyword.put(opts, :root_only, true)
+  defp maybe_add_root_only_filter(opts, _), do: opts
 end

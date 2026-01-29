@@ -138,4 +138,88 @@ defmodule SacrumWeb.TaskControllerTest do
       assert response(conn, 204)
     end
   end
+
+  describe "GET /api/projects/:project_id/tasks filters" do
+    setup :setup_authenticated
+
+    test "filters by status (workflow step name)", %{conn: conn, project: project} do
+      {:ok, workflow} = Sacrum.Repo.Workflows.insert(project, %{name: "Test Workflow"})
+
+      {:ok, step} =
+        Sacrum.Repo.WorkflowSteps.insert(workflow.id, %{name: "in_progress", step_order: 1})
+
+      {:ok, _} = Sacrum.Repo.Workflows.update(workflow, %{initial_step_id: step.id})
+
+      {:ok, task1} = Tasks.insert(project, %{title: "Task with workflow"})
+      {:ok, _task1} = Sacrum.Repo.TaskWorkflows.assign_workflow(task1, workflow)
+      {:ok, _task2} = Tasks.insert(project, %{title: "Task without workflow"})
+
+      conn = get(conn, ~p"/api/projects/#{project.id}/tasks?status=in_progress")
+      assert %{"data" => tasks} = json_response(conn, 200)
+      assert length(tasks) == 1
+      assert hd(tasks)["title"] == "Task with workflow"
+    end
+
+    test "filters by tags", %{conn: conn, project: project} do
+      {:ok, _} = Tasks.insert(project, %{title: "Tagged", tags: ["backend", "urgent"]})
+      {:ok, _} = Tasks.insert(project, %{title: "Other", tags: ["frontend"]})
+      {:ok, _} = Tasks.insert(project, %{title: "No tags"})
+
+      conn = get(conn, ~p"/api/projects/#{project.id}/tasks?tags=backend")
+      assert %{"data" => tasks} = json_response(conn, 200)
+      assert length(tasks) == 1
+      assert hd(tasks)["title"] == "Tagged"
+    end
+
+    test "filters by root_only", %{conn: conn, project: project} do
+      {:ok, parent} = Tasks.insert(project, %{title: "Parent"})
+      {:ok, child} = Tasks.insert(project, %{title: "Child"})
+      {:ok, _} = Sacrum.Repo.TaskHierarchy.set_parent(child, parent)
+
+      conn = get(conn, ~p"/api/projects/#{project.id}/tasks?root_only=true")
+      assert %{"data" => tasks} = json_response(conn, 200)
+      assert length(tasks) == 1
+      assert hd(tasks)["title"] == "Parent"
+    end
+
+    test "filters by workflow_id", %{conn: conn, project: project} do
+      {:ok, workflow} = Sacrum.Repo.Workflows.insert(project, %{name: "WF1"})
+
+      {:ok, step} =
+        Sacrum.Repo.WorkflowSteps.insert(workflow.id, %{name: "start", step_order: 1})
+
+      {:ok, _} = Sacrum.Repo.Workflows.update(workflow, %{initial_step_id: step.id})
+
+      {:ok, task1} = Tasks.insert(project, %{title: "In workflow"})
+      {:ok, _} = Sacrum.Repo.TaskWorkflows.assign_workflow(task1, workflow)
+      {:ok, _} = Tasks.insert(project, %{title: "Not in workflow"})
+
+      conn = get(conn, ~p"/api/projects/#{project.id}/tasks?workflow_id=#{workflow.id}")
+      assert %{"data" => tasks} = json_response(conn, 200)
+      assert length(tasks) == 1
+      assert hd(tasks)["title"] == "In workflow"
+    end
+
+    test "combines filters correctly", %{conn: conn, project: project} do
+      {:ok, parent} = Tasks.insert(project, %{title: "Root tagged", tags: ["backend"]})
+      {:ok, child} = Tasks.insert(project, %{title: "Child tagged", tags: ["backend"]})
+      {:ok, _} = Sacrum.Repo.TaskHierarchy.set_parent(child, parent)
+      {:ok, _} = Tasks.insert(project, %{title: "Root untagged"})
+
+      conn = get(conn, ~p"/api/projects/#{project.id}/tasks?root_only=true&tags=backend")
+      assert %{"data" => tasks} = json_response(conn, 200)
+      assert length(tasks) == 1
+      assert hd(tasks)["title"] == "Root tagged"
+    end
+
+    test "empty filter values are ignored", %{conn: conn, project: project} do
+      {:ok, _} = Tasks.insert(project, %{title: "Task 1"})
+
+      conn =
+        get(conn, ~p"/api/projects/#{project.id}/tasks?status=&tags=&root_only=&workflow_id=")
+
+      assert %{"data" => tasks} = json_response(conn, 200)
+      assert length(tasks) == 1
+    end
+  end
 end
