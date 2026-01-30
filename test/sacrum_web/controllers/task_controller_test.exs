@@ -306,7 +306,7 @@ defmodule SacrumWeb.TaskControllerTest do
 
       # Create a code_ref for this section
       {:ok, _ref} =
-        Sacrum.Repo.CodeRefs.insert_for_section(section, %{
+        Sacrum.Repo.CodeRefs.insert_for_section(section.id, task.user_id, %{
           path: "lib/foo.ex",
           line_start: 1,
           line_end: 10
@@ -333,7 +333,10 @@ defmodule SacrumWeb.TaskControllerTest do
       {:ok, workflow} = Sacrum.Repo.Workflows.insert(project, %{name: "Test Workflow"})
 
       {:ok, step} =
-        Sacrum.Repo.WorkflowSteps.insert(workflow.id, %{name: "in_progress", step_order: 1})
+        Sacrum.Repo.WorkflowSteps.insert(workflow.id, workflow.user_id, %{
+          name: "in_progress",
+          step_order: 1
+        })
 
       {:ok, _} = Sacrum.Repo.Workflows.update(workflow, %{initial_step_id: step.id})
 
@@ -373,7 +376,10 @@ defmodule SacrumWeb.TaskControllerTest do
       {:ok, workflow} = Sacrum.Repo.Workflows.insert(project, %{name: "WF1"})
 
       {:ok, step} =
-        Sacrum.Repo.WorkflowSteps.insert(workflow.id, %{name: "start", step_order: 1})
+        Sacrum.Repo.WorkflowSteps.insert(workflow.id, workflow.user_id, %{
+          name: "start",
+          step_order: 1
+        })
 
       {:ok, _} = Sacrum.Repo.Workflows.update(workflow, %{initial_step_id: step.id})
 

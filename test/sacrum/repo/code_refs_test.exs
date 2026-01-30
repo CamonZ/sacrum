@@ -43,7 +43,7 @@ defmodule Sacrum.Repo.CodeRefsTest do
       task = setup_task()
       {:ok, section} = TaskSections.insert(task, %{section_type: "goal", content: "Content"})
 
-      {:ok, ref} = CodeRefs.insert_for_section(section, %{path: "lib/bar.ex"})
+      {:ok, ref} = CodeRefs.insert_for_section(section.id, task.user_id, %{path: "lib/bar.ex"})
       assert ref.section_id == section.id
       assert ref.path == "lib/bar.ex"
     end

@@ -44,7 +44,7 @@ defmodule Sacrum.Repo.WorkflowsTest do
 
     test "accepts project_id as binary" do
       project = create_project()
-      assert {:ok, %Workflow{}} = Workflows.insert(project.id, @valid_attrs)
+      assert {:ok, %Workflow{}} = Workflows.insert(project.id, project.user_id, @valid_attrs)
     end
 
     test "rejects missing name" do

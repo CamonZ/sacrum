@@ -1,13 +1,13 @@
 defmodule SacrumWeb.ProjectChannel do
   use Phoenix.Channel
 
-  alias Sacrum.Repo.Projects
+  alias Sacrum.Accounts.Projects
 
   @impl true
   def join("project:" <> slug, _params, socket) do
     user = socket.assigns.current_user
 
-    case Projects.get_by(user_id: user.id, slug: slug) do
+    case Projects.get_by(user.id, slug: slug) do
       {:ok, project} ->
         {:ok, assign(socket, :project, project)}
 

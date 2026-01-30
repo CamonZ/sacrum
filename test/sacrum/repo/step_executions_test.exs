@@ -26,7 +26,7 @@ defmodule Sacrum.Repo.StepExecutionsTest do
       task_id = Ecto.UUID.generate()
 
       assert {:ok, %StepExecution{} = execution} =
-               StepExecutions.insert(%{
+               StepExecutions.insert(workflow.user_id, %{
                  task_id: task_id,
                  workflow_id: workflow.id,
                  step_name: "review",
@@ -43,13 +43,17 @@ defmodule Sacrum.Repo.StepExecutionsTest do
     end
 
     test "rejects missing task_id" do
-      assert {:error, changeset} = StepExecutions.insert(%{step_name: "review"})
+      workflow = create_workflow()
+
+      assert {:error, changeset} = StepExecutions.insert(workflow.user_id, %{step_name: "review"})
       assert %{task_id: ["can't be blank"]} = errors_on(changeset)
     end
 
     test "rejects missing step_name" do
+      workflow = create_workflow()
+
       assert {:error, changeset} =
-               StepExecutions.insert(%{task_id: Ecto.UUID.generate()})
+               StepExecutions.insert(workflow.user_id, %{task_id: Ecto.UUID.generate()})
 
       assert %{step_name: ["can't be blank"]} = errors_on(changeset)
     end
@@ -57,13 +61,14 @@ defmodule Sacrum.Repo.StepExecutionsTest do
 
   describe "list_for_task/1" do
     test "returns executions ordered by inserted_at" do
+      workflow = create_workflow()
       task_id = Ecto.UUID.generate()
 
       {:ok, _e1} =
-        StepExecutions.insert(%{task_id: task_id, step_name: "draft"})
+        StepExecutions.insert(workflow.user_id, %{task_id: task_id, step_name: "draft"})
 
       {:ok, _e2} =
-        StepExecutions.insert(%{task_id: task_id, step_name: "review"})
+        StepExecutions.insert(workflow.user_id, %{task_id: task_id, step_name: "review"})
 
       executions = StepExecutions.list_for_task(task_id)
       assert length(executions) == 2
@@ -71,11 +76,14 @@ defmodule Sacrum.Repo.StepExecutionsTest do
     end
 
     test "does not return executions for other tasks" do
+      workflow = create_workflow()
       task_id = Ecto.UUID.generate()
       other_task_id = Ecto.UUID.generate()
 
-      {:ok, _} = StepExecutions.insert(%{task_id: task_id, step_name: "draft"})
-      {:ok, _} = StepExecutions.insert(%{task_id: other_task_id, step_name: "review"})
+      {:ok, _} = StepExecutions.insert(workflow.user_id, %{task_id: task_id, step_name: "draft"})
+
+      {:ok, _} =
+        StepExecutions.insert(workflow.user_id, %{task_id: other_task_id, step_name: "review"})
 
       executions = StepExecutions.list_for_task(task_id)
       assert length(executions) == 1

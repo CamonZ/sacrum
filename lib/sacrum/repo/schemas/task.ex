@@ -38,6 +38,7 @@ defmodule Sacrum.Repo.Schemas.Task do
     belongs_to :project, Sacrum.Repo.Schemas.Project
     belongs_to :workflow, Sacrum.Repo.Schemas.Workflow
     belongs_to :current_step, Sacrum.Repo.Schemas.WorkflowStep
+    belongs_to :user, Sacrum.Repo.Schemas.User
 
     has_many :sections, Sacrum.Repo.Schemas.TaskSection, on_replace: :delete
     has_many :code_refs, Sacrum.Repo.Schemas.CodeRef
@@ -46,20 +47,34 @@ defmodule Sacrum.Repo.Schemas.Task do
   end
 
   def create_changeset(task, attrs) do
+    user_id = task.user_id
+
     task
     |> cast(attrs, @create_fields)
     |> validate_required([:title])
-    |> cast_assoc(:sections, with: &TaskSection.changeset/2)
+    |> cast_assoc(:sections,
+      with: fn section, section_attrs ->
+        TaskSection.changeset(section, section_attrs)
+        |> Ecto.Changeset.put_change(:user_id, user_id)
+      end
+    )
     |> maybe_generate_short_id()
     |> unique_constraint(:short_id)
     |> foreign_key_constraint(:project_id)
   end
 
   def update_changeset(task, attrs) do
+    user_id = task.user_id
+
     task
     |> cast(attrs, @update_fields)
     |> validate_required([:title])
-    |> cast_assoc(:sections, with: &TaskSection.changeset/2)
+    |> cast_assoc(:sections,
+      with: fn section, section_attrs ->
+        TaskSection.changeset(section, section_attrs)
+        |> Ecto.Changeset.put_change(:user_id, user_id)
+      end
+    )
   end
 
   defp maybe_generate_short_id(changeset) do

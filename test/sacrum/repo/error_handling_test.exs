@@ -90,17 +90,17 @@ defmodule Sacrum.Repo.ErrorHandlingTest do
     test "Projects.insert/2 returns changeset for empty attrs" do
       {:ok, user} = Users.insert(@valid_user_attrs)
 
-      assert {:error, changeset} = Projects.insert(user.id, %{})
+      assert {:error, changeset} = Projects.insert(user, %{})
       assert %Ecto.Changeset{} = changeset
       assert changeset.errors != []
     end
 
     test "TaskSections.insert/2 returns changeset for empty attrs" do
       {:ok, user} = Users.insert(@valid_user_attrs)
-      {:ok, project} = Projects.insert(user.id, %{name: "Test Project"})
-      {:ok, task} = Tasks.insert(project.id, %{title: "Test Task"})
+      {:ok, project} = Projects.insert(user, %{name: "Test Project"})
+      {:ok, task} = Tasks.insert(project, %{title: "Test Task"})
 
-      assert {:error, changeset} = TaskSections.insert(task.id, %{})
+      assert {:error, changeset} = TaskSections.insert(task, %{})
       assert %Ecto.Changeset{} = changeset
       assert changeset.errors != []
     end
@@ -117,8 +117,8 @@ defmodule Sacrum.Repo.ErrorHandlingTest do
 
     test "Tasks.get/1 returns ok tuple and preloads sections" do
       {:ok, user} = Users.insert(@valid_user_attrs)
-      {:ok, project} = Projects.insert(user.id, %{name: "Test Project"})
-      {:ok, task} = Tasks.insert(project.id, %{title: "Test Task"})
+      {:ok, project} = Projects.insert(user, %{name: "Test Project"})
+      {:ok, task} = Tasks.insert(project, %{title: "Test Task"})
 
       assert {:ok, found} = Tasks.get(task.id)
       assert found.id == task.id
@@ -137,8 +137,8 @@ defmodule Sacrum.Repo.ErrorHandlingTest do
 
     test "Tasks.update/2 succeeds with valid data" do
       {:ok, user} = Users.insert(@valid_user_attrs)
-      {:ok, project} = Projects.insert(user.id, %{name: "Test Project"})
-      {:ok, task} = Tasks.insert(project.id, %{title: "Test Task"})
+      {:ok, project} = Projects.insert(user, %{name: "Test Project"})
+      {:ok, task} = Tasks.insert(project, %{title: "Test Task"})
 
       # Attempt to update with valid data
       assert {:ok, updated} = Tasks.update(task, %{title: "Updated Task"})
@@ -149,33 +149,35 @@ defmodule Sacrum.Repo.ErrorHandlingTest do
   describe "domain-specific error atoms" do
     test "TaskDependencies.add_dependency/2 returns :self_dependency" do
       {:ok, user} = Users.insert(@valid_user_attrs)
-      {:ok, project} = Projects.insert(user.id, %{name: "Test Project"})
-      {:ok, task} = Tasks.insert(project.id, %{title: "Test Task"})
+      {:ok, project} = Projects.insert(user, %{name: "Test Project"})
+      {:ok, task} = Tasks.insert(project, %{title: "Test Task"})
 
       assert {:error, :self_dependency} = TaskDependencies.add_dependency(task, task)
     end
 
     test "TaskDependencies.add_dependency/2 returns :different_projects" do
       {:ok, user1} = Users.insert(@valid_user_attrs)
-      {:ok, user2} = Users.insert(%{
-        @valid_user_attrs |
-        email: "other@example.com",
-        username: "otheruser"
-      })
 
-      {:ok, project1} = Projects.insert(user1.id, %{name: "Project 1"})
-      {:ok, project2} = Projects.insert(user2.id, %{name: "Project 2"})
-      {:ok, task1} = Tasks.insert(project1.id, %{title: "Task 1"})
-      {:ok, task2} = Tasks.insert(project2.id, %{title: "Task 2"})
+      {:ok, user2} =
+        Users.insert(%{
+          @valid_user_attrs
+          | email: "other@example.com",
+            username: "otheruser"
+        })
+
+      {:ok, project1} = Projects.insert(user1, %{name: "Project 1"})
+      {:ok, project2} = Projects.insert(user2, %{name: "Project 2"})
+      {:ok, task1} = Tasks.insert(project1, %{title: "Task 1"})
+      {:ok, task2} = Tasks.insert(project2, %{title: "Task 2"})
 
       assert {:error, :different_projects} = TaskDependencies.add_dependency(task1, task2)
     end
 
     test "TaskDependencies.add_dependency/2 returns :circular_dependency" do
       {:ok, user} = Users.insert(@valid_user_attrs)
-      {:ok, project} = Projects.insert(user.id, %{name: "Test Project"})
-      {:ok, task1} = Tasks.insert(project.id, %{title: "Task 1"})
-      {:ok, task2} = Tasks.insert(project.id, %{title: "Task 2"})
+      {:ok, project} = Projects.insert(user, %{name: "Test Project"})
+      {:ok, task1} = Tasks.insert(project, %{title: "Task 1"})
+      {:ok, task2} = Tasks.insert(project, %{title: "Task 2"})
 
       # Create a dependency chain: task1 -> task2
       {:ok, _} = TaskDependencies.add_dependency(task1, task2)
@@ -186,9 +188,9 @@ defmodule Sacrum.Repo.ErrorHandlingTest do
 
     test "TaskDependencies.remove_dependency/2 returns :not_found for non-existent dependency" do
       {:ok, user} = Users.insert(@valid_user_attrs)
-      {:ok, project} = Projects.insert(user.id, %{name: "Test Project"})
-      {:ok, task1} = Tasks.insert(project.id, %{title: "Task 1"})
-      {:ok, task2} = Tasks.insert(project.id, %{title: "Task 2"})
+      {:ok, project} = Projects.insert(user, %{name: "Test Project"})
+      {:ok, task1} = Tasks.insert(project, %{title: "Task 1"})
+      {:ok, task2} = Tasks.insert(project, %{title: "Task 2"})
 
       # No dependency exists between task1 and task2
       assert {:error, :not_found} = TaskDependencies.remove_dependency(task1, task2)
@@ -196,8 +198,8 @@ defmodule Sacrum.Repo.ErrorHandlingTest do
 
     test "TaskHierarchy.remove_parent/1 returns :not_found when no parent exists" do
       {:ok, user} = Users.insert(@valid_user_attrs)
-      {:ok, project} = Projects.insert(user.id, %{name: "Test Project"})
-      {:ok, task} = Tasks.insert(project.id, %{title: "Task"})
+      {:ok, project} = Projects.insert(user, %{name: "Test Project"})
+      {:ok, task} = Tasks.insert(project, %{title: "Task"})
 
       # Task has no parent
       assert {:error, :not_found} = TaskHierarchy.remove_parent(task)
@@ -205,8 +207,8 @@ defmodule Sacrum.Repo.ErrorHandlingTest do
 
     test "TaskHierarchy.get_parent/1 returns :not_found when no parent exists" do
       {:ok, user} = Users.insert(@valid_user_attrs)
-      {:ok, project} = Projects.insert(user.id, %{name: "Test Project"})
-      {:ok, task} = Tasks.insert(project.id, %{title: "Task"})
+      {:ok, project} = Projects.insert(user, %{name: "Test Project"})
+      {:ok, task} = Tasks.insert(project, %{title: "Task"})
 
       # Task has no parent
       assert {:error, :not_found} = TaskHierarchy.get_parent(task)

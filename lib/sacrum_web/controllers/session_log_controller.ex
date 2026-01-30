@@ -1,17 +1,16 @@
 defmodule SacrumWeb.SessionLogController do
   use SacrumWeb, :controller
 
-  import SacrumWeb.Helpers.Authorization
-
-  alias Sacrum.Repo.StepExecutions
-  alias Sacrum.Repo.SessionLogs
+  alias Sacrum.Accounts.StepExecutions
+  alias Sacrum.Accounts.SessionLogs
 
   action_fallback SacrumWeb.FallbackController
 
   def index(conn, %{"step_execution_id" => execution_id}) do
-    with {:ok, execution} <- StepExecutions.get(execution_id),
-         :ok <- authorize_execution_owner(execution, conn.assigns.current_user) do
-      logs = SessionLogs.list_for_execution(execution_id)
+    user = conn.assigns.current_user
+
+    with {:ok, _execution} <- StepExecutions.get_by(user.id, id: execution_id) do
+      logs = SessionLogs.list_by(user.id, step_execution_id: execution_id)
       render(conn, :index, logs: logs)
     end
   end

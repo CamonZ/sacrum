@@ -10,6 +10,7 @@ defmodule Sacrum.Repo.Schemas.StepTransition do
 
     belongs_to :from_step, Sacrum.Repo.Schemas.WorkflowStep
     belongs_to :to_step, Sacrum.Repo.Schemas.WorkflowStep
+    belongs_to :user, Sacrum.Repo.Schemas.User
 
     timestamps(type: :utc_datetime_usec)
   end

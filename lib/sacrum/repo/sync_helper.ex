@@ -68,20 +68,24 @@ defmodule Sacrum.Repo.SyncHelper do
   })
   ```
   """
-  def diff_and_sync(existing, incoming_maps, config) when is_list(existing) and is_list(incoming_maps) and is_map(config) do
+  def diff_and_sync(existing, incoming_maps, config)
+      when is_list(existing) and is_list(incoming_maps) and is_map(config) do
     target_key = config[:target_key]
 
     # Build the map for lookups
-    existing_by_target = Map.new(existing, fn record ->
-      target = Map.fetch!(record, target_key)
-      {target, record}
-    end)
+    existing_by_target =
+      Map.new(existing, fn record ->
+        target = Map.fetch!(record, target_key)
+        {target, record}
+      end)
 
     # Get set of incoming target IDs (handling both string and atom keys)
     target_key_str = Atom.to_string(target_key)
-    incoming_target_ids = MapSet.new(incoming_maps, fn map ->
-      map[target_key_str] || map[target_key]
-    end)
+
+    incoming_target_ids =
+      MapSet.new(incoming_maps, fn map ->
+        map[target_key_str] || map[target_key]
+      end)
 
     # Call user-provided functions to determine operations
     to_delete = config[:to_delete_fn].(existing, incoming_target_ids)
@@ -89,15 +93,21 @@ defmodule Sacrum.Repo.SyncHelper do
     to_update = config[:to_update_fn].(incoming_maps, existing_by_target)
 
     # Helper functions for operation naming
-    delete_name_fn = config[:delete_name_fn] || (fn record -> {:delete, record.id} end)
-    insert_name_fn = config[:insert_name_fn] || (fn map ->
-      target = map[target_key_str] || map[target_key]
-      {:insert, target}
-    end)
-    update_name_fn = config[:update_name_fn] || (fn map ->
-      target = map[target_key_str] || map[target_key]
-      {:update, target}
-    end)
+    delete_name_fn = config[:delete_name_fn] || fn record -> {:delete, record.id} end
+
+    insert_name_fn =
+      config[:insert_name_fn] ||
+        fn map ->
+          target = map[target_key_str] || map[target_key]
+          {:insert, target}
+        end
+
+    update_name_fn =
+      config[:update_name_fn] ||
+        fn map ->
+          target = map[target_key_str] || map[target_key]
+          {:update, target}
+        end
 
     # Build the transaction
     multi =

@@ -20,6 +20,8 @@ defmodule Sacrum.Repo.Workflows do
   Preloading is managed by callers. No automatic preloads are applied in this module.
   """
 
+  use Sacrum.GenericRepo, schema: Sacrum.Repo.Schemas.Workflow
+
   import Ecto.Query
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.Project
@@ -27,13 +29,6 @@ defmodule Sacrum.Repo.Workflows do
   alias Sacrum.Repo.Schemas.WorkflowTransition
   alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.SyncHelper
-
-  def get(id) do
-    case Repo.get(Workflow, id) do
-      nil -> {:error, :not_found}
-      workflow -> {:ok, workflow}
-    end
-  end
 
   def list(%Project{id: project_id}), do: list(project_id)
 
@@ -45,10 +40,28 @@ defmodule Sacrum.Repo.Workflows do
     |> Repo.all()
   end
 
-  def insert(%Project{id: project_id}, attrs), do: insert(project_id, attrs)
+  def list_for_user(user_id) when is_binary(user_id) do
+    from(w in Workflow,
+      where: w.user_id == ^user_id,
+      order_by: [asc: w.display_order, asc: w.inserted_at]
+    )
+    |> Repo.all()
+  end
 
-  def insert(project_id, attrs) when is_binary(project_id) do
+  def insert(%Project{id: project_id, user_id: user_id}, attrs),
+    do: insert(project_id, user_id, attrs)
+
+  def insert(project_id, attrs) when is_binary(project_id) and is_map(attrs) do
     %Workflow{project_id: project_id}
+    |> Workflow.create_changeset(attrs)
+    |> Repo.insert()
+    |> Broadcaster.broadcast(:workflow_created, :project)
+  end
+
+  defoverridable insert: 2
+
+  def insert(project_id, user_id, attrs) when is_binary(project_id) and is_binary(user_id) do
+    %Workflow{project_id: project_id, user_id: user_id}
     |> Workflow.create_changeset(attrs)
     |> Repo.insert()
     |> Broadcaster.broadcast(:workflow_created, :project)
@@ -92,7 +105,9 @@ defmodule Sacrum.Repo.Workflows do
     SyncHelper.diff_and_sync(existing, transition_maps, %{
       target_key: :to_workflow_id,
       to_delete_fn: fn existing, incoming_target_ids ->
-        Enum.filter(existing, fn t -> not MapSet.member?(incoming_target_ids, t.to_workflow_id) end)
+        Enum.filter(existing, fn t ->
+          not MapSet.member?(incoming_target_ids, t.to_workflow_id)
+        end)
       end,
       to_insert_fn: fn incoming, existing_by_target ->
         Enum.filter(incoming, fn m ->
@@ -110,7 +125,7 @@ defmodule Sacrum.Repo.Workflows do
         end)
       end,
       build_changeset_fn: fn m ->
-        %WorkflowTransition{}
+        %WorkflowTransition{user_id: workflow.user_id}
         |> WorkflowTransition.create_changeset(Map.merge(m, %{"from_workflow_id" => workflow.id}))
       end,
       build_update_changeset_fn: fn existing_rec, m ->

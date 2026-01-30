@@ -1,13 +1,30 @@
 defmodule Sacrum.Repo.SessionLogsTest do
   use Sacrum.DataCase, async: true
 
+  alias Sacrum.Repo.Users
   alias Sacrum.Repo.SessionLogs
   alias Sacrum.Repo.StepExecutions
   alias Sacrum.Repo.Schemas.SessionLog
 
+  @valid_user_attrs %{
+    email: "test@example.com",
+    username: "testuser",
+    password: "password123"
+  }
+
+  defp create_user do
+    {:ok, user} = Users.insert(@valid_user_attrs)
+    user
+  end
+
   defp create_execution do
+    unique_id = System.unique_integer([:positive]) |> Integer.to_string()
+    email = "user#{unique_id}@example.com"
+    username = "user#{unique_id}"
+    user = create_user_with_email_and_username(email, username)
+
     {:ok, execution} =
-      StepExecutions.insert(%{
+      StepExecutions.insert(user.id, %{
         task_id: Ecto.UUID.generate(),
         step_name: "review"
       })
@@ -15,12 +32,18 @@ defmodule Sacrum.Repo.SessionLogsTest do
     execution
   end
 
+  defp create_user_with_email_and_username(email, username) do
+    {:ok, user} = Users.insert(%{@valid_user_attrs | email: email, username: username})
+    user
+  end
+
   describe "insert/1" do
     test "creates session log record" do
       execution = create_execution()
+      user_id = execution.user_id
 
       assert {:ok, %SessionLog{} = log} =
-               SessionLogs.insert(%{
+               SessionLogs.insert(user_id, %{
                  step_execution_id: execution.id,
                  content: "Reviewing code changes..."
                })
@@ -31,15 +54,18 @@ defmodule Sacrum.Repo.SessionLogsTest do
 
     test "rejects missing content" do
       execution = create_execution()
+      user_id = execution.user_id
 
       assert {:error, changeset} =
-               SessionLogs.insert(%{step_execution_id: execution.id})
+               SessionLogs.insert(user_id, %{step_execution_id: execution.id})
 
       assert %{content: ["can't be blank"]} = errors_on(changeset)
     end
 
     test "rejects missing step_execution_id" do
-      assert {:error, changeset} = SessionLogs.insert(%{content: "Some log"})
+      user = create_user()
+
+      assert {:error, changeset} = SessionLogs.insert(user.id, %{content: "Some log"})
       assert %{step_execution_id: ["can't be blank"]} = errors_on(changeset)
     end
   end
@@ -47,8 +73,10 @@ defmodule Sacrum.Repo.SessionLogsTest do
   describe "list_for_execution/1" do
     test "returns logs for a given execution" do
       execution = create_execution()
-      {:ok, _} = SessionLogs.insert(%{step_execution_id: execution.id, content: "Log 1"})
-      {:ok, _} = SessionLogs.insert(%{step_execution_id: execution.id, content: "Log 2"})
+      user_id = execution.user_id
+
+      {:ok, _} = SessionLogs.insert(user_id, %{step_execution_id: execution.id, content: "Log 1"})
+      {:ok, _} = SessionLogs.insert(user_id, %{step_execution_id: execution.id, content: "Log 2"})
 
       logs = SessionLogs.list_for_execution(execution)
       assert length(logs) == 2
@@ -58,8 +86,13 @@ defmodule Sacrum.Repo.SessionLogsTest do
     test "does not return logs from other executions" do
       execution1 = create_execution()
       execution2 = create_execution()
-      {:ok, _} = SessionLogs.insert(%{step_execution_id: execution1.id, content: "Log 1"})
-      {:ok, _} = SessionLogs.insert(%{step_execution_id: execution2.id, content: "Log 2"})
+      user_id = execution1.user_id
+
+      {:ok, _} =
+        SessionLogs.insert(user_id, %{step_execution_id: execution1.id, content: "Log 1"})
+
+      {:ok, _} =
+        SessionLogs.insert(user_id, %{step_execution_id: execution2.id, content: "Log 2"})
 
       logs = SessionLogs.list_for_execution(execution1)
       assert length(logs) == 1

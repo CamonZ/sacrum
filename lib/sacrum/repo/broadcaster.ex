@@ -88,20 +88,23 @@ defmodule Sacrum.Repo.Broadcaster do
   defp get_project(%{project: project}, :project), do: project
 
   # Nested workflow: :project (workflow_steps)
-  defp get_project(%{workflow: %{project: project}}, [workflow: :project]), do: project
+  defp get_project(%{workflow: %{project: project}}, workflow: :project), do: project
 
   # Nested from_step: [workflow: :project] (step_transitions)
-  defp get_project(%{from_step: %{workflow: %{project: project}}}, [from_step: [workflow: :project]]), do: project
+  defp get_project(%{from_step: %{workflow: %{project: project}}},
+         from_step: [workflow: :project]
+       ),
+       do: project
 
   # Special case for different structures - try to match the pattern
-  defp get_project(entity, [workflow: :project]) do
+  defp get_project(entity, workflow: :project) do
     case Map.fetch(entity, :workflow) do
       {:ok, %{project: project}} -> project
       _ -> nil
     end
   end
 
-  defp get_project(entity, [from_step: [workflow: :project]]) do
+  defp get_project(entity, from_step: [workflow: :project]) do
     case Map.fetch(entity, :from_step) do
       {:ok, %{workflow: %{project: project}}} -> project
       _ -> nil
@@ -119,13 +122,13 @@ defmodule Sacrum.Repo.Broadcaster do
 
   @doc """
   Broadcast a step execution by first looking up its task to get the project.
-  
+
   This is a specialized helper for step executions which don't have direct project associations.
-  
+
   Args:
     - result: {:ok, execution} or {:error, reason}
     - event: event name (atom, e.g. :step_execution_created)
-  
+
   Returns:
     - {:ok, execution} on success
     - {:error, reason} on error
@@ -139,13 +142,13 @@ defmodule Sacrum.Repo.Broadcaster do
 
   @doc """
   Broadcast a session log by looking up its step execution and task to get the project.
-  
+
   This is a specialized helper for session logs which don't have direct project associations.
-  
+
   Args:
     - result: {:ok, log} or {:error, reason}
     - event: event name (atom, e.g. :session_log_created)
-  
+
   Returns:
     - {:ok, log} on success
     - {:error, reason} on error

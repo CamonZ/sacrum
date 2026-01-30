@@ -21,6 +21,7 @@ defmodule Sacrum.Repo.Schemas.StepExecution do
     field :duration_ms, :integer
 
     belongs_to :workflow, Sacrum.Repo.Schemas.Workflow
+    belongs_to :user, Sacrum.Repo.Schemas.User
 
     timestamps(type: :utc_datetime_usec)
   end

@@ -8,6 +8,7 @@ defmodule Sacrum.Repo.Schemas.TaskDependency do
   schema "task_dependencies" do
     belongs_to :task, Sacrum.Repo.Schemas.Task
     belongs_to :depends_on, Sacrum.Repo.Schemas.Task
+    belongs_to :user, Sacrum.Repo.Schemas.User
 
     timestamps(type: :utc_datetime_usec)
   end

@@ -1,12 +1,15 @@
 defmodule Sacrum.Repo.WorkflowSteps do
   @moduledoc """
-  CRUD operations for workflow steps, scoped to a workflow.
+  CRUD operations for workflow steps.
 
   ## Error Contract
 
   - `get/1` returns `{:ok, step}` or `{:error, :not_found}`
-  - `insert/2` returns `{:ok, step}` or `{:error, changeset}`
-  - `update/2` returns `{:ok, step}` or `{:error, changeset}`
+  - `get!/1` returns step or raises
+  - `get_by/1` returns `{:ok, step}` or `{:error, :not_found}`
+  - `all/0` returns `[step]`
+  - `insert/1` returns `{:ok, step}` or `{:error, changeset}`
+  - `update/1` returns `{:ok, step}` or `{:error, changeset}`
   - `delete/1` returns `{:ok, step}` or `{:error, changeset}`
   - `sync_transitions/2` returns `{:ok, [transitions]}` or `{:error, changeset}` or `{:error, atom}`
 
@@ -21,20 +24,15 @@ defmodule Sacrum.Repo.WorkflowSteps do
   Preloading is managed by callers. No automatic preloads are applied in this module.
   """
 
+  use Sacrum.GenericRepo, schema: Sacrum.Repo.Schemas.WorkflowStep
+
   import Ecto.Query
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.Workflow
   alias Sacrum.Repo.Schemas.WorkflowStep
   alias Sacrum.Repo.Schemas.StepTransition
-  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.SyncHelper
-
-  def get(id) do
-    case Repo.get(WorkflowStep, id) do
-      nil -> {:error, :not_found}
-      step -> {:ok, step}
-    end
-  end
+  alias Sacrum.Repo.Broadcaster
 
   def list(%Workflow{id: workflow_id}), do: list(workflow_id)
 
@@ -46,10 +44,31 @@ defmodule Sacrum.Repo.WorkflowSteps do
     |> Repo.all()
   end
 
-  def insert(%Workflow{id: workflow_id}, attrs), do: insert(workflow_id, attrs)
+  @doc """
+  Insert a new workflow step. Accepts Workflow struct (with or without user_id).
+  """
+  def insert(%Workflow{id: workflow_id, user_id: user_id}, attrs) when is_binary(user_id) do
+    insert(workflow_id, user_id, attrs)
+  end
 
-  def insert(workflow_id, attrs) when is_binary(workflow_id) do
+  def insert(%Workflow{id: workflow_id}, attrs) do
     %WorkflowStep{workflow_id: workflow_id}
+    |> WorkflowStep.create_changeset(attrs)
+    |> Repo.insert()
+    |> Broadcaster.broadcast(:step_created, workflow: :project)
+  end
+
+  def insert(workflow_id, attrs) when is_binary(workflow_id) and is_map(attrs) do
+    %WorkflowStep{workflow_id: workflow_id}
+    |> WorkflowStep.create_changeset(attrs)
+    |> Repo.insert()
+    |> Broadcaster.broadcast(:step_created, workflow: :project)
+  end
+
+  defoverridable insert: 2
+
+  def insert(workflow_id, user_id, attrs) when is_binary(workflow_id) and is_binary(user_id) do
+    %WorkflowStep{workflow_id: workflow_id, user_id: user_id}
     |> WorkflowStep.create_changeset(attrs)
     |> Repo.insert()
     |> Broadcaster.broadcast(:step_created, workflow: :project)
@@ -96,7 +115,7 @@ defmodule Sacrum.Repo.WorkflowSteps do
         build_changeset_fn: fn t ->
           to_id = to_step_id(t)
 
-          StepTransition.create_changeset(%StepTransition{}, %{
+          StepTransition.create_changeset(%StepTransition{user_id: step.user_id}, %{
             from_step_id: step.id,
             to_step_id: to_id,
             label: label_for(t)
@@ -117,17 +136,6 @@ defmodule Sacrum.Repo.WorkflowSteps do
           {:ok, updated}
         end
       })
-    end
-  end
-
-  def delete(%WorkflowStep{} = step) do
-    case Repo.delete(step) do
-      {:ok, deleted} ->
-        Broadcaster.broadcast_event(deleted, :step_deleted, workflow: :project)
-        {:ok, deleted}
-
-      error ->
-        error
     end
   end
 
@@ -170,4 +178,14 @@ defmodule Sacrum.Repo.WorkflowSteps do
     end
   end
 
+  def delete(%WorkflowStep{} = step) do
+    case Repo.delete(step) do
+      {:ok, deleted} ->
+        Broadcaster.broadcast_event(deleted, :step_deleted, workflow: :project)
+        {:ok, deleted}
+
+      error ->
+        error
+    end
+  end
 end

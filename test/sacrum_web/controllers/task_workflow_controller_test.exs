@@ -22,8 +22,11 @@ defmodule SacrumWeb.TaskWorkflowControllerTest do
 
     {:ok, workflow} = Workflows.update(workflow, %{initial_step_id: step1.id})
 
-    {:ok, _} = StepTransitions.insert(%{from_step_id: step1.id, to_step_id: step2.id})
-    {:ok, _} = StepTransitions.insert(%{from_step_id: step2.id, to_step_id: step3.id})
+    {:ok, _} =
+      StepTransitions.insert(step1.user_id, %{from_step_id: step1.id, to_step_id: step2.id})
+
+    {:ok, _} =
+      StepTransitions.insert(step2.user_id, %{from_step_id: step2.id, to_step_id: step3.id})
 
     {:ok, task} = Tasks.insert(project, %{title: "Test Task"})
 

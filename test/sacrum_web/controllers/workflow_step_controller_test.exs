@@ -107,8 +107,11 @@ defmodule SacrumWeb.WorkflowStepControllerTest do
       {:ok, step3} = WorkflowSteps.insert(workflow, %{name: "Done", step_order: 3})
 
       # Create initial transitions
-      {:ok, _} = StepTransitions.insert(%{from_step_id: step1.id, to_step_id: step2.id})
-      {:ok, _} = StepTransitions.insert(%{from_step_id: step1.id, to_step_id: step3.id})
+      {:ok, _} =
+        StepTransitions.insert(step1.user_id, %{from_step_id: step1.id, to_step_id: step2.id})
+
+      {:ok, _} =
+        StepTransitions.insert(step1.user_id, %{from_step_id: step1.id, to_step_id: step3.id})
 
       # Sync to only step3
       conn =
@@ -130,7 +133,8 @@ defmodule SacrumWeb.WorkflowStepControllerTest do
       {:ok, step1} = WorkflowSteps.insert(workflow, %{name: "Backlog", step_order: 1})
       {:ok, step2} = WorkflowSteps.insert(workflow, %{name: "In Progress", step_order: 2})
 
-      {:ok, _} = StepTransitions.insert(%{from_step_id: step1.id, to_step_id: step2.id})
+      {:ok, _} =
+        StepTransitions.insert(step1.user_id, %{from_step_id: step1.id, to_step_id: step2.id})
 
       conn =
         patch(conn, ~p"/api/workflow-steps/#{step1.id}", %{
@@ -221,7 +225,11 @@ defmodule SacrumWeb.WorkflowStepControllerTest do
       {:ok, step2} = WorkflowSteps.insert(workflow, %{name: "In Progress", step_order: 2})
 
       {:ok, _} =
-        StepTransitions.insert(%{from_step_id: step1.id, to_step_id: step2.id, label: "start"})
+        StepTransitions.insert(step1.user_id, %{
+          from_step_id: step1.id,
+          to_step_id: step2.id,
+          label: "start"
+        })
 
       conn = get(conn, ~p"/api/workflow-steps/#{step1.id}")
 

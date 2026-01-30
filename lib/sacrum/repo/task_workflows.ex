@@ -48,7 +48,10 @@ defmodule Sacrum.Repo.TaskWorkflows do
     with {:ok, initial_step} <- resolve_initial_step(workflow) do
       Multi.new()
       |> Multi.update(:task, task_workflow_changeset(task, workflow.id, initial_step.id))
-      |> Multi.insert(:step_execution, step_execution_attrs(task.id, workflow.id, initial_step))
+      |> Multi.insert(
+        :step_execution,
+        step_execution_attrs(task.id, task.user_id, workflow.id, initial_step)
+      )
       |> Repo.transaction()
       |> case do
         {:ok, %{task: task}} ->
@@ -88,7 +91,7 @@ defmodule Sacrum.Repo.TaskWorkflows do
       |> Multi.update(:task, task_workflow_changeset(task, task.workflow_id, target_step.id))
       |> Multi.insert(
         :step_execution,
-        step_execution_attrs(task.id, task.workflow_id, target_step)
+        step_execution_attrs(task.id, task.user_id, task.workflow_id, target_step)
       )
       |> Repo.transaction()
       |> case do
@@ -138,8 +141,8 @@ defmodule Sacrum.Repo.TaskWorkflows do
     |> Ecto.Changeset.foreign_key_constraint(:current_step_id)
   end
 
-  defp step_execution_attrs(task_id, workflow_id, step) do
-    StepExecution.create_changeset(%StepExecution{}, %{
+  defp step_execution_attrs(task_id, user_id, workflow_id, step) do
+    StepExecution.create_changeset(%StepExecution{user_id: user_id}, %{
       task_id: task_id,
       workflow_id: workflow_id,
       step_name: step.name,

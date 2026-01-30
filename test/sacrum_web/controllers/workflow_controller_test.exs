@@ -171,7 +171,10 @@ defmodule SacrumWeb.WorkflowControllerTest do
       alias Sacrum.Repo.WorkflowTransitions
 
       {:ok, _} =
-        WorkflowTransitions.insert(%{from_workflow_id: wf1.id, to_workflow_id: wf2.id})
+        WorkflowTransitions.insert(wf1.user_id, %{
+          from_workflow_id: wf1.id,
+          to_workflow_id: wf2.id
+        })
 
       conn = patch(conn, ~p"/api/workflows/#{wf1.id}", %{transitions: []})
 

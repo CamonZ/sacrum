@@ -33,8 +33,17 @@ defmodule SacrumWeb.SessionLogControllerTest do
     setup [:setup_authenticated, :setup_with_execution]
 
     test "returns chronological list of session logs", ctx do
-      {:ok, _} = SessionLogs.insert(%{step_execution_id: ctx.execution.id, content: "Log line 1"})
-      {:ok, _} = SessionLogs.insert(%{step_execution_id: ctx.execution.id, content: "Log line 2"})
+      {:ok, _} =
+        SessionLogs.insert(ctx.execution.user_id, %{
+          step_execution_id: ctx.execution.id,
+          content: "Log line 1"
+        })
+
+      {:ok, _} =
+        SessionLogs.insert(ctx.execution.user_id, %{
+          step_execution_id: ctx.execution.id,
+          content: "Log line 2"
+        })
 
       conn = get(ctx.conn, ~p"/api/executions/#{ctx.execution.id}/logs")
 

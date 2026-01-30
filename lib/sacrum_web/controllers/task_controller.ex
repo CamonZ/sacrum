@@ -1,9 +1,8 @@
 defmodule SacrumWeb.TaskController do
   use SacrumWeb, :controller
 
-  import SacrumWeb.Helpers.Authorization
-
-  alias Sacrum.Repo.Tasks
+  alias Sacrum.Accounts.Projects
+  alias Sacrum.Accounts.Tasks
   alias Sacrum.Repo.TaskHierarchy
   alias Sacrum.Repo.TaskDependencies
   alias Sacrum.Repo.Schemas.Task
@@ -11,9 +10,11 @@ defmodule SacrumWeb.TaskController do
   action_fallback SacrumWeb.FallbackController
 
   def index(conn, %{"project_id" => project_id} = params) do
-    with {:ok, project} <- authorize_project(project_id, conn.assigns.current_user) do
+    user = conn.assigns.current_user
+
+    with {:ok, _project} <- Projects.get_by(user.id, id: project_id) do
       opts =
-        [project_id: project.id]
+        [project_id: project_id]
         |> maybe_add_filter(:level, params["level"])
         |> maybe_add_filter(:parent_id, params["parent_id"])
         |> maybe_add_filter(:search, params["search"])
@@ -23,36 +24,42 @@ defmodule SacrumWeb.TaskController do
         |> maybe_add_root_only_filter(params["root_only"])
         |> maybe_add_filter(:workflow_id, params["workflow_id"])
 
-      tasks = Tasks.list_tasks(opts)
+      tasks = Tasks.list_tasks(user.id, opts)
       render(conn, :index, tasks: tasks)
     end
   end
 
   def ready(conn, %{"project_id" => project_id}) do
-    with {:ok, project} <- authorize_project(project_id, conn.assigns.current_user) do
-      tasks = Tasks.ready(project.id)
+    user = conn.assigns.current_user
+
+    with {:ok, _project} <- Projects.get_by(user.id, id: project_id) do
+      tasks = Tasks.ready(user.id, project_id)
       render(conn, :index, tasks: tasks)
     end
   end
 
   def tree(conn, %{"task_id" => task_id}) do
-    with {:ok, %Task{} = task} <- find_task(task_id),
-         :ok <- authorize_task_owner(task, conn.assigns.current_user) do
+    user = conn.assigns.current_user
+
+    with {:ok, %Task{} = task} <- Tasks.find(user.id, task_id) do
       tree = TaskHierarchy.build_tree(task)
       render(conn, :tree, tree: tree)
     end
   end
 
   def show(conn, %{"id" => id}) do
-    with {:ok, %Task{} = task} <- find_task(id),
-         :ok <- authorize_task_owner(task, conn.assigns.current_user) do
+    user = conn.assigns.current_user
+
+    with {:ok, %Task{} = task} <- Tasks.find(user.id, id) do
       render(conn, :show, task: task)
     end
   end
 
   def create(conn, %{"project_id" => project_id} = params) do
-    with {:ok, project} <- authorize_project(project_id, conn.assigns.current_user),
-         {:ok, %Task{} = task} <- Tasks.insert(project, params) do
+    user = conn.assigns.current_user
+
+    with {:ok, _project} <- Projects.get_by(user.id, id: project_id),
+         {:ok, %Task{} = task} <- Tasks.insert(user.id, project_id, params) do
       conn
       |> put_status(:created)
       |> render(:show, task: task)
@@ -60,41 +67,44 @@ defmodule SacrumWeb.TaskController do
   end
 
   def update(conn, %{"id" => id} = params) do
-    with {:ok, %Task{} = task} <- find_task(id),
-         :ok <- authorize_task_owner(task, conn.assigns.current_user),
+    user = conn.assigns.current_user
+
+    with {:ok, %Task{} = task} <- Tasks.find(user.id, id),
          {:ok, %Task{} = updated} <- Tasks.update(task, params) do
       render(conn, :show, task: updated)
     end
   end
 
   def delete(conn, %{"id" => id}) do
-    with {:ok, %Task{} = task} <- find_task(id),
-         :ok <- authorize_task_owner(task, conn.assigns.current_user),
+    user = conn.assigns.current_user
+
+    with {:ok, %Task{} = task} <- Tasks.find(user.id, id),
          {:ok, _} <- Tasks.delete(task) do
       send_resp(conn, :no_content, "")
     end
   end
 
   def blockers(conn, %{"task_id" => task_id}) do
-    with {:ok, %Task{} = task} <- find_task(task_id),
-         :ok <- authorize_task_owner(task, conn.assigns.current_user) do
+    user = conn.assigns.current_user
+
+    with {:ok, %Task{} = task} <- Tasks.find(user.id, task_id) do
       blockers = TaskDependencies.get_blockers(task)
       render(conn, :blockers, tasks: blockers)
     end
   end
 
   def path(conn, %{"task_id" => task_id, "to" => target_id}) do
-    with {:ok, %Task{} = task} <- find_task(task_id),
-         :ok <- authorize_task_owner(task, conn.assigns.current_user),
-         {:ok, %Task{} = target} <- Tasks.get(target_id),
+    user = conn.assigns.current_user
+
+    with {:ok, %Task{} = task} <- Tasks.find(user.id, task_id),
+         {:ok, %Task{} = target} <- Tasks.get_by(user.id, id: target_id),
          {:ok, path_ids} <- TaskDependencies.find_path(task, target) do
       json(conn, %{data: %{path: path_ids}})
     end
   end
 
   def path(conn, %{"task_id" => task_id}) do
-    with {:ok, %Task{} = task} <- find_task(task_id),
-         :ok <- authorize_task_owner(task, conn.assigns.current_user) do
+    with {:ok, %Task{} = _task} <- Tasks.find(conn.assigns.current_user.id, task_id) do
       conn
       |> put_status(:unprocessable_entity)
       |> json(%{errors: %{to: ["query parameter is required"]}})
@@ -119,5 +129,4 @@ defmodule SacrumWeb.TaskController do
 
   defp maybe_add_root_only_filter(opts, "true"), do: Keyword.put(opts, :root_only, true)
   defp maybe_add_root_only_filter(opts, _), do: opts
-
 end

@@ -66,5 +66,4 @@ defmodule SacrumWeb.ConnCase do
     {:ok, token, _api_token} = Sacrum.Auth.create_api_token(user)
     Plug.Conn.put_req_header(conn, "authorization", "Bearer #{token}")
   end
-
 end

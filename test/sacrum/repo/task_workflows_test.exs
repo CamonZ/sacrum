@@ -43,7 +43,10 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
 
   defp create_transition(from_step, to_step) do
     {:ok, transition} =
-      StepTransitions.insert(%{from_step_id: from_step.id, to_step_id: to_step.id})
+      StepTransitions.insert(from_step.user_id, %{
+        from_step_id: from_step.id,
+        to_step_id: to_step.id
+      })
 
     transition
   end

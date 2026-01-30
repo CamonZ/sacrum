@@ -15,6 +15,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     field :step_order, :integer
 
     belongs_to :workflow, Sacrum.Repo.Schemas.Workflow
+    belongs_to :user, Sacrum.Repo.Schemas.User
 
     has_many :transitions, Sacrum.Repo.Schemas.StepTransition, foreign_key: :from_step_id
 

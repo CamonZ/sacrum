@@ -11,6 +11,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowTransition do
     belongs_to :from_workflow, Sacrum.Repo.Schemas.Workflow
     belongs_to :to_workflow, Sacrum.Repo.Schemas.Workflow
     belongs_to :target_step, Sacrum.Repo.Schemas.WorkflowStep
+    belongs_to :user, Sacrum.Repo.Schemas.User
 
     timestamps(type: :utc_datetime_usec)
   end

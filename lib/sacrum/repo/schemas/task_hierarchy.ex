@@ -8,6 +8,7 @@ defmodule Sacrum.Repo.Schemas.TaskHierarchy do
   schema "task_hierarchy" do
     belongs_to :parent, Sacrum.Repo.Schemas.Task
     belongs_to :child, Sacrum.Repo.Schemas.Task
+    belongs_to :user, Sacrum.Repo.Schemas.User
 
     timestamps(type: :utc_datetime_usec)
   end

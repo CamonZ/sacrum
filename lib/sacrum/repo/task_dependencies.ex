@@ -37,7 +37,7 @@ defmodule Sacrum.Repo.TaskDependencies do
         {:error, :circular_dependency}
 
       true ->
-        %TaskDependency{task_id: task.id, depends_on_id: depends_on.id}
+        %TaskDependency{task_id: task.id, depends_on_id: depends_on.id, user_id: task.user_id}
         |> TaskDependency.changeset()
         |> Repo.insert()
     end
@@ -63,19 +63,21 @@ defmodule Sacrum.Repo.TaskDependencies do
 
   def get_blockers(%Task{} = task) do
     # Build the recursive CTE query for transitive blockers
-    base_query = from(d in TaskDependency,
-      where: d.task_id == ^task.id,
-      select: %{id: d.depends_on_id}
-    )
-    
-    recursive_query = from(d in TaskDependency,
-      join: b in fragment("blockers"),
-      on: d.task_id == b.id,
-      select: %{id: d.depends_on_id}
-    )
-    
+    base_query =
+      from(d in TaskDependency,
+        where: d.task_id == ^task.id,
+        select: %{id: d.depends_on_id}
+      )
+
+    recursive_query =
+      from(d in TaskDependency,
+        join: b in fragment("blockers"),
+        on: d.task_id == b.id,
+        select: %{id: d.depends_on_id}
+      )
+
     blocker_cte = union_all(base_query, ^recursive_query)
-    
+
     # Main query using the CTE
     from(t in Task)
     |> with_cte("blockers", as: ^blocker_cte)

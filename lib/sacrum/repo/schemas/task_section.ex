@@ -15,6 +15,7 @@ defmodule Sacrum.Repo.Schemas.TaskSection do
     field :done_at, :utc_datetime_usec
 
     belongs_to :task, Sacrum.Repo.Schemas.Task
+    belongs_to :user, Sacrum.Repo.Schemas.User
     has_many :code_refs, Sacrum.Repo.Schemas.CodeRef, foreign_key: :section_id
 
     timestamps(type: :utc_datetime_usec)

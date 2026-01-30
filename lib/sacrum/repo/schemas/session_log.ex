@@ -9,6 +9,7 @@ defmodule Sacrum.Repo.Schemas.SessionLog do
     field :content, :string
 
     belongs_to :step_execution, Sacrum.Repo.Schemas.StepExecution
+    belongs_to :user, Sacrum.Repo.Schemas.User
 
     timestamps(type: :utc_datetime_usec)
   end

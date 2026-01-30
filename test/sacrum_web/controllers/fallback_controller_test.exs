@@ -6,11 +6,12 @@ defmodule SacrumWeb.FallbackControllerTest do
 
   describe "call/2 with changeset error" do
     test "returns 422 with changeset errors" do
-      changeset = Ecto.Changeset.add_error(
-        Ecto.Changeset.change(%User{}, %{}),
-        :email,
-        "is invalid"
-      )
+      changeset =
+        Ecto.Changeset.add_error(
+          Ecto.Changeset.change(%User{}, %{}),
+          :email,
+          "is invalid"
+        )
 
       conn = build_conn(:post, "/api/users")
       conn = Plug.Parsers.call(conn, Plug.Parsers.init(parsers: [:json], json_decoder: Jason))
@@ -45,7 +46,9 @@ defmodule SacrumWeb.FallbackControllerTest do
       conn = build_conn(:post, "/api/tasks")
       conn = Plug.Parsers.call(conn, Plug.Parsers.init(parsers: [:json], json_decoder: Jason))
       conn = put_format(conn, "json")
-      conn = FallbackController.call(conn, {:error, :unprocessable_entity, "Custom error message"})
+
+      conn =
+        FallbackController.call(conn, {:error, :unprocessable_entity, "Custom error message"})
 
       assert conn.status == 422
       response = json_response(conn, 422)

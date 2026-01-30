@@ -22,6 +22,8 @@ defmodule Sacrum.Repo.Tasks do
   leave preloading to callers.
   """
 
+  use Sacrum.GenericRepo, schema: Sacrum.Repo.Schemas.Task
+
   import Ecto.Query
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.Task
@@ -29,6 +31,9 @@ defmodule Sacrum.Repo.Tasks do
   alias Sacrum.Repo.Schemas.TaskDependency
   alias Sacrum.Repo.Broadcaster
 
+  @doc """
+  Get a task by ID, preloading sections.
+  """
   def get(id) do
     case Repo.get(Task, id) do
       nil -> {:error, :not_found}
@@ -45,6 +50,35 @@ defmodule Sacrum.Repo.Tasks do
     end
   end
 
+  @doc """
+  Get a task by short_id, scoped to user.
+  """
+  def get_by_short_id(short_id, user_id) do
+    query = from(t in Task, where: t.short_id == ^short_id and t.user_id == ^user_id)
+
+    case Repo.one(query) do
+      nil -> {:error, :not_found}
+      task -> {:ok, Repo.preload(task, :sections)}
+    end
+  end
+
+  @doc """
+  Find a task by UUID or short_id within a user's scope.
+  """
+  def find(id, user_id) do
+    case Ecto.UUID.cast(id) do
+      {:ok, _uuid} ->
+        get_by(id: id, user_id: user_id)
+        |> maybe_preload_sections()
+
+      :error ->
+        get_by_short_id(id, user_id)
+    end
+  end
+
+  defp maybe_preload_sections({:ok, task}), do: {:ok, Repo.preload(task, :sections)}
+  defp maybe_preload_sections(error), do: error
+
   def list(%Project{id: project_id}), do: list(project_id)
 
   def list(project_id) when is_binary(project_id) do
@@ -57,6 +91,7 @@ defmodule Sacrum.Repo.Tasks do
 
   Options:
     - `:project_id` - filter by project
+    - `:user_id` - filter by user
     - `:level` - filter by task level
     - `:parent_id` - filter by parent task (via hierarchy)
     - `:blocked` - when false, exclude tasks with incomplete dependencies
@@ -68,6 +103,7 @@ defmodule Sacrum.Repo.Tasks do
   """
   def list_tasks(opts \\ []) do
     Task
+    |> apply_filter(:user_id, opts[:user_id])
     |> apply_filter(:project_id, opts[:project_id])
     |> apply_filter(:level, opts[:level])
     |> apply_filter(:parent_id, opts[:parent_id])
@@ -84,10 +120,19 @@ defmodule Sacrum.Repo.Tasks do
 
   @doc """
   Returns root tasks (no parent) with no incomplete blockers for a project.
-  These are the highest-level actionable items ready for work.
   """
   def ready(project_id) do
     list_tasks(project_id: project_id, root_only: true, blocked: false)
+  end
+
+  def ready(project_id, user_id) do
+    list_tasks(project_id: project_id, user_id: user_id, root_only: true, blocked: false)
+  end
+
+  defp apply_filter(query, :user_id, nil), do: query
+
+  defp apply_filter(query, :user_id, user_id) do
+    where(query, [t], t.user_id == ^user_id)
   end
 
   defp apply_filter(query, :project_id, nil), do: query
@@ -175,10 +220,30 @@ defmodule Sacrum.Repo.Tasks do
     where(query, [t], t.workflow_id == ^workflow_id)
   end
 
-  def insert(%Project{id: project_id}, attrs), do: insert(project_id, attrs)
+  def insert(%Project{id: project_id, user_id: user_id}, attrs) when is_binary(user_id) do
+    insert(project_id, user_id, attrs)
+  end
 
-  def insert(project_id, attrs) when is_binary(project_id) do
+  def insert(%Project{id: project_id}, attrs) do
     %Task{project_id: project_id}
+    |> Task.create_changeset(attrs)
+    |> Repo.insert()
+    |> preload_sections()
+    |> Broadcaster.broadcast(:task_created, :project)
+  end
+
+  def insert(project_id, attrs) when is_binary(project_id) and is_map(attrs) do
+    %Task{project_id: project_id}
+    |> Task.create_changeset(attrs)
+    |> Repo.insert()
+    |> preload_sections()
+    |> Broadcaster.broadcast(:task_created, :project)
+  end
+
+  defoverridable insert: 2
+
+  def insert(project_id, user_id, attrs) when is_binary(project_id) and is_binary(user_id) do
+    %Task{project_id: project_id, user_id: user_id}
     |> Task.create_changeset(attrs)
     |> Repo.insert()
     |> preload_sections()
@@ -217,7 +282,6 @@ defmodule Sacrum.Repo.Tasks do
         {:error, :not_found}
 
       parent ->
-        # Remove existing parent first if any
         Sacrum.Repo.TaskHierarchy.remove_parent(task)
 
         case Sacrum.Repo.TaskHierarchy.set_parent(task, parent) do
@@ -230,12 +294,10 @@ defmodule Sacrum.Repo.Tasks do
   defp maybe_update_parent(_task, _attrs), do: :ok
 
   defp maybe_update_dependencies(task, %{"depends_on_ids" => ids}) when is_list(ids) do
-    # Get current dependencies
     current = Sacrum.Repo.TaskDependencies.get_direct_blockers(task)
     current_ids = MapSet.new(Enum.map(current, & &1.id))
     desired_ids = MapSet.new(ids)
 
-    # Remove dependencies that are no longer desired
     to_remove = MapSet.difference(current_ids, desired_ids)
 
     for id <- to_remove do
@@ -245,7 +307,6 @@ defmodule Sacrum.Repo.Tasks do
       end
     end
 
-    # Add new dependencies
     to_add = MapSet.difference(desired_ids, current_ids)
 
     results =

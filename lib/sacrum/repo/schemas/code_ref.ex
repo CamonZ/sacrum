@@ -16,6 +16,7 @@ defmodule Sacrum.Repo.Schemas.CodeRef do
 
     belongs_to :task, Sacrum.Repo.Schemas.Task
     belongs_to :section, Sacrum.Repo.Schemas.TaskSection
+    belongs_to :user, Sacrum.Repo.Schemas.User
 
     timestamps(type: :utc_datetime_usec)
   end

@@ -17,6 +17,7 @@ defmodule Sacrum.Repo.Schemas.Workflow do
     belongs_to :project, Sacrum.Repo.Schemas.Project
     belongs_to :on_done_workflow, Sacrum.Repo.Schemas.Workflow
     belongs_to :on_reject_workflow, Sacrum.Repo.Schemas.Workflow
+    belongs_to :user, Sacrum.Repo.Schemas.User
     has_many :workflow_steps, Sacrum.Repo.Schemas.WorkflowStep
     has_many :transitions, Sacrum.Repo.Schemas.WorkflowTransition, foreign_key: :from_workflow_id
 

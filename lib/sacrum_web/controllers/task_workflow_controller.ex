@@ -1,19 +1,19 @@
 defmodule SacrumWeb.TaskWorkflowController do
   use SacrumWeb, :controller
 
-  import SacrumWeb.Helpers.Authorization
-
-  alias Sacrum.Repo.Workflows
+  alias Sacrum.Accounts.Tasks
+  alias Sacrum.Accounts.Workflows
   alias Sacrum.Repo.TaskWorkflows
-  alias Sacrum.Repo.Schemas.Task
 
   action_fallback SacrumWeb.FallbackController
 
   def assign(conn, %{"task_id" => task_id, "workflow_id" => workflow_id}) do
-    with {:ok, %Task{} = task} <- find_task(task_id),
-         :ok <- authorize_task_owner(task, conn.assigns.current_user),
-         {:ok, workflow} <- Workflows.get(workflow_id),
-         {:ok, %Task{} = updated} <- TaskWorkflows.assign_workflow(task, workflow) do
+    user = conn.assigns.current_user
+
+    with {:ok, %Sacrum.Repo.Schemas.Task{} = task} <- Tasks.find(user.id, task_id),
+         {:ok, workflow} <- Workflows.get_by(user.id, id: workflow_id),
+         {:ok, %Sacrum.Repo.Schemas.Task{} = updated} <-
+           TaskWorkflows.assign_workflow(task, workflow) do
       conn
       |> put_view(json: SacrumWeb.TaskJSON)
       |> render(:show, task: updated)
@@ -21,9 +21,10 @@ defmodule SacrumWeb.TaskWorkflowController do
   end
 
   def unassign(conn, %{"task_id" => task_id}) do
-    with {:ok, %Task{} = task} <- find_task(task_id),
-         :ok <- authorize_task_owner(task, conn.assigns.current_user),
-         {:ok, %Task{} = updated} <- TaskWorkflows.unassign_workflow(task) do
+    user = conn.assigns.current_user
+
+    with {:ok, %Sacrum.Repo.Schemas.Task{} = task} <- Tasks.find(user.id, task_id),
+         {:ok, %Sacrum.Repo.Schemas.Task{} = updated} <- TaskWorkflows.unassign_workflow(task) do
       conn
       |> put_view(json: SacrumWeb.TaskJSON)
       |> render(:show, task: updated)
@@ -31,9 +32,10 @@ defmodule SacrumWeb.TaskWorkflowController do
   end
 
   def move_to(conn, %{"task_id" => task_id, "step_id" => step_id}) do
-    with {:ok, %Task{} = task} <- find_task(task_id),
-         :ok <- authorize_task_owner(task, conn.assigns.current_user),
-         {:ok, %Task{} = updated} <- TaskWorkflows.move_to_step(task, step_id) do
+    user = conn.assigns.current_user
+
+    with {:ok, %Sacrum.Repo.Schemas.Task{} = task} <- Tasks.find(user.id, task_id),
+         {:ok, %Sacrum.Repo.Schemas.Task{} = updated} <- TaskWorkflows.move_to_step(task, step_id) do
       conn
       |> put_view(json: SacrumWeb.TaskJSON)
       |> render(:show, task: updated)

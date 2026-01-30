@@ -21,7 +21,7 @@ defmodule Sacrum.Repo.TaskHierarchy do
   alias Sacrum.Repo.Schemas.TaskHierarchy
 
   def set_parent(%Task{} = child, %Task{} = parent) do
-    %TaskHierarchy{parent_id: parent.id, child_id: child.id}
+    %TaskHierarchy{parent_id: parent.id, child_id: child.id, user_id: parent.user_id}
     |> TaskHierarchy.changeset()
     |> Repo.insert()
   end
@@ -71,23 +71,25 @@ defmodule Sacrum.Repo.TaskHierarchy do
 
   def get_descendants(%Task{} = task) do
     # Build the recursive CTE query for descendants
-    base_query = from(h in TaskHierarchy,
-      where: h.parent_id == ^task.id,
-      join: t in Task,
-      on: t.id == h.child_id,
-      select: t
-    )
-    
-    recursive_query = from(h in TaskHierarchy,
-      join: d in fragment("descendants"),
-      on: h.parent_id == d.id,
-      join: t in Task,
-      on: t.id == h.child_id,
-      select: t
-    )
-    
+    base_query =
+      from(h in TaskHierarchy,
+        where: h.parent_id == ^task.id,
+        join: t in Task,
+        on: t.id == h.child_id,
+        select: t
+      )
+
+    recursive_query =
+      from(h in TaskHierarchy,
+        join: d in fragment("descendants"),
+        on: h.parent_id == d.id,
+        join: t in Task,
+        on: t.id == h.child_id,
+        select: t
+      )
+
     descendant_cte = union_all(base_query, ^recursive_query)
-    
+
     # Query using the CTE
     from(t in Task)
     |> with_cte("descendants", as: ^descendant_cte)

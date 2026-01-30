@@ -1,11 +1,13 @@
 defmodule Sacrum.Repo.Projects do
   @moduledoc """
-  CRUD operations for projects, scoped to a user.
+  CRUD operations for projects.
 
   ## Error Contract
 
   - `get/1` returns `{:ok, project}` or `{:error, :not_found}`
+  - `get!/1` returns project or raises
   - `get_by/1` returns `{:ok, project}` or `{:error, :not_found}`
+  - `all/0` returns `[project]`
   - `insert/2` returns `{:ok, project}` or `{:error, changeset}`
   - `update/2` returns `{:ok, project}` or `{:error, changeset}`
   - `delete/1` returns `{:ok, project}` or `{:error, changeset}`
@@ -20,19 +22,7 @@ defmodule Sacrum.Repo.Projects do
   alias Sacrum.Repo.Schemas.Project
   alias Sacrum.Repo.Schemas.User
 
-  def get(id) do
-    case Repo.get(Project, id) do
-      nil -> {:error, :not_found}
-      project -> {:ok, project}
-    end
-  end
-
-  def get_by(clauses) do
-    case Repo.get_by(Project, clauses) do
-      nil -> {:error, :not_found}
-      project -> {:ok, project}
-    end
-  end
+  use Sacrum.GenericRepo, schema: Sacrum.Repo.Schemas.Project
 
   def list(%User{id: user_id}), do: list(user_id)
 
@@ -49,11 +39,11 @@ defmodule Sacrum.Repo.Projects do
     |> Repo.insert()
   end
 
+  defoverridable insert: 2
+
   def update(%Project{} = project, attrs) do
     project
     |> Project.update_changeset(attrs)
     |> Repo.update()
   end
-
-  def delete(%Project{} = project), do: Repo.delete(project)
 end
