@@ -70,23 +70,32 @@ defmodule Sacrum.Repo.TaskHierarchy do
   end
 
   def get_descendants(%Task{} = task) do
-    get_descendants_recursive([task.id], [])
-  end
-
-  defp get_descendants_recursive([], acc), do: acc
-
-  defp get_descendants_recursive(parent_ids, acc) do
-    children =
-      from(h in TaskHierarchy,
-        where: h.parent_id in ^parent_ids,
-        join: t in Task,
-        on: t.id == h.child_id,
-        select: t
-      )
-      |> Repo.all()
-
-    child_ids = Enum.map(children, & &1.id)
-    get_descendants_recursive(child_ids, acc ++ children)
+    # Build the recursive CTE query for descendants
+    base_query = from(h in TaskHierarchy,
+      where: h.parent_id == ^task.id,
+      join: t in Task,
+      on: t.id == h.child_id,
+      select: t
+    )
+    
+    recursive_query = from(h in TaskHierarchy,
+      join: d in fragment("descendants"),
+      on: h.parent_id == d.id,
+      join: t in Task,
+      on: t.id == h.child_id,
+      select: t
+    )
+    
+    descendant_cte = union_all(base_query, ^recursive_query)
+    
+    # Query using the CTE
+    from(t in Task)
+    |> with_cte("descendants", as: ^descendant_cte)
+    |> recursive_ctes(true)
+    |> join(:inner, [t], d in fragment("(SELECT * FROM descendants)"), on: t.id == d.id)
+    |> select([t], t)
+    |> order_by([t], asc: t.inserted_at)
+    |> Repo.all()
   end
 
   @doc """

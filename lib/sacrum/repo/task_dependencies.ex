@@ -62,32 +62,29 @@ defmodule Sacrum.Repo.TaskDependencies do
   end
 
   def get_blockers(%Task{} = task) do
-    get_blockers_recursive([task.id], MapSet.new(), [])
-  end
-
-  defp get_blockers_recursive([], _visited, acc), do: acc
-
-  defp get_blockers_recursive(task_ids, visited, acc) do
-    new_ids = Enum.reject(task_ids, &MapSet.member?(visited, &1))
-
-    if new_ids == [] do
-      acc
-    else
-      blockers =
-        from(d in TaskDependency,
-          where: d.task_id in ^new_ids,
-          join: t in Task,
-          on: t.id == d.depends_on_id,
-          select: t
-        )
-        |> Repo.all()
-
-      new_visited = Enum.reduce(new_ids, visited, &MapSet.put(&2, &1))
-      new_blocker_ids = Enum.map(blockers, & &1.id)
-      unique_blockers = Enum.reject(blockers, fn b -> MapSet.member?(visited, b.id) end)
-
-      get_blockers_recursive(new_blocker_ids, new_visited, acc ++ unique_blockers)
-    end
+    # Build the recursive CTE query for transitive blockers
+    base_query = from(d in TaskDependency,
+      where: d.task_id == ^task.id,
+      select: %{id: d.depends_on_id}
+    )
+    
+    recursive_query = from(d in TaskDependency,
+      join: b in fragment("blockers"),
+      on: d.task_id == b.id,
+      select: %{id: d.depends_on_id}
+    )
+    
+    blocker_cte = union_all(base_query, ^recursive_query)
+    
+    # Main query using the CTE
+    from(t in Task)
+    |> with_cte("blockers", as: ^blocker_cte)
+    |> recursive_ctes(true)
+    |> join(:inner, [t], b in fragment("blockers"), on: t.id == b.id)
+    |> select([t], t)
+    |> order_by([t], asc: t.inserted_at)
+    |> distinct(true)
+    |> Repo.all()
   end
 
   def get_blocking(%Task{id: task_id}) do
