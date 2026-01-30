@@ -27,6 +27,7 @@ defmodule Sacrum.Repo.WorkflowSteps do
   alias Sacrum.Repo.Schemas.WorkflowStep
   alias Sacrum.Repo.Schemas.StepTransition
   alias Sacrum.Repo.Broadcaster
+  alias Sacrum.Repo.SyncHelper
 
   def get(id) do
     case Repo.get(WorkflowStep, id) do
@@ -77,23 +78,35 @@ defmodule Sacrum.Repo.WorkflowSteps do
         from(t in StepTransition, where: t.from_step_id == ^step.id)
         |> Repo.all()
 
-      existing_by_to = Map.new(existing, &{&1.to_step_id, &1})
+      SyncHelper.diff_and_sync(existing, transitions, %{
+        target_key: :to_step_id,
+        to_delete_fn: fn existing, incoming_target_ids ->
+          Enum.filter(existing, fn t -> not MapSet.member?(incoming_target_ids, t.to_step_id) end)
+        end,
+        to_insert_fn: fn incoming, existing_by_target ->
+          Enum.filter(incoming, fn t ->
+            to_id = to_step_id(t)
+            not Map.has_key?(existing_by_target, to_id)
+          end)
+        end,
+        to_update_fn: fn _incoming, _existing_by_target ->
+          # No updates for step transitions - they're created with just from/to, no other mutable fields
+          []
+        end,
+        build_changeset_fn: fn t ->
+          to_id = to_step_id(t)
 
-      desired_to_ids =
-        MapSet.new(transitions, &to_step_id/1)
-
-      existing_to_ids =
-        MapSet.new(existing, & &1.to_step_id)
-
-      to_add = MapSet.difference(desired_to_ids, existing_to_ids)
-      to_remove = MapSet.difference(existing_to_ids, desired_to_ids)
-
-      Ecto.Multi.new()
-      |> delete_removed_transitions(to_remove, existing_by_to)
-      |> insert_new_transitions(step, transitions, to_add)
-      |> Repo.transaction()
-      |> case do
-        {:ok, _changes} ->
+          StepTransition.create_changeset(%StepTransition{}, %{
+            from_step_id: step.id,
+            to_step_id: to_id,
+            label: label_for(t)
+          })
+        end,
+        build_update_changeset_fn: fn _existing, _map ->
+          # No-op for step transitions
+          nil
+        end,
+        fetch_final_fn: fn ->
           updated =
             from(t in StepTransition,
               where: t.from_step_id == ^step.id,
@@ -102,10 +115,8 @@ defmodule Sacrum.Repo.WorkflowSteps do
             |> Repo.all()
 
           {:ok, updated}
-
-        {:error, _op, changeset, _changes} ->
-          {:error, changeset}
-      end
+        end
+      })
     end
   end
 
@@ -159,27 +170,4 @@ defmodule Sacrum.Repo.WorkflowSteps do
     end
   end
 
-  defp delete_removed_transitions(multi, to_remove, existing_by_to) do
-    Enum.reduce(to_remove, multi, fn to_id, acc ->
-      transition = Map.fetch!(existing_by_to, to_id)
-      Ecto.Multi.delete(acc, {:delete, to_id}, transition)
-    end)
-  end
-
-  defp insert_new_transitions(multi, step, transitions, to_add) do
-    transitions
-    |> Enum.filter(fn t -> MapSet.member?(to_add, to_step_id(t)) end)
-    |> Enum.reduce(multi, fn t, acc ->
-      to_id = to_step_id(t)
-
-      changeset =
-        StepTransition.create_changeset(%StepTransition{}, %{
-          from_step_id: step.id,
-          to_step_id: to_id,
-          label: label_for(t)
-        })
-
-      Ecto.Multi.insert(acc, {:insert, to_id}, changeset)
-    end)
-  end
 end

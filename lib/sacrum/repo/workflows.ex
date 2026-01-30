@@ -21,12 +21,12 @@ defmodule Sacrum.Repo.Workflows do
   """
 
   import Ecto.Query
-  alias Ecto.Multi
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.Project
   alias Sacrum.Repo.Schemas.Workflow
   alias Sacrum.Repo.Schemas.WorkflowTransition
   alias Sacrum.Repo.Broadcaster
+  alias Sacrum.Repo.SyncHelper
 
   def get(id) do
     case Repo.get(Workflow, id) do
@@ -89,72 +89,42 @@ defmodule Sacrum.Repo.Workflows do
   defp do_sync_transitions(workflow, transition_maps) do
     existing = Repo.WorkflowTransitions.list_for_workflow(workflow)
 
-    existing_by_target =
-      Map.new(existing, fn t -> {t.to_workflow_id, t} end)
-
-    incoming_target_ids = MapSet.new(transition_maps, & &1["to_workflow_id"])
-
-    to_delete =
-      Enum.filter(existing, fn t -> not MapSet.member?(incoming_target_ids, t.to_workflow_id) end)
-
-    to_insert =
-      Enum.filter(transition_maps, fn m ->
-        not Map.has_key?(existing_by_target, m["to_workflow_id"])
-      end)
-
-    to_update =
-      Enum.filter(transition_maps, fn m ->
-        Map.has_key?(existing_by_target, m["to_workflow_id"])
-      end)
-      |> Enum.map(fn m -> {existing_by_target[m["to_workflow_id"]], m} end)
-      |> Enum.filter(fn {existing_rec, m} ->
-        existing_rec.label != m["label"] ||
-          existing_rec.target_step_id != m["target_step_id"]
-      end)
-
-    multi =
-      Multi.new()
-      |> delete_transitions(to_delete)
-      |> insert_transitions(workflow, to_insert)
-      |> update_transitions(to_update)
-
-    case Repo.transaction(multi) do
-      {:ok, _} ->
-        Broadcaster.broadcast_event(workflow, :workflow_updated, :project)
-        {:ok, Repo.WorkflowTransitions.list_for_workflow(workflow)}
-
-      {:error, _name, changeset, _changes} ->
-        {:error, changeset}
-    end
-  end
-
-  defp delete_transitions(multi, transitions) do
-    Enum.reduce(transitions, multi, fn t, multi ->
-      Multi.delete(multi, {:delete, t.id}, t)
-    end)
-  end
-
-  defp insert_transitions(multi, workflow, maps) do
-    Enum.reduce(maps, multi, fn m, multi ->
-      changeset =
+    SyncHelper.diff_and_sync(existing, transition_maps, %{
+      target_key: :to_workflow_id,
+      to_delete_fn: fn existing, incoming_target_ids ->
+        Enum.filter(existing, fn t -> not MapSet.member?(incoming_target_ids, t.to_workflow_id) end)
+      end,
+      to_insert_fn: fn incoming, existing_by_target ->
+        Enum.filter(incoming, fn m ->
+          not Map.has_key?(existing_by_target, m["to_workflow_id"])
+        end)
+      end,
+      to_update_fn: fn incoming, existing_by_target ->
+        Enum.filter(incoming, fn m ->
+          Map.has_key?(existing_by_target, m["to_workflow_id"])
+        end)
+        |> Enum.map(fn m -> {existing_by_target[m["to_workflow_id"]], m} end)
+        |> Enum.filter(fn {existing_rec, m} ->
+          existing_rec.label != m["label"] ||
+            existing_rec.target_step_id != m["target_step_id"]
+        end)
+      end,
+      build_changeset_fn: fn m ->
         %WorkflowTransition{}
         |> WorkflowTransition.create_changeset(Map.merge(m, %{"from_workflow_id" => workflow.id}))
-
-      Multi.insert(multi, {:insert, m["to_workflow_id"]}, changeset)
-    end)
-  end
-
-  defp update_transitions(multi, pairs) do
-    Enum.reduce(pairs, multi, fn {existing_rec, m}, multi ->
-      changeset =
+      end,
+      build_update_changeset_fn: fn existing_rec, m ->
         existing_rec
         |> Ecto.Changeset.change(%{
           label: m["label"],
           target_step_id: m["target_step_id"]
         })
-
-      Multi.update(multi, {:update, existing_rec.id}, changeset)
-    end)
+      end,
+      fetch_final_fn: fn ->
+        Broadcaster.broadcast_event(workflow, :workflow_updated, :project)
+        {:ok, Repo.WorkflowTransitions.list_for_workflow(workflow)}
+      end
+    })
   end
 
   def delete(%Workflow{} = workflow) do
