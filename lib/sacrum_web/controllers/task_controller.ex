@@ -1,11 +1,11 @@
 defmodule SacrumWeb.TaskController do
   use SacrumWeb, :controller
 
-  alias Sacrum.Repo.Projects
+  import SacrumWeb.Helpers.Authorization
+
   alias Sacrum.Repo.Tasks
   alias Sacrum.Repo.TaskHierarchy
   alias Sacrum.Repo.TaskDependencies
-  alias Sacrum.Repo.Schemas.Project
   alias Sacrum.Repo.Schemas.Task
 
   action_fallback SacrumWeb.FallbackController
@@ -99,34 +99,6 @@ defmodule SacrumWeb.TaskController do
       conn
       |> put_status(:unprocessable_entity)
       |> json(%{errors: %{to: ["query parameter is required"]}})
-    end
-  end
-
-  defp authorize_project(project_id, user) do
-    with {:ok, %Project{} = project} <- Projects.get(project_id),
-         true <- project.user_id == user.id do
-      {:ok, project}
-    else
-      false -> {:error, :not_found}
-      error -> error
-    end
-  end
-
-  defp authorize_task_owner(%Task{} = task, user) do
-    task = Sacrum.Repo.preload(task, :project)
-
-    if task.project && task.project.user_id == user.id do
-      :ok
-    else
-      {:error, :not_found}
-    end
-  end
-
-  # Allow lookup by UUID or short_id
-  defp find_task(id) do
-    case Ecto.UUID.cast(id) do
-      {:ok, _uuid} -> Tasks.get(id)
-      :error -> Tasks.get_by_short_id(id)
     end
   end
 

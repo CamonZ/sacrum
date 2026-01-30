@@ -1,9 +1,10 @@
 defmodule SacrumWeb.WorkflowController do
   use SacrumWeb, :controller
 
+  import SacrumWeb.Helpers.Authorization
+
   alias Sacrum.Repo.Projects
   alias Sacrum.Repo.Workflows
-  alias Sacrum.Repo.Schemas.Project
   alias Sacrum.Repo.Schemas.Workflow
 
   action_fallback SacrumWeb.FallbackController
@@ -55,16 +56,6 @@ defmodule SacrumWeb.WorkflowController do
          :ok <- authorize_workflow_owner(workflow, conn.assigns.current_user),
          {:ok, _} <- Workflows.delete(workflow) do
       send_resp(conn, :no_content, "")
-    end
-  end
-
-  defp authorize_project(project_id, user) do
-    with {:ok, %Project{} = project} <- Projects.get(project_id),
-         true <- project.user_id == user.id do
-      {:ok, project}
-    else
-      false -> {:error, :not_found}
-      error -> error
     end
   end
 
