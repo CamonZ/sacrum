@@ -1,28 +1,10 @@
 defmodule SacrumWeb.TaskControllerTest do
   use SacrumWeb.ConnCase, async: true
 
-  alias Sacrum.Repo.Users
   alias Sacrum.Repo.Projects
   alias Sacrum.Repo.Tasks
   alias Sacrum.Repo.TaskDependencies
   alias Sacrum.Repo.TaskHierarchy
-  alias Sacrum.Auth
-
-  @valid_user_attrs %{
-    email: "test@example.com",
-    username: "testuser",
-    password: "password123"
-  }
-
-  defp create_user(attrs \\ @valid_user_attrs) do
-    {:ok, user} = Users.insert(attrs)
-    user
-  end
-
-  defp authenticate(conn, user) do
-    {:ok, token, _api_token} = Auth.create_api_token(user)
-    put_req_header(conn, "authorization", "Bearer #{token}")
-  end
 
   defp setup_authenticated(%{conn: conn}) do
     user = create_user()

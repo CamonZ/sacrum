@@ -35,4 +35,36 @@ defmodule SacrumWeb.ConnCase do
     Sacrum.DataCase.setup_sandbox(tags)
     {:ok, conn: Phoenix.ConnTest.build_conn()}
   end
+
+  @doc """
+  Creates a test user with the given attributes.
+
+  If no attributes are provided, uses a default set:
+  - email: "test@example.com"
+  - username: "testuser"
+  - password: "password123"
+  """
+  def create_user(attrs \\ %{}) do
+    default_attrs = %{
+      email: "test@example.com",
+      username: "testuser",
+      password: "password123"
+    }
+
+    attrs = Map.merge(default_attrs, attrs)
+    {:ok, user} = Sacrum.Repo.Users.insert(attrs)
+    user
+  end
+
+  @doc """
+  Authenticates a connection with a user's API token.
+
+  Creates an API token for the user and adds it to the
+  connection as a Bearer token in the Authorization header.
+  """
+  def authenticate(conn, user) do
+    {:ok, token, _api_token} = Sacrum.Auth.create_api_token(user)
+    Plug.Conn.put_req_header(conn, "authorization", "Bearer #{token}")
+  end
+
 end

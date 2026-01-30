@@ -1,7 +1,6 @@
 defmodule SacrumWeb.SessionLogControllerTest do
   use SacrumWeb.ConnCase, async: true
 
-  alias Sacrum.Repo.Users
   alias Sacrum.Repo.Projects
   alias Sacrum.Repo.Tasks
   alias Sacrum.Repo.Workflows
@@ -9,23 +8,6 @@ defmodule SacrumWeb.SessionLogControllerTest do
   alias Sacrum.Repo.TaskWorkflows
   alias Sacrum.Repo.StepExecutions
   alias Sacrum.Repo.SessionLogs
-  alias Sacrum.Auth
-
-  @valid_user_attrs %{
-    email: "test@example.com",
-    username: "testuser",
-    password: "password123"
-  }
-
-  defp create_user do
-    {:ok, user} = Users.insert(@valid_user_attrs)
-    user
-  end
-
-  defp authenticate(conn, user) do
-    {:ok, token, _api_token} = Auth.create_api_token(user)
-    put_req_header(conn, "authorization", "Bearer #{token}")
-  end
 
   defp setup_authenticated(%{conn: conn}) do
     user = create_user()
