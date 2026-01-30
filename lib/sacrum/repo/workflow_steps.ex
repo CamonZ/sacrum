@@ -1,6 +1,24 @@
 defmodule Sacrum.Repo.WorkflowSteps do
   @moduledoc """
   CRUD operations for workflow steps, scoped to a workflow.
+
+  ## Error Contract
+
+  - `get/1` returns `{:ok, step}` or `{:error, :not_found}`
+  - `insert/2` returns `{:ok, step}` or `{:error, changeset}`
+  - `update/2` returns `{:ok, step}` or `{:error, changeset}`
+  - `delete/1` returns `{:ok, step}` or `{:error, changeset}`
+  - `sync_transitions/2` returns `{:ok, [transitions]}` or `{:error, changeset}` or `{:error, atom}`
+
+  ## Domain-Specific Errors
+
+  `sync_transitions/2` may return `{:error, atom}` for:
+  - `:duplicate_to_step_ids` - when transition list has duplicate target steps
+  - `:different_workflows` - when target steps belong to different workflows
+
+  ## Preload Strategy
+
+  Preloading is managed by callers. No automatic preloads are applied in this module.
   """
 
   import Ecto.Query

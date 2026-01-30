@@ -1,6 +1,18 @@
 defmodule Sacrum.Repo.Projects do
   @moduledoc """
   CRUD operations for projects, scoped to a user.
+
+  ## Error Contract
+
+  - `get/1` returns `{:ok, project}` or `{:error, :not_found}`
+  - `get_by/1` returns `{:ok, project}` or `{:error, :not_found}`
+  - `insert/2` returns `{:ok, project}` or `{:error, changeset}`
+  - `update/2` returns `{:ok, project}` or `{:error, changeset}`
+  - `delete/1` returns `{:ok, project}` or `{:error, changeset}`
+
+  ## Preload Strategy
+
+  Preloading is managed by callers. No automatic preloads are applied in this module.
   """
 
   import Ecto.Query

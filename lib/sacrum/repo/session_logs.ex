@@ -1,6 +1,15 @@
 defmodule Sacrum.Repo.SessionLogs do
   @moduledoc """
   Operations for session logs within step executions.
+
+  ## Error Contract
+
+  - `get/1` returns `{:ok, log}` or `{:error, :not_found}`
+  - `insert/1` returns `{:ok, log}` or `{:error, changeset}`
+
+  ## Preload Strategy
+
+  Preloading is managed by callers. No automatic preloads are applied in this module.
   """
 
   import Ecto.Query

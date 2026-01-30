@@ -1,6 +1,21 @@
 defmodule Sacrum.Repo.StepTransitions do
   @moduledoc """
   CRUD operations for step transitions within a workflow.
+
+  ## Error Contract
+
+  - `get/1` returns `{:ok, transition}` or `{:error, :not_found}`
+  - `insert/1` returns `{:ok, transition}` or `{:error, changeset}` or `{:error, atom}`
+  - `delete/1` returns `{:ok, transition}` or `{:error, changeset}`
+
+  ## Domain-Specific Errors
+
+  `insert/1` may return `{:error, atom}` for:
+  - `:different_workflows` - when step transitions belong to different workflows
+
+  ## Preload Strategy
+
+  Preloading is managed by callers. No automatic preloads are applied in this module.
   """
 
   import Ecto.Query

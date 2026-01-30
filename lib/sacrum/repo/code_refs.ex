@@ -1,6 +1,17 @@
 defmodule Sacrum.Repo.CodeRefs do
   @moduledoc """
   CRUD operations for code references.
+
+  ## Error Contract
+
+  - `get/1` returns `{:ok, ref}` or `{:error, :not_found}`
+  - `insert_for_task/2` returns `{:ok, ref}` or `{:error, changeset}`
+  - `insert_for_section/2` returns `{:ok, ref}` or `{:error, changeset}`
+  - `delete/1` returns `{:ok, ref}` or `{:error, changeset}`
+
+  ## Preload Strategy
+
+  Preloading is managed by callers. No automatic preloads are applied in this module.
   """
 
   import Ecto.Query

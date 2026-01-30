@@ -1,6 +1,17 @@
 defmodule Sacrum.Repo.TaskSections do
   @moduledoc """
   CRUD operations for task sections, scoped to a task.
+
+  ## Error Contract
+
+  - `get/1` returns `{:ok, section}` or `{:error, :not_found}`
+  - `insert/2` returns `{:ok, section}` or `{:error, changeset}`
+  - `update/2` returns `{:ok, section}` or `{:error, changeset}`
+  - `delete/1` returns `{:ok, section}` or `{:error, changeset}`
+
+  ## Preload Strategy
+
+  Preloading is managed by callers. No automatic preloads are applied in this module.
   """
 
   import Ecto.Query

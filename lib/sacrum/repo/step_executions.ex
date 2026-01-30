@@ -1,6 +1,15 @@
 defmodule Sacrum.Repo.StepExecutions do
   @moduledoc """
   Operations for step execution audit trail.
+
+  ## Error Contract
+
+  - `get/1` returns `{:ok, execution}` or `{:error, :not_found}`
+  - `insert/1` returns `{:ok, execution}` or `{:error, changeset}`
+
+  ## Preload Strategy
+
+  Preloading is managed by callers. No automatic preloads are applied in this module.
   """
 
   import Ecto.Query

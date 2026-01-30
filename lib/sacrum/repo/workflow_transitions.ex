@@ -1,6 +1,17 @@
 defmodule Sacrum.Repo.WorkflowTransitions do
   @moduledoc """
   CRUD operations for workflow-to-workflow transitions.
+
+  ## Error Contract
+
+  - `get/1` returns `{:ok, transition}` or `{:error, :not_found}`
+  - `insert/1` returns `{:ok, transition}` or `{:error, changeset}`
+  - `delete/1` returns `{:ok, transition}` or `{:error, changeset}`
+
+  ## Preload Strategy
+
+  Preloading is managed by callers. The `list_for_project/1` function automatically
+  preloads `:from_workflow` and `:to_workflow` associations.
   """
 
   import Ecto.Query

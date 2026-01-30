@@ -1,6 +1,35 @@
 defmodule Sacrum.Repo.TaskWorkflows do
   @moduledoc """
   Workflow assignment and progression functions for tasks.
+
+  ## Error Contract
+
+  - `assign_workflow/2` returns `{:ok, task}` or `{:error, changeset}`
+  - `unassign_workflow/1` returns `{:ok, task}` or `{:error, changeset}`
+  - `move_to_step/2` returns `{:ok, task}` or `{:error, changeset}` or `{:error, atom}`
+  - `get_current_step/1` returns `{:ok, step}` or `{:error, atom}`
+
+  ## Domain-Specific Errors
+
+  `move_to_step/2` may return `{:error, atom}` for:
+  - `:no_workflow` - when task has no workflow assigned
+  - `:no_current_step` - when task has no current step assigned
+  - `:step_not_found` - when target step does not exist
+  - `:step_not_in_workflow` - when target step belongs to a different workflow
+  - `:no_transition` - when no transition exists between current and target steps
+
+  `get_current_step/1` may return `{:error, atom}` for:
+  - `:no_current_step` - when task has no current step assigned
+  - `:not_found` - when the current step ID does not reference an existing step
+
+  `assign_workflow/2` may return `{:error, atom}` for:
+  - `:initial_step_not_found` - when workflow's initial_step_id does not exist
+  - `:workflow_has_no_steps` - when workflow has no workflow steps
+
+  ## Preload Strategy
+
+  Preloading is managed by callers. Functions perform necessary preloads internally
+  for validation but do not return preloaded records.
   """
 
   import Ecto.Query

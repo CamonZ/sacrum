@@ -1,6 +1,25 @@
 defmodule Sacrum.Repo.Tasks do
   @moduledoc """
   CRUD operations for tasks, scoped to a project.
+
+  ## Error Contract
+
+  - `get/1` returns `{:ok, task}` or `{:error, :not_found}`
+  - `get_by_short_id/1` returns `{:ok, task}` or `{:error, :not_found}`
+  - `insert/2` returns `{:ok, task}` or `{:error, changeset}`
+  - `update/2` returns `{:ok, task}` or `{:error, changeset}`
+  - `delete/1` returns `{:ok, task}` or `{:error, changeset}`
+
+  ## Domain-Specific Errors
+
+  `update/2` may return `{:error, changeset}` with validation errors for:
+  - Invalid section IDs provided in the `:sections` field
+
+  ## Preload Strategy
+
+  The `get/1` and `get_by_short_id/1` functions automatically preload the `:sections`
+  association. The `list_tasks/1` function also preloads `:sections`. Other functions
+  leave preloading to callers.
   """
 
   import Ecto.Query

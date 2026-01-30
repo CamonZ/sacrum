@@ -1,6 +1,17 @@
 defmodule Sacrum.Repo.ApiTokens do
   @moduledoc """
   Basic CRUD operations for API tokens.
+
+  ## Error Contract
+
+  - `get/1` returns `{:ok, token}` or `{:error, :not_found}`
+  - `insert/1` returns `{:ok, token}` or `{:error, changeset}`
+  - `update/2` returns `{:ok, token}` or `{:error, changeset}`
+  - `delete/1` returns `{:ok, token}` or `{:error, changeset}`
+
+  ## Preload Strategy
+
+  Preloading is managed by callers. No automatic preloads are applied in this module.
   """
 
   import Ecto.Query

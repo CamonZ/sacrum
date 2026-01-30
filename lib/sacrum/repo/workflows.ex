@@ -1,6 +1,23 @@
 defmodule Sacrum.Repo.Workflows do
   @moduledoc """
   CRUD operations for workflows, scoped to a project.
+
+  ## Error Contract
+
+  - `get/1` returns `{:ok, workflow}` or `{:error, :not_found}`
+  - `insert/2` returns `{:ok, workflow}` or `{:error, changeset}`
+  - `update/2` returns `{:ok, workflow}` or `{:error, changeset}`
+  - `delete/1` returns `{:ok, workflow}` or `{:error, changeset}`
+  - `sync_transitions/2` returns `{:ok, [transitions]}` or `{:error, changeset}`
+
+  ## Domain-Specific Errors
+
+  `sync_transitions/2` may return `{:error, changeset}` with validation errors for:
+  - Duplicate `to_workflow_id` entries in the transitions list
+
+  ## Preload Strategy
+
+  Preloading is managed by callers. No automatic preloads are applied in this module.
   """
 
   import Ecto.Query

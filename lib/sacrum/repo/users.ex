@@ -1,6 +1,18 @@
 defmodule Sacrum.Repo.Users do
   @moduledoc """
   Basic CRUD operations for users.
+
+  ## Error Contract
+
+  - `get/1` returns `{:ok, user}` or `{:error, :not_found}`
+  - `insert/1` returns `{:ok, user}` or `{:error, changeset}`
+  - `update/2` returns `{:ok, user}` or `{:error, changeset}`
+  - `update_password/2` returns `{:ok, user}` or `{:error, changeset}`
+  - `delete/1` returns `{:ok, user}` or `{:error, changeset}`
+
+  ## Preload Strategy
+
+  Preloading is managed by callers. No automatic preloads are applied in this module.
   """
 
   alias Sacrum.Repo

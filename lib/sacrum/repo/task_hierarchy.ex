@@ -1,6 +1,18 @@
 defmodule Sacrum.Repo.TaskHierarchy do
   @moduledoc """
   Functions for managing task parent-child hierarchy.
+
+  ## Error Contract
+
+  - `set_parent/2` returns `{:ok, hierarchy}` or `{:error, changeset}`
+  - `remove_parent/1` returns `{:ok, hierarchy}` or `{:error, :not_found}`
+  - `get_parent/1` returns `{:ok, parent_task}` or `{:error, :not_found}`
+
+  ## Preload Strategy
+
+  Preloading is managed by callers. No automatic preloads are applied in this module.
+  Functions like `get_children/1`, `get_ancestors/1`, and `get_descendants/1` return
+  task structs but do not automatically preload associations.
   """
 
   import Ecto.Query

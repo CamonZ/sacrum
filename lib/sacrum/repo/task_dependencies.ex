@@ -1,6 +1,23 @@
 defmodule Sacrum.Repo.TaskDependencies do
   @moduledoc """
   Functions for managing task dependencies with cycle detection.
+
+  ## Error Contract
+
+  - `add_dependency/2` returns `{:ok, dependency}` or `{:error, atom}`
+  - `remove_dependency/2` returns `{:ok, dependency}` or `{:error, :not_found}`
+  - `find_path/2` returns `{:ok, [task_ids]}` (empty list if no path exists)
+
+  ## Domain-Specific Errors
+
+  `add_dependency/2` may return `{:error, atom}` for:
+  - `:different_projects` - when tasks belong to different projects
+  - `:self_dependency` - when task depends on itself
+  - `:circular_dependency` - when adding the dependency would create a cycle
+
+  ## Preload Strategy
+
+  Preloading is managed by callers. No automatic preloads are applied in this module.
   """
 
   import Ecto.Query
