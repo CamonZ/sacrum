@@ -188,14 +188,96 @@ defmodule Sacrum.Repo.Tasks do
   def update(%Task{} = task, attrs) do
     task = Repo.preload(task, :sections)
 
-    with :ok <- validate_section_ownership(task, attrs) do
-      task
-      |> Task.update_changeset(attrs)
-      |> Repo.update()
-      |> preload_sections()
-      |> Broadcaster.broadcast(:task_updated, :project)
+    with :ok <- validate_section_ownership(task, attrs),
+         {:ok, updated_task} <- do_update_task(task, attrs),
+         :ok <- maybe_update_parent(updated_task, attrs),
+         :ok <- maybe_update_dependencies(updated_task, attrs) do
+      Broadcaster.broadcast({:ok, updated_task}, :task_updated, :project)
     end
   end
+
+  defp do_update_task(task, attrs) do
+    task
+    |> Task.update_changeset(attrs)
+    |> Repo.update()
+    |> preload_sections()
+  end
+
+  defp maybe_update_parent(task, %{"parent_id" => nil}) do
+    case Sacrum.Repo.TaskHierarchy.remove_parent(task) do
+      {:ok, _} -> :ok
+      {:error, :not_found} -> :ok
+      error -> error
+    end
+  end
+
+  defp maybe_update_parent(task, %{"parent_id" => parent_id}) do
+    case Repo.get(Sacrum.Repo.Schemas.Task, parent_id) do
+      nil ->
+        {:error, :not_found}
+
+      parent ->
+        # Remove existing parent first if any
+        Sacrum.Repo.TaskHierarchy.remove_parent(task)
+
+        case Sacrum.Repo.TaskHierarchy.set_parent(task, parent) do
+          {:ok, _} -> :ok
+          error -> error
+        end
+    end
+  end
+
+  defp maybe_update_parent(_task, _attrs), do: :ok
+
+  defp maybe_update_dependencies(task, %{"depends_on_ids" => ids}) when is_list(ids) do
+    # Get current dependencies
+    current = Sacrum.Repo.TaskDependencies.get_direct_blockers(task)
+    current_ids = MapSet.new(Enum.map(current, & &1.id))
+    desired_ids = MapSet.new(ids)
+
+    # Remove dependencies that are no longer desired
+    to_remove = MapSet.difference(current_ids, desired_ids)
+
+    for id <- to_remove do
+      case Repo.get(Sacrum.Repo.Schemas.Task, id) do
+        nil -> :ok
+        dep -> Sacrum.Repo.TaskDependencies.remove_dependency(task, dep)
+      end
+    end
+
+    # Add new dependencies
+    to_add = MapSet.difference(desired_ids, current_ids)
+
+    results =
+      for id <- to_add do
+        case Repo.get(Sacrum.Repo.Schemas.Task, id) do
+          nil -> {:error, :not_found}
+          dep -> Sacrum.Repo.TaskDependencies.add_dependency(task, dep)
+        end
+      end
+
+    case Enum.find(results, &match?({:error, _}, &1)) do
+      nil ->
+        :ok
+
+      {:error, :different_projects} ->
+        {:error, :unprocessable_entity, "depends_on_ids must be in the same project"}
+
+      {:error, :self_dependency} ->
+        {:error, :unprocessable_entity, "a task cannot depend on itself"}
+
+      {:error, :circular_dependency} ->
+        {:error, :unprocessable_entity, "would create a circular dependency"}
+
+      {:error, :not_found} ->
+        {:error, :unprocessable_entity, "one or more dependencies not found"}
+
+      error ->
+        error
+    end
+  end
+
+  defp maybe_update_dependencies(_task, _attrs), do: :ok
 
   def delete(%Task{} = task) do
     case Repo.delete(task) do
