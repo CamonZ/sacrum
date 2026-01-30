@@ -2,6 +2,6 @@ defmodule SacrumWeb.PageController do
   use SacrumWeb, :controller
 
   def home(conn, _params) do
-    render(conn, :home)
+    json(conn, %{status: "ok"})
   end
 end

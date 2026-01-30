@@ -1,15 +1,6 @@
 defmodule SacrumWeb.Router do
   use SacrumWeb, :router
 
-  pipeline :browser do
-    plug :accepts, ["html"]
-    plug :fetch_session
-    plug :fetch_live_flash
-    plug :put_root_layout, html: {SacrumWeb.Layouts, :root}
-    plug :protect_from_forgery
-    plug :put_secure_browser_headers
-  end
-
   pipeline :api do
     plug :accepts, ["json"]
   end
@@ -20,7 +11,7 @@ defmodule SacrumWeb.Router do
   end
 
   scope "/", SacrumWeb do
-    pipe_through :browser
+    pipe_through :api
 
     get "/", PageController, :home
   end
@@ -65,10 +56,9 @@ defmodule SacrumWeb.Router do
     import Phoenix.LiveDashboard.Router
 
     scope "/dev" do
-      pipe_through :browser
+      pipe_through :api
 
       live_dashboard "/dashboard", metrics: SacrumWeb.Telemetry
-      forward "/mailbox", Plug.Swoosh.MailboxPreview
     end
   end
 end
