@@ -8,6 +8,7 @@ defmodule Sacrum.Repo.WorkflowSteps do
   alias Sacrum.Repo.Schemas.Workflow
   alias Sacrum.Repo.Schemas.WorkflowStep
   alias Sacrum.Repo.Schemas.StepTransition
+  alias Sacrum.Repo.Broadcaster
 
   def get(id) do
     case Repo.get(WorkflowStep, id) do
@@ -32,14 +33,14 @@ defmodule Sacrum.Repo.WorkflowSteps do
     %WorkflowStep{workflow_id: workflow_id}
     |> WorkflowStep.create_changeset(attrs)
     |> Repo.insert()
-    |> broadcast(:step_created)
+    |> Broadcaster.broadcast(:step_created, workflow: :project)
   end
 
   def update(%WorkflowStep{} = step, attrs) do
     step
     |> WorkflowStep.update_changeset(attrs)
     |> Repo.update()
-    |> broadcast(:step_updated)
+    |> Broadcaster.broadcast(:step_updated, workflow: :project)
   end
 
   @doc """
@@ -93,30 +94,11 @@ defmodule Sacrum.Repo.WorkflowSteps do
   def delete(%WorkflowStep{} = step) do
     case Repo.delete(step) do
       {:ok, deleted} ->
-        broadcast_event(deleted, :step_deleted)
+        Broadcaster.broadcast_event(deleted, :step_deleted, workflow: :project)
         {:ok, deleted}
 
       error ->
         error
-    end
-  end
-
-  defp broadcast({:ok, step}, event) do
-    broadcast_event(step, event)
-    {:ok, step}
-  end
-
-  defp broadcast({:error, _} = error, _event), do: error
-
-  defp broadcast_event(step, event) do
-    step = Repo.preload(step, workflow: :project)
-
-    case step do
-      %{workflow: %{project: %{slug: slug}}} ->
-        apply(SacrumWeb.ProjectChannel, :"broadcast_#{event}", [slug, step])
-
-      _ ->
-        :ok
     end
   end
 

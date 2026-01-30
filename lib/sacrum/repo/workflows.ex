@@ -9,6 +9,7 @@ defmodule Sacrum.Repo.Workflows do
   alias Sacrum.Repo.Schemas.Project
   alias Sacrum.Repo.Schemas.Workflow
   alias Sacrum.Repo.Schemas.WorkflowTransition
+  alias Sacrum.Repo.Broadcaster
 
   def get(id) do
     case Repo.get(Workflow, id) do
@@ -33,14 +34,14 @@ defmodule Sacrum.Repo.Workflows do
     %Workflow{project_id: project_id}
     |> Workflow.create_changeset(attrs)
     |> Repo.insert()
-    |> broadcast(:workflow_created)
+    |> Broadcaster.broadcast(:workflow_created, :project)
   end
 
   def update(%Workflow{} = workflow, attrs) do
     workflow
     |> Workflow.update_changeset(attrs)
     |> Repo.update()
-    |> broadcast(:workflow_updated)
+    |> Broadcaster.broadcast(:workflow_updated, :project)
   end
 
   @doc """
@@ -102,7 +103,7 @@ defmodule Sacrum.Repo.Workflows do
 
     case Repo.transaction(multi) do
       {:ok, _} ->
-        broadcast_event(workflow, :workflow_updated)
+        Broadcaster.broadcast_event(workflow, :workflow_updated, :project)
         {:ok, Repo.WorkflowTransitions.list_for_workflow(workflow)}
 
       {:error, _name, changeset, _changes} ->
@@ -142,30 +143,11 @@ defmodule Sacrum.Repo.Workflows do
   def delete(%Workflow{} = workflow) do
     case Repo.delete(workflow) do
       {:ok, deleted} ->
-        broadcast_event(deleted, :workflow_deleted)
+        Broadcaster.broadcast_event(deleted, :workflow_deleted, :project)
         {:ok, deleted}
 
       error ->
         error
-    end
-  end
-
-  defp broadcast({:ok, workflow}, event) do
-    broadcast_event(workflow, event)
-    {:ok, workflow}
-  end
-
-  defp broadcast({:error, _} = error, _event), do: error
-
-  defp broadcast_event(workflow, event) do
-    workflow = Repo.preload(workflow, :project)
-
-    case workflow.project do
-      %Project{slug: slug} ->
-        apply(SacrumWeb.ProjectChannel, :"broadcast_#{event}", [slug, workflow])
-
-      _ ->
-        :ok
     end
   end
 end

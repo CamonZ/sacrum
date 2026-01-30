@@ -1,0 +1,199 @@
+defmodule Sacrum.Repo.Broadcaster do
+  @moduledoc """
+  Shared broadcast logic for all repo modules.
+
+  Provides a single entry point for broadcasting entity changes to the ProjectChannel.
+  Handles different preload paths (direct :project vs nested workflow: :project).
+  """
+
+  alias Sacrum.Repo
+  alias Sacrum.Repo.Schemas.Project
+
+  # Dispatch map for dynamic function calls to ProjectChannel
+  @channel_broadcasts %{
+    task_created: :broadcast_task_created,
+    task_updated: :broadcast_task_updated,
+    task_deleted: :broadcast_task_deleted,
+    workflow_changed: :broadcast_workflow_changed,
+    workflow_created: :broadcast_workflow_created,
+    workflow_updated: :broadcast_workflow_updated,
+    workflow_deleted: :broadcast_workflow_deleted,
+    step_created: :broadcast_step_created,
+    step_updated: :broadcast_step_updated,
+    step_deleted: :broadcast_step_deleted,
+    step_transition_created: :broadcast_step_transition_created,
+    step_transition_deleted: :broadcast_step_transition_deleted,
+    step_execution_created: :broadcast_step_execution_created,
+    step_execution_status_changed: :broadcast_step_execution_status_changed,
+    session_log_created: :broadcast_session_log_created
+  }
+
+  @doc """
+  Broadcast a result tuple from a repo operation.
+
+  Handles {:ok, entity} by preloading and broadcasting, and passes through {:error, reason}.
+
+  Args:
+    - result: {:ok, entity} or {:error, reason}
+    - event: event name (atom, e.g. :task_created)
+    - preload_path: preload path (atom or list, e.g. :project or [workflow: :project])
+
+  Returns:
+    - {:ok, entity} on success
+    - {:error, reason} on error
+  """
+  def broadcast({:ok, entity}, event, preload_path) do
+    broadcast_event(entity, event, preload_path)
+    {:ok, entity}
+  end
+
+  def broadcast({:error, _} = error, _event, _preload_path), do: error
+
+  @doc """
+  Broadcast an entity directly after a successful operation.
+
+  Preloads the entity with the specified path, extracts project slug, and calls
+  the appropriate ProjectChannel function.
+
+  Args:
+    - entity: the entity to broadcast
+    - event: event name (atom)
+    - preload_path: preload path (atom or list)
+
+  Returns:
+    - :ok
+  """
+  def broadcast_event(entity, event, preload_path) do
+    case extract_project_slug(entity, preload_path) do
+      {:ok, slug} ->
+        channel_func = Map.fetch!(@channel_broadcasts, event)
+        apply(SacrumWeb.ProjectChannel, channel_func, [slug, entity])
+
+      :error ->
+        :ok
+    end
+  end
+
+  # Extract project slug from an entity, handling different preload paths
+  defp extract_project_slug(entity, preload_path) do
+    entity = Repo.preload(entity, preload_path)
+
+    case get_project(entity, preload_path) do
+      %Project{slug: slug} -> {:ok, slug}
+      _ -> :error
+    end
+  end
+
+  # Direct project association (tasks, workflows)
+  defp get_project(%{project: project}, :project), do: project
+
+  # Nested workflow: :project (workflow_steps)
+  defp get_project(%{workflow: %{project: project}}, [workflow: :project]), do: project
+
+  # Nested from_step: [workflow: :project] (step_transitions)
+  defp get_project(%{from_step: %{workflow: %{project: project}}}, [from_step: [workflow: :project]]), do: project
+
+  # Special case for different structures - try to match the pattern
+  defp get_project(entity, [workflow: :project]) do
+    case Map.fetch(entity, :workflow) do
+      {:ok, %{project: project}} -> project
+      _ -> nil
+    end
+  end
+
+  defp get_project(entity, [from_step: [workflow: :project]]) do
+    case Map.fetch(entity, :from_step) do
+      {:ok, %{workflow: %{project: project}}} -> project
+      _ -> nil
+    end
+  end
+
+  defp get_project(entity, :project) do
+    case Map.fetch(entity, :project) do
+      {:ok, project} -> project
+      _ -> nil
+    end
+  end
+
+  defp get_project(_entity, _path), do: nil
+
+  @doc """
+  Broadcast a step execution by first looking up its task to get the project.
+  
+  This is a specialized helper for step executions which don't have direct project associations.
+  
+  Args:
+    - result: {:ok, execution} or {:error, reason}
+    - event: event name (atom, e.g. :step_execution_created)
+  
+  Returns:
+    - {:ok, execution} on success
+    - {:error, reason} on error
+  """
+  def broadcast_step_execution({:ok, execution}, event) do
+    broadcast_step_execution_event(execution, event)
+    {:ok, execution}
+  end
+
+  def broadcast_step_execution({:error, _} = error, _event), do: error
+
+  @doc """
+  Broadcast a session log by looking up its step execution and task to get the project.
+  
+  This is a specialized helper for session logs which don't have direct project associations.
+  
+  Args:
+    - result: {:ok, log} or {:error, reason}
+    - event: event name (atom, e.g. :session_log_created)
+  
+  Returns:
+    - {:ok, log} on success
+    - {:error, reason} on error
+  """
+  def broadcast_session_log({:ok, log}, event) do
+    broadcast_session_log_event(log, event)
+    {:ok, log}
+  end
+
+  def broadcast_session_log({:error, _} = error, _event), do: error
+
+  # Private helper for step execution broadcast
+  defp broadcast_step_execution_event(execution, event) do
+    task = Repo.get(Sacrum.Repo.Schemas.Task, execution.task_id)
+
+    if task do
+      task = Repo.preload(task, :project)
+
+      case task.project do
+        %Project{slug: slug} ->
+          channel_func = Map.fetch!(@channel_broadcasts, event)
+          apply(SacrumWeb.ProjectChannel, channel_func, [slug, execution])
+
+        _ ->
+          :ok
+      end
+    end
+  end
+
+  # Private helper for session log broadcast
+  defp broadcast_session_log_event(log, event) do
+    log = Repo.preload(log, :step_execution)
+
+    if log.step_execution do
+      task = Repo.get(Sacrum.Repo.Schemas.Task, log.step_execution.task_id)
+
+      if task do
+        task = Repo.preload(task, :project)
+
+        case task.project do
+          %Project{slug: slug} ->
+            channel_func = Map.fetch!(@channel_broadcasts, event)
+            apply(SacrumWeb.ProjectChannel, channel_func, [slug, log])
+
+          _ ->
+            :ok
+        end
+      end
+    end
+  end
+end

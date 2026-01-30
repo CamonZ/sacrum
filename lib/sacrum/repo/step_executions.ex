@@ -6,8 +6,7 @@ defmodule Sacrum.Repo.StepExecutions do
   import Ecto.Query
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.StepExecution
-  alias Sacrum.Repo.Schemas.Task
-  alias Sacrum.Repo.Schemas.Project
+  alias Sacrum.Repo.Broadcaster
 
   def get(id) do
     case Repo.get(StepExecution, id) do
@@ -28,31 +27,6 @@ defmodule Sacrum.Repo.StepExecutions do
     %StepExecution{}
     |> StepExecution.create_changeset(attrs)
     |> Repo.insert()
-    |> broadcast(:step_execution_created)
-  end
-
-  defp broadcast({:ok, execution}, event) do
-    broadcast_event(execution, event)
-    {:ok, execution}
-  end
-
-  defp broadcast({:error, _} = error, _event), do: error
-
-  defp broadcast_event(execution, event) do
-    task = Repo.get(Task, execution.task_id)
-
-    if task do
-      task = Repo.preload(task, :project)
-
-      case task.project do
-        %Project{slug: slug} ->
-          apply(SacrumWeb.ProjectChannel, :"broadcast_#{event}", [slug, execution])
-
-        _ ->
-          :ok
-      end
-    else
-      :ok
-    end
+    |> Broadcaster.broadcast_step_execution(:step_execution_created)
   end
 end

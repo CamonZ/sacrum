@@ -7,6 +7,7 @@ defmodule Sacrum.Repo.StepTransitions do
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.StepTransition
   alias Sacrum.Repo.Schemas.WorkflowStep
+  alias Sacrum.Repo.Broadcaster
 
   def get(id) do
     case Repo.get(StepTransition, id) do
@@ -30,14 +31,14 @@ defmodule Sacrum.Repo.StepTransitions do
       %StepTransition{}
       |> StepTransition.create_changeset(attrs)
       |> Repo.insert()
-      |> broadcast(:step_transition_created)
+      |> Broadcaster.broadcast(:step_transition_created, from_step: [workflow: :project])
     end
   end
 
   def delete(%StepTransition{} = transition) do
     case Repo.delete(transition) do
       {:ok, deleted} ->
-        broadcast_event(deleted, :step_transition_deleted)
+        Broadcaster.broadcast_event(deleted, :step_transition_deleted, from_step: [workflow: :project])
         {:ok, deleted}
 
       error ->
@@ -70,25 +71,6 @@ defmodule Sacrum.Repo.StepTransitions do
           true ->
             :ok
         end
-    end
-  end
-
-  defp broadcast({:ok, transition}, event) do
-    broadcast_event(transition, event)
-    {:ok, transition}
-  end
-
-  defp broadcast({:error, _} = error, _event), do: error
-
-  defp broadcast_event(transition, event) do
-    transition = Repo.preload(transition, from_step: [workflow: :project])
-
-    case transition do
-      %{from_step: %{workflow: %{project: %{slug: slug}}}} ->
-        apply(SacrumWeb.ProjectChannel, :"broadcast_#{event}", [slug, transition])
-
-      _ ->
-        :ok
     end
   end
 end

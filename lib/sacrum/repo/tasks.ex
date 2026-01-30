@@ -8,6 +8,7 @@ defmodule Sacrum.Repo.Tasks do
   alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.Schemas.Project
   alias Sacrum.Repo.Schemas.TaskDependency
+  alias Sacrum.Repo.Broadcaster
 
   def get(id) do
     case Repo.get(Task, id) do
@@ -162,7 +163,7 @@ defmodule Sacrum.Repo.Tasks do
     |> Task.create_changeset(attrs)
     |> Repo.insert()
     |> preload_sections()
-    |> broadcast(:task_created)
+    |> Broadcaster.broadcast(:task_created, :project)
   end
 
   def update(%Task{} = task, attrs) do
@@ -173,14 +174,14 @@ defmodule Sacrum.Repo.Tasks do
       |> Task.update_changeset(attrs)
       |> Repo.update()
       |> preload_sections()
-      |> broadcast(:task_updated)
+      |> Broadcaster.broadcast(:task_updated, :project)
     end
   end
 
   def delete(%Task{} = task) do
     case Repo.delete(task) do
       {:ok, deleted_task} ->
-        broadcast_event(deleted_task, :task_deleted)
+        Broadcaster.broadcast_event(deleted_task, :task_deleted, :project)
         {:ok, deleted_task}
 
       error ->
@@ -216,23 +217,4 @@ defmodule Sacrum.Repo.Tasks do
 
   defp preload_sections({:ok, task}), do: {:ok, Repo.preload(task, :sections, force: true)}
   defp preload_sections(error), do: error
-
-  defp broadcast({:ok, task}, event) do
-    broadcast_event(task, event)
-    {:ok, task}
-  end
-
-  defp broadcast({:error, _} = error, _event), do: error
-
-  defp broadcast_event(task, event) do
-    task = Repo.preload(task, :project)
-
-    case task.project do
-      %Project{slug: slug} ->
-        apply(SacrumWeb.ProjectChannel, :"broadcast_#{event}", [slug, task])
-
-      _ ->
-        :ok
-    end
-  end
 end
