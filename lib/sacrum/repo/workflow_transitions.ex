@@ -15,8 +15,6 @@ defmodule Sacrum.Repo.WorkflowTransitions do
     end
   end
 
-  def get!(id), do: Repo.get!(WorkflowTransition, id)
-
   def list_for_workflow(%Workflow{id: workflow_id}), do: list_for_workflow(workflow_id)
 
   def list_for_workflow(from_workflow_id) when is_binary(from_workflow_id) do

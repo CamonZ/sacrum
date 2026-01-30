@@ -17,8 +17,6 @@ defmodule Sacrum.Repo.Workflows do
     end
   end
 
-  def get!(id), do: Repo.get!(Workflow, id)
-
   def list(%Project{id: project_id}), do: list(project_id)
 
   def list(project_id) when is_binary(project_id) do

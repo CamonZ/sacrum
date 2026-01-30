@@ -16,8 +16,6 @@ defmodule Sacrum.Repo.StepExecutions do
     end
   end
 
-  def get!(id), do: Repo.get!(StepExecution, id)
-
   def list_for_task(task_id) when is_binary(task_id) do
     from(e in StepExecution,
       where: e.task_id == ^task_id,

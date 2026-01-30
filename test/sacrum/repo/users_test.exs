@@ -49,53 +49,6 @@ defmodule Sacrum.Repo.UsersTest do
     end
   end
 
-  describe "get!/1" do
-    test "returns user when found" do
-      {:ok, user} = Users.insert(@valid_attrs)
-      assert %User{} = Users.get!(user.id)
-    end
-
-    test "raises when not found" do
-      assert_raise Ecto.NoResultsError, fn ->
-        Users.get!(Ecto.UUID.generate())
-      end
-    end
-  end
-
-  describe "get_by/1" do
-    test "returns user when found by email" do
-      {:ok, user} = Users.insert(@valid_attrs)
-      assert {:ok, found} = Users.get_by(email: user.email)
-      assert found.id == user.id
-    end
-
-    test "returns user when found by username" do
-      {:ok, user} = Users.insert(@valid_attrs)
-      assert {:ok, found} = Users.get_by(username: user.username)
-      assert found.id == user.id
-    end
-
-    test "returns error when not found" do
-      assert {:error, :not_found} = Users.get_by(email: "nonexistent@example.com")
-    end
-  end
-
-  describe "list/0" do
-    test "returns empty list when no users" do
-      assert [] = Users.list()
-    end
-
-    test "returns all users" do
-      {:ok, user1} = Users.insert(@valid_attrs)
-      {:ok, user2} = Users.insert(%{@valid_attrs | email: "other@example.com", username: "other"})
-
-      users = Users.list()
-      assert length(users) == 2
-      assert Enum.any?(users, &(&1.id == user1.id))
-      assert Enum.any?(users, &(&1.id == user2.id))
-    end
-  end
-
   describe "update/2" do
     test "updates user with valid attributes" do
       {:ok, user} = Users.insert(@valid_attrs)
@@ -137,15 +90,6 @@ defmodule Sacrum.Repo.UsersTest do
       {:ok, user} = Users.insert(@valid_attrs)
       assert {:ok, _} = Users.delete(user)
       assert {:error, :not_found} = Users.get(user.id)
-    end
-  end
-
-  describe "query/0" do
-    test "returns queryable" do
-      {:ok, _} = Users.insert(@valid_attrs)
-
-      query = Users.query()
-      assert [%User{}] = Sacrum.Repo.all(query)
     end
   end
 end

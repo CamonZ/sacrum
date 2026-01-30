@@ -15,8 +15,6 @@ defmodule Sacrum.Repo.StepTransitions do
     end
   end
 
-  def get!(id), do: Repo.get!(StepTransition, id)
-
   def list_for_step(%WorkflowStep{id: step_id}), do: list_for_step(step_id)
 
   def list_for_step(from_step_id) when is_binary(from_step_id) do

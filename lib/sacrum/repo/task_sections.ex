@@ -15,8 +15,6 @@ defmodule Sacrum.Repo.TaskSections do
     end
   end
 
-  def get!(id), do: Repo.get!(TaskSection, id)
-
   def list_for_task(%Task{id: task_id}), do: list_for_task(task_id)
 
   def list_for_task(task_id) when is_binary(task_id) do

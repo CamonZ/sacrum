@@ -16,8 +16,6 @@ defmodule Sacrum.Repo.CodeRefs do
     end
   end
 
-  def get!(id), do: Repo.get!(CodeRef, id)
-
   def list_for_task(%Task{id: task_id}), do: list_for_task(task_id)
 
   def list_for_task(task_id) when is_binary(task_id) do

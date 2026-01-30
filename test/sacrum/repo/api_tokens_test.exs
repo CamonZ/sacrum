@@ -69,75 +69,6 @@ defmodule Sacrum.Repo.ApiTokensTest do
     end
   end
 
-  describe "get!/1" do
-    test "returns token when found" do
-      user = create_user()
-      {:ok, token} = ApiTokens.insert(valid_token_attrs(user))
-
-      assert %ApiToken{} = ApiTokens.get!(token.id)
-    end
-
-    test "raises when not found" do
-      assert_raise Ecto.NoResultsError, fn ->
-        ApiTokens.get!(Ecto.UUID.generate())
-      end
-    end
-  end
-
-  describe "get_by/1" do
-    test "returns token when found by token_hash" do
-      user = create_user()
-      attrs = valid_token_attrs(user)
-      {:ok, token} = ApiTokens.insert(attrs)
-
-      assert {:ok, found} = ApiTokens.get_by(token_hash: attrs.token_hash)
-      assert found.id == token.id
-    end
-
-    test "returns token when found by user_id and id" do
-      user = create_user()
-      {:ok, token} = ApiTokens.insert(valid_token_attrs(user))
-
-      assert {:ok, found} = ApiTokens.get_by(id: token.id, user_id: user.id)
-      assert found.id == token.id
-    end
-
-    test "returns error when not found" do
-      assert {:error, :not_found} = ApiTokens.get_by(token_hash: "nonexistent")
-    end
-  end
-
-  describe "list/0" do
-    test "returns empty list when no tokens" do
-      assert [] = ApiTokens.list()
-    end
-
-    test "returns all tokens" do
-      user = create_user()
-      {:ok, token1} = ApiTokens.insert(valid_token_attrs(user))
-      {:ok, token2} = ApiTokens.insert(valid_token_attrs(user))
-
-      tokens = ApiTokens.list()
-      assert length(tokens) == 2
-      assert Enum.any?(tokens, &(&1.id == token1.id))
-      assert Enum.any?(tokens, &(&1.id == token2.id))
-    end
-  end
-
-  describe "for_user/1" do
-    test "returns query scoped to user" do
-      user1 = create_user()
-      {:ok, user2} = Users.insert(%{@user_attrs | email: "other@example.com", username: "other"})
-
-      {:ok, token1} = ApiTokens.insert(valid_token_attrs(user1))
-      {:ok, _token2} = ApiTokens.insert(valid_token_attrs(user2))
-
-      tokens = ApiTokens.for_user(user1.id) |> ApiTokens.list()
-      assert length(tokens) == 1
-      assert hd(tokens).id == token1.id
-    end
-  end
-
   describe "update/2" do
     test "updates token with valid attributes" do
       user = create_user()
@@ -163,16 +94,6 @@ defmodule Sacrum.Repo.ApiTokensTest do
 
       {:ok, _} = Users.delete(user)
       assert {:error, :not_found} = ApiTokens.get(token.id)
-    end
-  end
-
-  describe "query/0" do
-    test "returns queryable" do
-      user = create_user()
-      {:ok, _} = ApiTokens.insert(valid_token_attrs(user))
-
-      query = ApiTokens.query()
-      assert [%ApiToken{}] = Sacrum.Repo.all(query)
     end
   end
 end

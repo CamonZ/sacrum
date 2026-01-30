@@ -15,8 +15,6 @@ defmodule Sacrum.Repo.Projects do
     end
   end
 
-  def get!(id), do: Repo.get!(Project, id)
-
   def get_by(clauses) do
     case Repo.get_by(Project, clauses) do
       nil -> {:error, :not_found}

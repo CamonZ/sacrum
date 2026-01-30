@@ -14,19 +14,6 @@ defmodule Sacrum.Repo.ApiTokens do
     end
   end
 
-  def get!(id), do: Repo.get!(ApiToken, id)
-
-  def get_by(clauses) do
-    case Repo.get_by(ApiToken, clauses) do
-      nil -> {:error, :not_found}
-      token -> {:ok, token}
-    end
-  end
-
-  def list, do: Repo.all(ApiToken)
-
-  def list(query), do: Repo.all(query)
-
   def insert(attrs) do
     %ApiToken{}
     |> ApiToken.changeset(attrs)
@@ -40,8 +27,6 @@ defmodule Sacrum.Repo.ApiTokens do
   end
 
   def delete(%ApiToken{} = token), do: Repo.delete(token)
-
-  def query, do: from(t in ApiToken)
 
   def for_user(user_id) do
     from(t in ApiToken, where: t.user_id == ^user_id)

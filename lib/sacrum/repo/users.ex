@@ -3,7 +3,6 @@ defmodule Sacrum.Repo.Users do
   Basic CRUD operations for users.
   """
 
-  import Ecto.Query
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.User
 
@@ -13,19 +12,6 @@ defmodule Sacrum.Repo.Users do
       user -> {:ok, user}
     end
   end
-
-  def get!(id), do: Repo.get!(User, id)
-
-  def get_by(clauses) do
-    case Repo.get_by(User, clauses) do
-      nil -> {:error, :not_found}
-      user -> {:ok, user}
-    end
-  end
-
-  def list, do: Repo.all(User)
-
-  def list(query), do: Repo.all(query)
 
   def insert(attrs) do
     %User{}
@@ -46,6 +32,4 @@ defmodule Sacrum.Repo.Users do
   end
 
   def delete(%User{} = user), do: Repo.delete(user)
-
-  def query, do: from(u in User)
 end
