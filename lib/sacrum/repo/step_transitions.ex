@@ -28,24 +28,6 @@ defmodule Sacrum.Repo.StepTransitions do
   alias Sacrum.Repo.Schemas.StepTransition
   alias Sacrum.Repo.Schemas.WorkflowStep
 
-  def list_for_step(%WorkflowStep{id: step_id}), do: list_for_step(step_id)
-
-  def list_for_step(from_step_id) when is_binary(from_step_id) do
-    from(t in StepTransition,
-      where: t.from_step_id == ^from_step_id,
-      order_by: [asc: t.inserted_at]
-    )
-    |> Repo.all()
-  end
-
-  def list_for_step(from_step_id, user_id) when is_binary(from_step_id) and is_binary(user_id) do
-    from(t in StepTransition,
-      where: t.from_step_id == ^from_step_id and t.user_id == ^user_id,
-      order_by: [asc: t.inserted_at]
-    )
-    |> Repo.all()
-  end
-
   @doc """
   Insert a new step transition from attrs map.
   """

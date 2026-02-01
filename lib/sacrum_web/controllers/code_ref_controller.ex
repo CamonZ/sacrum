@@ -10,16 +10,14 @@ defmodule SacrumWeb.CodeRefController do
   def index(conn, %{"task_id" => task_id}) do
     user = conn.assigns.current_user
 
-    with {:ok, task} <- Tasks.get_by(user.id, id: task_id) do
-      refs = CodeRefs.list_by(user.id, task_id: task.id)
-      render(conn, :index, code_refs: refs)
-    end
+    refs = CodeRefs.list_by(user.id, conditions: [task_id: task_id])
+    render(conn, :index, code_refs: refs)
   end
 
   def create(conn, %{"task_id" => task_id} = params) do
     user = conn.assigns.current_user
 
-    with {:ok, task} <- Tasks.get_by(user.id, id: task_id),
+    with {:ok, task} <- Tasks.get_by(user.id, conditions: [id: task_id]),
          {:ok, %CodeRef{} = ref} <- CodeRefs.insert_for_task(user.id, task.id, params) do
       conn
       |> put_status(:created)
@@ -30,8 +28,8 @@ defmodule SacrumWeb.CodeRefController do
   def delete(conn, %{"task_id" => task_id, "id" => id}) do
     user = conn.assigns.current_user
 
-    with {:ok, _task} <- Tasks.get_by(user.id, id: task_id),
-         {:ok, %CodeRef{} = ref} <- CodeRefs.get_by(user.id, id: id),
+    with {:ok, _task} <- Tasks.get_by(user.id, conditions: [id: task_id]),
+         {:ok, %CodeRef{} = ref} <- CodeRefs.get_by(user.id, conditions: [id: id]),
          {:ok, _} <- CodeRefs.delete(ref) do
       send_resp(conn, :no_content, "")
     end

@@ -4,8 +4,6 @@ defmodule Sacrum.Repo.Tasks do
 
   ## Error Contract
 
-  - `get/1` returns `{:ok, task}` or `{:error, :not_found}`
-  - `get_by_short_id/1` returns `{:ok, task}` or `{:error, :not_found}`
   - `insert/2` returns `{:ok, task}` or `{:error, changeset}`
   - `update/2` returns `{:ok, task}` or `{:error, changeset}`
   - `delete/1` returns `{:ok, task}` or `{:error, changeset}`
@@ -14,12 +12,6 @@ defmodule Sacrum.Repo.Tasks do
 
   `update/2` may return `{:error, changeset}` with validation errors for:
   - Invalid section IDs provided in the `:sections` field
-
-  ## Preload Strategy
-
-  The `get/1` and `get_by_short_id/1` functions automatically preload the `:sections`
-  association. The `list_tasks/1` function also preloads `:sections`. Other functions
-  leave preloading to callers.
   """
 
   use Sacrum.GenericRepo, schema: Sacrum.Repo.Schemas.Task
@@ -30,61 +22,6 @@ defmodule Sacrum.Repo.Tasks do
   alias Sacrum.Repo.Schemas.Project
   alias Sacrum.Repo.Schemas.TaskDependency
   alias Sacrum.Repo.Broadcaster
-
-  @doc """
-  Get a task by ID, preloading sections.
-  """
-  def get(id) do
-    case Repo.get(Task, id) do
-      nil -> {:error, :not_found}
-      task -> {:ok, Repo.preload(task, :sections)}
-    end
-  end
-
-  def get!(id), do: Repo.get!(Task, id) |> Repo.preload(:sections)
-
-  def get_by_short_id(short_id) do
-    case Repo.get_by(Task, short_id: short_id) do
-      nil -> {:error, :not_found}
-      task -> {:ok, Repo.preload(task, :sections)}
-    end
-  end
-
-  @doc """
-  Get a task by short_id, scoped to user.
-  """
-  def get_by_short_id(short_id, user_id) do
-    query = from(t in Task, where: t.short_id == ^short_id and t.user_id == ^user_id)
-
-    case Repo.one(query) do
-      nil -> {:error, :not_found}
-      task -> {:ok, Repo.preload(task, :sections)}
-    end
-  end
-
-  @doc """
-  Find a task by UUID or short_id within a user's scope.
-  """
-  def find(id, user_id) do
-    case Ecto.UUID.cast(id) do
-      {:ok, _uuid} ->
-        get_by(id: id, user_id: user_id)
-        |> maybe_preload_sections()
-
-      :error ->
-        get_by_short_id(id, user_id)
-    end
-  end
-
-  defp maybe_preload_sections({:ok, task}), do: {:ok, Repo.preload(task, :sections)}
-  defp maybe_preload_sections(error), do: error
-
-  def list(%Project{id: project_id}), do: list(project_id)
-
-  def list(project_id) when is_binary(project_id) do
-    from(t in Task, where: t.project_id == ^project_id, order_by: [asc: t.inserted_at])
-    |> Repo.all()
-  end
 
   @doc """
   Lists tasks with optional filters.
@@ -101,32 +38,32 @@ defmodule Sacrum.Repo.Tasks do
     - `:root_only` - when true, exclude tasks that have a parent
     - `:workflow_id` - filter by assigned workflow
   """
-  def list_tasks(opts \\ []) do
+  def list_tasks(opts) do
     Task
-    |> apply_filter(:user_id, opts[:user_id])
-    |> apply_filter(:project_id, opts[:project_id])
-    |> apply_filter(:level, opts[:level])
-    |> apply_filter(:parent_id, opts[:parent_id])
-    |> apply_filter(:blocked, opts[:blocked])
-    |> apply_filter(:search, opts[:search])
-    |> apply_filter(:status, opts[:status])
-    |> apply_filter(:tags, opts[:tags])
-    |> apply_filter(:root_only, opts[:root_only])
-    |> apply_filter(:workflow_id, opts[:workflow_id])
+    |> apply_filters(opts)
+    |> apply_task_preloads(opts)
     |> order_by([t], asc: t.inserted_at)
-    |> preload(:sections)
     |> Repo.all()
   end
 
   @doc """
   Returns root tasks (no parent) with no incomplete blockers for a project.
   """
-  def ready(project_id) do
-    list_tasks(project_id: project_id, root_only: true, blocked: false)
+  def ready(project_id, user_id) do
+    list_tasks(
+      conditions: [project_id: project_id, user_id: user_id, root_only: true, blocked: false]
+    )
   end
 
-  def ready(project_id, user_id) do
-    list_tasks(project_id: project_id, user_id: user_id, root_only: true, blocked: false)
+  defp apply_task_preloads(query, opts) do
+    preloads = Keyword.get(opts, :preloads, [])
+    preload(query, ^preloads)
+  end
+
+  defp apply_filters(query, opts) do
+    opts
+    |> Keyword.get(:conditions)
+    |> Enum.reduce(query, fn {key, value}, acc -> apply_filter(acc, key, value) end)
   end
 
   defp apply_filter(query, :user_id, nil), do: query

@@ -54,14 +54,19 @@ defmodule Sacrum.Repo.WorkflowTransitionsTest do
     end
   end
 
-  describe "list_for_workflow/1" do
+  describe "all/1" do
     test "returns transitions from a workflow" do
       {_project, w1, w2} = create_workflows()
 
       {:ok, _} =
         WorkflowTransitions.insert(w1.user_id, %{from_workflow_id: w1.id, to_workflow_id: w2.id})
 
-      transitions = WorkflowTransitions.list_for_workflow(w1)
+      transitions =
+        WorkflowTransitions.all(
+          conditions: [from_workflow_id: w1.id],
+          order_by: [asc: :inserted_at]
+        )
+
       assert length(transitions) == 1
       assert hd(transitions).to_workflow_id == w2.id
     end

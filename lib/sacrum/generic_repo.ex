@@ -15,10 +15,11 @@ defmodule Sacrum.GenericRepo do
   ## Generated Functions
 
   - `get(id)` → `{:ok, record} | {:error, :not_found}`
+  - `get(id, opts)` → `{:ok, record} | {:error, :not_found}` (with preloads)
   - `get!(id)` → record or raises
-  - `get_by(clauses)` → `{:ok, record} | {:error, :not_found}`
+  - `get_by(opts)` → `{:ok, record} | {:error, :not_found}` (conditions + preloads)
   - `all()` → `[record]`
-  - `all(queryable)` → `[record]`
+  - `all(opts)` → `[record]` (conditions + preloads, or queryable)
   - `query()` → `Ecto.Query.t()`
   - `count()` / `count(queryable)` → integer
   - `exists?(id)` → boolean
@@ -38,16 +39,22 @@ defmodule Sacrum.GenericRepo do
       @doc """
       Retrieve a single record by primary key.
 
+      Accepts optional keyword opts:
+        - `:preloads` - list of associations to preload
+
       Returns `{:ok, record}` or `{:error, :not_found}`.
       """
-      def get(id) do
+      def get(id, opts \\ []) do
         case Repo.get(Schema, id) do
-          nil -> {:error, :not_found}
-          record -> {:ok, record}
+          nil ->
+            {:error, :not_found}
+
+          record ->
+            {:ok, apply_preloads(record, Keyword.get(opts, :preloads, []))}
         end
       end
 
-      defoverridable get: 1
+      defoverridable get: 1, get: 2
 
       @doc """
       Retrieve a single record by primary key, raising if not found.
@@ -59,14 +66,30 @@ defmodule Sacrum.GenericRepo do
       defoverridable get!: 1
 
       @doc """
-      Retrieve a single record by key-value clauses.
+      Retrieve a single record by structured opts or flat clauses.
+
+      Structured opts:
+        - `:conditions` - keyword list of field/value pairs for WHERE clauses
+        - `:preloads` - list of associations to preload
+
+      Also accepts flat keyword clauses for backward compatibility:
+        `get_by(short_id: "abc")` is equivalent to `get_by(conditions: [short_id: "abc"])`
 
       Returns `{:ok, record}` or `{:error, :not_found}`.
       """
-      def get_by(clauses) do
-        case Repo.get_by(Schema, clauses) do
-          nil -> {:error, :not_found}
-          record -> {:ok, record}
+      def get_by(opts) do
+        {conditions, preloads, _order_by} = extract_opts(opts)
+
+        query =
+          from(s in Schema)
+          |> apply_conditions(conditions)
+
+        case Repo.one(query) do
+          nil ->
+            {:error, :not_found}
+
+          record ->
+            {:ok, apply_preloads(record, preloads)}
         end
       end
 
@@ -82,10 +105,24 @@ defmodule Sacrum.GenericRepo do
       defoverridable all: 0
 
       @doc """
-      Retrieve all records matching a queryable.
+      Retrieve all records matching a queryable or structured opts.
+
+      When passed a keyword list with `:conditions`, builds a query with
+      conditions and preloads. Otherwise treats the argument as a queryable.
       """
-      def all(queryable) do
-        Repo.all(queryable)
+      def all(opts_or_queryable) do
+        if Keyword.keyword?(opts_or_queryable) and
+             Keyword.has_key?(opts_or_queryable, :conditions) do
+          {conditions, preloads, order_by} = extract_opts(opts_or_queryable)
+
+          from(s in Schema)
+          |> apply_conditions(conditions)
+          |> apply_order_by(order_by)
+          |> apply_query_preloads(preloads)
+          |> Repo.all()
+        else
+          Repo.all(opts_or_queryable)
+        end
       end
 
       defoverridable all: 1
@@ -161,6 +198,35 @@ defmodule Sacrum.GenericRepo do
       end
 
       defoverridable delete: 1
+
+      # -- Private helpers for composable opts --
+
+      defp extract_opts(opts) do
+        if Keyword.keyword?(opts) and Keyword.has_key?(opts, :conditions) do
+          {Keyword.get(opts, :conditions, []), Keyword.get(opts, :preloads, []),
+           Keyword.get(opts, :order_by, [])}
+        else
+          # Flat clauses (backward compat) — treat entire list as conditions
+          {opts, [], []}
+        end
+      end
+
+      defp apply_conditions(query, []), do: query
+
+      defp apply_conditions(query, conditions) do
+        Enum.reduce(conditions, query, fn {key, value}, q ->
+          where(q, [s], field(s, ^key) == ^value)
+        end)
+      end
+
+      defp apply_preloads(record, []), do: record
+      defp apply_preloads(record, preloads), do: Repo.preload(record, preloads)
+
+      defp apply_query_preloads(query, []), do: query
+      defp apply_query_preloads(query, preloads), do: preload(query, ^preloads)
+
+      defp apply_order_by(query, []), do: query
+      defp apply_order_by(query, order_by), do: order_by(query, ^order_by)
     end
   end
 end

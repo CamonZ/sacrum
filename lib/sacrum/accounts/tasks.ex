@@ -23,18 +23,11 @@ defmodule Sacrum.Accounts.Tasks do
   def find(user_id, id) when is_binary(user_id) do
     case Ecto.UUID.cast(id) do
       {:ok, _uuid} ->
-        get_by(user_id, id: id)
+        get_by(user_id, conditions: [id: id])
 
       :error ->
-        get_by_short_id(user_id, id)
+        get_by(user_id, conditions: [short_id: id])
     end
-  end
-
-  @doc """
-  Get a task by short_id, scoped to user.
-  """
-  def get_by_short_id(user_id, short_id) when is_binary(user_id) do
-    TasksRepo.get_by_short_id(short_id, user_id)
   end
 
   @doc """
@@ -52,7 +45,8 @@ defmodule Sacrum.Accounts.Tasks do
     - `:workflow_id` - filter by assigned workflow
   """
   def list_tasks(user_id, opts \\ []) when is_binary(user_id) do
-    TasksRepo.list_tasks([{:user_id, user_id} | opts])
+    conditions = [{:user_id, user_id} | Keyword.get(opts, :conditions, [])]
+    TasksRepo.list_tasks(Keyword.put(opts, :conditions, conditions))
   end
 
   @doc """

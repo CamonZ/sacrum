@@ -15,7 +15,7 @@ defmodule SacrumWeb.ProjectController do
   def show(conn, %{"id" => id}) do
     user = conn.assigns.current_user
 
-    with {:ok, %Project{} = project} <- Projects.get_by(user.id, id: id) do
+    with {:ok, %Project{} = project} <- Projects.get_by(user.id, conditions: [id: id]) do
       render(conn, :show, project: project)
     end
   end
@@ -33,7 +33,7 @@ defmodule SacrumWeb.ProjectController do
   def update(conn, %{"id" => id} = params) do
     user = conn.assigns.current_user
 
-    with {:ok, %Project{} = project} <- Projects.get_by(user.id, id: id),
+    with {:ok, %Project{} = project} <- Projects.get_by(user.id, conditions: [id: id]),
          {:ok, %Project{} = updated} <- Projects.update(project, params) do
       render(conn, :show, project: updated)
     end
@@ -42,7 +42,7 @@ defmodule SacrumWeb.ProjectController do
   def delete(conn, %{"id" => id}) do
     user = conn.assigns.current_user
 
-    with {:ok, %Project{} = project} <- Projects.get_by(user.id, id: id),
+    with {:ok, %Project{} = project} <- Projects.get_by(user.id, conditions: [id: id]),
          {:ok, _} <- Projects.delete(project) do
       send_resp(conn, :no_content, "")
     end

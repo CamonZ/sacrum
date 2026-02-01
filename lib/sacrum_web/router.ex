@@ -35,13 +35,12 @@ defmodule SacrumWeb.Router do
     resources "/workflow-steps", WorkflowStepController, except: [:new, :edit]
 
     get "/tasks/ready", TaskController, :ready
+    get "/tasks/tree", TaskController, :tree
+    get "/tasks/path", TaskController, :path
+    get "/tasks/blockers", TaskController, :blockers
 
     resources "/tasks", TaskController, except: [:new, :edit] do
       resources "/refs", CodeRefController, only: [:index, :create, :delete]
-
-      get "/blockers", TaskController, :blockers
-      get "/path", TaskController, :path
-      get "/tree", TaskController, :tree
 
       post "/assign-workflow", TaskWorkflowController, :assign
       delete "/assign-workflow", TaskWorkflowController, :unassign

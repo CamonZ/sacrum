@@ -30,24 +30,6 @@ defmodule Sacrum.Repo.Workflows do
   alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.SyncHelper
 
-  def list(%Project{id: project_id}), do: list(project_id)
-
-  def list(project_id) when is_binary(project_id) do
-    from(w in Workflow,
-      where: w.project_id == ^project_id,
-      order_by: [asc: w.display_order, asc: w.inserted_at]
-    )
-    |> Repo.all()
-  end
-
-  def list_for_user(user_id) when is_binary(user_id) do
-    from(w in Workflow,
-      where: w.user_id == ^user_id,
-      order_by: [asc: w.display_order, asc: w.inserted_at]
-    )
-    |> Repo.all()
-  end
-
   def insert(%Project{id: project_id, user_id: user_id}, attrs),
     do: insert(project_id, user_id, attrs)
 
@@ -100,7 +82,11 @@ defmodule Sacrum.Repo.Workflows do
   end
 
   defp do_sync_transitions(workflow, transition_maps) do
-    existing = Repo.WorkflowTransitions.list_for_workflow(workflow)
+    existing =
+      Repo.WorkflowTransitions.all(
+        conditions: [from_workflow_id: workflow.id],
+        order_by: [asc: :inserted_at]
+      )
 
     SyncHelper.diff_and_sync(existing, transition_maps, %{
       target_key: :to_workflow_id,
@@ -137,7 +123,12 @@ defmodule Sacrum.Repo.Workflows do
       end,
       fetch_final_fn: fn ->
         Broadcaster.broadcast_event(workflow, :workflow_updated, :project)
-        {:ok, Repo.WorkflowTransitions.list_for_workflow(workflow)}
+
+        {:ok,
+         Repo.WorkflowTransitions.all(
+           conditions: [from_workflow_id: workflow.id],
+           order_by: [asc: :inserted_at]
+         )}
       end
     })
   end

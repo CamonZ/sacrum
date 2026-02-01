@@ -59,13 +59,13 @@ defmodule Sacrum.Repo.CodeRefsTest do
     end
   end
 
-  describe "list_for_task/1" do
+  describe "all/1" do
     test "returns refs belonging to the given task" do
       task = setup_task()
       {:ok, _} = CodeRefs.insert_for_task(task, %{path: "lib/a.ex"})
       {:ok, _} = CodeRefs.insert_for_task(task, %{path: "lib/b.ex"})
 
-      refs = CodeRefs.list_for_task(task)
+      refs = CodeRefs.all(conditions: [task_id: task.id], order_by: [asc: :inserted_at])
       assert length(refs) == 2
     end
   end

@@ -95,7 +95,9 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
 
       {:ok, _updated} = TaskWorkflows.assign_workflow(task, workflow)
 
-      executions = StepExecutions.list_for_task(task.id)
+      executions =
+        StepExecutions.all(conditions: [task_id: task.id], order_by: [asc: :inserted_at])
+
       assert length(executions) == 1
       assert hd(executions).step_name == "backlog"
       assert hd(executions).status == "entered"
@@ -182,7 +184,9 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
 
       {:ok, _moved} = TaskWorkflows.move_to_step(assigned, steps.in_progress.id)
 
-      executions = StepExecutions.list_for_task(task.id)
+      executions =
+        StepExecutions.all(conditions: [task_id: task.id], order_by: [asc: :inserted_at])
+
       assert length(executions) == 2
       assert List.last(executions).step_name == "in_progress"
     end

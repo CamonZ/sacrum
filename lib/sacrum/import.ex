@@ -243,7 +243,13 @@ defmodule Sacrum.Import do
     end)
   end
 
-  @spec import_steps_for_workflow(user(), Ecto.UUID.t(), [json_map()], id_map(), non_neg_integer()) ::
+  @spec import_steps_for_workflow(
+          user(),
+          Ecto.UUID.t(),
+          [json_map()],
+          id_map(),
+          non_neg_integer()
+        ) ::
           {:ok, id_map(), non_neg_integer()} | {:error, import_error()}
   defp import_steps_for_workflow(user, new_wf_id, steps, step_map, step_count) do
     Enum.reduce_while(steps, {:ok, step_map, step_count}, fn step_data, {:ok, map, count} ->

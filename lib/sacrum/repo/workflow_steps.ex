@@ -34,16 +34,6 @@ defmodule Sacrum.Repo.WorkflowSteps do
   alias Sacrum.Repo.SyncHelper
   alias Sacrum.Repo.Broadcaster
 
-  def list(%Workflow{id: workflow_id}), do: list(workflow_id)
-
-  def list(workflow_id) when is_binary(workflow_id) do
-    from(s in WorkflowStep,
-      where: s.workflow_id == ^workflow_id,
-      order_by: [asc: s.step_order, asc: s.inserted_at]
-    )
-    |> Repo.all()
-  end
-
   @doc """
   Insert a new workflow step. Accepts Workflow struct (with or without user_id).
   """

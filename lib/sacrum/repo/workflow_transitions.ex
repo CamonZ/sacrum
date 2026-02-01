@@ -24,25 +24,6 @@ defmodule Sacrum.Repo.WorkflowTransitions do
   alias Sacrum.Repo.Schemas.Workflow
   alias Sacrum.Repo.Schemas.WorkflowTransition
 
-  def list_for_workflow(%Workflow{id: workflow_id}), do: list_for_workflow(workflow_id)
-
-  def list_for_workflow(from_workflow_id) when is_binary(from_workflow_id) do
-    from(t in WorkflowTransition,
-      where: t.from_workflow_id == ^from_workflow_id,
-      order_by: [asc: t.inserted_at]
-    )
-    |> Repo.all()
-  end
-
-  def list_for_workflow(from_workflow_id, user_id)
-      when is_binary(from_workflow_id) and is_binary(user_id) do
-    from(t in WorkflowTransition,
-      where: t.from_workflow_id == ^from_workflow_id and t.user_id == ^user_id,
-      order_by: [asc: t.inserted_at]
-    )
-    |> Repo.all()
-  end
-
   def list_for_project(project_id) when is_binary(project_id) do
     from(t in WorkflowTransition,
       join: w in Workflow,

@@ -71,14 +71,19 @@ defmodule Sacrum.Repo.StepTransitionsTest do
     end
   end
 
-  describe "list_for_step/1" do
+  describe "all/1" do
     test "returns transitions from a step" do
       {_project, _workflow, step1, step2} = create_steps()
 
       {:ok, _} =
         StepTransitions.insert(step1.user_id, %{from_step_id: step1.id, to_step_id: step2.id})
 
-      transitions = StepTransitions.list_for_step(step1)
+      transitions =
+        StepTransitions.all(
+          conditions: [from_step_id: step1.id],
+          order_by: [asc: :inserted_at]
+        )
+
       assert length(transitions) == 1
       assert hd(transitions).to_step_id == step2.id
     end

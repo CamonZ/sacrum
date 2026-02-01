@@ -59,7 +59,7 @@ defmodule Sacrum.Repo.StepExecutionsTest do
     end
   end
 
-  describe "list_for_task/1" do
+  describe "all/1" do
     test "returns executions ordered by inserted_at" do
       workflow = create_workflow()
       task_id = Ecto.UUID.generate()
@@ -70,7 +70,9 @@ defmodule Sacrum.Repo.StepExecutionsTest do
       {:ok, _e2} =
         StepExecutions.insert(workflow.user_id, %{task_id: task_id, step_name: "review"})
 
-      executions = StepExecutions.list_for_task(task_id)
+      executions =
+        StepExecutions.all(conditions: [task_id: task_id], order_by: [asc: :inserted_at])
+
       assert length(executions) == 2
       assert Enum.map(executions, & &1.step_name) == ["draft", "review"]
     end
@@ -85,7 +87,9 @@ defmodule Sacrum.Repo.StepExecutionsTest do
       {:ok, _} =
         StepExecutions.insert(workflow.user_id, %{task_id: other_task_id, step_name: "review"})
 
-      executions = StepExecutions.list_for_task(task_id)
+      executions =
+        StepExecutions.all(conditions: [task_id: task_id], order_by: [asc: :inserted_at])
+
       assert length(executions) == 1
     end
   end

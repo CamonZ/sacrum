@@ -12,30 +12,28 @@ defmodule SacrumWeb.TaskController do
   def index(conn, %{"project_id" => project_id} = params) do
     user = conn.assigns.current_user
 
-    with {:ok, _project} <- Projects.get_by(user.id, id: project_id) do
-      opts =
-        [project_id: project_id]
-        |> maybe_add_filter(:level, params["level"])
-        |> maybe_add_filter(:parent_id, params["parent_id"])
-        |> maybe_add_filter(:search, params["search"])
-        |> maybe_add_blocked_filter(params["blocked"])
-        |> maybe_add_filter(:status, params["status"])
-        |> maybe_add_tags_filter(params["tags"])
-        |> maybe_add_root_only_filter(params["root_only"])
-        |> maybe_add_filter(:workflow_id, params["workflow_id"])
+    conditions =
+      [project_id: project_id]
+      |> maybe_add_filter(:level, params["level"])
+      |> maybe_add_filter(:parent_id, params["parent_id"])
+      |> maybe_add_filter(:search, params["search"])
+      |> maybe_add_blocked_filter(params["blocked"])
+      |> maybe_add_filter(:status, params["status"])
+      |> maybe_add_tags_filter(params["tags"])
+      |> maybe_add_root_only_filter(params["root_only"])
+      |> maybe_add_filter(:workflow_id, params["workflow_id"])
 
-      tasks = Tasks.list_tasks(user.id, opts)
-      render(conn, :index, tasks: tasks)
-    end
+    tasks =
+      Tasks.list_tasks(user.id, conditions: conditions, preloads: [:sections, :blockers, :parent])
+
+    render(conn, :index, tasks: tasks)
   end
 
   def ready(conn, %{"project_id" => project_id}) do
     user = conn.assigns.current_user
 
-    with {:ok, _project} <- Projects.get_by(user.id, id: project_id) do
-      tasks = Tasks.ready(user.id, project_id)
-      render(conn, :index, tasks: tasks)
-    end
+    tasks = Tasks.ready(user.id, project_id)
+    render(conn, :index, tasks: tasks)
   end
 
   def tree(conn, %{"task_id" => task_id}) do
@@ -58,7 +56,7 @@ defmodule SacrumWeb.TaskController do
   def create(conn, %{"project_id" => project_id} = params) do
     user = conn.assigns.current_user
 
-    with {:ok, _project} <- Projects.get_by(user.id, id: project_id),
+    with {:ok, _project} <- Projects.get_by(user.id, conditions: [id: project_id]),
          {:ok, %Task{} = task} <- Tasks.insert(user.id, project_id, params) do
       conn
       |> put_status(:created)
@@ -97,7 +95,7 @@ defmodule SacrumWeb.TaskController do
     user = conn.assigns.current_user
 
     with {:ok, %Task{} = task} <- Tasks.find(user.id, task_id),
-         {:ok, %Task{} = target} <- Tasks.get_by(user.id, id: target_id),
+         {:ok, %Task{} = target} <- Tasks.get_by(user.id, conditions: [id: target_id]),
          {:ok, path_ids} <- TaskDependencies.find_path(task, target) do
       json(conn, %{data: %{path: path_ids}})
     end

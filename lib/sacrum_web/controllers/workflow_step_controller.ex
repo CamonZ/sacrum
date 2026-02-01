@@ -11,9 +11,9 @@ defmodule SacrumWeb.WorkflowStepController do
   def index(conn, %{"workflow_id" => workflow_id}) do
     user = conn.assigns.current_user
 
-    with {:ok, _workflow} <- Workflows.get_by(user.id, id: workflow_id) do
+    with {:ok, _workflow} <- Workflows.get_by(user.id, conditions: [id: workflow_id]) do
       steps =
-        WorkflowSteps.list_by(user.id, workflow_id: workflow_id)
+        WorkflowSteps.list_by(user.id, conditions: [workflow_id: workflow_id])
         |> Repo.preload(:transitions)
 
       render(conn, :index, steps: steps)
@@ -23,7 +23,7 @@ defmodule SacrumWeb.WorkflowStepController do
   def show(conn, %{"id" => id}) do
     user = conn.assigns.current_user
 
-    with {:ok, %WorkflowStep{} = step} <- WorkflowSteps.get_by(user.id, id: id) do
+    with {:ok, %WorkflowStep{} = step} <- WorkflowSteps.get_by(user.id, conditions: [id: id]) do
       step = Repo.preload(step, :transitions)
       render(conn, :show, step: step)
     end
@@ -32,7 +32,7 @@ defmodule SacrumWeb.WorkflowStepController do
   def create(conn, %{"workflow_id" => workflow_id} = params) do
     user = conn.assigns.current_user
 
-    with {:ok, _workflow} <- Workflows.get_by(user.id, id: workflow_id),
+    with {:ok, _workflow} <- Workflows.get_by(user.id, conditions: [id: workflow_id]),
          {:ok, %WorkflowStep{} = step} <- WorkflowSteps.insert(user.id, workflow_id, params) do
       conn
       |> put_status(:created)
@@ -43,7 +43,7 @@ defmodule SacrumWeb.WorkflowStepController do
   def update(conn, %{"id" => id} = params) do
     user = conn.assigns.current_user
 
-    with {:ok, %WorkflowStep{} = step} <- WorkflowSteps.get_by(user.id, id: id),
+    with {:ok, %WorkflowStep{} = step} <- WorkflowSteps.get_by(user.id, conditions: [id: id]),
          {:ok, %WorkflowStep{} = updated} <- WorkflowSteps.update(step, params),
          {:ok, %WorkflowStep{} = updated} <- maybe_sync_transitions(updated, params) do
       updated = Repo.preload(updated, :transitions)
@@ -63,7 +63,7 @@ defmodule SacrumWeb.WorkflowStepController do
   def delete(conn, %{"id" => id}) do
     user = conn.assigns.current_user
 
-    with {:ok, %WorkflowStep{} = step} <- WorkflowSteps.get_by(user.id, id: id),
+    with {:ok, %WorkflowStep{} = step} <- WorkflowSteps.get_by(user.id, conditions: [id: id]),
          {:ok, _} <- WorkflowSteps.delete(step) do
       send_resp(conn, :no_content, "")
     end

@@ -64,7 +64,7 @@ defmodule Sacrum.Repo.SyncHelper do
     build_update_changeset_fn: fn existing, map ->
       Ecto.Changeset.change(existing, %{label: map["label"], target_step_id: map["target_step_id"]})
     end,
-    fetch_final_fn: fn -> {:ok, Repo.WorkflowTransitions.list_for_workflow(workflow)} end
+    fetch_final_fn: fn -> {:ok, Repo.WorkflowTransitions.all(conditions: [from_workflow_id: workflow.id], order_by: [asc: :inserted_at])} end
   })
   ```
   """

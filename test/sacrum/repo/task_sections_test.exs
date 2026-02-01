@@ -41,13 +41,18 @@ defmodule Sacrum.Repo.TaskSectionsTest do
     end
   end
 
-  describe "list_for_task/1" do
+  describe "all/1" do
     test "returns sections belonging to the given task" do
       task = setup_task()
       {:ok, _} = TaskSections.insert(task, %{section_type: "goal", content: "Goal 1"})
       {:ok, _} = TaskSections.insert(task, %{section_type: "step", content: "Step 1"})
 
-      sections = TaskSections.list_for_task(task)
+      sections =
+        TaskSections.all(
+          conditions: [task_id: task.id],
+          order_by: [asc: :section_order, asc: :inserted_at]
+        )
+
       assert length(sections) == 2
     end
   end

@@ -3,6 +3,8 @@ defmodule Sacrum.Repo.Schemas.Task do
   import Ecto.Changeset
 
   alias Sacrum.Repo.Schemas.TaskSection
+  alias Sacrum.Repo.Schemas.TaskDependency
+  alias Sacrum.Repo.Schemas.TaskHierarchy
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -42,6 +44,22 @@ defmodule Sacrum.Repo.Schemas.Task do
 
     has_many :sections, Sacrum.Repo.Schemas.TaskSection, on_replace: :delete
     has_many :code_refs, Sacrum.Repo.Schemas.CodeRef
+
+    # Dependencies (blockers — tasks this task depends on)
+    has_many :task_dependencies, TaskDependency, foreign_key: :task_id
+    has_many :blockers, through: [:task_dependencies, :depends_on]
+
+    # Dependencies (dependents — tasks that depend on this one)
+    has_many :task_dependents, TaskDependency, foreign_key: :depends_on_id
+    has_many :dependents, through: [:task_dependents, :task]
+
+    # Hierarchy (parent)
+    has_one :parent_hierarchy, TaskHierarchy, foreign_key: :child_id
+    has_one :parent, through: [:parent_hierarchy, :parent]
+
+    # Hierarchy (children)
+    has_many :child_hierarchies, TaskHierarchy, foreign_key: :parent_id
+    has_many :children, through: [:child_hierarchies, :child]
 
     timestamps(type: :utc_datetime_usec)
   end

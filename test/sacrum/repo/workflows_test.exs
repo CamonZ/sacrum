@@ -72,13 +72,18 @@ defmodule Sacrum.Repo.WorkflowsTest do
     end
   end
 
-  describe "list/1" do
+  describe "all/1" do
     test "returns workflows for a given project" do
       project = create_project()
       {:ok, w1} = Workflows.insert(project, %{name: "First", display_order: 1})
       {:ok, w2} = Workflows.insert(project, %{name: "Second", display_order: 2})
 
-      workflows = Workflows.list(project)
+      workflows =
+        Workflows.all(
+          conditions: [project_id: project.id],
+          order_by: [asc: :display_order, asc: :inserted_at]
+        )
+
       assert length(workflows) == 2
       assert Enum.map(workflows, & &1.id) == [w1.id, w2.id]
     end
@@ -90,14 +95,24 @@ defmodule Sacrum.Repo.WorkflowsTest do
       {:ok, _} = Workflows.insert(project1, %{name: "W1"})
       {:ok, _} = Workflows.insert(project2, %{name: "W2"})
 
-      workflows = Workflows.list(project1)
+      workflows =
+        Workflows.all(
+          conditions: [project_id: project1.id],
+          order_by: [asc: :display_order, asc: :inserted_at]
+        )
+
       assert length(workflows) == 1
       assert hd(workflows).name == "W1"
     end
 
     test "returns empty list when project has no workflows" do
       project = create_project()
-      assert [] = Workflows.list(project)
+
+      assert [] =
+               Workflows.all(
+                 conditions: [project_id: project.id],
+                 order_by: [asc: :display_order, asc: :inserted_at]
+               )
     end
   end
 

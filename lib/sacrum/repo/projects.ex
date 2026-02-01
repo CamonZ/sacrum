@@ -24,13 +24,6 @@ defmodule Sacrum.Repo.Projects do
 
   use Sacrum.GenericRepo, schema: Sacrum.Repo.Schemas.Project
 
-  def list(%User{id: user_id}), do: list(user_id)
-
-  def list(user_id) when is_binary(user_id) do
-    from(p in Project, where: p.user_id == ^user_id, order_by: [asc: p.inserted_at])
-    |> Repo.all()
-  end
-
   def insert(%User{id: user_id}, attrs), do: insert(user_id, attrs)
 
   def insert(user_id, attrs) when is_binary(user_id) do

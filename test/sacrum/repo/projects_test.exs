@@ -89,21 +89,21 @@ defmodule Sacrum.Repo.ProjectsTest do
     end
   end
 
-  describe "list/1" do
+  describe "all/1" do
     test "returns only projects belonging to the given user" do
       user1 = create_user()
       user2 = create_user2()
       {:ok, project1} = Projects.insert(user1, @valid_attrs)
       {:ok, _project2} = Projects.insert(user2, %{name: "Other Project"})
 
-      projects = Projects.list(user1)
+      projects = Projects.all(conditions: [user_id: user1.id], order_by: [asc: :inserted_at])
       assert length(projects) == 1
       assert hd(projects).id == project1.id
     end
 
     test "returns empty list when user has no projects" do
       user = create_user()
-      assert [] = Projects.list(user)
+      assert [] = Projects.all(conditions: [user_id: user.id], order_by: [asc: :inserted_at])
     end
   end
 

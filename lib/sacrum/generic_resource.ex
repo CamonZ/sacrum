@@ -3,7 +3,7 @@ defmodule Sacrum.GenericResource do
   A macro that generates user-scoped access functions for a schema module.
 
   This macro provides functions that always enforce user_id scoping, building
-  queries dynamically from keyword list clauses and always injecting
+  queries dynamically from structured opts and always injecting
   `WHERE user_id = ?`. Useful for resource modules that need to scope all
   operations to the current user.
 
@@ -19,14 +19,26 @@ defmodule Sacrum.GenericResource do
   ## Options
 
   - `:schema` (required) - The schema module to scope
-  - `:preloads` - A list of associations to preload (applied by get_by)
+  - `:preloads` - A list of associations to preload (merged with runtime preloads)
   - `:default_order` - Default order_by clause (applied by list_by)
 
   ## Generated Functions
 
-  - `get_by(user_id, clauses)` → `{:ok, record} | {:error, :not_found}`
+  - `get_by(user_id, opts)` → `{:ok, record} | {:error, :not_found}`
   - `list_by(user_id)` → `[record]`
-  - `list_by(user_id, clauses)` → `[record]`
+  - `list_by(user_id, opts)` → `[record]`
+
+  ## Opts Format
+
+  Accepts structured opts with `:conditions` and `:preloads` keys:
+
+      get_by(user_id, conditions: [id: id], preloads: [:sections])
+      list_by(user_id, conditions: [project_id: pid], preloads: [:children])
+
+  Also accepts flat keyword clauses for backward compatibility:
+
+      get_by(user_id, id: id)
+      list_by(user_id, project_id: pid)
   """
 
   defmacro __using__(opts) do
@@ -43,19 +55,23 @@ defmodule Sacrum.GenericResource do
       @default_order unquote(default_order)
 
       @doc """
-      Retrieve a single record by user_id and clauses.
+      Retrieve a single record by user_id and opts.
 
-      Always scopes to the given user_id. Applies configured preloads.
+      Always scopes to the given user_id. Merges runtime preloads with
+      module-level preloads.
       Returns `{:ok, record}` or `{:error, :not_found}`.
       """
-      def get_by(user_id, clauses) when is_binary(user_id) and is_list(clauses) do
+      def get_by(user_id, opts) when is_binary(user_id) and is_list(opts) do
+        {conditions, runtime_preloads} = extract_opts(opts)
+        all_preloads = merge_preloads(@preloads, runtime_preloads)
+
         query =
           from(s in Schema, where: s.user_id == ^user_id)
-          |> apply_clauses(clauses)
+          |> apply_clauses(conditions)
 
         case Repo.one(query) do
           nil -> {:error, :not_found}
-          record -> {:ok, maybe_preload(record)}
+          record -> {:ok, apply_preloads(record, all_preloads)}
         end
       end
 
@@ -76,16 +92,31 @@ defmodule Sacrum.GenericResource do
       @doc """
       List records for a user with optional filters.
 
-      Always scopes to the given user_id. Applies clauses, default ordering,
-      and configured preloads. Returns a list of records.
+      Always scopes to the given user_id. Applies conditions, default ordering,
+      and merges runtime preloads with module-level preloads.
+      Returns a list of records.
       """
-      def list_by(user_id, clauses) when is_binary(user_id) and is_list(clauses) do
-        from(s in Schema,
-          where: s.user_id == ^user_id,
-          order_by: @default_order
-        )
-        |> apply_clauses(clauses)
-        |> Repo.all()
+      def list_by(user_id, opts) when is_binary(user_id) and is_list(opts) do
+        {conditions, runtime_preloads} = extract_opts(opts)
+        all_preloads = merge_preloads(@preloads, runtime_preloads)
+
+        query =
+          from(s in Schema,
+            where: s.user_id == ^user_id,
+            order_by: @default_order
+          )
+          |> apply_clauses(conditions)
+          |> apply_query_preloads(all_preloads)
+          |> Repo.all()
+      end
+
+      defp extract_opts(opts) do
+        if Keyword.keyword?(opts) and Keyword.has_key?(opts, :conditions) do
+          {Keyword.get(opts, :conditions, []), Keyword.get(opts, :preloads, [])}
+        else
+          # Flat clauses (backward compat) — treat entire list as conditions
+          {opts, []}
+        end
       end
 
       defp apply_clauses(query, clauses) do
@@ -98,13 +129,15 @@ defmodule Sacrum.GenericResource do
         end)
       end
 
-      defp maybe_preload(record) do
-        if Enum.empty?(@preloads) do
-          record
-        else
-          Repo.preload(record, @preloads)
-        end
+      defp merge_preloads(module_preloads, runtime_preloads) do
+        (module_preloads ++ runtime_preloads) |> Enum.uniq()
       end
+
+      defp apply_preloads(record, []), do: record
+      defp apply_preloads(record, preloads), do: Repo.preload(record, preloads)
+
+      defp apply_query_preloads(query, []), do: query
+      defp apply_query_preloads(query, preloads), do: preload(query, ^preloads)
     end
   end
 end

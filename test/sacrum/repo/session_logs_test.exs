@@ -70,7 +70,7 @@ defmodule Sacrum.Repo.SessionLogsTest do
     end
   end
 
-  describe "list_for_execution/1" do
+  describe "all/1" do
     test "returns logs for a given execution" do
       execution = create_execution()
       user_id = execution.user_id
@@ -78,7 +78,12 @@ defmodule Sacrum.Repo.SessionLogsTest do
       {:ok, _} = SessionLogs.insert(user_id, %{step_execution_id: execution.id, content: "Log 1"})
       {:ok, _} = SessionLogs.insert(user_id, %{step_execution_id: execution.id, content: "Log 2"})
 
-      logs = SessionLogs.list_for_execution(execution)
+      logs =
+        SessionLogs.all(
+          conditions: [step_execution_id: execution.id],
+          order_by: [asc: :inserted_at]
+        )
+
       assert length(logs) == 2
       assert Enum.map(logs, & &1.content) == ["Log 1", "Log 2"]
     end
@@ -94,7 +99,12 @@ defmodule Sacrum.Repo.SessionLogsTest do
       {:ok, _} =
         SessionLogs.insert(user_id, %{step_execution_id: execution2.id, content: "Log 2"})
 
-      logs = SessionLogs.list_for_execution(execution1)
+      logs =
+        SessionLogs.all(
+          conditions: [step_execution_id: execution1.id],
+          order_by: [asc: :inserted_at]
+        )
+
       assert length(logs) == 1
       assert hd(logs).content == "Log 1"
     end

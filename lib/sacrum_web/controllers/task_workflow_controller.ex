@@ -11,7 +11,7 @@ defmodule SacrumWeb.TaskWorkflowController do
     user = conn.assigns.current_user
 
     with {:ok, %Sacrum.Repo.Schemas.Task{} = task} <- Tasks.find(user.id, task_id),
-         {:ok, workflow} <- Workflows.get_by(user.id, id: workflow_id),
+         {:ok, workflow} <- Workflows.get_by(user.id, conditions: [id: workflow_id]),
          {:ok, %Sacrum.Repo.Schemas.Task{} = updated} <-
            TaskWorkflows.assign_workflow(task, workflow) do
       conn

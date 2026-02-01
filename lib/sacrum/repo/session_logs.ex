@@ -20,26 +20,6 @@ defmodule Sacrum.Repo.SessionLogs do
   import Ecto.Query
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.SessionLog
-  alias Sacrum.Repo.Schemas.StepExecution
-
-  def list_for_execution(%StepExecution{id: execution_id}), do: list_for_execution(execution_id)
-
-  def list_for_execution(execution_id) when is_binary(execution_id) do
-    from(l in SessionLog,
-      where: l.step_execution_id == ^execution_id,
-      order_by: [asc: l.inserted_at]
-    )
-    |> Repo.all()
-  end
-
-  def list_for_execution(execution_id, user_id)
-      when is_binary(execution_id) and is_binary(user_id) do
-    from(l in SessionLog,
-      where: l.step_execution_id == ^execution_id and l.user_id == ^user_id,
-      order_by: [asc: l.inserted_at]
-    )
-    |> Repo.all()
-  end
 
   @doc """
   Insert a new session log from attrs map.

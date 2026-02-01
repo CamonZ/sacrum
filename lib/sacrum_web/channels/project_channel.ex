@@ -7,7 +7,7 @@ defmodule SacrumWeb.ProjectChannel do
   def join("project:" <> slug, _params, socket) do
     user = socket.assigns.current_user
 
-    case Projects.get_by(user.id, slug: slug) do
+    case Projects.get_by(user.id, conditions: [slug: slug]) do
       {:ok, project} ->
         {:ok, assign(socket, :project, project)}
 

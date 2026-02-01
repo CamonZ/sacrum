@@ -13,8 +13,8 @@ defmodule SacrumWeb.WorkflowController do
 
     case params do
       %{"project_id" => project_id} ->
-        with {:ok, _project} <- Projects.get_by(user.id, id: project_id) do
-          workflows = Workflows.list_by(user.id, project_id: project_id)
+        with {:ok, _project} <- Projects.get_by(user.id, conditions: [id: project_id]) do
+          workflows = Workflows.list_by(user.id, conditions: [project_id: project_id])
           render(conn, :index, workflows: workflows)
         end
 
@@ -27,7 +27,7 @@ defmodule SacrumWeb.WorkflowController do
   def show(conn, %{"id" => id}) do
     user = conn.assigns.current_user
 
-    with {:ok, %Workflow{} = workflow} <- Workflows.get_by(user.id, id: id) do
+    with {:ok, %Workflow{} = workflow} <- Workflows.get_by(user.id, conditions: [id: id]) do
       render(conn, :show, workflow: workflow)
     end
   end
@@ -35,7 +35,7 @@ defmodule SacrumWeb.WorkflowController do
   def create(conn, %{"project_id" => project_id} = params) do
     user = conn.assigns.current_user
 
-    with {:ok, _project} <- Projects.get_by(user.id, id: project_id),
+    with {:ok, _project} <- Projects.get_by(user.id, conditions: [id: project_id]),
          {:ok, %Workflow{} = workflow} <- Workflows.insert(user.id, project_id, params) do
       conn
       |> put_status(:created)
@@ -46,7 +46,7 @@ defmodule SacrumWeb.WorkflowController do
   def update(conn, %{"id" => id} = params) do
     user = conn.assigns.current_user
 
-    with {:ok, %Workflow{} = workflow} <- Workflows.get_by(user.id, id: id),
+    with {:ok, %Workflow{} = workflow} <- Workflows.get_by(user.id, conditions: [id: id]),
          {:ok, %Workflow{} = updated} <- Workflows.update(workflow, params),
          {:ok, updated} <- maybe_sync_transitions(updated, params) do
       render(conn, :show, workflow: updated)
@@ -56,7 +56,7 @@ defmodule SacrumWeb.WorkflowController do
   def delete(conn, %{"id" => id}) do
     user = conn.assigns.current_user
 
-    with {:ok, %Workflow{} = workflow} <- Workflows.get_by(user.id, id: id),
+    with {:ok, %Workflow{} = workflow} <- Workflows.get_by(user.id, conditions: [id: id]),
          {:ok, _} <- Workflows.delete(workflow) do
       send_resp(conn, :no_content, "")
     end

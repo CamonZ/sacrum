@@ -24,24 +24,6 @@ defmodule Sacrum.Repo.TaskSections do
   alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.Schemas.TaskSection
 
-  def list_for_task(%Task{id: task_id}), do: list_for_task(task_id)
-
-  def list_for_task(task_id) when is_binary(task_id) do
-    from(s in TaskSection,
-      where: s.task_id == ^task_id,
-      order_by: [asc: s.section_order, asc: s.inserted_at]
-    )
-    |> Repo.all()
-  end
-
-  def list_for_task(task_id, user_id) when is_binary(task_id) and is_binary(user_id) do
-    from(s in TaskSection,
-      where: s.task_id == ^task_id and s.user_id == ^user_id,
-      order_by: [asc: s.section_order, asc: s.inserted_at]
-    )
-    |> Repo.all()
-  end
-
   def insert(%Task{id: task_id, user_id: user_id}, attrs) when is_binary(user_id) do
     insert(task_id, user_id, attrs)
   end

@@ -66,12 +66,12 @@ defmodule Sacrum.Repo.TasksTest do
       assert id == task.id
     end
 
-    test "get_by_short_id/1 returns task by short_id" do
+    test "get_by/1 returns task by short_id" do
       user = create_user()
       project = create_project(user)
       {:ok, task} = Tasks.insert(project, %{title: "Test"})
 
-      assert {:ok, %Task{short_id: sid}} = Tasks.get_by_short_id(task.short_id)
+      assert {:ok, %Task{short_id: sid}} = Tasks.get_by(conditions: [short_id: task.short_id])
       assert sid == task.short_id
     end
 
@@ -103,14 +103,14 @@ defmodule Sacrum.Repo.TasksTest do
     end
   end
 
-  describe "list/1" do
+  describe "all/1" do
     test "returns tasks for project" do
       user = create_user()
       project = create_project(user)
       {:ok, _} = Tasks.insert(project, %{title: "Task 1"})
       {:ok, _} = Tasks.insert(project, %{title: "Task 2"})
 
-      tasks = Tasks.list(project)
+      tasks = Tasks.all(conditions: [project_id: project.id], order_by: [asc: :inserted_at])
       assert length(tasks) == 2
     end
   end
@@ -126,7 +126,7 @@ defmodule Sacrum.Repo.TasksTest do
       {:ok, _} = Tasks.insert(p1, %{title: "P1 Task"})
       {:ok, _} = Tasks.insert(p2, %{title: "P2 Task"})
 
-      tasks = Tasks.list_tasks(project_id: p1.id)
+      tasks = Tasks.list_tasks(conditions: [project_id: p1.id])
       assert length(tasks) == 1
       assert hd(tasks).title == "P1 Task"
     end
@@ -137,7 +137,7 @@ defmodule Sacrum.Repo.TasksTest do
       {:ok, _} = Tasks.insert(project, %{title: "Ticket", level: "ticket"})
       {:ok, _} = Tasks.insert(project, %{title: "Task", level: "task"})
 
-      tasks = Tasks.list_tasks(project_id: project.id, level: "ticket")
+      tasks = Tasks.list_tasks(conditions: [project_id: project.id, level: "ticket"])
       assert length(tasks) == 1
       assert hd(tasks).title == "Ticket"
     end
@@ -148,7 +148,7 @@ defmodule Sacrum.Repo.TasksTest do
       {:ok, _} = Tasks.insert(project, %{title: "Task 1"})
       {:ok, _} = Tasks.insert(project, %{title: "Task 2"})
 
-      tasks = Tasks.list_tasks(project_id: project.id)
+      tasks = Tasks.list_tasks(conditions: [project_id: project.id])
       assert length(tasks) == 2
     end
   end

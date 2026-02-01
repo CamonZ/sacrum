@@ -22,22 +22,6 @@ defmodule Sacrum.Repo.StepExecutions do
   alias Sacrum.Repo.Schemas.StepExecution
   alias Sacrum.Repo.Broadcaster
 
-  def list_for_task(task_id) when is_binary(task_id) do
-    from(e in StepExecution,
-      where: e.task_id == ^task_id,
-      order_by: [asc: e.inserted_at]
-    )
-    |> Repo.all()
-  end
-
-  def list_for_task(task_id, user_id) when is_binary(task_id) and is_binary(user_id) do
-    from(e in StepExecution,
-      where: e.task_id == ^task_id and e.user_id == ^user_id,
-      order_by: [asc: e.inserted_at]
-    )
-    |> Repo.all()
-  end
-
   @doc """
   Insert a new step execution from attrs map.
   """

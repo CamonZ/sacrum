@@ -57,20 +57,30 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
     end
   end
 
-  describe "list/1" do
+  describe "all/1" do
     test "returns steps for a workflow ordered by step_order" do
       workflow = create_workflow()
       {:ok, s2} = WorkflowSteps.insert(workflow, %{name: "Second", step_order: 2})
       {:ok, s1} = WorkflowSteps.insert(workflow, %{name: "First", step_order: 1})
 
-      steps = WorkflowSteps.list(workflow)
+      steps =
+        WorkflowSteps.all(
+          conditions: [workflow_id: workflow.id],
+          order_by: [asc: :step_order, asc: :inserted_at]
+        )
+
       assert length(steps) == 2
       assert Enum.map(steps, & &1.id) == [s1.id, s2.id]
     end
 
     test "returns empty list when workflow has no steps" do
       workflow = create_workflow()
-      assert [] = WorkflowSteps.list(workflow)
+
+      assert [] =
+               WorkflowSteps.all(
+                 conditions: [workflow_id: workflow.id],
+                 order_by: [asc: :step_order, asc: :inserted_at]
+               )
     end
   end
 

@@ -24,7 +24,8 @@ defmodule SacrumWeb.SessionLogControllerTest do
     {:ok, task} = TaskWorkflows.assign_workflow(task, workflow)
 
     # Get the execution created by assign_workflow
-    [execution | _] = StepExecutions.list_for_task(task.id)
+    [execution | _] =
+      StepExecutions.all(conditions: [task_id: task.id], order_by: [asc: :inserted_at])
 
     Map.merge(context, %{task: task, execution: execution})
   end

@@ -1,7 +1,6 @@
 defmodule SacrumWeb.TaskJSON do
+  alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.Task
-  alias Sacrum.Repo.TaskHierarchy
-  alias Sacrum.Repo.TaskDependencies
 
   def index(%{tasks: tasks}) do
     %{data: for(task <- tasks, do: data(task))}
@@ -47,16 +46,18 @@ defmodule SacrumWeb.TaskJSON do
   end
 
   defp get_parent_id(task) do
-    case TaskHierarchy.get_parent(task) do
-      {:ok, parent} -> parent.id
-      {:error, :not_found} -> nil
+    case task.parent do
+      %Task{} = parent -> parent.id
+      %Ecto.Association.NotLoaded{} -> get_parent_id(Repo.preload(task, :parent))
+      nil -> nil
     end
   end
 
   defp get_dependency_ids(task) do
-    task
-    |> TaskDependencies.get_direct_blockers()
-    |> Enum.map(& &1.id)
+    case task.blockers do
+      %Ecto.Association.NotLoaded{} -> get_dependency_ids(Repo.preload(task, :blockers))
+      blockers -> Enum.map(blockers, & &1.id)
+    end
   end
 
   defp render_sections(%Task{sections: sections}) when is_list(sections) do
