@@ -24,7 +24,7 @@ defmodule Sacrum.Repo.Schemas.Workflow do
     timestamps(type: :utc_datetime_usec)
   end
 
-  @create_fields ~w(name description metadata auto_advance display_order is_default)a
+  @create_fields ~w(name description metadata auto_advance display_order is_default user_id)a
   @update_fields ~w(name description metadata auto_advance display_order is_default initial_step_id on_done_workflow_id on_reject_workflow_id)a
 
   def create_changeset(workflow, attrs) do

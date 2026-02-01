@@ -15,15 +15,10 @@ defmodule Sacrum.Repo.Users do
   Preloading is managed by callers. No automatic preloads are applied in this module.
   """
 
+  use Sacrum.GenericRepo, schema: Sacrum.Repo.Schemas.User
+
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.User
-
-  def get(id) do
-    case Repo.get(User, id) do
-      nil -> {:error, :not_found}
-      user -> {:ok, user}
-    end
-  end
 
   def insert(attrs) do
     %User{}

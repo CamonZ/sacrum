@@ -10,7 +10,7 @@ defmodule Sacrum.Accounts.SessionLogs do
     preloads: [],
     default_order: [asc: :inserted_at]
 
-  alias Sacrum.Repo.SessionLogs, as: SessionLogsRepo
+  alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.SessionLog
   alias Sacrum.Repo.Broadcaster
 
@@ -20,7 +20,7 @@ defmodule Sacrum.Accounts.SessionLogs do
   def insert(user_id, attrs) when is_binary(user_id) do
     %SessionLog{user_id: user_id}
     |> SessionLog.create_changeset(attrs)
-    |> SessionLogsRepo.insert()
+    |> Repo.insert()
     |> Broadcaster.broadcast_session_log(:session_log_created)
   end
 end

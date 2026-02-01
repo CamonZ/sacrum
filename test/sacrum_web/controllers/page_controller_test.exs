@@ -1,8 +1,8 @@
 defmodule SacrumWeb.PageControllerTest do
   use SacrumWeb.ConnCase
 
-  test "GET / returns health check", %{conn: conn} do
+  test "GET /", %{conn: conn} do
     conn = get(conn, ~p"/")
-    assert json_response(conn, 200) == %{"status" => "ok"}
+    assert html_response(conn, 200) =~ "Orchestrate Agents."
   end
 end

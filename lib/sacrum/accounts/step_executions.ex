@@ -10,7 +10,7 @@ defmodule Sacrum.Accounts.StepExecutions do
     preloads: [],
     default_order: [asc: :inserted_at]
 
-  alias Sacrum.Repo.StepExecutions, as: StepExecutionsRepo
+  alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.StepExecution
   alias Sacrum.Repo.Broadcaster
 
@@ -20,7 +20,7 @@ defmodule Sacrum.Accounts.StepExecutions do
   def insert(user_id, attrs) when is_binary(user_id) do
     %StepExecution{user_id: user_id}
     |> StepExecution.create_changeset(attrs)
-    |> StepExecutionsRepo.insert()
+    |> Repo.insert()
     |> Broadcaster.broadcast_step_execution(:step_execution_created)
   end
 end

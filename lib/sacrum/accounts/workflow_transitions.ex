@@ -10,6 +10,7 @@ defmodule Sacrum.Accounts.WorkflowTransitions do
     preloads: [],
     default_order: [asc: :inserted_at]
 
+  alias Sacrum.Repo
   alias Sacrum.Repo.WorkflowTransitions, as: WorkflowTransitionsRepo
   alias Sacrum.Repo.Schemas.WorkflowTransition
 
@@ -19,7 +20,7 @@ defmodule Sacrum.Accounts.WorkflowTransitions do
   def insert(user_id, attrs) when is_binary(user_id) do
     %WorkflowTransition{user_id: user_id}
     |> WorkflowTransition.create_changeset(attrs)
-    |> WorkflowTransitionsRepo.insert()
+    |> Repo.insert()
   end
 
   @doc """
