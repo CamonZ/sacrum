@@ -32,6 +32,7 @@ defmodule SacrumWeb.WorkflowControllerTest do
 
       assert %{"data" => workflows} = json_response(conn, 200)
       assert length(workflows) == 2
+      assert Enum.all?(workflows, &is_list(&1["transitions"]))
     end
 
     test "returns all workflows across projects when no project_id", %{
@@ -50,14 +51,14 @@ defmodule SacrumWeb.WorkflowControllerTest do
       assert %{"data" => []} = json_response(conn, 200)
     end
 
-    test "returns 404 for another user's project", %{conn: conn} do
+    test "returns empty list for another user's project", %{conn: conn} do
       other_user =
         create_user(%{email: "other@example.com", username: "other", password: "password123"})
 
       {:ok, other_project} = Projects.insert(other_user, %{name: "Other"})
 
       conn = get(conn, ~p"/api/workflows?project_id=#{other_project.id}")
-      assert json_response(conn, 404)
+      assert %{"data" => []} = json_response(conn, 200)
     end
   end
 
@@ -73,7 +74,8 @@ defmodule SacrumWeb.WorkflowControllerTest do
                "data" => %{
                  "id" => id,
                  "name" => "My Workflow",
-                 "description" => "Desc"
+                 "description" => "Desc",
+                 "transitions" => []
                }
              } = json_response(conn, 200)
 

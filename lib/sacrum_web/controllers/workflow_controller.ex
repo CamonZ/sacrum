@@ -11,17 +11,17 @@ defmodule SacrumWeb.WorkflowController do
   def index(conn, params) do
     user = conn.assigns.current_user
 
-    case params do
-      %{"project_id" => project_id} ->
-        with {:ok, _project} <- Projects.get_by(user.id, conditions: [id: project_id]) do
-          workflows = Workflows.list_by(user.id, conditions: [project_id: project_id])
-          render(conn, :index, workflows: workflows)
-        end
+    conditions =
+      case Map.get(params, "project_id") do
+        project_id when is_binary(project_id) ->
+          [project_id: project_id]
 
-      _ ->
-        workflows = Workflows.list_by(user.id)
-        render(conn, :index, workflows: workflows)
-    end
+        _ ->
+          []
+      end
+
+    workflows = Workflows.list_by(user.id, conditions: conditions)
+    render(conn, :index, workflows: workflows)
   end
 
   def show(conn, %{"id" => id}) do

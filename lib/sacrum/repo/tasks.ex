@@ -57,17 +57,17 @@ defmodule Sacrum.Repo.Tasks do
 
   defp apply_task_preloads(query, opts) do
     preloads = Keyword.get(opts, :preloads, [])
+    apply_join_preloads(query, preloads)
+  end
 
-    {query, remaining} =
-      Enum.reduce(preloads, {query, []}, fn
-        :blockers, {q, rest} ->
-          {q, [:task_dependencies | rest]}
+  defp apply_join_preloads(query, []), do: query
 
-        other, {q, rest} ->
-          {q, [other | rest]}
-      end)
-
-    preload(query, ^Enum.reverse(remaining))
+  defp apply_join_preloads(query, preloads) do
+    Enum.reduce(preloads, query, fn assoc, q ->
+      q
+      |> join(:left, [t], a in assoc(t, ^assoc), as: ^assoc)
+      |> preload([{^assoc, a}], [{^assoc, a}])
+    end)
   end
 
   defp apply_filters(query, opts) do

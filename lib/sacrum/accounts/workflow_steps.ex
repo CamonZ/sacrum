@@ -7,11 +7,10 @@ defmodule Sacrum.Accounts.WorkflowSteps do
   """
 
   use Sacrum.GenericResource,
-    schema: Sacrum.Repo.Schemas.WorkflowStep,
+    repo: Sacrum.Repo.WorkflowSteps,
     preloads: [],
     default_order: [asc: :step_order, asc: :inserted_at]
 
-  alias Sacrum.Repo
   alias Sacrum.Repo.WorkflowSteps, as: WorkflowStepsRepo
   alias Sacrum.Repo.Schemas.WorkflowStep
   alias Sacrum.Repo.Broadcaster

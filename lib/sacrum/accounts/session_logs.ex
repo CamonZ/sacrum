@@ -6,7 +6,7 @@ defmodule Sacrum.Accounts.SessionLogs do
   """
 
   use Sacrum.GenericResource,
-    schema: Sacrum.Repo.Schemas.SessionLog,
+    repo: Sacrum.Repo.SessionLogs,
     preloads: [],
     default_order: [asc: :inserted_at]
 

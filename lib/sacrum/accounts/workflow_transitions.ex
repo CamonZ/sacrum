@@ -6,7 +6,7 @@ defmodule Sacrum.Accounts.WorkflowTransitions do
   """
 
   use Sacrum.GenericResource,
-    schema: Sacrum.Repo.Schemas.WorkflowTransition,
+    repo: Sacrum.Repo.WorkflowTransitions,
     preloads: [],
     default_order: [asc: :inserted_at]
 

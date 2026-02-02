@@ -6,7 +6,7 @@ defmodule Sacrum.Accounts.CodeRefs do
   """
 
   use Sacrum.GenericResource,
-    schema: Sacrum.Repo.Schemas.CodeRef,
+    repo: Sacrum.Repo.CodeRefs,
     preloads: [],
     default_order: [asc: :inserted_at]
 

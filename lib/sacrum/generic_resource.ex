@@ -2,23 +2,22 @@ defmodule Sacrum.GenericResource do
   @moduledoc """
   A macro that generates user-scoped access functions for a schema module.
 
-  This macro provides functions that always enforce user_id scoping, building
-  queries dynamically from structured opts and always injecting
-  `WHERE user_id = ?`. Useful for resource modules that need to scope all
-  operations to the current user.
+  This macro provides functions that always enforce user_id scoping, delegating
+  to the corresponding repo module (which uses GenericRepo) for query building,
+  preloading, and execution.
 
   ## Usage
 
       defmodule Sacrum.Accounts.Projects do
         use Sacrum.GenericResource,
-          schema: Sacrum.Repo.Schemas.Project,
+          repo: Sacrum.Repo.Projects,
           preloads: [:tasks],
           default_order: [asc: :inserted_at]
       end
 
   ## Options
 
-  - `:schema` (required) - The schema module to scope
+  - `:repo` (required) - The repo module (uses GenericRepo) to delegate to
   - `:preloads` - A list of associations to preload (merged with runtime preloads)
   - `:default_order` - Default order_by clause (applied by list_by)
 
@@ -42,14 +41,12 @@ defmodule Sacrum.GenericResource do
   """
 
   defmacro __using__(opts) do
-    schema = Keyword.fetch!(opts, :schema)
+    repo = Keyword.fetch!(opts, :repo)
     preloads = Keyword.get(opts, :preloads, [])
     default_order = Keyword.get(opts, :default_order, asc: :inserted_at)
 
     quote do
-      import Ecto.Query
-      alias Sacrum.Repo
-      alias unquote(schema), as: Schema
+      alias unquote(repo), as: RepoModule
 
       @preloads unquote(preloads)
       @default_order unquote(default_order)
@@ -65,14 +62,10 @@ defmodule Sacrum.GenericResource do
         {conditions, runtime_preloads} = extract_opts(opts)
         all_preloads = merge_preloads(@preloads, runtime_preloads)
 
-        query =
-          from(s in Schema, where: s.user_id == ^user_id)
-          |> apply_clauses(conditions)
-
-        case Repo.one(query) do
-          nil -> {:error, :not_found}
-          record -> {:ok, apply_preloads(record, all_preloads)}
-        end
+        RepoModule.get_by(
+          conditions: [{:user_id, user_id} | conditions],
+          preloads: all_preloads
+        )
       end
 
       @doc """
@@ -82,11 +75,11 @@ defmodule Sacrum.GenericResource do
       Returns a list of records.
       """
       def list_by(user_id) when is_binary(user_id) do
-        from(s in Schema,
-          where: s.user_id == ^user_id,
+        RepoModule.all(
+          conditions: [user_id: user_id],
+          preloads: @preloads,
           order_by: @default_order
         )
-        |> Repo.all()
       end
 
       @doc """
@@ -100,14 +93,11 @@ defmodule Sacrum.GenericResource do
         {conditions, runtime_preloads} = extract_opts(opts)
         all_preloads = merge_preloads(@preloads, runtime_preloads)
 
-        query =
-          from(s in Schema,
-            where: s.user_id == ^user_id,
-            order_by: @default_order
-          )
-          |> apply_clauses(conditions)
-          |> apply_query_preloads(all_preloads)
-          |> Repo.all()
+        RepoModule.all(
+          conditions: [{:user_id, user_id} | conditions],
+          preloads: all_preloads,
+          order_by: @default_order
+        )
       end
 
       defp extract_opts(opts) do
@@ -119,25 +109,9 @@ defmodule Sacrum.GenericResource do
         end
       end
 
-      defp apply_clauses(query, clauses) do
-        Enum.reduce(clauses, query, fn
-          {key, value}, q when is_atom(key) ->
-            where(q, [s], field(s, ^key) == ^value)
-
-          _clause, q ->
-            q
-        end)
-      end
-
       defp merge_preloads(module_preloads, runtime_preloads) do
         (module_preloads ++ runtime_preloads) |> Enum.uniq()
       end
-
-      defp apply_preloads(record, []), do: record
-      defp apply_preloads(record, preloads), do: Repo.preload(record, preloads)
-
-      defp apply_query_preloads(query, []), do: query
-      defp apply_query_preloads(query, preloads), do: preload(query, ^preloads)
     end
   end
 end

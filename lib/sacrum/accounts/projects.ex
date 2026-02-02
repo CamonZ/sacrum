@@ -6,11 +6,10 @@ defmodule Sacrum.Accounts.Projects do
   """
 
   use Sacrum.GenericResource,
-    schema: Sacrum.Repo.Schemas.Project,
+    repo: Sacrum.Repo.Projects,
     preloads: [],
     default_order: [asc: :inserted_at]
 
-  alias Sacrum.Repo
   alias Sacrum.Repo.Projects, as: ProjectsRepo
   alias Sacrum.Repo.Schemas.Project
 

@@ -6,7 +6,7 @@ defmodule Sacrum.Accounts.StepTransitions do
   """
 
   use Sacrum.GenericResource,
-    schema: Sacrum.Repo.Schemas.StepTransition,
+    repo: Sacrum.Repo.StepTransitions,
     preloads: [],
     default_order: [asc: :inserted_at]
 

@@ -24,7 +24,7 @@ defmodule SacrumWeb.TaskController do
       |> maybe_add_filter(:workflow_id, params["workflow_id"])
 
     tasks =
-      Tasks.list_tasks(user.id, conditions: conditions, preloads: [:sections, :blockers, :parent])
+      Tasks.list_tasks(user.id, conditions: conditions, preloads: [:sections, :task_dependencies, :parent])
 
     render(conn, :index, tasks: tasks)
   end

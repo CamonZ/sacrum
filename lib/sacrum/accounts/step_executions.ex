@@ -6,7 +6,7 @@ defmodule Sacrum.Accounts.StepExecutions do
   """
 
   use Sacrum.GenericResource,
-    schema: Sacrum.Repo.Schemas.StepExecution,
+    repo: Sacrum.Repo.StepExecutions,
     preloads: [],
     default_order: [asc: :inserted_at]
 

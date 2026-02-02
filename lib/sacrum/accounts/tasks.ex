@@ -7,11 +7,10 @@ defmodule Sacrum.Accounts.Tasks do
   """
 
   use Sacrum.GenericResource,
-    schema: Sacrum.Repo.Schemas.Task,
+    repo: Sacrum.Repo.Tasks,
     preloads: [:sections],
     default_order: [asc: :inserted_at]
 
-  import Ecto.Query
   alias Sacrum.Repo
   alias Sacrum.Repo.Tasks, as: TasksRepo
   alias Sacrum.Repo.Schemas.Task

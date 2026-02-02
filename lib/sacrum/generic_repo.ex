@@ -223,7 +223,14 @@ defmodule Sacrum.GenericRepo do
       defp apply_preloads(record, preloads), do: Repo.preload(record, preloads)
 
       defp apply_query_preloads(query, []), do: query
-      defp apply_query_preloads(query, preloads), do: preload(query, ^preloads)
+
+      defp apply_query_preloads(query, preloads) do
+        Enum.reduce(preloads, query, fn assoc, q ->
+          q
+          |> join(:left, [s], a in assoc(s, ^assoc), as: ^assoc)
+          |> preload([{^assoc, a}], [{^assoc, a}])
+        end)
+      end
 
       defp apply_order_by(query, []), do: query
       defp apply_order_by(query, order_by), do: order_by(query, ^order_by)
