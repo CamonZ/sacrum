@@ -8,16 +8,23 @@ defmodule SacrumWeb.WorkflowStepController do
 
   action_fallback SacrumWeb.FallbackController
 
-  def index(conn, %{"workflow_id" => workflow_id}) do
+  def index(conn, params) do
     user = conn.assigns.current_user
 
-    with {:ok, _workflow} <- Workflows.get_by(user.id, conditions: [id: workflow_id]) do
-      steps =
-        WorkflowSteps.list_by(user.id, conditions: [workflow_id: workflow_id])
-        |> Repo.preload(:transitions)
+    conditions =
+      case Map.get(params, "workflow_id") do
+        workflow_id when is_binary(workflow_id) ->
+          [workflow_id: workflow_id]
 
-      render(conn, :index, steps: steps)
-    end
+        _ ->
+          []
+      end
+
+    steps =
+      WorkflowSteps.list_by(user.id, conditions: conditions)
+      |> Repo.preload(:transitions)
+
+    render(conn, :index, steps: steps)
   end
 
   def show(conn, %{"id" => id}) do

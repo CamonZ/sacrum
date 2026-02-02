@@ -28,6 +28,37 @@ defmodule SacrumWeb.WorkflowStepControllerTest do
       assert %{"data" => steps} = json_response(conn, 200)
       assert length(steps) == 2
     end
+
+    test "returns all steps across workflows when no workflow_id given", %{
+      conn: conn,
+      workflow: workflow,
+      project: project
+    } do
+      {:ok, _} = WorkflowSteps.insert(workflow, %{name: "Draft", step_order: 1})
+      {:ok, other_workflow} = Workflows.insert(project, %{name: "Other"})
+      {:ok, _} = WorkflowSteps.insert(other_workflow, %{name: "Review", step_order: 1})
+
+      conn = get(conn, ~p"/api/workflow-steps")
+
+      assert %{"data" => steps} = json_response(conn, 200)
+      assert length(steps) == 2
+    end
+
+    test "filters by workflow_id when provided", %{
+      conn: conn,
+      workflow: workflow,
+      project: project
+    } do
+      {:ok, _} = WorkflowSteps.insert(workflow, %{name: "Draft", step_order: 1})
+      {:ok, other_workflow} = Workflows.insert(project, %{name: "Other"})
+      {:ok, _} = WorkflowSteps.insert(other_workflow, %{name: "Review", step_order: 1})
+
+      conn = get(conn, ~p"/api/workflow-steps?workflow_id=#{workflow.id}")
+
+      assert %{"data" => steps} = json_response(conn, 200)
+      assert length(steps) == 1
+      assert hd(steps)["name"] == "Draft"
+    end
   end
 
   describe "POST /api/workflow-steps" do
