@@ -4,7 +4,6 @@ defmodule Sacrum.Repo.Schemas.Task do
 
   alias Sacrum.Repo.Schemas.TaskSection
   alias Sacrum.Repo.Schemas.TaskDependency
-  alias Sacrum.Repo.Schemas.TaskHierarchy
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -54,12 +53,10 @@ defmodule Sacrum.Repo.Schemas.Task do
     has_many :dependents, through: [:task_dependents, :task]
 
     # Hierarchy (parent)
-    has_one :parent_hierarchy, TaskHierarchy, foreign_key: :child_id
-    has_one :parent, through: [:parent_hierarchy, :parent]
+    belongs_to :parent, Sacrum.Repo.Schemas.Task
 
     # Hierarchy (children)
-    has_many :child_hierarchies, TaskHierarchy, foreign_key: :parent_id
-    has_many :children, through: [:child_hierarchies, :child]
+    has_many :children, Sacrum.Repo.Schemas.Task, foreign_key: :parent_id
 
     timestamps(type: :utc_datetime_usec)
   end

@@ -4,7 +4,6 @@ defmodule SacrumWeb.TaskControllerTest do
   alias Sacrum.Repo.Projects
   alias Sacrum.Repo.Tasks
   alias Sacrum.Repo.TaskDependencies
-  alias Sacrum.Repo.TaskHierarchy
 
   defp setup_authenticated(%{conn: conn}) do
     user = create_user()
@@ -548,7 +547,7 @@ defmodule SacrumWeb.TaskControllerTest do
     test "null parent_id removes parent", %{conn: conn, project: project} do
       {:ok, parent} = Tasks.insert(project, %{title: "Parent"})
       {:ok, child} = Tasks.insert(project, %{title: "Child"})
-      {:ok, _} = TaskHierarchy.set_parent(child, parent)
+      {:ok, _} = Sacrum.Repo.TaskHierarchy.set_parent(child, parent)
 
       conn =
         patch(conn, ~p"/api/tasks/#{child.id}", %{
@@ -557,7 +556,8 @@ defmodule SacrumWeb.TaskControllerTest do
         })
 
       assert %{"data" => %{"parent_id" => nil}} = json_response(conn, 200)
-      assert {:error, :not_found} = TaskHierarchy.get_parent(child)
+      child = Sacrum.Repo.get!(Sacrum.Repo.Schemas.Task, child.id)
+      assert {:error, :not_found} = Sacrum.Repo.TaskHierarchy.get_parent(child)
     end
 
     test "null parent_id succeeds when no parent exists", %{conn: conn, project: project} do

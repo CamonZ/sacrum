@@ -46,17 +46,16 @@ defmodule SacrumWeb.TaskJSON do
   end
 
   defp get_parent_id(task) do
-    case task.parent do
-      %Task{} = parent -> parent.id
-      %Ecto.Association.NotLoaded{} -> get_parent_id(Repo.preload(task, :parent))
-      nil -> nil
-    end
+    task.parent_id
   end
 
   defp get_dependency_ids(task) do
-    case task.blockers do
-      %Ecto.Association.NotLoaded{} -> get_dependency_ids(Repo.preload(task, :blockers))
-      blockers -> Enum.map(blockers, & &1.id)
+    case task.task_dependencies do
+      %Ecto.Association.NotLoaded{} ->
+        get_dependency_ids(Repo.preload(task, :task_dependencies))
+
+      deps ->
+        Enum.map(deps, & &1.depends_on_id)
     end
   end
 

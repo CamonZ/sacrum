@@ -35,7 +35,6 @@ defmodule Sacrum.Import do
     WorkflowTransition,
     Task,
     CodeRef,
-    TaskHierarchy,
     TaskDependency,
     StepExecution
   }
@@ -496,7 +495,7 @@ defmodule Sacrum.Import do
 
   @spec import_hierarchy(user(), id_map(), json_map()) ::
           {:ok, non_neg_integer()} | {:error, import_error()}
-  defp import_hierarchy(user, task_map, relationships_data) do
+  defp import_hierarchy(_user, task_map, relationships_data) do
     child_of = relationships_data["child_of"] || []
 
     Enum.reduce_while(child_of, {:ok, 0}, fn rel, {:ok, count} ->
@@ -505,11 +504,11 @@ defmodule Sacrum.Import do
 
       with {:ok, new_child} <- Map.fetch(task_map, old_child),
            {:ok, new_parent} <- Map.fetch(task_map, old_parent) do
-        changeset =
-          %TaskHierarchy{parent_id: new_parent, child_id: new_child, user_id: user.id}
-          |> TaskHierarchy.changeset()
+        task = Repo.get!(Task, new_child)
 
-        case Repo.insert(changeset) do
+        changeset = Ecto.Changeset.change(task, parent_id: new_parent)
+
+        case Repo.update(changeset) do
           {:ok, _} -> {:cont, {:ok, count + 1}}
           {:error, cs} -> {:halt, {:error, {:hierarchy, old_child, old_parent, cs}}}
         end

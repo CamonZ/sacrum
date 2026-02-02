@@ -57,7 +57,17 @@ defmodule Sacrum.Repo.Tasks do
 
   defp apply_task_preloads(query, opts) do
     preloads = Keyword.get(opts, :preloads, [])
-    preload(query, ^preloads)
+
+    {query, remaining} =
+      Enum.reduce(preloads, {query, []}, fn
+        :blockers, {q, rest} ->
+          {q, [:task_dependencies | rest]}
+
+        other, {q, rest} ->
+          {q, [other | rest]}
+      end)
+
+    preload(query, ^Enum.reverse(remaining))
   end
 
   defp apply_filters(query, opts) do
@@ -87,11 +97,7 @@ defmodule Sacrum.Repo.Tasks do
   defp apply_filter(query, :parent_id, nil), do: query
 
   defp apply_filter(query, :parent_id, parent_id) do
-    from(t in query,
-      join: h in Sacrum.Repo.Schemas.TaskHierarchy,
-      on: h.child_id == t.id,
-      where: h.parent_id == ^parent_id
-    )
+    where(query, [t], t.parent_id == ^parent_id)
   end
 
   defp apply_filter(query, :blocked, nil), do: query
@@ -141,14 +147,7 @@ defmodule Sacrum.Repo.Tasks do
   defp apply_filter(query, :root_only, false), do: query
 
   defp apply_filter(query, :root_only, true) do
-    from(t in query,
-      where:
-        t.id not in subquery(
-          from(h in Sacrum.Repo.Schemas.TaskHierarchy,
-            select: h.child_id
-          )
-        )
-    )
+    where(query, [t], is_nil(t.parent_id))
   end
 
   defp apply_filter(query, :workflow_id, nil), do: query
@@ -192,7 +191,7 @@ defmodule Sacrum.Repo.Tasks do
 
     with :ok <- validate_section_ownership(task, attrs),
          {:ok, updated_task} <- do_update_task(task, attrs),
-         :ok <- maybe_update_parent(updated_task, attrs),
+         {:ok, updated_task} <- maybe_update_parent(updated_task, attrs),
          :ok <- maybe_update_dependencies(updated_task, attrs) do
       Broadcaster.broadcast({:ok, updated_task}, :task_updated, :project)
     end
@@ -207,8 +206,8 @@ defmodule Sacrum.Repo.Tasks do
 
   defp maybe_update_parent(task, %{"parent_id" => nil}) do
     case Sacrum.Repo.TaskHierarchy.remove_parent(task) do
-      {:ok, _} -> :ok
-      {:error, :not_found} -> :ok
+      {:ok, updated} -> {:ok, updated}
+      {:error, :not_found} -> {:ok, task}
       error -> error
     end
   end
@@ -219,16 +218,11 @@ defmodule Sacrum.Repo.Tasks do
         {:error, :not_found}
 
       parent ->
-        Sacrum.Repo.TaskHierarchy.remove_parent(task)
-
-        case Sacrum.Repo.TaskHierarchy.set_parent(task, parent) do
-          {:ok, _} -> :ok
-          error -> error
-        end
+        Sacrum.Repo.TaskHierarchy.set_parent(task, parent)
     end
   end
 
-  defp maybe_update_parent(_task, _attrs), do: :ok
+  defp maybe_update_parent(task, _attrs), do: {:ok, task}
 
   defp maybe_update_dependencies(task, %{"depends_on_ids" => ids}) when is_list(ids) do
     current = Sacrum.Repo.TaskDependencies.get_direct_blockers(task)
