@@ -37,7 +37,6 @@ defmodule SacrumWeb.Router do
     get "/tasks/ready", TaskController, :ready
 
     resources "/tasks", TaskController, except: [:new, :edit] do
-      get "/tree", TaskController, :tree
       get "/path", TaskController, :path
       get "/blockers", TaskController, :blockers
 

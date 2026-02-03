@@ -3,7 +3,6 @@ defmodule SacrumWeb.TaskController do
 
   alias Sacrum.Accounts.Projects
   alias Sacrum.Accounts.Tasks
-  alias Sacrum.Repo.TaskHierarchy
   alias Sacrum.Repo.TaskDependencies
   alias Sacrum.Repo.Schemas.Task
 
@@ -34,15 +33,6 @@ defmodule SacrumWeb.TaskController do
 
     tasks = Tasks.ready(user.id, project_id)
     render(conn, :index, tasks: tasks)
-  end
-
-  def tree(conn, %{"task_id" => task_id}) do
-    user = conn.assigns.current_user
-
-    with {:ok, %Task{} = task} <- Tasks.find(user.id, task_id) do
-      tree = TaskHierarchy.build_tree(task)
-      render(conn, :tree, tree: tree)
-    end
   end
 
   def show(conn, %{"id" => id}) do
