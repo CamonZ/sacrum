@@ -634,6 +634,85 @@ defmodule SacrumWeb.TaskControllerTest do
     end
   end
 
+  describe "POST /api/tasks/:task_id/dependencies/:dependency_id" do
+    setup :setup_authenticated
+
+    test "creates dependency and returns 201", %{conn: conn, project: project} do
+      {:ok, task} = Tasks.insert(project, %{title: "Task"})
+      {:ok, dependency} = Tasks.insert(project, %{title: "Dependency"})
+
+      conn = post(conn, ~p"/api/tasks/#{task.id}/dependencies/#{dependency.id}")
+      assert response(conn, 201)
+
+      # Verify dependency was created
+      blockers = TaskDependencies.get_direct_blockers(task)
+      assert length(blockers) == 1
+      assert hd(blockers).id == dependency.id
+    end
+
+    test "returns 422 when adding self as dependency", %{conn: conn, project: project} do
+      {:ok, task} = Tasks.insert(project, %{title: "Task"})
+
+      conn = post(conn, ~p"/api/tasks/#{task.id}/dependencies/#{task.id}")
+      assert %{"errors" => _} = json_response(conn, 422)
+    end
+
+    test "returns 422 when tasks are from different projects", %{conn: conn, user: user, project: project} do
+      {:ok, other_project} = Sacrum.Repo.Projects.insert(user, %{name: "Other Project"})
+      {:ok, task} = Tasks.insert(project, %{title: "Task"})
+      {:ok, other_task} = Tasks.insert(other_project, %{title: "Other Task"})
+
+      conn = post(conn, ~p"/api/tasks/#{task.id}/dependencies/#{other_task.id}")
+      assert %{"errors" => _} = json_response(conn, 422)
+    end
+
+    test "returns 404 when task does not exist", %{conn: conn, project: project} do
+      {:ok, dependency} = Tasks.insert(project, %{title: "Dependency"})
+
+      conn = post(conn, ~p"/api/tasks/#{Ecto.UUID.generate()}/dependencies/#{dependency.id}")
+      assert json_response(conn, 404)
+    end
+
+    test "returns 404 when dependency does not exist", %{conn: conn, project: project} do
+      {:ok, task} = Tasks.insert(project, %{title: "Task"})
+
+      conn = post(conn, ~p"/api/tasks/#{task.id}/dependencies/#{Ecto.UUID.generate()}")
+      assert json_response(conn, 404)
+    end
+  end
+
+  describe "DELETE /api/tasks/:task_id/dependencies/:dependency_id" do
+    setup :setup_authenticated
+
+    test "removes dependency and returns 204", %{conn: conn, project: project} do
+      {:ok, task} = Tasks.insert(project, %{title: "Task"})
+      {:ok, dependency} = Tasks.insert(project, %{title: "Dependency"})
+      {:ok, _} = TaskDependencies.add_dependency(task, dependency)
+
+      conn = delete(conn, ~p"/api/tasks/#{task.id}/dependencies/#{dependency.id}")
+      assert response(conn, 204)
+
+      # Verify dependency was removed
+      blockers = TaskDependencies.get_direct_blockers(task)
+      assert blockers == []
+    end
+
+    test "returns 404 when dependency relationship does not exist", %{conn: conn, project: project} do
+      {:ok, task} = Tasks.insert(project, %{title: "Task"})
+      {:ok, other} = Tasks.insert(project, %{title: "Other"})
+
+      conn = delete(conn, ~p"/api/tasks/#{task.id}/dependencies/#{other.id}")
+      assert json_response(conn, 404)
+    end
+
+    test "returns 404 when task does not exist", %{conn: conn, project: project} do
+      {:ok, dependency} = Tasks.insert(project, %{title: "Dependency"})
+
+      conn = delete(conn, ~p"/api/tasks/#{Ecto.UUID.generate()}/dependencies/#{dependency.id}")
+      assert json_response(conn, 404)
+    end
+  end
+
   describe "GET /api/tasks/:task_id/path" do
     setup :setup_authenticated
 

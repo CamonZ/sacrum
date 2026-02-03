@@ -26,7 +26,7 @@ defmodule SacrumWeb.TaskJSON do
       review_comment: task.review_comment,
       rejection_reason: task.rejection_reason,
       revision_feedback: task.revision_feedback,
-      parent_id: get_parent_id(task),
+      parent_id: task.parent_id,
       dependency_ids: get_dependency_ids(task),
       sections: render_sections(task),
       started_at: task.started_at,
@@ -34,10 +34,6 @@ defmodule SacrumWeb.TaskJSON do
       inserted_at: task.inserted_at,
       updated_at: task.updated_at
     }
-  end
-
-  defp get_parent_id(task) do
-    task.parent_id
   end
 
   defp get_dependency_ids(task) do

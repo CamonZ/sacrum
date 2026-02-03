@@ -81,6 +81,26 @@ defmodule SacrumWeb.TaskController do
     end
   end
 
+  def create_dependency(conn, %{"task_id" => task_id, "dependency_id" => dependency_id}) do
+    user = conn.assigns.current_user
+
+    with {:ok, %Task{} = task} <- Tasks.find(user.id, task_id),
+         {:ok, %Task{} = dependency} <- Tasks.find(user.id, dependency_id),
+         {:ok, _} <- TaskDependencies.add_dependency(task, dependency) do
+      send_resp(conn, :created, "")
+    end
+  end
+
+  def delete_dependency(conn, %{"task_id" => task_id, "dependency_id" => dependency_id}) do
+    user = conn.assigns.current_user
+
+    with {:ok, %Task{} = task} <- Tasks.find(user.id, task_id),
+         {:ok, %Task{} = dependency} <- Tasks.find(user.id, dependency_id),
+         {:ok, _} <- TaskDependencies.remove_dependency(task, dependency) do
+      send_resp(conn, :no_content, "")
+    end
+  end
+
   def path(conn, %{"task_id" => task_id, "to" => target_id}) do
     user = conn.assigns.current_user
 

@@ -40,6 +40,9 @@ defmodule SacrumWeb.Router do
       get "/path", TaskController, :path
       get "/blockers", TaskController, :blockers
 
+      post "/dependencies/:dependency_id", TaskController, :create_dependency
+      delete "/dependencies/:dependency_id", TaskController, :delete_dependency
+
       resources "/refs", CodeRefController, only: [:index, :create, :delete]
 
       post "/assign-workflow", TaskWorkflowController, :assign

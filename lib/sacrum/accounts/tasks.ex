@@ -22,10 +22,10 @@ defmodule Sacrum.Accounts.Tasks do
   def find(user_id, id) when is_binary(user_id) do
     case Ecto.UUID.cast(id) do
       {:ok, _uuid} ->
-        get_by(user_id, conditions: [id: id])
+        get_by(user_id, conditions: [id: id], preloads: [:parent])
 
       :error ->
-        get_by(user_id, conditions: [short_id: id])
+        get_by(user_id, conditions: [short_id: id], preloads: [:parent])
     end
   end
 
