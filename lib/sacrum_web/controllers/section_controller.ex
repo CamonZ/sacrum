@@ -18,6 +18,16 @@ defmodule SacrumWeb.SectionController do
     end
   end
 
+  def update(conn, %{"task_id" => task_id, "id" => id} = params) do
+    user = conn.assigns.current_user
+
+    with {:ok, _task} <- Tasks.find(user.id, task_id),
+         {:ok, %TaskSection{} = section} <- Sections.get_by(user.id, conditions: [id: id]),
+         {:ok, %TaskSection{} = updated} <- Sections.update(section, params) do
+      render(conn, :show, section: updated)
+    end
+  end
+
   def delete(conn, %{"task_id" => task_id, "id" => id}) do
     user = conn.assigns.current_user
 

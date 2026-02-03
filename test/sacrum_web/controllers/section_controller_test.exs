@@ -59,6 +59,83 @@ defmodule SacrumWeb.SectionControllerTest do
     end
   end
 
+  describe "PATCH /api/tasks/:task_id/sections/:id" do
+    setup :setup_authenticated
+
+    test "updates section and returns 200", %{conn: conn, task: task} do
+      {:ok, section} =
+        TaskSections.insert(task, %{section_type: "notes", content: "Original content"})
+
+      conn =
+        patch(conn, ~p"/api/tasks/#{task.id}/sections/#{section.id}", %{
+          content: "Updated content"
+        })
+
+      assert %{"data" => %{"content" => "Updated content", "section_type" => "notes"}} =
+               json_response(conn, 200)
+    end
+
+    test "updates section_type", %{conn: conn, task: task} do
+      {:ok, section} =
+        TaskSections.insert(task, %{section_type: "notes", content: "Some content"})
+
+      conn =
+        patch(conn, ~p"/api/tasks/#{task.id}/sections/#{section.id}", %{
+          section_type: "testing_criteria"
+        })
+
+      assert %{"data" => %{"section_type" => "testing_criteria"}} = json_response(conn, 200)
+    end
+
+    test "marks section as done", %{conn: conn, task: task} do
+      {:ok, section} =
+        TaskSections.insert(task, %{section_type: "notes", content: "Task to complete"})
+
+      conn =
+        patch(conn, ~p"/api/tasks/#{task.id}/sections/#{section.id}", %{
+          done: true
+        })
+
+      assert %{"data" => %{"done" => true}} = json_response(conn, 200)
+    end
+
+    test "returns 404 when section does not exist", %{conn: conn, task: task} do
+      conn =
+        patch(conn, ~p"/api/tasks/#{task.id}/sections/#{Ecto.UUID.generate()}", %{
+          content: "test"
+        })
+
+      assert json_response(conn, 404)
+    end
+
+    test "returns 404 when task does not exist", %{conn: conn, task: task} do
+      {:ok, section} = TaskSections.insert(task, %{section_type: "notes", content: "test"})
+
+      conn =
+        patch(conn, ~p"/api/tasks/#{Ecto.UUID.generate()}/sections/#{section.id}", %{
+          content: "updated"
+        })
+
+      assert json_response(conn, 404)
+    end
+
+    test "returns 404 for another user's section", %{conn: _conn, task: task} do
+      {:ok, section} = TaskSections.insert(task, %{section_type: "notes", content: "test"})
+
+      other_user =
+        create_user(%{email: "other@example.com", username: "other", password: "password123"})
+
+      other_conn = build_conn() |> authenticate(other_user)
+
+      conn =
+        patch(other_conn, ~p"/api/tasks/#{task.id}/sections/#{section.id}", %{
+          content: "hacked"
+        })
+
+      assert json_response(conn, 404)
+    end
+  end
+
   describe "DELETE /api/tasks/:task_id/sections/:id" do
     setup :setup_authenticated
 

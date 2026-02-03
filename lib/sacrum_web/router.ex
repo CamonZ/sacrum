@@ -43,7 +43,7 @@ defmodule SacrumWeb.Router do
       post "/dependencies/:dependency_id", TaskController, :create_dependency
       delete "/dependencies/:dependency_id", TaskController, :delete_dependency
 
-      resources "/sections", SectionController, only: [:create, :delete]
+      resources "/sections", SectionController, only: [:create, :update, :delete]
       resources "/refs", CodeRefController, only: [:index, :create, :delete]
 
       post "/assign-workflow", TaskWorkflowController, :assign

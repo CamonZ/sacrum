@@ -37,6 +37,13 @@ defmodule Sacrum.Accounts.Sections do
   end
 
   @doc """
+  Update a section.
+  """
+  def update(%TaskSection{} = section, attrs) do
+    TaskSections.update(section, attrs)
+  end
+
+  @doc """
   Delete a section.
   """
   def delete(%TaskSection{} = section) do
