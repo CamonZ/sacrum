@@ -136,6 +136,32 @@ defmodule SacrumWeb.ProjectChannel do
     )
   end
 
+  # Section broadcasts
+
+  def broadcast_section_created(project_slug, section) do
+    SacrumWeb.Endpoint.broadcast(
+      "project:#{project_slug}",
+      "section_created",
+      section_payload(section)
+    )
+  end
+
+  def broadcast_section_updated(project_slug, section) do
+    SacrumWeb.Endpoint.broadcast(
+      "project:#{project_slug}",
+      "section_updated",
+      section_payload(section)
+    )
+  end
+
+  def broadcast_section_deleted(project_slug, section) do
+    SacrumWeb.Endpoint.broadcast(
+      "project:#{project_slug}",
+      "section_deleted",
+      %{id: section.id, task_id: section.task_id}
+    )
+  end
+
   # Payload helpers
 
   defp task_payload(task) do
@@ -241,6 +267,20 @@ defmodule SacrumWeb.ProjectChannel do
       content: log.content,
       inserted_at: log.inserted_at,
       updated_at: log.updated_at
+    }
+  end
+
+  defp section_payload(section) do
+    %{
+      id: section.id,
+      task_id: section.task_id,
+      section_type: section.section_type,
+      content: section.content,
+      section_order: section.section_order,
+      done: section.done,
+      done_at: section.done_at,
+      inserted_at: section.inserted_at,
+      updated_at: section.updated_at
     }
   end
 end

@@ -25,7 +25,10 @@ defmodule Sacrum.Repo.Broadcaster do
     step_transition_deleted: :broadcast_step_transition_deleted,
     step_execution_created: :broadcast_step_execution_created,
     step_execution_status_changed: :broadcast_step_execution_status_changed,
-    session_log_created: :broadcast_session_log_created
+    session_log_created: :broadcast_session_log_created,
+    section_created: :broadcast_section_created,
+    section_updated: :broadcast_section_updated,
+    section_deleted: :broadcast_section_deleted
   }
 
   @doc """
@@ -160,6 +163,26 @@ defmodule Sacrum.Repo.Broadcaster do
 
   def broadcast_session_log({:error, _} = error, _event), do: error
 
+  @doc """
+  Broadcast a section by looking up its task to get the project.
+
+  This is a specialized helper for sections which don't have direct project associations.
+
+  Args:
+    - result: {:ok, section} or {:error, reason}
+    - event: event name (atom, e.g. :section_created)
+
+  Returns:
+    - {:ok, section} on success
+    - {:error, reason} on error
+  """
+  def broadcast_section({:ok, section}, event) do
+    broadcast_section_event(section, event)
+    {:ok, section}
+  end
+
+  def broadcast_section({:error, _} = error, _event), do: error
+
   # Private helper for step execution broadcast
   defp broadcast_step_execution_event(execution, event) do
     task = Repo.get(Sacrum.Repo.Schemas.Task, execution.task_id)
@@ -196,6 +219,24 @@ defmodule Sacrum.Repo.Broadcaster do
           _ ->
             :ok
         end
+      end
+    end
+  end
+
+  # Private helper for section broadcast
+  defp broadcast_section_event(section, event) do
+    task = Repo.get(Sacrum.Repo.Schemas.Task, section.task_id)
+
+    if task do
+      task = Repo.preload(task, :project)
+
+      case task.project do
+        %Project{slug: slug} ->
+          channel_func = Map.fetch!(@channel_broadcasts, event)
+          apply(SacrumWeb.ProjectChannel, channel_func, [slug, section])
+
+        _ ->
+          :ok
       end
     end
   end
