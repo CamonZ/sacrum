@@ -23,7 +23,7 @@ defmodule SacrumWeb.BroadcastsTest do
     {:ok, project} = Projects.insert(user, %{name: "Broadcast Project"})
 
     {:ok, socket} = connect(UserSocket, %{"token" => token})
-    {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.slug}")
+    {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}")
 
     {user, project}
   end

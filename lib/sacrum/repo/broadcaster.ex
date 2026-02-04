@@ -55,7 +55,7 @@ defmodule Sacrum.Repo.Broadcaster do
   @doc """
   Broadcast an entity directly after a successful operation.
 
-  Preloads the entity with the specified path, extracts project slug, and calls
+  Preloads the entity with the specified path, extracts project ID, and calls
   the appropriate ProjectChannel function.
 
   Args:
@@ -67,22 +67,22 @@ defmodule Sacrum.Repo.Broadcaster do
     - :ok
   """
   def broadcast_event(entity, event, preload_path) do
-    case extract_project_slug(entity, preload_path) do
-      {:ok, slug} ->
+    case extract_project_id(entity, preload_path) do
+      {:ok, project_id} ->
         channel_func = Map.fetch!(@channel_broadcasts, event)
-        apply(SacrumWeb.ProjectChannel, channel_func, [slug, entity])
+        apply(SacrumWeb.ProjectChannel, channel_func, [project_id, entity])
 
       :error ->
         :ok
     end
   end
 
-  # Extract project slug from an entity, handling different preload paths
-  defp extract_project_slug(entity, preload_path) do
+  # Extract project ID from an entity, handling different preload paths
+  defp extract_project_id(entity, preload_path) do
     entity = Repo.preload(entity, preload_path)
 
     case get_project(entity, preload_path) do
-      %Project{slug: slug} -> {:ok, slug}
+      %Project{id: id} -> {:ok, id}
       _ -> :error
     end
   end
@@ -191,9 +191,9 @@ defmodule Sacrum.Repo.Broadcaster do
       task = Repo.preload(task, :project)
 
       case task.project do
-        %Project{slug: slug} ->
+        %Project{id: project_id} ->
           channel_func = Map.fetch!(@channel_broadcasts, event)
-          apply(SacrumWeb.ProjectChannel, channel_func, [slug, execution])
+          apply(SacrumWeb.ProjectChannel, channel_func, [project_id, execution])
 
         _ ->
           :ok
@@ -212,9 +212,9 @@ defmodule Sacrum.Repo.Broadcaster do
         task = Repo.preload(task, :project)
 
         case task.project do
-          %Project{slug: slug} ->
+          %Project{id: project_id} ->
             channel_func = Map.fetch!(@channel_broadcasts, event)
-            apply(SacrumWeb.ProjectChannel, channel_func, [slug, log])
+            apply(SacrumWeb.ProjectChannel, channel_func, [project_id, log])
 
           _ ->
             :ok
@@ -231,9 +231,9 @@ defmodule Sacrum.Repo.Broadcaster do
       task = Repo.preload(task, :project)
 
       case task.project do
-        %Project{slug: slug} ->
+        %Project{id: project_id} ->
           channel_func = Map.fetch!(@channel_broadcasts, event)
-          apply(SacrumWeb.ProjectChannel, channel_func, [slug, section])
+          apply(SacrumWeb.ProjectChannel, channel_func, [project_id, section])
 
         _ ->
           :ok

@@ -4,10 +4,10 @@ defmodule SacrumWeb.ProjectChannel do
   alias Sacrum.Accounts.Projects
 
   @impl true
-  def join("project:" <> slug, _params, socket) do
+  def join("project:" <> project_id, _params, socket) do
     user = socket.assigns.current_user
 
-    case Projects.get_by(user.id, conditions: [slug: slug]) do
+    case Projects.get_by(user.id, conditions: [id: project_id]) do
       {:ok, project} ->
         {:ok, assign(socket, :project, project)}
 
@@ -18,21 +18,21 @@ defmodule SacrumWeb.ProjectChannel do
 
   # Task broadcasts
 
-  def broadcast_task_created(project_slug, task) do
-    SacrumWeb.Endpoint.broadcast("project:#{project_slug}", "task_created", task_payload(task))
+  def broadcast_task_created(project_id, task) do
+    SacrumWeb.Endpoint.broadcast("project:#{project_id}", "task_created", task_payload(task))
   end
 
-  def broadcast_task_updated(project_slug, task) do
-    SacrumWeb.Endpoint.broadcast("project:#{project_slug}", "task_updated", task_payload(task))
+  def broadcast_task_updated(project_id, task) do
+    SacrumWeb.Endpoint.broadcast("project:#{project_id}", "task_updated", task_payload(task))
   end
 
-  def broadcast_task_deleted(project_slug, task) do
-    SacrumWeb.Endpoint.broadcast("project:#{project_slug}", "task_deleted", %{id: task.id})
+  def broadcast_task_deleted(project_id, task) do
+    SacrumWeb.Endpoint.broadcast("project:#{project_id}", "task_deleted", %{id: task.id})
   end
 
-  def broadcast_workflow_changed(project_slug, task) do
+  def broadcast_workflow_changed(project_id, task) do
     SacrumWeb.Endpoint.broadcast(
-      "project:#{project_slug}",
+      "project:#{project_id}",
       "workflow_changed",
       workflow_payload(task)
     )
@@ -40,25 +40,25 @@ defmodule SacrumWeb.ProjectChannel do
 
   # Workflow broadcasts
 
-  def broadcast_workflow_created(project_slug, workflow) do
+  def broadcast_workflow_created(project_id, workflow) do
     SacrumWeb.Endpoint.broadcast(
-      "project:#{project_slug}",
+      "project:#{project_id}",
       "workflow_created",
       workflow_entity_payload(workflow)
     )
   end
 
-  def broadcast_workflow_updated(project_slug, workflow) do
+  def broadcast_workflow_updated(project_id, workflow) do
     SacrumWeb.Endpoint.broadcast(
-      "project:#{project_slug}",
+      "project:#{project_id}",
       "workflow_updated",
       workflow_entity_payload(workflow)
     )
   end
 
-  def broadcast_workflow_deleted(project_slug, workflow) do
+  def broadcast_workflow_deleted(project_id, workflow) do
     SacrumWeb.Endpoint.broadcast(
-      "project:#{project_slug}",
+      "project:#{project_id}",
       "workflow_deleted",
       %{id: workflow.id}
     )
@@ -66,25 +66,25 @@ defmodule SacrumWeb.ProjectChannel do
 
   # Step broadcasts
 
-  def broadcast_step_created(project_slug, step) do
+  def broadcast_step_created(project_id, step) do
     SacrumWeb.Endpoint.broadcast(
-      "project:#{project_slug}",
+      "project:#{project_id}",
       "step_created",
       step_payload(step)
     )
   end
 
-  def broadcast_step_updated(project_slug, step) do
+  def broadcast_step_updated(project_id, step) do
     SacrumWeb.Endpoint.broadcast(
-      "project:#{project_slug}",
+      "project:#{project_id}",
       "step_updated",
       step_payload(step)
     )
   end
 
-  def broadcast_step_deleted(project_slug, step) do
+  def broadcast_step_deleted(project_id, step) do
     SacrumWeb.Endpoint.broadcast(
-      "project:#{project_slug}",
+      "project:#{project_id}",
       "step_deleted",
       %{id: step.id, workflow_id: step.workflow_id}
     )
@@ -92,17 +92,17 @@ defmodule SacrumWeb.ProjectChannel do
 
   # Step transition broadcasts
 
-  def broadcast_step_transition_created(project_slug, transition) do
+  def broadcast_step_transition_created(project_id, transition) do
     SacrumWeb.Endpoint.broadcast(
-      "project:#{project_slug}",
+      "project:#{project_id}",
       "step_transition_created",
       step_transition_payload(transition)
     )
   end
 
-  def broadcast_step_transition_deleted(project_slug, transition) do
+  def broadcast_step_transition_deleted(project_id, transition) do
     SacrumWeb.Endpoint.broadcast(
-      "project:#{project_slug}",
+      "project:#{project_id}",
       "step_transition_deleted",
       %{id: transition.id}
     )
@@ -110,17 +110,17 @@ defmodule SacrumWeb.ProjectChannel do
 
   # Step execution broadcasts
 
-  def broadcast_step_execution_created(project_slug, execution) do
+  def broadcast_step_execution_created(project_id, execution) do
     SacrumWeb.Endpoint.broadcast(
-      "project:#{project_slug}",
+      "project:#{project_id}",
       "step_execution_created",
       step_execution_payload(execution)
     )
   end
 
-  def broadcast_step_execution_status_changed(project_slug, execution) do
+  def broadcast_step_execution_status_changed(project_id, execution) do
     SacrumWeb.Endpoint.broadcast(
-      "project:#{project_slug}",
+      "project:#{project_id}",
       "step_execution_status_changed",
       step_execution_payload(execution)
     )
@@ -128,9 +128,9 @@ defmodule SacrumWeb.ProjectChannel do
 
   # Session log broadcasts
 
-  def broadcast_session_log_created(project_slug, log) do
+  def broadcast_session_log_created(project_id, log) do
     SacrumWeb.Endpoint.broadcast(
-      "project:#{project_slug}",
+      "project:#{project_id}",
       "session_log_created",
       session_log_payload(log)
     )
@@ -138,25 +138,25 @@ defmodule SacrumWeb.ProjectChannel do
 
   # Section broadcasts
 
-  def broadcast_section_created(project_slug, section) do
+  def broadcast_section_created(project_id, section) do
     SacrumWeb.Endpoint.broadcast(
-      "project:#{project_slug}",
+      "project:#{project_id}",
       "section_created",
       section_payload(section)
     )
   end
 
-  def broadcast_section_updated(project_slug, section) do
+  def broadcast_section_updated(project_id, section) do
     SacrumWeb.Endpoint.broadcast(
-      "project:#{project_slug}",
+      "project:#{project_id}",
       "section_updated",
       section_payload(section)
     )
   end
 
-  def broadcast_section_deleted(project_slug, section) do
+  def broadcast_section_deleted(project_id, section) do
     SacrumWeb.Endpoint.broadcast(
-      "project:#{project_slug}",
+      "project:#{project_id}",
       "section_deleted",
       %{id: section.id, task_id: section.task_id}
     )

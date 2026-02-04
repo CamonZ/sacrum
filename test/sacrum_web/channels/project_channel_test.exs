@@ -31,7 +31,7 @@ defmodule SacrumWeb.ProjectChannelTest do
     test "can join project channel for owned project" do
       {_user, project, socket} = setup_socket()
 
-      assert {:ok, _reply, socket} = subscribe_and_join(socket, "project:#{project.slug}")
+      assert {:ok, _reply, socket} = subscribe_and_join(socket, "project:#{project.id}")
       assert socket.assigns.project.id == project.id
     end
 
@@ -45,25 +45,25 @@ defmodule SacrumWeb.ProjectChannelTest do
       {:ok, other_project} = Projects.insert(other_user, %{name: "Other Project"})
 
       assert {:error, %{reason: "not found"}} =
-               subscribe_and_join(socket, "project:#{other_project.slug}")
+               subscribe_and_join(socket, "project:#{other_project.id}")
     end
 
     test "cannot join channel for nonexistent project" do
       {_user, _project, socket} = setup_socket()
 
       assert {:error, %{reason: "not found"}} =
-               subscribe_and_join(socket, "project:nonexistent-slug")
+               subscribe_and_join(socket, "project:#{Ecto.UUID.generate()}")
     end
   end
 
   describe "broadcast helpers" do
     test "broadcast_task_created sends task_created event" do
       {_user, project, socket} = setup_socket()
-      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.slug}")
+      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}")
 
       task = build_task(project)
 
-      SacrumWeb.ProjectChannel.broadcast_task_created(project.slug, task)
+      SacrumWeb.ProjectChannel.broadcast_task_created(project.id, task)
 
       assert_broadcast "task_created", payload
       assert payload.id == task.id
@@ -72,11 +72,11 @@ defmodule SacrumWeb.ProjectChannelTest do
 
     test "broadcast_task_updated sends task_updated event" do
       {_user, project, socket} = setup_socket()
-      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.slug}")
+      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}")
 
       task = build_task(project)
 
-      SacrumWeb.ProjectChannel.broadcast_task_updated(project.slug, task)
+      SacrumWeb.ProjectChannel.broadcast_task_updated(project.id, task)
 
       assert_broadcast "task_updated", payload
       assert payload.id == task.id
@@ -84,11 +84,11 @@ defmodule SacrumWeb.ProjectChannelTest do
 
     test "broadcast_task_deleted sends task_deleted event with id only" do
       {_user, project, socket} = setup_socket()
-      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.slug}")
+      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}")
 
       task = build_task(project)
 
-      SacrumWeb.ProjectChannel.broadcast_task_deleted(project.slug, task)
+      SacrumWeb.ProjectChannel.broadcast_task_deleted(project.id, task)
 
       assert_broadcast "task_deleted", %{id: id}
       assert id == task.id
@@ -96,11 +96,11 @@ defmodule SacrumWeb.ProjectChannelTest do
 
     test "broadcast_workflow_changed sends workflow_changed event" do
       {_user, project, socket} = setup_socket()
-      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.slug}")
+      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}")
 
       task = build_task(project)
 
-      SacrumWeb.ProjectChannel.broadcast_workflow_changed(project.slug, task)
+      SacrumWeb.ProjectChannel.broadcast_workflow_changed(project.id, task)
 
       assert_broadcast "workflow_changed", payload
       assert payload.id == task.id
