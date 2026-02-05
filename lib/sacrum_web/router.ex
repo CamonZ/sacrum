@@ -30,7 +30,12 @@ defmodule SacrumWeb.Router do
 
     resources "/projects", ProjectController, except: [:new, :edit]
 
-    resources "/workflows", WorkflowController, except: [:new, :edit]
+    resources "/workflows", WorkflowController, except: [:new, :edit] do
+      resources "/transitions", WorkflowTransitionController,
+        only: [:create, :delete],
+        param: "id",
+        name: "transition"
+    end
 
     resources "/workflow-steps", WorkflowStepController, except: [:new, :edit]
 
