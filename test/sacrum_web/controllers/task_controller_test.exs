@@ -305,7 +305,7 @@ defmodule SacrumWeb.TaskControllerTest do
 
       # Create a code_ref for this section
       {:ok, _ref} =
-        Sacrum.Repo.CodeRefs.insert_for_section(section.id, task.user_id, %{
+        Sacrum.Repo.CodeRefs.insert_for_section(section.id, project.id, task.user_id, %{
           path: "lib/foo.ex",
           line_start: 1,
           line_end: 10
@@ -332,7 +332,7 @@ defmodule SacrumWeb.TaskControllerTest do
       {:ok, workflow} = Sacrum.Repo.Workflows.insert(project, %{name: "Test Workflow"})
 
       {:ok, step} =
-        Sacrum.Repo.WorkflowSteps.insert(workflow.id, workflow.user_id, %{
+        Sacrum.Repo.WorkflowSteps.insert(workflow.id, workflow.project_id, workflow.user_id, %{
           name: "in_progress",
           step_order: 1
         })
@@ -375,7 +375,7 @@ defmodule SacrumWeb.TaskControllerTest do
       {:ok, workflow} = Sacrum.Repo.Workflows.insert(project, %{name: "WF1"})
 
       {:ok, step} =
-        Sacrum.Repo.WorkflowSteps.insert(workflow.id, workflow.user_id, %{
+        Sacrum.Repo.WorkflowSteps.insert(workflow.id, workflow.project_id, workflow.user_id, %{
           name: "start",
           step_order: 1
         })
@@ -657,7 +657,11 @@ defmodule SacrumWeb.TaskControllerTest do
       assert %{"errors" => _} = json_response(conn, 422)
     end
 
-    test "returns 422 when tasks are from different projects", %{conn: conn, user: user, project: project} do
+    test "returns 422 when tasks are from different projects", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
       {:ok, other_project} = Sacrum.Repo.Projects.insert(user, %{name: "Other Project"})
       {:ok, task} = Tasks.insert(project, %{title: "Task"})
       {:ok, other_task} = Tasks.insert(other_project, %{title: "Other Task"})
@@ -697,7 +701,10 @@ defmodule SacrumWeb.TaskControllerTest do
       assert blockers == []
     end
 
-    test "returns 404 when dependency relationship does not exist", %{conn: conn, project: project} do
+    test "returns 404 when dependency relationship does not exist", %{
+      conn: conn,
+      project: project
+    } do
       {:ok, task} = Tasks.insert(project, %{title: "Task"})
       {:ok, other} = Tasks.insert(project, %{title: "Other"})
 

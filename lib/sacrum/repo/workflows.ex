@@ -111,7 +111,7 @@ defmodule Sacrum.Repo.Workflows do
         end)
       end,
       build_changeset_fn: fn m ->
-        %WorkflowTransition{user_id: workflow.user_id}
+        %WorkflowTransition{user_id: workflow.user_id, project_id: workflow.project_id}
         |> WorkflowTransition.create_changeset(Map.merge(m, %{"from_workflow_id" => workflow.id}))
       end,
       build_update_changeset_fn: fn existing_rec, m ->

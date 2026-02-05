@@ -25,30 +25,8 @@ defmodule Sacrum.Repo.TaskSections do
   alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.Schemas.TaskSection
 
-  def insert(%Task{id: task_id, user_id: user_id}, attrs) when is_binary(user_id) do
-    insert(task_id, user_id, attrs)
-  end
-
-  def insert(%Task{id: task_id, user_id: user_id}, attrs) when user_id != nil do
-    insert(task_id, user_id, attrs)
-  end
-
-  def insert(%Task{id: task_id}, attrs) do
-    %TaskSection{task_id: task_id}
-    |> TaskSection.changeset(attrs)
-    |> Repo.insert()
-    |> Broadcaster.broadcast_section(:section_created)
-  end
-
-  def insert(task_id, attrs) when is_binary(task_id) and is_map(attrs) do
-    %TaskSection{task_id: task_id}
-    |> TaskSection.changeset(attrs)
-    |> Repo.insert()
-    |> Broadcaster.broadcast_section(:section_created)
-  end
-
-  def insert(task_id, user_id, attrs) when is_binary(task_id) and is_binary(user_id) do
-    %TaskSection{task_id: task_id, user_id: user_id}
+  def insert(%Task{id: task_id, project_id: project_id, user_id: user_id}, attrs) do
+    %TaskSection{task_id: task_id, project_id: project_id, user_id: user_id}
     |> TaskSection.changeset(attrs)
     |> Repo.insert()
     |> Broadcaster.broadcast_section(:section_created)

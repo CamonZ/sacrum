@@ -16,6 +16,7 @@ defmodule Sacrum.Repo.Schemas.CodeRef do
 
     belongs_to :task, Sacrum.Repo.Schemas.Task
     belongs_to :section, Sacrum.Repo.Schemas.TaskSection
+    belongs_to :project, Sacrum.Repo.Schemas.Project
     belongs_to :user, Sacrum.Repo.Schemas.User
 
     timestamps(type: :utc_datetime_usec)
@@ -30,6 +31,7 @@ defmodule Sacrum.Repo.Schemas.CodeRef do
       name: :exactly_one_parent,
       message: "exactly one of task_id or section_id must be set"
     )
+    |> foreign_key_constraint(:project_id)
   end
 
   defp validate_exactly_one_parent(changeset) do

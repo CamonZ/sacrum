@@ -16,9 +16,13 @@ defmodule Sacrum.Accounts.StepExecutions do
 
   @doc """
   Insert a new step execution for a user.
+  Extracts task_id and project_id from attrs.
   """
-  def insert(user_id, attrs) when is_binary(user_id) do
-    %StepExecution{user_id: user_id}
+  def insert(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
+    task_id = Map.get(attrs, "task_id") || Map.get(attrs, :task_id)
+    project_id = Map.get(attrs, "project_id") || Map.get(attrs, :project_id)
+
+    %StepExecution{user_id: user_id, task_id: task_id, project_id: project_id}
     |> StepExecution.create_changeset(attrs)
     |> Repo.insert()
     |> Broadcaster.broadcast_step_execution(:step_execution_created)

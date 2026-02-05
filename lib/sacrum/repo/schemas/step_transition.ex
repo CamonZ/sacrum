@@ -10,6 +10,7 @@ defmodule Sacrum.Repo.Schemas.StepTransition do
 
     belongs_to :from_step, Sacrum.Repo.Schemas.WorkflowStep
     belongs_to :to_step, Sacrum.Repo.Schemas.WorkflowStep
+    belongs_to :project, Sacrum.Repo.Schemas.Project
     belongs_to :user, Sacrum.Repo.Schemas.User
 
     timestamps(type: :utc_datetime_usec)
@@ -21,6 +22,7 @@ defmodule Sacrum.Repo.Schemas.StepTransition do
     |> validate_required([:from_step_id, :to_step_id])
     |> foreign_key_constraint(:from_step_id)
     |> foreign_key_constraint(:to_step_id)
+    |> foreign_key_constraint(:project_id)
     |> unique_constraint([:from_step_id, :to_step_id],
       message: "transition already exists between these steps"
     )

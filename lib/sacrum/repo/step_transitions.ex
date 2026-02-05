@@ -29,28 +29,27 @@ defmodule Sacrum.Repo.StepTransitions do
   alias Sacrum.Repo.Schemas.WorkflowStep
 
   @doc """
-  Insert a new step transition from attrs map.
-  """
-  def insert(attrs) when is_map(attrs) do
-    with :ok <- validate_same_workflow(attrs) do
-      %StepTransition{}
-      |> StepTransition.create_changeset(attrs)
-      |> Repo.insert()
-    end
-  end
-
-  @doc """
   Insert a new step transition with user_id.
+  Extracts from_step_id, to_step_id, and project_id from attrs.
   """
-  def insert(user_id, attrs) when is_binary(user_id) do
+  def insert(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
+    from_step_id = Map.get(attrs, "from_step_id") || Map.get(attrs, :from_step_id)
+    to_step_id = Map.get(attrs, "to_step_id") || Map.get(attrs, :to_step_id)
+    project_id = Map.get(attrs, "project_id") || Map.get(attrs, :project_id)
+
     with :ok <- validate_same_workflow(attrs) do
-      %StepTransition{user_id: user_id}
+      %StepTransition{
+        user_id: user_id,
+        from_step_id: from_step_id,
+        to_step_id: to_step_id,
+        project_id: project_id
+      }
       |> StepTransition.create_changeset(attrs)
       |> Repo.insert()
     end
   end
 
-  defoverridable insert: 1, insert: 2
+  defoverridable insert: 2
 
   defp validate_same_workflow(attrs) do
     from_id = attrs[:from_step_id] || attrs["from_step_id"]

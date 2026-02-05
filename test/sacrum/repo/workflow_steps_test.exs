@@ -47,7 +47,12 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       workflow = create_workflow()
 
       assert {:ok, %WorkflowStep{}} =
-               WorkflowSteps.insert(workflow.id, workflow.user_id, @valid_attrs)
+               WorkflowSteps.insert(
+                 workflow.id,
+                 workflow.project_id,
+                 workflow.user_id,
+                 @valid_attrs
+               )
     end
 
     test "rejects missing name" do

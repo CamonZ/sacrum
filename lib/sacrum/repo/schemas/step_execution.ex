@@ -21,6 +21,7 @@ defmodule Sacrum.Repo.Schemas.StepExecution do
     field :duration_ms, :integer
 
     belongs_to :workflow, Sacrum.Repo.Schemas.Workflow
+    belongs_to :project, Sacrum.Repo.Schemas.Project
     belongs_to :user, Sacrum.Repo.Schemas.User
 
     timestamps(type: :utc_datetime_usec)
@@ -33,5 +34,6 @@ defmodule Sacrum.Repo.Schemas.StepExecution do
     |> cast(attrs, @create_fields)
     |> validate_required([:task_id, :step_name])
     |> foreign_key_constraint(:workflow_id)
+    |> foreign_key_constraint(:project_id)
   end
 end

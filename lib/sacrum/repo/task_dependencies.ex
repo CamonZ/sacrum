@@ -37,7 +37,12 @@ defmodule Sacrum.Repo.TaskDependencies do
         {:error, :circular_dependency}
 
       true ->
-        %TaskDependency{task_id: task.id, depends_on_id: depends_on.id, user_id: task.user_id}
+        %TaskDependency{
+          task_id: task.id,
+          depends_on_id: depends_on.id,
+          project_id: task.project_id,
+          user_id: task.user_id
+        }
         |> TaskDependency.changeset()
         |> Repo.insert()
     end

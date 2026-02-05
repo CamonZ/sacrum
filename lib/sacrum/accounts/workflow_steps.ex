@@ -17,14 +17,23 @@ defmodule Sacrum.Accounts.WorkflowSteps do
 
   @doc """
   Insert a new workflow step for a user within a workflow.
-  Accepts either (workflow_struct, attrs) or (user_id, workflow_id, attrs).
+  Accepts either (workflow_struct, attrs) or (user_id, attrs).
   """
-  def insert(%{id: workflow_id, user_id: user_id}, attrs) do
-    insert(user_id, workflow_id, attrs)
+  def insert(%{id: workflow_id, project_id: project_id, user_id: user_id}, attrs) do
+    attrs =
+      attrs
+      |> stringify_keys()
+      |> Map.put("workflow_id", workflow_id)
+      |> Map.put("project_id", project_id)
+
+    insert(user_id, attrs)
   end
 
-  def insert(user_id, workflow_id, attrs) when is_binary(user_id) and is_binary(workflow_id) do
-    %WorkflowStep{workflow_id: workflow_id, user_id: user_id}
+  def insert(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
+    workflow_id = Map.get(attrs, "workflow_id") || Map.get(attrs, :workflow_id)
+    project_id = Map.get(attrs, "project_id") || Map.get(attrs, :project_id)
+
+    %WorkflowStep{workflow_id: workflow_id, project_id: project_id, user_id: user_id}
     |> WorkflowStep.create_changeset(attrs)
     |> WorkflowStepsRepo.insert()
     |> Broadcaster.broadcast(:step_created, workflow: :project)
@@ -59,5 +68,9 @@ defmodule Sacrum.Accounts.WorkflowSteps do
   """
   def sync_transitions(%WorkflowStep{} = step, transitions) when is_list(transitions) do
     WorkflowStepsRepo.sync_transitions(step, transitions)
+  end
+
+  defp stringify_keys(map) when is_map(map) do
+    Map.new(map, fn {k, v} -> {to_string(k), v} end)
   end
 end

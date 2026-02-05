@@ -63,6 +63,7 @@ defmodule Sacrum.Repo.Schemas.Task do
 
   def create_changeset(task, attrs) do
     user_id = task.user_id
+    project_id = task.project_id
 
     task
     |> cast(attrs, @create_fields)
@@ -71,6 +72,7 @@ defmodule Sacrum.Repo.Schemas.Task do
       with: fn section, section_attrs ->
         TaskSection.changeset(section, section_attrs)
         |> Ecto.Changeset.put_change(:user_id, user_id)
+        |> Ecto.Changeset.put_change(:project_id, project_id)
       end
     )
     |> maybe_generate_short_id()
@@ -80,6 +82,7 @@ defmodule Sacrum.Repo.Schemas.Task do
 
   def update_changeset(task, attrs) do
     user_id = task.user_id
+    project_id = task.project_id
 
     task
     |> cast(attrs, @update_fields)
@@ -88,6 +91,7 @@ defmodule Sacrum.Repo.Schemas.Task do
       with: fn section, section_attrs ->
         TaskSection.changeset(section, section_attrs)
         |> Ecto.Changeset.put_change(:user_id, user_id)
+        |> Ecto.Changeset.put_change(:project_id, project_id)
       end
     )
   end

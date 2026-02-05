@@ -8,6 +8,7 @@ defmodule Sacrum.Repo.Schemas.TaskDependency do
   schema "task_dependencies" do
     belongs_to :task, Sacrum.Repo.Schemas.Task
     belongs_to :depends_on, Sacrum.Repo.Schemas.Task
+    belongs_to :project, Sacrum.Repo.Schemas.Project
     belongs_to :user, Sacrum.Repo.Schemas.User
 
     timestamps(type: :utc_datetime_usec)
@@ -23,5 +24,6 @@ defmodule Sacrum.Repo.Schemas.TaskDependency do
     )
     |> foreign_key_constraint(:task_id)
     |> foreign_key_constraint(:depends_on_id)
+    |> foreign_key_constraint(:project_id)
   end
 end

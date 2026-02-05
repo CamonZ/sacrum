@@ -11,6 +11,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowTransition do
     belongs_to :from_workflow, Sacrum.Repo.Schemas.Workflow
     belongs_to :to_workflow, Sacrum.Repo.Schemas.Workflow
     belongs_to :target_step, Sacrum.Repo.Schemas.WorkflowStep
+    belongs_to :project, Sacrum.Repo.Schemas.Project
     belongs_to :user, Sacrum.Repo.Schemas.User
 
     timestamps(type: :utc_datetime_usec)
@@ -23,6 +24,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowTransition do
     |> foreign_key_constraint(:from_workflow_id)
     |> foreign_key_constraint(:to_workflow_id)
     |> foreign_key_constraint(:target_step_id)
+    |> foreign_key_constraint(:project_id)
     |> unique_constraint([:from_workflow_id, :to_workflow_id],
       message: "transition already exists between these workflows"
     )

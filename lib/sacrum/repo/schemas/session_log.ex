@@ -9,6 +9,7 @@ defmodule Sacrum.Repo.Schemas.SessionLog do
     field :content, :string
 
     belongs_to :step_execution, Sacrum.Repo.Schemas.StepExecution
+    belongs_to :project, Sacrum.Repo.Schemas.Project
     belongs_to :user, Sacrum.Repo.Schemas.User
 
     timestamps(type: :utc_datetime_usec)
@@ -19,5 +20,6 @@ defmodule Sacrum.Repo.Schemas.SessionLog do
     |> cast(attrs, [:content, :step_execution_id])
     |> validate_required([:content, :step_execution_id])
     |> foreign_key_constraint(:step_execution_id)
+    |> foreign_key_constraint(:project_id)
   end
 end

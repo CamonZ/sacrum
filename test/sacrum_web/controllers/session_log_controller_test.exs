@@ -36,12 +36,14 @@ defmodule SacrumWeb.SessionLogControllerTest do
     test "returns chronological list of session logs", ctx do
       {:ok, _} =
         SessionLogs.insert(ctx.execution.user_id, %{
+          project_id: ctx.project.id,
           step_execution_id: ctx.execution.id,
           content: "Log line 1"
         })
 
       {:ok, _} =
         SessionLogs.insert(ctx.execution.user_id, %{
+          project_id: ctx.project.id,
           step_execution_id: ctx.execution.id,
           content: "Log line 2"
         })

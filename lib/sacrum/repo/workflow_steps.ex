@@ -37,12 +37,13 @@ defmodule Sacrum.Repo.WorkflowSteps do
   @doc """
   Insert a new workflow step. Accepts Workflow struct (with or without user_id).
   """
-  def insert(%Workflow{id: workflow_id, user_id: user_id}, attrs) when is_binary(user_id) do
-    insert(workflow_id, user_id, attrs)
+  def insert(%Workflow{id: workflow_id, project_id: project_id, user_id: user_id}, attrs)
+      when is_binary(user_id) do
+    insert(workflow_id, project_id, user_id, attrs)
   end
 
-  def insert(%Workflow{id: workflow_id}, attrs) do
-    %WorkflowStep{workflow_id: workflow_id}
+  def insert(%Workflow{id: workflow_id, project_id: project_id}, attrs) do
+    %WorkflowStep{workflow_id: workflow_id, project_id: project_id}
     |> WorkflowStep.create_changeset(attrs)
     |> Repo.insert()
     |> Broadcaster.broadcast(:step_created, workflow: :project)
@@ -57,8 +58,17 @@ defmodule Sacrum.Repo.WorkflowSteps do
 
   defoverridable insert: 2
 
-  def insert(workflow_id, user_id, attrs) when is_binary(workflow_id) and is_binary(user_id) do
+  def insert(workflow_id, user_id, attrs)
+      when is_binary(workflow_id) and is_binary(user_id) and is_map(attrs) do
     %WorkflowStep{workflow_id: workflow_id, user_id: user_id}
+    |> WorkflowStep.create_changeset(attrs)
+    |> Repo.insert()
+    |> Broadcaster.broadcast(:step_created, workflow: :project)
+  end
+
+  def insert(workflow_id, project_id, user_id, attrs)
+      when is_binary(workflow_id) and is_binary(project_id) and is_binary(user_id) do
+    %WorkflowStep{workflow_id: workflow_id, project_id: project_id, user_id: user_id}
     |> WorkflowStep.create_changeset(attrs)
     |> Repo.insert()
     |> Broadcaster.broadcast(:step_created, workflow: :project)
@@ -105,11 +115,14 @@ defmodule Sacrum.Repo.WorkflowSteps do
         build_changeset_fn: fn t ->
           to_id = to_step_id(t)
 
-          StepTransition.create_changeset(%StepTransition{user_id: step.user_id}, %{
-            from_step_id: step.id,
-            to_step_id: to_id,
-            label: label_for(t)
-          })
+          StepTransition.create_changeset(
+            %StepTransition{user_id: step.user_id, project_id: step.project_id},
+            %{
+              from_step_id: step.id,
+              to_step_id: to_id,
+              label: label_for(t)
+            }
+          )
         end,
         build_update_changeset_fn: fn _existing, _map ->
           # No-op for step transitions

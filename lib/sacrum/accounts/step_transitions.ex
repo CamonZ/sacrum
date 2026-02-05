@@ -16,9 +16,19 @@ defmodule Sacrum.Accounts.StepTransitions do
 
   @doc """
   Insert a new step transition for a user.
+  Extracts from_step_id, to_step_id, and project_id from attrs.
   """
-  def insert(user_id, attrs) when is_binary(user_id) do
-    %StepTransition{user_id: user_id}
+  def insert(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
+    from_step_id = Map.get(attrs, "from_step_id") || Map.get(attrs, :from_step_id)
+    to_step_id = Map.get(attrs, "to_step_id") || Map.get(attrs, :to_step_id)
+    project_id = Map.get(attrs, "project_id") || Map.get(attrs, :project_id)
+
+    %StepTransition{
+      user_id: user_id,
+      from_step_id: from_step_id,
+      to_step_id: to_step_id,
+      project_id: project_id
+    }
     |> StepTransition.create_changeset(attrs)
     |> StepTransitionsRepo.insert()
     |> Broadcaster.broadcast(:step_transition_created, from_step: [workflow: :project])

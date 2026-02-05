@@ -11,7 +11,8 @@ defmodule SacrumWeb.SectionController do
     user = conn.assigns.current_user
 
     with {:ok, task} <- Tasks.find(user.id, task_id),
-         {:ok, %TaskSection{} = section} <- Sections.insert(task, params) do
+         params = Map.put(params, "project_id", task.project_id),
+         {:ok, %TaskSection{} = section} <- Sections.insert(user.id, params) do
       conn
       |> put_status(:created)
       |> render(:show, section: section)

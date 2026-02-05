@@ -7,8 +7,8 @@ defmodule Sacrum.Accounts.Sections do
 
   alias Sacrum.Repo
   alias Sacrum.Repo.TaskSections
-  alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.Schemas.TaskSection
+  alias Sacrum.Repo.Broadcaster
 
   @doc """
   Get a section by ID, scoped to a user.
@@ -31,9 +31,16 @@ defmodule Sacrum.Accounts.Sections do
 
   @doc """
   Insert a section for a task.
+  Extracts task_id and project_id from attrs.
   """
-  def insert(%Task{id: task_id, user_id: user_id}, attrs) do
-    TaskSections.insert(task_id, user_id, attrs)
+  def insert(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
+    task_id = Map.get(attrs, "task_id") || Map.get(attrs, :task_id)
+    project_id = Map.get(attrs, "project_id") || Map.get(attrs, :project_id)
+
+    %TaskSection{task_id: task_id, project_id: project_id, user_id: user_id}
+    |> TaskSection.changeset(attrs)
+    |> Repo.insert()
+    |> Broadcaster.broadcast_section(:section_created)
   end
 
   @doc """

@@ -23,10 +23,11 @@ defmodule Sacrum.Repo.WorkflowTransitionsTest do
 
   describe "insert/1" do
     test "creates workflow-to-workflow transition" do
-      {_project, w1, w2} = create_workflows()
+      {project, w1, w2} = create_workflows()
 
       assert {:ok, %WorkflowTransition{} = transition} =
                WorkflowTransitions.insert(w1.user_id, %{
+                 project_id: project.id,
                  from_workflow_id: w1.id,
                  to_workflow_id: w2.id,
                  label: "promote"
@@ -38,13 +39,18 @@ defmodule Sacrum.Repo.WorkflowTransitionsTest do
     end
 
     test "rejects duplicate from/to pair" do
-      {_project, w1, w2} = create_workflows()
+      {project, w1, w2} = create_workflows()
 
       {:ok, _} =
-        WorkflowTransitions.insert(w1.user_id, %{from_workflow_id: w1.id, to_workflow_id: w2.id})
+        WorkflowTransitions.insert(w1.user_id, %{
+          project_id: project.id,
+          from_workflow_id: w1.id,
+          to_workflow_id: w2.id
+        })
 
       assert {:error, changeset} =
                WorkflowTransitions.insert(w1.user_id, %{
+                 project_id: project.id,
                  from_workflow_id: w1.id,
                  to_workflow_id: w2.id
                })
@@ -56,10 +62,14 @@ defmodule Sacrum.Repo.WorkflowTransitionsTest do
 
   describe "all/1" do
     test "returns transitions from a workflow" do
-      {_project, w1, w2} = create_workflows()
+      {project, w1, w2} = create_workflows()
 
       {:ok, _} =
-        WorkflowTransitions.insert(w1.user_id, %{from_workflow_id: w1.id, to_workflow_id: w2.id})
+        WorkflowTransitions.insert(w1.user_id, %{
+          project_id: project.id,
+          from_workflow_id: w1.id,
+          to_workflow_id: w2.id
+        })
 
       transitions =
         WorkflowTransitions.all(
@@ -74,10 +84,14 @@ defmodule Sacrum.Repo.WorkflowTransitionsTest do
 
   describe "delete/1" do
     test "removes the transition" do
-      {_project, w1, w2} = create_workflows()
+      {project, w1, w2} = create_workflows()
 
       {:ok, transition} =
-        WorkflowTransitions.insert(w1.user_id, %{from_workflow_id: w1.id, to_workflow_id: w2.id})
+        WorkflowTransitions.insert(w1.user_id, %{
+          project_id: project.id,
+          from_workflow_id: w1.id,
+          to_workflow_id: w2.id
+        })
 
       assert {:ok, _} = WorkflowTransitions.delete(transition)
       assert {:error, :not_found} = WorkflowTransitions.get(transition.id)
@@ -99,10 +113,11 @@ defmodule Sacrum.Repo.WorkflowTransitionsTest do
     end
 
     test "removes transitions not in the incoming list" do
-      {_project, w1, w2} = create_workflows()
+      {project, w1, w2} = create_workflows()
 
       {:ok, _} =
         WorkflowTransitions.insert(w1.user_id, %{
+          project_id: project.id,
           from_workflow_id: w1.id,
           to_workflow_id: w2.id,
           label: "old"
@@ -114,10 +129,11 @@ defmodule Sacrum.Repo.WorkflowTransitionsTest do
     end
 
     test "updates changed transitions" do
-      {_project, w1, w2} = create_workflows()
+      {project, w1, w2} = create_workflows()
 
       {:ok, _} =
         WorkflowTransitions.insert(w1.user_id, %{
+          project_id: project.id,
           from_workflow_id: w1.id,
           to_workflow_id: w2.id,
           label: "old_label"
@@ -145,6 +161,7 @@ defmodule Sacrum.Repo.WorkflowTransitionsTest do
       # Start with transitions to w2 and w3
       {:ok, _} =
         WorkflowTransitions.insert(w1.user_id, %{
+          project_id: project.id,
           from_workflow_id: w1.id,
           to_workflow_id: w2.id,
           label: "a"
@@ -152,6 +169,7 @@ defmodule Sacrum.Repo.WorkflowTransitionsTest do
 
       {:ok, _} =
         WorkflowTransitions.insert(w1.user_id, %{
+          project_id: project.id,
           from_workflow_id: w1.id,
           to_workflow_id: w3.id,
           label: "b"

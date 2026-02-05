@@ -174,6 +174,7 @@ defmodule SacrumWeb.WorkflowControllerTest do
 
       {:ok, _} =
         WorkflowTransitions.insert(wf1.user_id, %{
+          project_id: project.id,
           from_workflow_id: wf1.id,
           to_workflow_id: wf2.id
         })

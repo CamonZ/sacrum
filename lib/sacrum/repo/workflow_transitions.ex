@@ -47,22 +47,23 @@ defmodule Sacrum.Repo.WorkflowTransitions do
   end
 
   @doc """
-  Insert a new workflow transition from attrs map.
-  """
-  def insert(attrs) when is_map(attrs) do
-    %WorkflowTransition{}
-    |> WorkflowTransition.create_changeset(attrs)
-    |> Repo.insert()
-  end
-
-  @doc """
   Insert a new workflow transition with user_id.
+  Extracts from_workflow_id, to_workflow_id, and project_id from attrs.
   """
-  def insert(user_id, attrs) when is_binary(user_id) do
-    %WorkflowTransition{user_id: user_id}
+  def insert(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
+    from_workflow_id = Map.get(attrs, "from_workflow_id") || Map.get(attrs, :from_workflow_id)
+    to_workflow_id = Map.get(attrs, "to_workflow_id") || Map.get(attrs, :to_workflow_id)
+    project_id = Map.get(attrs, "project_id") || Map.get(attrs, :project_id)
+
+    %WorkflowTransition{
+      user_id: user_id,
+      from_workflow_id: from_workflow_id,
+      to_workflow_id: to_workflow_id,
+      project_id: project_id
+    }
     |> WorkflowTransition.create_changeset(attrs)
     |> Repo.insert()
   end
 
-  defoverridable insert: 1, insert: 2
+  defoverridable insert: 2
 end

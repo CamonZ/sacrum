@@ -39,8 +39,10 @@ defmodule SacrumWeb.WorkflowStepController do
   def create(conn, %{"workflow_id" => workflow_id} = params) do
     user = conn.assigns.current_user
 
-    with {:ok, _workflow} <- Workflows.get_by(user.id, conditions: [id: workflow_id]),
-         {:ok, %WorkflowStep{} = step} <- WorkflowSteps.insert(user.id, workflow_id, params) do
+    with {:ok, workflow} <- Workflows.get_by(user.id, conditions: [id: workflow_id]),
+         params = Map.put(params, "project_id", workflow.project_id),
+         {:ok, %WorkflowStep{} = step} <-
+           WorkflowSteps.insert(user.id, params) do
       conn
       |> put_status(:created)
       |> render(:show, step: step)

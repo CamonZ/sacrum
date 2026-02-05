@@ -22,22 +22,17 @@ defmodule Sacrum.Repo.SessionLogs do
   alias Sacrum.Repo.Schemas.SessionLog
 
   @doc """
-  Insert a new session log from attrs map.
-  """
-  def insert(attrs) when is_map(attrs) do
-    %SessionLog{}
-    |> SessionLog.create_changeset(attrs)
-    |> Repo.insert()
-  end
-
-  @doc """
   Insert a new session log with user_id.
+  Extracts step_execution_id and project_id from attrs.
   """
-  def insert(user_id, attrs) when is_binary(user_id) do
-    %SessionLog{user_id: user_id}
+  def insert(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
+    step_execution_id = Map.get(attrs, "step_execution_id") || Map.get(attrs, :step_execution_id)
+    project_id = Map.get(attrs, "project_id") || Map.get(attrs, :project_id)
+
+    %SessionLog{user_id: user_id, step_execution_id: step_execution_id, project_id: project_id}
     |> SessionLog.create_changeset(attrs)
     |> Repo.insert()
   end
 
-  defoverridable insert: 1, insert: 2
+  defoverridable insert: 2
 end

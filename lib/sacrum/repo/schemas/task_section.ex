@@ -15,6 +15,7 @@ defmodule Sacrum.Repo.Schemas.TaskSection do
     field :done_at, :utc_datetime_usec
 
     belongs_to :task, Sacrum.Repo.Schemas.Task
+    belongs_to :project, Sacrum.Repo.Schemas.Project
     belongs_to :user, Sacrum.Repo.Schemas.User
     has_many :code_refs, Sacrum.Repo.Schemas.CodeRef, foreign_key: :section_id
 
@@ -26,5 +27,6 @@ defmodule Sacrum.Repo.Schemas.TaskSection do
     |> cast(attrs, @fields)
     |> validate_required([:section_type, :content])
     |> foreign_key_constraint(:task_id)
+    |> foreign_key_constraint(:project_id)
   end
 end

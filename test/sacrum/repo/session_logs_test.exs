@@ -2,6 +2,8 @@ defmodule Sacrum.Repo.SessionLogsTest do
   use Sacrum.DataCase, async: true
 
   alias Sacrum.Repo.Users
+  alias Sacrum.Repo.Projects
+  alias Sacrum.Repo.Workflows
   alias Sacrum.Repo.SessionLogs
   alias Sacrum.Repo.StepExecutions
   alias Sacrum.Repo.Schemas.SessionLog
@@ -22,14 +24,17 @@ defmodule Sacrum.Repo.SessionLogsTest do
     email = "user#{unique_id}@example.com"
     username = "user#{unique_id}"
     user = create_user_with_email_and_username(email, username)
+    {:ok, project} = Projects.insert(user, %{name: "Test Project #{unique_id}"})
+    {:ok, _workflow} = Workflows.insert(project, %{name: "Default"})
 
     {:ok, execution} =
       StepExecutions.insert(user.id, %{
+        project_id: project.id,
         task_id: Ecto.UUID.generate(),
         step_name: "review"
       })
 
-    execution
+    {execution, project}
   end
 
   defp create_user_with_email_and_username(email, username) do
@@ -39,11 +44,12 @@ defmodule Sacrum.Repo.SessionLogsTest do
 
   describe "insert/1" do
     test "creates session log record" do
-      execution = create_execution()
+      {execution, project} = create_execution()
       user_id = execution.user_id
 
       assert {:ok, %SessionLog{} = log} =
                SessionLogs.insert(user_id, %{
+                 project_id: project.id,
                  step_execution_id: execution.id,
                  content: "Reviewing code changes..."
                })
@@ -53,30 +59,47 @@ defmodule Sacrum.Repo.SessionLogsTest do
     end
 
     test "rejects missing content" do
-      execution = create_execution()
+      {execution, project} = create_execution()
       user_id = execution.user_id
 
       assert {:error, changeset} =
-               SessionLogs.insert(user_id, %{step_execution_id: execution.id})
+               SessionLogs.insert(user_id, %{
+                 project_id: project.id,
+                 step_execution_id: execution.id
+               })
 
       assert %{content: ["can't be blank"]} = errors_on(changeset)
     end
 
     test "rejects missing step_execution_id" do
       user = create_user()
+      {:ok, project} = Projects.insert(user, %{name: "Test Project"})
 
-      assert {:error, changeset} = SessionLogs.insert(user.id, %{content: "Some log"})
+      assert {:error, changeset} =
+               SessionLogs.insert(user.id, %{project_id: project.id, content: "Some log"})
+
       assert %{step_execution_id: ["can't be blank"]} = errors_on(changeset)
     end
   end
 
   describe "all/1" do
     test "returns logs for a given execution" do
-      execution = create_execution()
+      {execution, project} = create_execution()
       user_id = execution.user_id
 
-      {:ok, _} = SessionLogs.insert(user_id, %{step_execution_id: execution.id, content: "Log 1"})
-      {:ok, _} = SessionLogs.insert(user_id, %{step_execution_id: execution.id, content: "Log 2"})
+      {:ok, _} =
+        SessionLogs.insert(user_id, %{
+          project_id: project.id,
+          step_execution_id: execution.id,
+          content: "Log 1"
+        })
+
+      {:ok, _} =
+        SessionLogs.insert(user_id, %{
+          project_id: project.id,
+          step_execution_id: execution.id,
+          content: "Log 2"
+        })
 
       logs =
         SessionLogs.all(
@@ -89,15 +112,23 @@ defmodule Sacrum.Repo.SessionLogsTest do
     end
 
     test "does not return logs from other executions" do
-      execution1 = create_execution()
-      execution2 = create_execution()
+      {execution1, project1} = create_execution()
+      {execution2, project2} = create_execution()
       user_id = execution1.user_id
 
       {:ok, _} =
-        SessionLogs.insert(user_id, %{step_execution_id: execution1.id, content: "Log 1"})
+        SessionLogs.insert(user_id, %{
+          project_id: project1.id,
+          step_execution_id: execution1.id,
+          content: "Log 1"
+        })
 
       {:ok, _} =
-        SessionLogs.insert(user_id, %{step_execution_id: execution2.id, content: "Log 2"})
+        SessionLogs.insert(execution2.user_id, %{
+          project_id: project2.id,
+          step_execution_id: execution2.id,
+          content: "Log 2"
+        })
 
       logs =
         SessionLogs.all(

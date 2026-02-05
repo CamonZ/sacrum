@@ -16,9 +16,13 @@ defmodule Sacrum.Accounts.SessionLogs do
 
   @doc """
   Insert a new session log for a user.
+  Extracts step_execution_id and project_id from attrs.
   """
-  def insert(user_id, attrs) when is_binary(user_id) do
-    %SessionLog{user_id: user_id}
+  def insert(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
+    step_execution_id = Map.get(attrs, "step_execution_id") || Map.get(attrs, :step_execution_id)
+    project_id = Map.get(attrs, "project_id") || Map.get(attrs, :project_id)
+
+    %SessionLog{user_id: user_id, step_execution_id: step_execution_id, project_id: project_id}
     |> SessionLog.create_changeset(attrs)
     |> Repo.insert()
     |> Broadcaster.broadcast_session_log(:session_log_created)

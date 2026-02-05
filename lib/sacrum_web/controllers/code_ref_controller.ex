@@ -18,7 +18,9 @@ defmodule SacrumWeb.CodeRefController do
     user = conn.assigns.current_user
 
     with {:ok, task} <- Tasks.get_by(user.id, conditions: [id: task_id]),
-         {:ok, %CodeRef{} = ref} <- CodeRefs.insert_for_task(user.id, task.id, params) do
+         params = Map.put(params, "project_id", task.project_id),
+         {:ok, %CodeRef{} = ref} <-
+           CodeRefs.insert_for_task(user.id, params) do
       conn
       |> put_status(:created)
       |> render(:show, code_ref: ref)

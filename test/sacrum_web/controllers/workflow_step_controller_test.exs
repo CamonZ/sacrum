@@ -132,17 +132,29 @@ defmodule SacrumWeb.WorkflowStepControllerTest do
       assert to_ids == Enum.sort([step2.id, step3.id])
     end
 
-    test "syncs transitions removes absent ones", %{conn: conn, workflow: workflow} do
+    test "syncs transitions removes absent ones", %{
+      conn: conn,
+      workflow: workflow,
+      project: project
+    } do
       {:ok, step1} = WorkflowSteps.insert(workflow, %{name: "Backlog", step_order: 1})
       {:ok, step2} = WorkflowSteps.insert(workflow, %{name: "In Progress", step_order: 2})
       {:ok, step3} = WorkflowSteps.insert(workflow, %{name: "Done", step_order: 3})
 
       # Create initial transitions
       {:ok, _} =
-        StepTransitions.insert(step1.user_id, %{from_step_id: step1.id, to_step_id: step2.id})
+        StepTransitions.insert(step1.user_id, %{
+          project_id: project.id,
+          from_step_id: step1.id,
+          to_step_id: step2.id
+        })
 
       {:ok, _} =
-        StepTransitions.insert(step1.user_id, %{from_step_id: step1.id, to_step_id: step3.id})
+        StepTransitions.insert(step1.user_id, %{
+          project_id: project.id,
+          from_step_id: step1.id,
+          to_step_id: step3.id
+        })
 
       # Sync to only step3
       conn =
@@ -160,12 +172,20 @@ defmodule SacrumWeb.WorkflowStepControllerTest do
       assert hd(transitions)["to_step_id"] == step3.id
     end
 
-    test "empty transitions array removes all transitions", %{conn: conn, workflow: workflow} do
+    test "empty transitions array removes all transitions", %{
+      conn: conn,
+      workflow: workflow,
+      project: project
+    } do
       {:ok, step1} = WorkflowSteps.insert(workflow, %{name: "Backlog", step_order: 1})
       {:ok, step2} = WorkflowSteps.insert(workflow, %{name: "In Progress", step_order: 2})
 
       {:ok, _} =
-        StepTransitions.insert(step1.user_id, %{from_step_id: step1.id, to_step_id: step2.id})
+        StepTransitions.insert(step1.user_id, %{
+          project_id: project.id,
+          from_step_id: step1.id,
+          to_step_id: step2.id
+        })
 
       conn =
         patch(conn, ~p"/api/workflow-steps/#{step1.id}", %{
@@ -251,12 +271,17 @@ defmodule SacrumWeb.WorkflowStepControllerTest do
   describe "GET /api/workflow-steps/:id" do
     setup :setup_authenticated
 
-    test "includes transitions in show response", %{conn: conn, workflow: workflow} do
+    test "includes transitions in show response", %{
+      conn: conn,
+      workflow: workflow,
+      project: project
+    } do
       {:ok, step1} = WorkflowSteps.insert(workflow, %{name: "Backlog", step_order: 1})
       {:ok, step2} = WorkflowSteps.insert(workflow, %{name: "In Progress", step_order: 2})
 
       {:ok, _} =
         StepTransitions.insert(step1.user_id, %{
+          project_id: project.id,
           from_step_id: step1.id,
           to_step_id: step2.id,
           label: "start"

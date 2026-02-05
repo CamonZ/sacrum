@@ -16,8 +16,11 @@ defmodule Sacrum.Accounts.CodeRefs do
   @doc """
   Insert a code ref for a task.
   """
-  def insert_for_task(user_id, task_id, attrs) when is_binary(user_id) and is_binary(task_id) do
-    %CodeRef{task_id: task_id, user_id: user_id}
+  def insert_for_task(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
+    task_id = Map.get(attrs, "task_id") || Map.get(attrs, :task_id)
+    project_id = Map.get(attrs, "project_id") || Map.get(attrs, :project_id)
+
+    %CodeRef{task_id: task_id, project_id: project_id, user_id: user_id}
     |> CodeRef.changeset(attrs)
     |> CodeRefsRepo.insert()
   end
@@ -25,9 +28,11 @@ defmodule Sacrum.Accounts.CodeRefs do
   @doc """
   Insert a code ref for a task section.
   """
-  def insert_for_section(user_id, section_id, attrs)
-      when is_binary(user_id) and is_binary(section_id) do
-    %CodeRef{section_id: section_id, user_id: user_id}
+  def insert_for_section(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
+    section_id = Map.get(attrs, "section_id") || Map.get(attrs, :section_id)
+    project_id = Map.get(attrs, "project_id") || Map.get(attrs, :project_id)
+
+    %CodeRef{section_id: section_id, project_id: project_id, user_id: user_id}
     |> CodeRef.changeset(attrs)
     |> CodeRefsRepo.insert()
   end

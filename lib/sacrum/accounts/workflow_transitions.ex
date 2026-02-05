@@ -16,9 +16,19 @@ defmodule Sacrum.Accounts.WorkflowTransitions do
 
   @doc """
   Insert a new workflow transition for a user.
+  Extracts from_workflow_id, to_workflow_id, and project_id from attrs.
   """
-  def insert(user_id, attrs) when is_binary(user_id) do
-    %WorkflowTransition{user_id: user_id}
+  def insert(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
+    from_workflow_id = Map.get(attrs, "from_workflow_id") || Map.get(attrs, :from_workflow_id)
+    to_workflow_id = Map.get(attrs, "to_workflow_id") || Map.get(attrs, :to_workflow_id)
+    project_id = Map.get(attrs, "project_id") || Map.get(attrs, :project_id)
+
+    %WorkflowTransition{
+      user_id: user_id,
+      from_workflow_id: from_workflow_id,
+      to_workflow_id: to_workflow_id,
+      project_id: project_id
+    }
     |> WorkflowTransition.create_changeset(attrs)
     |> Repo.insert()
   end

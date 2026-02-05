@@ -25,10 +25,11 @@ defmodule Sacrum.Repo.StepTransitionsTest do
 
   describe "insert/1" do
     test "creates transition between two steps in same workflow" do
-      {_project, _workflow, step1, step2} = create_steps()
+      {project, _workflow, step1, step2} = create_steps()
 
       assert {:ok, %StepTransition{} = transition} =
                StepTransitions.insert(step1.user_id, %{
+                 project_id: project.id,
                  from_step_id: step1.id,
                  to_step_id: step2.id,
                  label: "submit"
@@ -49,19 +50,25 @@ defmodule Sacrum.Repo.StepTransitionsTest do
 
       assert {:error, :different_workflows} =
                StepTransitions.insert(step1.user_id, %{
+                 project_id: project.id,
                  from_step_id: step1.id,
                  to_step_id: step2.id
                })
     end
 
     test "rejects duplicate from_step/to_step pair" do
-      {_project, _workflow, step1, step2} = create_steps()
+      {project, _workflow, step1, step2} = create_steps()
 
       {:ok, _} =
-        StepTransitions.insert(step1.user_id, %{from_step_id: step1.id, to_step_id: step2.id})
+        StepTransitions.insert(step1.user_id, %{
+          project_id: project.id,
+          from_step_id: step1.id,
+          to_step_id: step2.id
+        })
 
       assert {:error, changeset} =
                StepTransitions.insert(step1.user_id, %{
+                 project_id: project.id,
                  from_step_id: step1.id,
                  to_step_id: step2.id
                })
@@ -73,10 +80,14 @@ defmodule Sacrum.Repo.StepTransitionsTest do
 
   describe "all/1" do
     test "returns transitions from a step" do
-      {_project, _workflow, step1, step2} = create_steps()
+      {project, _workflow, step1, step2} = create_steps()
 
       {:ok, _} =
-        StepTransitions.insert(step1.user_id, %{from_step_id: step1.id, to_step_id: step2.id})
+        StepTransitions.insert(step1.user_id, %{
+          project_id: project.id,
+          from_step_id: step1.id,
+          to_step_id: step2.id
+        })
 
       transitions =
         StepTransitions.all(
@@ -91,10 +102,14 @@ defmodule Sacrum.Repo.StepTransitionsTest do
 
   describe "delete/1" do
     test "removes the transition" do
-      {_project, _workflow, step1, step2} = create_steps()
+      {project, _workflow, step1, step2} = create_steps()
 
       {:ok, transition} =
-        StepTransitions.insert(step1.user_id, %{from_step_id: step1.id, to_step_id: step2.id})
+        StepTransitions.insert(step1.user_id, %{
+          project_id: project.id,
+          from_step_id: step1.id,
+          to_step_id: step2.id
+        })
 
       assert {:ok, _} = StepTransitions.delete(transition)
       assert {:error, :not_found} = StepTransitions.get(transition.id)
