@@ -271,7 +271,14 @@ defmodule Sacrum.Repo.Tasks do
 
   defp maybe_update_dependencies(_task, _attrs), do: :ok
 
-  def delete(%Task{} = task) do
+  def delete(%Task{} = task, opts \\ []) do
+    cascade = Keyword.get(opts, :cascade, true)
+
+    unless cascade do
+      from(t in Task, where: t.parent_id == ^task.id)
+      |> Repo.update_all(set: [parent_id: nil])
+    end
+
     case Repo.delete(task) do
       {:ok, deleted_task} ->
         Broadcaster.broadcast_event(deleted_task, :task_deleted, :project)

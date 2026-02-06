@@ -43,6 +43,7 @@ defmodule Sacrum.Repo.Schemas.Task do
 
     has_many :sections, Sacrum.Repo.Schemas.TaskSection, on_replace: :delete
     has_many :code_refs, Sacrum.Repo.Schemas.CodeRef
+    has_many :step_executions, Sacrum.Repo.Schemas.StepExecution
 
     # Dependencies (blockers — tasks this task depends on)
     has_many :task_dependencies, TaskDependency, foreign_key: :task_id

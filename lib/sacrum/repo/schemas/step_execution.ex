@@ -6,7 +6,6 @@ defmodule Sacrum.Repo.Schemas.StepExecution do
   @foreign_key_type :binary_id
 
   schema "step_executions" do
-    field :task_id, :binary_id
     field :step_name, :string
     field :status, :string
     field :context, :map, default: %{}
@@ -20,9 +19,12 @@ defmodule Sacrum.Repo.Schemas.StepExecution do
     field :cost, :decimal
     field :duration_ms, :integer
 
+    belongs_to :task, Sacrum.Repo.Schemas.Task
     belongs_to :workflow, Sacrum.Repo.Schemas.Workflow
     belongs_to :project, Sacrum.Repo.Schemas.Project
     belongs_to :user, Sacrum.Repo.Schemas.User
+
+    has_many :session_logs, Sacrum.Repo.Schemas.SessionLog
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -34,6 +36,7 @@ defmodule Sacrum.Repo.Schemas.StepExecution do
     execution
     |> cast(attrs, @create_fields)
     |> validate_required([:task_id, :step_name])
+    |> foreign_key_constraint(:task_id)
     |> foreign_key_constraint(:workflow_id)
     |> foreign_key_constraint(:project_id)
   end
@@ -42,6 +45,7 @@ defmodule Sacrum.Repo.Schemas.StepExecution do
     execution
     |> cast(attrs, @update_fields)
     |> validate_required([:step_name])
+    |> foreign_key_constraint(:task_id)
     |> foreign_key_constraint(:workflow_id)
     |> foreign_key_constraint(:project_id)
   end

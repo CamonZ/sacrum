@@ -106,43 +106,41 @@ defmodule Sacrum.Repo.TaskDependencies do
   end
 
   @doc """
-  Finds the shortest dependency path between two tasks using BFS.
+  Finds the shortest dependency path between two tasks using a recursive CTE.
   Returns {:ok, [task_ids]} or {:ok, []} if no path exists.
   """
+  def find_path(%Task{id: id}, %Task{id: id}), do: {:ok, [id]}
+
   def find_path(%Task{id: from_id}, %Task{id: to_id}) do
-    bfs_path(from_id, to_id)
-  end
+    {:ok, from_bin} = Ecto.UUID.dump(from_id)
+    {:ok, to_bin} = Ecto.UUID.dump(to_id)
 
-  defp bfs_path(from_id, to_id) do
-    queue = :queue.in({from_id, [from_id]}, :queue.new())
-    visited = MapSet.new([from_id])
-    do_bfs(queue, visited, to_id)
-  end
+    sql = """
+    WITH RECURSIVE path_search AS (
+      SELECT depends_on_id AS current_id,
+             ARRAY[$1::uuid, depends_on_id] AS path,
+             1 AS depth
+      FROM task_dependencies
+      WHERE task_id = $1::uuid
 
-  defp do_bfs(queue, visited, target) do
-    case :queue.out(queue) do
-      {:empty, _} ->
-        {:ok, []}
+      UNION ALL
 
-      {{:value, {current, path}}, rest_queue} ->
-        if current == target do
-          {:ok, path}
-        else
-          neighbor_ids =
-            from(d in TaskDependency, where: d.task_id == ^current, select: d.depends_on_id)
-            |> Repo.all()
+      SELECT d.depends_on_id,
+             ps.path || d.depends_on_id,
+             ps.depth + 1
+      FROM task_dependencies d
+      JOIN path_search ps ON d.task_id = ps.current_id
+      WHERE NOT (d.depends_on_id = ANY(ps.path))
+    )
+    SELECT path FROM path_search
+    WHERE current_id = $2::uuid
+    ORDER BY depth
+    LIMIT 1
+    """
 
-          {new_queue, new_visited} =
-            Enum.reduce(neighbor_ids, {rest_queue, visited}, fn nid, {q, v} ->
-              if MapSet.member?(v, nid) do
-                {q, v}
-              else
-                {:queue.in({nid, path ++ [nid]}, q), MapSet.put(v, nid)}
-              end
-            end)
-
-          do_bfs(new_queue, new_visited, target)
-        end
+    case Ecto.Adapters.SQL.query(Repo, sql, [from_bin, to_bin]) do
+      {:ok, %{rows: [[path]]}} -> {:ok, Enum.map(path, &Ecto.UUID.cast!/1)}
+      {:ok, %{rows: []}} -> {:ok, []}
     end
   end
 

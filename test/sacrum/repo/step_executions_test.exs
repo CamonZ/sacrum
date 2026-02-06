@@ -1,11 +1,12 @@
 defmodule Sacrum.Repo.StepExecutionsTest do
-  use Sacrum.DataCase, async: true
+  use Sacrum.DataCase, async: false
 
   alias Sacrum.Repo.StepExecutions
   alias Sacrum.Repo.Workflows
   alias Sacrum.Repo.Projects
   alias Sacrum.Repo.Users
   alias Sacrum.Repo.Schemas.StepExecution
+  alias Sacrum.Repo.Tasks
 
   @valid_user_attrs %{
     email: "test@example.com",
@@ -17,18 +18,23 @@ defmodule Sacrum.Repo.StepExecutionsTest do
     {:ok, user} = Users.insert(@valid_user_attrs)
     {:ok, project} = Projects.insert(user, %{name: "My Project"})
     {:ok, workflow} = Workflows.insert(project, %{name: "Default"})
-    workflow
+    {workflow, project, user}
+  end
+
+  defp create_task(project, user_id) do
+    {:ok, task} = Tasks.insert(project.id, user_id, %{title: "Test Task"})
+    task
   end
 
   describe "insert/1" do
     test "creates step execution record" do
-      workflow = create_workflow()
-      task_id = Ecto.UUID.generate()
+      {workflow, project, user} = create_workflow()
+      task = create_task(project, user.id)
 
       assert {:ok, %StepExecution{} = execution} =
                StepExecutions.insert(workflow.user_id, %{
-                 project_id: workflow.project_id,
-                 task_id: task_id,
+                 project_id: project.id,
+                 task_id: task.id,
                  workflow_id: workflow.id,
                  step_name: "review",
                  status: "completed",
@@ -37,18 +43,18 @@ defmodule Sacrum.Repo.StepExecutionsTest do
                  output_tokens: 50
                })
 
-      assert execution.task_id == task_id
+      assert execution.task_id == task.id
       assert execution.step_name == "review"
       assert execution.status == "completed"
       assert execution.model == "claude-3"
     end
 
     test "rejects missing task_id" do
-      workflow = create_workflow()
+      {workflow, project, _user} = create_workflow()
 
       assert {:error, changeset} =
                StepExecutions.insert(workflow.user_id, %{
-                 project_id: workflow.project_id,
+                 project_id: project.id,
                  step_name: "review"
                })
 
@@ -56,12 +62,13 @@ defmodule Sacrum.Repo.StepExecutionsTest do
     end
 
     test "rejects missing step_name" do
-      workflow = create_workflow()
+      {workflow, project, user} = create_workflow()
+      task = create_task(project, user.id)
 
       assert {:error, changeset} =
                StepExecutions.insert(workflow.user_id, %{
-                 project_id: workflow.project_id,
-                 task_id: Ecto.UUID.generate()
+                 project_id: project.id,
+                 task_id: task.id
                })
 
       assert %{step_name: ["can't be blank"]} = errors_on(changeset)
@@ -70,51 +77,51 @@ defmodule Sacrum.Repo.StepExecutionsTest do
 
   describe "all/1" do
     test "returns executions ordered by inserted_at" do
-      workflow = create_workflow()
-      task_id = Ecto.UUID.generate()
+      {workflow, project, user} = create_workflow()
+      task = create_task(project, user.id)
 
       {:ok, _e1} =
         StepExecutions.insert(workflow.user_id, %{
-          project_id: workflow.project_id,
-          task_id: task_id,
+          project_id: project.id,
+          task_id: task.id,
           step_name: "draft"
         })
 
       {:ok, _e2} =
         StepExecutions.insert(workflow.user_id, %{
-          project_id: workflow.project_id,
-          task_id: task_id,
+          project_id: project.id,
+          task_id: task.id,
           step_name: "review"
         })
 
       executions =
-        StepExecutions.all(conditions: [task_id: task_id], order_by: [asc: :inserted_at])
+        StepExecutions.all(conditions: [task_id: task.id], order_by: [asc: :inserted_at])
 
       assert length(executions) == 2
       assert Enum.map(executions, & &1.step_name) == ["draft", "review"]
     end
 
     test "does not return executions for other tasks" do
-      workflow = create_workflow()
-      task_id = Ecto.UUID.generate()
-      other_task_id = Ecto.UUID.generate()
+      {workflow, project, user} = create_workflow()
+      task1 = create_task(project, user.id)
+      task2 = create_task(project, user.id)
 
       {:ok, _} =
         StepExecutions.insert(workflow.user_id, %{
-          project_id: workflow.project_id,
-          task_id: task_id,
+          project_id: project.id,
+          task_id: task1.id,
           step_name: "draft"
         })
 
       {:ok, _} =
         StepExecutions.insert(workflow.user_id, %{
-          project_id: workflow.project_id,
-          task_id: other_task_id,
+          project_id: project.id,
+          task_id: task2.id,
           step_name: "review"
         })
 
       executions =
-        StepExecutions.all(conditions: [task_id: task_id], order_by: [asc: :inserted_at])
+        StepExecutions.all(conditions: [task_id: task1.id], order_by: [asc: :inserted_at])
 
       assert length(executions) == 1
     end
@@ -122,13 +129,13 @@ defmodule Sacrum.Repo.StepExecutionsTest do
 
   describe "update_changeset/2" do
     test "casts update fields and validates required step_name" do
-      workflow = create_workflow()
-      task_id = Ecto.UUID.generate()
+      {workflow, project, user} = create_workflow()
+      task = create_task(project, user.id)
 
       {:ok, execution} =
         StepExecutions.insert(workflow.user_id, %{
-          project_id: workflow.project_id,
-          task_id: task_id,
+          project_id: project.id,
+          task_id: task.id,
           workflow_id: workflow.id,
           step_name: "draft",
           status: "in_progress"
@@ -150,13 +157,13 @@ defmodule Sacrum.Repo.StepExecutionsTest do
     end
 
     test "ignores task_id in update changeset" do
-      workflow = create_workflow()
-      task_id = Ecto.UUID.generate()
+      {workflow, project, user} = create_workflow()
+      task = create_task(project, user.id)
 
       {:ok, execution} =
         StepExecutions.insert(workflow.user_id, %{
-          project_id: workflow.project_id,
-          task_id: task_id,
+          project_id: project.id,
+          task_id: task.id,
           step_name: "draft"
         })
 
@@ -168,13 +175,13 @@ defmodule Sacrum.Repo.StepExecutionsTest do
     end
 
     test "rejects nil step_name" do
-      workflow = create_workflow()
-      task_id = Ecto.UUID.generate()
+      {workflow, project, user} = create_workflow()
+      task = create_task(project, user.id)
 
       {:ok, execution} =
         StepExecutions.insert(workflow.user_id, %{
-          project_id: workflow.project_id,
-          task_id: task_id,
+          project_id: project.id,
+          task_id: task.id,
           step_name: "draft"
         })
 

@@ -1,6 +1,11 @@
 defmodule SacrumWeb.Endpoint do
   use Phoenix.Endpoint, otp_app: :sacrum
 
+  @doc """
+  Callback invoked to get the node name for Absinthe subscriptions.
+  """
+  def node_name, do: node()
+
   # The session will be stored in the cookie and signed,
   # this means its contents can be read but not tampered with.
   # Set :encryption_salt if you would also like to encrypt it.
@@ -17,6 +22,10 @@ defmodule SacrumWeb.Endpoint do
 
   socket "/socket", SacrumWeb.UserSocket,
     websocket: true,
+    longpoll: false
+
+  socket "/graphql-ws", Absinthe.Phoenix.Socket,
+    websocket: [connect_info: [:peer_data]],
     longpoll: false
 
   # Serve at "/" the static files from "priv/static" directory.

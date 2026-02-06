@@ -19,10 +19,32 @@ defmodule SacrumWeb.Router do
     plug SacrumWeb.Plugs.ApiAuthPlug
   end
 
+  pipeline :graphql do
+    plug :accepts, ["json"]
+    plug SacrumWeb.Plugs.ApiAuthPlug
+    plug SacrumWeb.Graphql.ContextPlug
+  end
+
   scope "/", SacrumWeb do
     pipe_through :browser
 
     get "/", PageController, :home
+  end
+
+  scope "/graphql" do
+    pipe_through :graphql
+
+    forward "/", Absinthe.Plug,
+      schema: SacrumWeb.Graphql.Schema
+  end
+
+  if Mix.env() == :dev do
+    scope "/graphiql" do
+      pipe_through :api
+      forward "/", Absinthe.Plug.GraphiQL,
+        schema: SacrumWeb.Graphql.Schema,
+        interface: :playground
+    end
   end
 
   scope "/api", SacrumWeb do

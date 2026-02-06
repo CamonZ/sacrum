@@ -1,11 +1,12 @@
 defmodule Sacrum.Repo.SessionLogsTest do
-  use Sacrum.DataCase, async: true
+  use Sacrum.DataCase, async: false
 
   alias Sacrum.Repo.Users
   alias Sacrum.Repo.Projects
   alias Sacrum.Repo.Workflows
   alias Sacrum.Repo.SessionLogs
   alias Sacrum.Repo.StepExecutions
+  alias Sacrum.Repo.Tasks
   alias Sacrum.Repo.Schemas.SessionLog
 
   @valid_user_attrs %{
@@ -26,11 +27,12 @@ defmodule Sacrum.Repo.SessionLogsTest do
     user = create_user_with_email_and_username(email, username)
     {:ok, project} = Projects.insert(user, %{name: "Test Project #{unique_id}"})
     {:ok, _workflow} = Workflows.insert(project, %{name: "Default"})
+    {:ok, task} = Tasks.insert(project.id, user.id, %{title: "Test Task"})
 
     {:ok, execution} =
       StepExecutions.insert(user.id, %{
         project_id: project.id,
-        task_id: Ecto.UUID.generate(),
+        task_id: task.id,
         step_name: "review"
       })
 

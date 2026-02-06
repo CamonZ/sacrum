@@ -89,8 +89,8 @@ defmodule Sacrum.Accounts.Tasks do
   @doc """
   Delete a task.
   """
-  def delete(%Task{} = task) do
-    case TasksRepo.delete(task) do
+  def delete(%Task{} = task, opts \\ []) do
+    case TasksRepo.delete(task, opts) do
       {:ok, deleted_task} ->
         Broadcaster.broadcast_event(deleted_task, :task_deleted, :project)
         {:ok, deleted_task}

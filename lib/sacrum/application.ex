@@ -12,10 +12,10 @@ defmodule Sacrum.Application do
       Sacrum.Repo,
       {DNSCluster, query: Application.get_env(:sacrum, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Sacrum.PubSub},
-      # Start a worker by calling: Sacrum.Worker.start_link(arg)
-      # {Sacrum.Worker, arg},
-      # Start to serve requests, typically the last entry
-      SacrumWeb.Endpoint
+      # Start to serve requests before Absinthe.Subscription
+      SacrumWeb.Endpoint,
+      # Absinthe subscriptions (must come after Endpoint)
+      {Absinthe.Subscription, SacrumWeb.Endpoint}
     ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html
