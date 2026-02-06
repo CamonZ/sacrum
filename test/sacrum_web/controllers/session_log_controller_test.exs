@@ -62,6 +62,39 @@ defmodule SacrumWeb.SessionLogControllerTest do
     end
   end
 
+  describe "POST /api/executions/:execution_id/logs" do
+    setup [:setup_authenticated, :setup_with_execution]
+
+    test "creates a new session log with valid params", ctx do
+      params = %{
+        "content" => "New log entry"
+      }
+
+      conn = post(ctx.conn, ~p"/api/executions/#{ctx.execution.id}/logs", params)
+
+      assert %{"data" => log} = json_response(conn, 201)
+      assert log["content"] == "New log entry"
+      assert log["step_execution_id"] == ctx.execution.id
+    end
+
+    test "returns 422 when missing content", ctx do
+      params = %{}
+
+      conn = post(ctx.conn, ~p"/api/executions/#{ctx.execution.id}/logs", params)
+
+      assert json_response(conn, 422)
+    end
+
+    test "returns 401 without auth token", %{execution: execution} do
+      conn = build_conn()
+      params = %{"content" => "Test log"}
+
+      conn = post(conn, ~p"/api/executions/#{execution.id}/logs", params)
+
+      assert json_response(conn, 401)
+    end
+  end
+
   describe "authentication" do
     test "returns 401 without auth token", %{conn: conn} do
       execution_id = Ecto.UUID.generate()

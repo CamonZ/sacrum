@@ -28,11 +28,20 @@ defmodule Sacrum.Repo.Schemas.StepExecution do
   end
 
   @create_fields ~w(task_id step_name status context prompt output transition_result model model_provider input_tokens output_tokens cost duration_ms workflow_id)a
+  @update_fields ~w(step_name status context prompt output transition_result model model_provider input_tokens output_tokens cost duration_ms)a
 
   def create_changeset(execution, attrs) do
     execution
     |> cast(attrs, @create_fields)
     |> validate_required([:task_id, :step_name])
+    |> foreign_key_constraint(:workflow_id)
+    |> foreign_key_constraint(:project_id)
+  end
+
+  def update_changeset(execution, attrs) do
+    execution
+    |> cast(attrs, @update_fields)
+    |> validate_required([:step_name])
     |> foreign_key_constraint(:workflow_id)
     |> foreign_key_constraint(:project_id)
   end

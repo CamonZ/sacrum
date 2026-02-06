@@ -119,4 +119,69 @@ defmodule Sacrum.Repo.StepExecutionsTest do
       assert length(executions) == 1
     end
   end
+
+  describe "update_changeset/2" do
+    test "casts update fields and validates required step_name" do
+      workflow = create_workflow()
+      task_id = Ecto.UUID.generate()
+
+      {:ok, execution} =
+        StepExecutions.insert(workflow.user_id, %{
+          project_id: workflow.project_id,
+          task_id: task_id,
+          workflow_id: workflow.id,
+          step_name: "draft",
+          status: "in_progress"
+        })
+
+      changeset =
+        StepExecution.update_changeset(execution, %{
+          status: "completed",
+          output: "Result text",
+          output_tokens: 75,
+          duration_ms: 1200
+        })
+
+      assert changeset.valid?
+      assert Ecto.Changeset.get_change(changeset, :status) == "completed"
+      assert Ecto.Changeset.get_change(changeset, :output) == "Result text"
+      assert Ecto.Changeset.get_change(changeset, :output_tokens) == 75
+      assert Ecto.Changeset.get_change(changeset, :duration_ms) == 1200
+    end
+
+    test "ignores task_id in update changeset" do
+      workflow = create_workflow()
+      task_id = Ecto.UUID.generate()
+
+      {:ok, execution} =
+        StepExecutions.insert(workflow.user_id, %{
+          project_id: workflow.project_id,
+          task_id: task_id,
+          step_name: "draft"
+        })
+
+      changeset =
+        StepExecution.update_changeset(execution, %{task_id: Ecto.UUID.generate()})
+
+      assert changeset.valid?
+      refute Ecto.Changeset.get_change(changeset, :task_id)
+    end
+
+    test "rejects nil step_name" do
+      workflow = create_workflow()
+      task_id = Ecto.UUID.generate()
+
+      {:ok, execution} =
+        StepExecutions.insert(workflow.user_id, %{
+          project_id: workflow.project_id,
+          task_id: task_id,
+          step_name: "draft"
+        })
+
+      changeset = StepExecution.update_changeset(execution, %{step_name: nil})
+
+      refute changeset.valid?
+      assert %{step_name: ["can't be blank"]} = errors_on(changeset)
+    end
+  end
 end

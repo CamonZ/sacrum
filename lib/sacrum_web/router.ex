@@ -55,11 +55,11 @@ defmodule SacrumWeb.Router do
       delete "/assign-workflow", TaskWorkflowController, :unassign
       post "/move-to", TaskWorkflowController, :move_to
 
-      resources "/executions", StepExecutionController, only: [:index]
+      resources "/executions", StepExecutionController, only: [:index, :create]
     end
 
-    resources "/executions", StepExecutionController, only: [:show] do
-      resources "/logs", SessionLogController, only: [:index]
+    resources "/executions", StepExecutionController, only: [:show, :update] do
+      resources "/logs", SessionLogController, only: [:index, :create]
     end
   end
 

@@ -66,6 +66,89 @@ defmodule SacrumWeb.StepExecutionControllerTest do
     end
   end
 
+  describe "POST /api/tasks/:task_id/executions" do
+    setup [:setup_authenticated, :setup_with_execution]
+
+    test "creates a new step execution with valid params", ctx do
+      params = %{
+        "step_name" => "process",
+        "status" => "running",
+        "prompt" => "Test prompt",
+        "output" => "Test output"
+      }
+
+      conn = post(ctx.conn, ~p"/api/tasks/#{ctx.task.id}/executions", params)
+
+      assert %{"data" => execution} = json_response(conn, 201)
+      assert execution["step_name"] == "process"
+      assert execution["status"] == "running"
+      assert execution["prompt"] == "Test prompt"
+      assert execution["output"] == "Test output"
+      assert execution["task_id"] == ctx.task.id
+    end
+
+    test "returns 422 when missing required fields", ctx do
+      params = %{
+        "status" => "running"
+      }
+
+      conn = post(ctx.conn, ~p"/api/tasks/#{ctx.task.id}/executions", params)
+
+      assert json_response(conn, 422)
+    end
+
+    test "returns 401 without auth token", %{task: task} do
+      conn = build_conn()
+      params = %{"step_name" => "test", "status" => "running"}
+
+      conn = post(conn, ~p"/api/tasks/#{task.id}/executions", params)
+
+      assert json_response(conn, 401)
+    end
+  end
+
+  describe "PATCH /api/executions/:id" do
+    setup [:setup_authenticated, :setup_with_execution]
+
+    test "updates an existing step execution", ctx do
+      # Get the execution created during workflow assignment
+      conn = get(ctx.conn, ~p"/api/tasks/#{ctx.task.id}/executions")
+
+      %{"data" => [execution | _]} = json_response(conn, 200)
+
+      params = %{
+        "status" => "completed",
+        "output" => "Updated output",
+        "output_tokens" => 100
+      }
+
+      conn = patch(ctx.conn, ~p"/api/executions/#{execution["id"]}", params)
+
+      assert %{"data" => updated} = json_response(conn, 200)
+      assert updated["status"] == "completed"
+      assert updated["output"] == "Updated output"
+      assert updated["output_tokens"] == 100
+    end
+
+    test "returns 404 for nonexistent execution", ctx do
+      params = %{"status" => "completed"}
+
+      conn = patch(ctx.conn, ~p"/api/executions/#{Ecto.UUID.generate()}", params)
+
+      assert json_response(conn, 404)
+    end
+
+    test "returns 401 without auth token" do
+      execution_id = Ecto.UUID.generate()
+      params = %{"status" => "completed"}
+
+      conn = build_conn()
+      conn = patch(conn, ~p"/api/executions/#{execution_id}", params)
+
+      assert json_response(conn, 401)
+    end
+  end
+
   describe "authentication" do
     test "returns 401 without auth token", %{conn: conn} do
       task_id = Ecto.UUID.generate()

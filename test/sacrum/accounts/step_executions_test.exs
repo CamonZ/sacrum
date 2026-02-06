@@ -119,4 +119,75 @@ defmodule Sacrum.Accounts.StepExecutionsTest do
       assert hd(executions).user_id == user1.id
     end
   end
+
+  describe "update/2" do
+    test "updates step execution fields" do
+      user = create_user()
+      {project, task, workflow} = create_task_with_workflow(user)
+
+      {:ok, execution} =
+        StepExecutions.insert(user.id, %{
+          "task_id" => task.id,
+          "project_id" => project.id,
+          "workflow_id" => workflow.id,
+          "step_name" => "draft",
+          "status" => "in_progress"
+        })
+
+      assert {:ok, %StepExecution{} = updated} =
+               StepExecutions.update(execution, %{
+                 "status" => "completed",
+                 "output" => "Done",
+                 "output_tokens" => 42
+               })
+
+      assert updated.id == execution.id
+      assert updated.status == "completed"
+      assert updated.output == "Done"
+      assert updated.output_tokens == 42
+      # unchanged fields preserved
+      assert updated.step_name == "draft"
+      assert updated.task_id == task.id
+    end
+
+    test "does not allow changing task_id" do
+      user = create_user()
+      {project, task, workflow} = create_task_with_workflow(user)
+
+      {:ok, execution} =
+        StepExecutions.insert(user.id, %{
+          "task_id" => task.id,
+          "project_id" => project.id,
+          "workflow_id" => workflow.id,
+          "step_name" => "draft",
+          "status" => "in_progress"
+        })
+
+      other_task_id = Ecto.UUID.generate()
+
+      {:ok, updated} =
+        StepExecutions.update(execution, %{"task_id" => other_task_id})
+
+      assert updated.task_id == task.id
+    end
+
+    test "returns error changeset for invalid data" do
+      user = create_user()
+      {project, task, workflow} = create_task_with_workflow(user)
+
+      {:ok, execution} =
+        StepExecutions.insert(user.id, %{
+          "task_id" => task.id,
+          "project_id" => project.id,
+          "workflow_id" => workflow.id,
+          "step_name" => "draft",
+          "status" => "in_progress"
+        })
+
+      assert {:error, changeset} =
+               StepExecutions.update(execution, %{"step_name" => nil})
+
+      assert %{step_name: ["can't be blank"]} = errors_on(changeset)
+    end
+  end
 end

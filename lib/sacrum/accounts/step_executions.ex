@@ -27,4 +27,15 @@ defmodule Sacrum.Accounts.StepExecutions do
     |> Repo.insert()
     |> Broadcaster.broadcast_step_execution(:step_execution_created)
   end
+
+  @doc """
+  Update an existing step execution.
+  Applies the update_changeset and broadcasts the status change event.
+  """
+  def update(%StepExecution{} = execution, attrs) do
+    execution
+    |> StepExecution.update_changeset(attrs)
+    |> Repo.update()
+    |> Broadcaster.broadcast_step_execution(:step_execution_status_changed)
+  end
 end
