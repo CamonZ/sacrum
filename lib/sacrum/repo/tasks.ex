@@ -47,11 +47,18 @@ defmodule Sacrum.Repo.Tasks do
   end
 
   @doc """
-  Returns root tasks (no parent) with no incomplete blockers for a project.
+  Returns root tasks (no parent) that are not completed and have no
+  incomplete blockers for a project.
   """
   def ready(project_id, user_id) do
     list_tasks(
-      conditions: [project_id: project_id, user_id: user_id, root_only: true, blocked: false]
+      conditions: [
+        project_id: project_id,
+        user_id: user_id,
+        root_only: true,
+        blocked: false,
+        completed: false
+      ]
     )
   end
 
@@ -98,6 +105,16 @@ defmodule Sacrum.Repo.Tasks do
 
   defp apply_filter(query, :parent_id, parent_id) do
     where(query, [t], t.parent_id == ^parent_id)
+  end
+
+  defp apply_filter(query, :completed, nil), do: query
+
+  defp apply_filter(query, :completed, false) do
+    where(query, [t], is_nil(t.completed_at))
+  end
+
+  defp apply_filter(query, :completed, true) do
+    where(query, [t], not is_nil(t.completed_at))
   end
 
   defp apply_filter(query, :blocked, nil), do: query
