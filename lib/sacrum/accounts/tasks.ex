@@ -109,27 +109,30 @@ defmodule Sacrum.Accounts.Tasks do
     |> preload_sections()
   end
 
-  defp maybe_update_parent(task, %{"parent_id" => nil}) do
-    case Sacrum.Repo.TaskHierarchy.remove_parent(task) do
-      {:ok, updated} -> {:ok, updated}
-      {:error, :not_found} -> {:ok, task}
-      error -> error
-    end
-  end
+  defp maybe_update_parent(task, attrs) do
+    parent_id = Map.get(attrs, "parent_id", Map.get(attrs, :parent_id, :not_set))
 
-  defp maybe_update_parent(task, %{"parent_id" => parent_id}) do
-    case Repo.get(Task, parent_id) do
+    case parent_id do
+      :not_set ->
+        {:ok, task}
+
       nil ->
-        {:error, :not_found}
+        case Sacrum.Repo.TaskHierarchy.remove_parent(task) do
+          {:ok, updated} -> {:ok, updated}
+          {:error, :not_found} -> {:ok, task}
+          error -> error
+        end
 
-      parent ->
-        Sacrum.Repo.TaskHierarchy.set_parent(task, parent)
+      id ->
+        case Repo.get(Task, id) do
+          nil -> {:error, :not_found}
+          parent -> Sacrum.Repo.TaskHierarchy.set_parent(task, parent)
+        end
     end
   end
 
-  defp maybe_update_parent(task, _attrs), do: {:ok, task}
-
-  defp maybe_update_dependencies(task, %{"depends_on_ids" => ids}) when is_list(ids) do
+  defp maybe_update_dependencies(task, attrs) when is_map_key(attrs, "depends_on_ids") or is_map_key(attrs, :depends_on_ids) do
+    ids = Map.get(attrs, "depends_on_ids", Map.get(attrs, :depends_on_ids))
     # Get current dependencies
     current = Sacrum.Repo.TaskDependencies.get_direct_blockers(task)
     current_ids = MapSet.new(Enum.map(current, & &1.id))
@@ -179,31 +182,39 @@ defmodule Sacrum.Accounts.Tasks do
 
   defp maybe_update_dependencies(_task, _attrs), do: :ok
 
-  defp validate_section_ownership(%Task{} = task, %{"sections" => sections})
-       when is_list(sections) do
-    existing_ids = MapSet.new(Enum.map(task.sections, &to_string(&1.id)))
+  defp validate_section_ownership(%Task{} = task, attrs) do
+    sections = Map.get(attrs, "sections", Map.get(attrs, :sections))
 
-    incoming_ids =
-      sections
-      |> Enum.map(& &1["id"])
-      |> Enum.reject(&is_nil/1)
-      |> MapSet.new(&to_string/1)
+    case sections do
+      nil ->
+        :ok
 
-    foreign_ids = MapSet.difference(incoming_ids, existing_ids)
+      sections when is_list(sections) ->
+        existing_ids = MapSet.new(Enum.map(task.sections, &to_string(&1.id)))
 
-    if MapSet.size(foreign_ids) == 0 do
-      :ok
-    else
-      changeset =
-        task
-        |> Ecto.Changeset.change()
-        |> Ecto.Changeset.add_error(:sections, "contain IDs not belonging to this task")
+        incoming_ids =
+          sections
+          |> Enum.map(&(Map.get(&1, "id") || Map.get(&1, :id)))
+          |> Enum.reject(&is_nil/1)
+          |> MapSet.new(&to_string/1)
 
-      {:error, changeset}
+        foreign_ids = MapSet.difference(incoming_ids, existing_ids)
+
+        if MapSet.size(foreign_ids) == 0 do
+          :ok
+        else
+          changeset =
+            task
+            |> Ecto.Changeset.change()
+            |> Ecto.Changeset.add_error(:sections, "contain IDs not belonging to this task")
+
+          {:error, changeset}
+        end
+
+      _ ->
+        :ok
     end
   end
-
-  defp validate_section_ownership(_task, _attrs), do: :ok
 
   defp maybe_assign_default_workflow({:ok, %Task{workflow_id: nil} = task}, project_id) do
     case find_default_workflow(project_id) do

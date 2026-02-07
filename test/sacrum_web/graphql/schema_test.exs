@@ -257,6 +257,64 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert result["data"]["updateTask"]["description"] == "New desc"
     end
 
+    test "sets parent_id via updateTask", %{conn: conn, user: user, project: project} do
+      {:ok, parent} = Accounts.Tasks.insert(user.id, project.id, %{title: "Parent"})
+      {:ok, child} = Accounts.Tasks.insert(user.id, project.id, %{title: "Child"})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            updateTask(id: "#{child.id}", parentId: "#{parent.id}") { id parentId }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] == nil
+      assert result["data"]["updateTask"]["parentId"] == parent.id
+    end
+
+    test "removes parent_id via updateTask", %{conn: conn, user: user, project: project} do
+      {:ok, parent} = Accounts.Tasks.insert(user.id, project.id, %{title: "Parent"})
+      {:ok, child} = Accounts.Tasks.insert(user.id, project.id, %{title: "Child"})
+      {:ok, _} = Sacrum.Repo.TaskHierarchy.set_parent(child, parent)
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            updateTask(id: "#{child.id}", parentId: null) { id parentId }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] == nil
+      assert result["data"]["updateTask"]["parentId"] == nil
+    end
+
+    test "sets depends_on_ids via updateTask", %{conn: conn, user: user, project: project} do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      {:ok, blocker} = Accounts.Tasks.insert(user.id, project.id, %{title: "Blocker"})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            updateTask(id: "#{task.id}", dependsOnIds: ["#{blocker.id}"]) {
+              id blockers { id }
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] == nil
+      assert [%{"id" => blocker_id}] = result["data"]["updateTask"]["blockers"]
+      assert blocker_id == blocker.id
+    end
+
     test "deletes a task", %{conn: conn, user: user, project: project} do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "To Delete"})
 
