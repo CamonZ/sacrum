@@ -1247,4 +1247,89 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert result["errors"] != nil
     end
   end
+
+  describe "transition mutations" do
+    setup [:setup_user_and_project]
+
+    test "creates a workflow transition with correct project_id", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, wf1} = Accounts.Workflows.insert(user.id, project.id, %{name: "Workflow 1"})
+      {:ok, wf2} = Accounts.Workflows.insert(user.id, project.id, %{name: "Workflow 2"})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createWorkflowTransition(
+              fromWorkflowId: "#{wf1.id}",
+              toWorkflowId: "#{wf2.id}",
+              label: "complete"
+            ) {
+              id
+              label
+              fromWorkflowId
+              toWorkflowId
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] == nil
+      transition = result["data"]["createWorkflowTransition"]
+      assert transition["label"] == "complete"
+      assert transition["fromWorkflowId"] == wf1.id
+      assert transition["toWorkflowId"] == wf2.id
+
+      # Verify project_id was set in the database
+      {:ok, saved} =
+        Accounts.WorkflowTransitions.get_by(user.id, conditions: [id: transition["id"]])
+
+      assert saved.project_id == project.id
+    end
+
+    test "creates a step transition with correct project_id", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, workflow} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+      {:ok, step1} = Accounts.WorkflowSteps.insert(workflow, %{name: "Step 1", step_order: 1})
+      {:ok, step2} = Accounts.WorkflowSteps.insert(workflow, %{name: "Step 2", step_order: 2})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createStepTransition(
+              fromStepId: "#{step1.id}",
+              toStepId: "#{step2.id}",
+              label: "next"
+            ) {
+              id
+              label
+              fromStepId
+              toStepId
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] == nil
+      transition = result["data"]["createStepTransition"]
+      assert transition["label"] == "next"
+      assert transition["fromStepId"] == step1.id
+      assert transition["toStepId"] == step2.id
+
+      # Verify project_id was set in the database
+      {:ok, saved} =
+        Accounts.StepTransitions.get_by(user.id, conditions: [id: transition["id"]])
+
+      assert saved.project_id == project.id
+    end
+  end
 end

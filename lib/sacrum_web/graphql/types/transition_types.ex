@@ -69,8 +69,8 @@ defmodule SacrumWeb.Graphql.Types.TransitionTypes do
       resolve(fn args, %{context: %{current_user: user}} ->
         from_wf_id = Map.get(args, :from_workflow_id)
 
-        with {:ok, _wf} <- Accounts.Workflows.get_by(user.id, conditions: [id: from_wf_id]) do
-          Accounts.WorkflowTransitions.insert(user.id, args)
+        with {:ok, wf} <- Accounts.Workflows.get_by(user.id, conditions: [id: from_wf_id]) do
+          Accounts.WorkflowTransitions.insert(user.id, Map.put(args, :project_id, wf.project_id))
         end
       end)
     end
@@ -93,8 +93,8 @@ defmodule SacrumWeb.Graphql.Types.TransitionTypes do
       resolve(fn args, %{context: %{current_user: user}} ->
         from_step_id = Map.get(args, :from_step_id)
 
-        with {:ok, _step} <- Accounts.WorkflowSteps.get_by(user.id, conditions: [id: from_step_id]) do
-          Accounts.StepTransitions.insert(user.id, args)
+        with {:ok, step} <- Accounts.WorkflowSteps.get_by(user.id, conditions: [id: from_step_id]) do
+          Accounts.StepTransitions.insert(user.id, Map.put(args, :project_id, step.project_id))
         end
       end)
     end
