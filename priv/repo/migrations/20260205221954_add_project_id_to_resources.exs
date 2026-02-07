@@ -63,28 +63,10 @@ defmodule Sacrum.Repo.Migrations.AddProjectIdToResources do
     UPDATE step_transitions SET project_id = ws.project_id
     FROM workflow_steps ws WHERE step_transitions.from_step_id = ws.id
     """
-
-    flush()
-
-    # Phase 3: Make project_id NOT NULL on all tables
-    for table <- @tables do
-      alter table(table) do
-        modify :project_id, references(:projects, type: :binary_id, on_delete: :delete_all),
-          null: false,
-          from: references(:projects, type: :binary_id, on_delete: :delete_all)
-      end
-    end
-
-    # Phase 4: Create indexes
-    for table <- @tables do
-      create index(table, [:project_id])
-    end
   end
 
   def down do
     for table <- Enum.reverse(@tables) do
-      drop index(table, [:project_id])
-
       alter table(table) do
         remove :project_id
       end

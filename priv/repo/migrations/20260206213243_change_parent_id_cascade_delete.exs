@@ -9,10 +9,5 @@ defmodule Sacrum.Repo.Migrations.ChangeParentIdCascadeDelete do
     alter table(:tasks) do
       modify :parent_id, references(:tasks, type: :binary_id, on_delete: :delete_all)
     end
-
-    # Add FK constraint for step_executions.task_id with cascade delete
-    alter table(:step_executions) do
-      modify :task_id, references(:tasks, type: :binary_id, on_delete: :delete_all), null: true
-    end
   end
 end
