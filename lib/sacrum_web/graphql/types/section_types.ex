@@ -20,11 +20,13 @@ defmodule SacrumWeb.Graphql.Types.SectionTypes do
 
     # Associations
     field :task_id, :id
+
     field :task, :task do
       resolve(dataloader(Accounts.Tasks))
     end
 
     field :project_id, :id
+
     field :project, :project do
       resolve(dataloader(Accounts.Projects))
     end
@@ -46,16 +48,19 @@ defmodule SacrumWeb.Graphql.Types.SectionTypes do
 
     # Associations
     field :task_id, :id
+
     field :task, :task do
       resolve(dataloader(Accounts.Tasks))
     end
 
     field :section_id, :id
+
     field :section, :task_section do
       resolve(dataloader(Accounts.Sections))
     end
 
     field :project_id, :id
+
     field :project, :project do
       resolve(dataloader(Accounts.Projects))
     end
@@ -63,11 +68,11 @@ defmodule SacrumWeb.Graphql.Types.SectionTypes do
 
   object :section_mutations do
     field :create_section, :task_section do
-      arg :task_id, non_null(:uuid4)
-      arg :section_type, non_null(:string)
-      arg :content, non_null(:string)
-      arg :section_order, :integer
-      arg :done, :boolean
+      arg(:task_id, non_null(:uuid4))
+      arg(:section_type, non_null(:string))
+      arg(:content, non_null(:string))
+      arg(:section_order, :integer)
+      arg(:done, :boolean)
 
       resolve(fn args, %{context: %{current_user: user}} ->
         task_id = Map.get(args, :task_id)
@@ -80,12 +85,12 @@ defmodule SacrumWeb.Graphql.Types.SectionTypes do
     end
 
     field :update_section, :task_section do
-      arg :id, non_null(:uuid4)
-      arg :section_type, :string
-      arg :content, :string
-      arg :section_order, :integer
-      arg :done, :boolean
-      arg :done_at, :datetime
+      arg(:id, non_null(:uuid4))
+      arg(:section_type, :string)
+      arg(:content, :string)
+      arg(:section_order, :integer)
+      arg(:done, :boolean)
+      arg(:done_at, :datetime)
 
       resolve(fn %{id: id} = args, %{context: %{current_user: user}} ->
         with {:ok, section} <- Accounts.Sections.get_by(user.id, conditions: [id: id]) do
@@ -96,7 +101,7 @@ defmodule SacrumWeb.Graphql.Types.SectionTypes do
     end
 
     field :delete_section, :task_section do
-      arg :id, non_null(:uuid4)
+      arg(:id, non_null(:uuid4))
 
       resolve(fn %{id: id}, %{context: %{current_user: user}} ->
         with {:ok, section} <- Accounts.Sections.get_by(user.id, conditions: [id: id]) do
@@ -106,13 +111,13 @@ defmodule SacrumWeb.Graphql.Types.SectionTypes do
     end
 
     field :create_code_ref, :code_ref do
-      arg :task_id, :uuid4
-      arg :section_id, :uuid4
-      arg :path, non_null(:string)
-      arg :line_start, :integer
-      arg :line_end, :integer
-      arg :name, :string
-      arg :description, :string
+      arg(:task_id, :uuid4)
+      arg(:section_id, :uuid4)
+      arg(:path, non_null(:string))
+      arg(:line_start, :integer)
+      arg(:line_end, :integer)
+      arg(:name, :string)
+      arg(:description, :string)
 
       resolve(fn args, %{context: %{current_user: user}} ->
         task_id = Map.get(args, :task_id)
@@ -142,7 +147,7 @@ defmodule SacrumWeb.Graphql.Types.SectionTypes do
     end
 
     field :delete_code_ref, :code_ref do
-      arg :id, non_null(:uuid4)
+      arg(:id, non_null(:uuid4))
 
       resolve(fn %{id: id}, %{context: %{current_user: user}} ->
         with {:ok, code_ref} <- Accounts.CodeRefs.get_by(user.id, conditions: [id: id]) do

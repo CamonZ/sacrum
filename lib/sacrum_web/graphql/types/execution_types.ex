@@ -28,11 +28,13 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
 
     # Associations
     field :workflow_id, :id
+
     field :workflow, :workflow do
       resolve(dataloader(Accounts.Workflows))
     end
 
     field :project_id, :id
+
     field :project, :project do
       resolve(dataloader(Accounts.Projects))
     end
@@ -50,11 +52,13 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
 
     # Associations
     field :step_execution_id, :id
+
     field :step_execution, :step_execution do
       resolve(dataloader(Accounts.StepExecutions))
     end
 
     field :project_id, :id
+
     field :project, :project do
       resolve(dataloader(Accounts.Projects))
     end
@@ -62,7 +66,7 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
 
   object :execution_queries do
     field :step_executions, list_of(:step_execution) do
-      arg :task_id, non_null(:uuid4)
+      arg(:task_id, non_null(:uuid4))
 
       resolve(fn %{task_id: task_id}, %{context: %{current_user: user}} ->
         with {:ok, _task} <- Accounts.Tasks.find(user.id, task_id) do
@@ -73,7 +77,7 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
     end
 
     field :step_execution, :step_execution do
-      arg :id, non_null(:uuid4)
+      arg(:id, non_null(:uuid4))
 
       resolve(fn %{id: id}, %{context: %{current_user: user}} ->
         case Accounts.StepExecutions.get_by(user.id, conditions: [id: id]) do
@@ -84,7 +88,7 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
     end
 
     field :session_logs, list_of(:session_log) do
-      arg :step_execution_id, non_null(:uuid4)
+      arg(:step_execution_id, non_null(:uuid4))
 
       resolve(fn %{step_execution_id: exec_id}, %{context: %{current_user: user}} ->
         with {:ok, _exec} <- Accounts.StepExecutions.get_by(user.id, conditions: [id: exec_id]) do
@@ -97,20 +101,20 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
 
   object :execution_mutations do
     field :create_step_execution, :step_execution do
-      arg :task_id, non_null(:uuid4)
-      arg :workflow_id, non_null(:uuid4)
-      arg :step_name, non_null(:string)
-      arg :status, :string
-      arg :context, :json
-      arg :prompt, :string
-      arg :output, :string
-      arg :transition_result, :string
-      arg :model, :string
-      arg :model_provider, :string
-      arg :input_tokens, :integer
-      arg :output_tokens, :integer
-      arg :cost, :decimal
-      arg :duration_ms, :integer
+      arg(:task_id, non_null(:uuid4))
+      arg(:workflow_id, non_null(:uuid4))
+      arg(:step_name, non_null(:string))
+      arg(:status, :string)
+      arg(:context, :json)
+      arg(:prompt, :string)
+      arg(:output, :string)
+      arg(:transition_result, :string)
+      arg(:model, :string)
+      arg(:model_provider, :string)
+      arg(:input_tokens, :integer)
+      arg(:output_tokens, :integer)
+      arg(:cost, :decimal)
+      arg(:duration_ms, :integer)
 
       resolve(fn args, %{context: %{current_user: user}} ->
         task_id = Map.get(args, :task_id)
@@ -125,19 +129,19 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
     end
 
     field :update_step_execution, :step_execution do
-      arg :id, non_null(:uuid4)
-      arg :step_name, :string
-      arg :status, :string
-      arg :context, :json
-      arg :prompt, :string
-      arg :output, :string
-      arg :transition_result, :string
-      arg :model, :string
-      arg :model_provider, :string
-      arg :input_tokens, :integer
-      arg :output_tokens, :integer
-      arg :cost, :decimal
-      arg :duration_ms, :integer
+      arg(:id, non_null(:uuid4))
+      arg(:step_name, :string)
+      arg(:status, :string)
+      arg(:context, :json)
+      arg(:prompt, :string)
+      arg(:output, :string)
+      arg(:transition_result, :string)
+      arg(:model, :string)
+      arg(:model_provider, :string)
+      arg(:input_tokens, :integer)
+      arg(:output_tokens, :integer)
+      arg(:cost, :decimal)
+      arg(:duration_ms, :integer)
 
       resolve(fn %{id: id} = args, %{context: %{current_user: user}} ->
         with {:ok, execution} <- Accounts.StepExecutions.get_by(user.id, conditions: [id: id]) do
@@ -148,8 +152,8 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
     end
 
     field :create_session_log, :session_log do
-      arg :step_execution_id, non_null(:uuid4)
-      arg :content, non_null(:string)
+      arg(:step_execution_id, non_null(:uuid4))
+      arg(:content, non_null(:string))
 
       resolve(fn args, %{context: %{current_user: user}} ->
         exec_id = Map.get(args, :step_execution_id)

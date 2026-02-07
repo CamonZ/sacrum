@@ -16,21 +16,21 @@ defmodule SacrumWeb.Graphql.Schema do
   import_types(SacrumWeb.Graphql.Types.ExecutionTypes)
 
   query do
-    import_fields :project_queries
-    import_fields :workflow_queries
-    import_fields :workflow_step_queries
-    import_fields :task_queries
-    import_fields :execution_queries
+    import_fields(:project_queries)
+    import_fields(:workflow_queries)
+    import_fields(:workflow_step_queries)
+    import_fields(:task_queries)
+    import_fields(:execution_queries)
   end
 
   mutation do
-    import_fields :project_mutations
-    import_fields :workflow_mutations
-    import_fields :workflow_step_mutations
-    import_fields :task_mutations
-    import_fields :section_mutations
-    import_fields :transition_mutations
-    import_fields :execution_mutations
+    import_fields(:project_mutations)
+    import_fields(:workflow_mutations)
+    import_fields(:workflow_step_mutations)
+    import_fields(:task_mutations)
+    import_fields(:section_mutations)
+    import_fields(:transition_mutations)
+    import_fields(:execution_mutations)
   end
 
   def context(ctx) do
@@ -42,7 +42,10 @@ defmodule SacrumWeb.Graphql.Schema do
       |> Dataloader.add_source(Sacrum.Accounts.Tasks, Dataloader.Ecto.new(Sacrum.Repo))
       |> Dataloader.add_source(Sacrum.Accounts.Sections, Dataloader.Ecto.new(Sacrum.Repo))
       |> Dataloader.add_source(Sacrum.Accounts.CodeRefs, Dataloader.Ecto.new(Sacrum.Repo))
-      |> Dataloader.add_source(Sacrum.Accounts.WorkflowTransitions, Dataloader.Ecto.new(Sacrum.Repo))
+      |> Dataloader.add_source(
+        Sacrum.Accounts.WorkflowTransitions,
+        Dataloader.Ecto.new(Sacrum.Repo)
+      )
       |> Dataloader.add_source(Sacrum.Accounts.StepTransitions, Dataloader.Ecto.new(Sacrum.Repo))
       |> Dataloader.add_source(Sacrum.Accounts.StepExecutions, Dataloader.Ecto.new(Sacrum.Repo))
       |> Dataloader.add_source(Sacrum.Accounts.SessionLogs, Dataloader.Ecto.new(Sacrum.Repo))
