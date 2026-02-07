@@ -47,7 +47,7 @@ defmodule SacrumWeb.Graphql.Types.WorkflowType do
 
   object :workflow_queries do
     field :workflows, list_of(:workflow) do
-      arg :project_id, non_null(:id)
+      arg :project_id, non_null(:uuid4)
 
       resolve(fn %{project_id: project_id}, %{context: %{current_user: user}} ->
         with {:ok, _project} <- Accounts.Projects.get_by(user.id, conditions: [id: project_id]) do
@@ -58,7 +58,7 @@ defmodule SacrumWeb.Graphql.Types.WorkflowType do
     end
 
     field :workflow, :workflow do
-      arg :id, non_null(:id)
+      arg :id, non_null(:uuid4)
 
       resolve(fn %{id: id}, %{context: %{current_user: user}} ->
         case Accounts.Workflows.get_by(user.id, conditions: [id: id]) do
@@ -71,7 +71,7 @@ defmodule SacrumWeb.Graphql.Types.WorkflowType do
 
   object :workflow_mutations do
     field :create_workflow, :workflow do
-      arg :project_id, non_null(:id)
+      arg :project_id, non_null(:uuid4)
       arg :name, non_null(:string)
       arg :description, :string
       arg :metadata, :json
@@ -90,16 +90,16 @@ defmodule SacrumWeb.Graphql.Types.WorkflowType do
     end
 
     field :update_workflow, :workflow do
-      arg :id, non_null(:id)
+      arg :id, non_null(:uuid4)
       arg :name, :string
       arg :description, :string
       arg :metadata, :json
       arg :auto_advance, :boolean
       arg :display_order, :integer
       arg :is_default, :boolean
-      arg :initial_step_id, :id
-      arg :on_done_workflow_id, :id
-      arg :on_reject_workflow_id, :id
+      arg :initial_step_id, :uuid4
+      arg :on_done_workflow_id, :uuid4
+      arg :on_reject_workflow_id, :uuid4
 
       resolve(fn %{id: id} = args, %{context: %{current_user: user}} ->
         with {:ok, workflow} <- Accounts.Workflows.get_by(user.id, conditions: [id: id]) do
@@ -110,7 +110,7 @@ defmodule SacrumWeb.Graphql.Types.WorkflowType do
     end
 
     field :delete_workflow, :workflow do
-      arg :id, non_null(:id)
+      arg :id, non_null(:uuid4)
 
       resolve(fn %{id: id}, %{context: %{current_user: user}} ->
         with {:ok, workflow} <- Accounts.Workflows.get_by(user.id, conditions: [id: id]) do
@@ -120,7 +120,7 @@ defmodule SacrumWeb.Graphql.Types.WorkflowType do
     end
 
     field :sync_workflow_transitions, :workflow do
-      arg :id, non_null(:id)
+      arg :id, non_null(:uuid4)
       arg :transitions, non_null(list_of(non_null(:workflow_transition_input)))
 
       resolve(fn %{id: id, transitions: transitions}, %{context: %{current_user: user}} ->
@@ -133,8 +133,8 @@ defmodule SacrumWeb.Graphql.Types.WorkflowType do
 
   input_object :workflow_transition_input do
     field :label, :string
-    field :from_workflow_id, :id
-    field :to_workflow_id, :id
-    field :target_step_id, :id
+    field :from_workflow_id, :uuid4
+    field :to_workflow_id, :uuid4
+    field :target_step_id, :uuid4
   end
 end

@@ -69,13 +69,13 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
 
   object :task_queries do
     field :tasks, list_of(:task) do
-      arg :project_id, non_null(:id)
+      arg :project_id, non_null(:uuid4)
       arg :level, :string
-      arg :parent_id, :id
+      arg :parent_id, :uuid4
       arg :status, :string
       arg :tags, list_of(:string)
       arg :search, :string
-      arg :workflow_id, :id
+      arg :workflow_id, :uuid4
       arg :root_only, :boolean
       arg :blocked, :boolean
 
@@ -104,7 +104,7 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
     end
 
     field :task, :task do
-      arg :id, non_null(:id)
+      arg :id, non_null(:uuid4)
 
       resolve(fn %{id: id}, %{context: %{current_user: user}} ->
         case Accounts.Tasks.find(user.id, id) do
@@ -115,7 +115,7 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
     end
 
     field :list_ready, list_of(:task) do
-      arg :project_id, non_null(:id)
+      arg :project_id, non_null(:uuid4)
 
       resolve(fn %{project_id: project_id}, %{context: %{current_user: user}} ->
         with {:ok, _project} <- Accounts.Projects.get_by(user.id, conditions: [id: project_id]) do
@@ -126,8 +126,8 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
     end
 
     field :find_path, list_of(:id) do
-      arg :from_id, non_null(:id)
-      arg :to_id, non_null(:id)
+      arg :from_id, non_null(:uuid4)
+      arg :to_id, non_null(:uuid4)
 
       resolve(fn %{from_id: from_id, to_id: to_id}, %{context: %{current_user: user}} ->
         with {:ok, from_task} <- Accounts.Tasks.find(user.id, from_id),
@@ -140,13 +140,13 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
 
   object :task_mutations do
     field :create_task, :task do
-      arg :project_id, non_null(:id)
+      arg :project_id, non_null(:uuid4)
       arg :title, non_null(:string)
       arg :description, :string
       arg :level, :string
       arg :priority, :string
       arg :tags, list_of(:string)
-      arg :parent_id, :id
+      arg :parent_id, :uuid4
       arg :sections, list_of(:task_section_input)
 
       resolve(fn args, %{context: %{current_user: user}} ->
@@ -160,7 +160,7 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
     end
 
     field :update_task, :task do
-      arg :id, non_null(:id)
+      arg :id, non_null(:uuid4)
       arg :title, :string
       arg :description, :string
       arg :level, :string
@@ -172,8 +172,8 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
       arg :revision_feedback, :string
       arg :started_at, :datetime
       arg :completed_at, :datetime
-      arg :parent_id, :id
-      arg :depends_on_ids, list_of(:id)
+      arg :parent_id, :uuid4
+      arg :depends_on_ids, list_of(:uuid4)
       arg :sections, list_of(:task_section_input)
 
       resolve(fn %{id: id} = args, %{context: %{current_user: user}} ->
@@ -185,7 +185,7 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
     end
 
     field :delete_task, :task do
-      arg :id, non_null(:id)
+      arg :id, non_null(:uuid4)
       arg :cascade, :boolean, default_value: true
 
       resolve(fn %{id: id, cascade: cascade}, %{context: %{current_user: user}} ->
@@ -196,8 +196,8 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
     end
 
     field :create_task_dependency, :task do
-      arg :task_id, non_null(:id)
-      arg :depends_on_id, non_null(:id)
+      arg :task_id, non_null(:uuid4)
+      arg :depends_on_id, non_null(:uuid4)
 
       resolve(fn %{task_id: task_id, depends_on_id: dep_id}, %{context: %{current_user: user}} ->
         with {:ok, task} <- Accounts.Tasks.find(user.id, task_id),
@@ -208,8 +208,8 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
     end
 
     field :delete_task_dependency, :task do
-      arg :task_id, non_null(:id)
-      arg :depends_on_id, non_null(:id)
+      arg :task_id, non_null(:uuid4)
+      arg :depends_on_id, non_null(:uuid4)
 
       resolve(fn %{task_id: task_id, depends_on_id: dep_id}, %{context: %{current_user: user}} ->
         with {:ok, task} <- Accounts.Tasks.find(user.id, task_id),
@@ -220,8 +220,8 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
     end
 
     field :assign_workflow, :task do
-      arg :task_id, non_null(:id)
-      arg :workflow_id, non_null(:id)
+      arg :task_id, non_null(:uuid4)
+      arg :workflow_id, non_null(:uuid4)
 
       resolve(fn %{task_id: task_id, workflow_id: wf_id}, %{context: %{current_user: user}} ->
         with {:ok, task} <- Accounts.Tasks.find(user.id, task_id),
@@ -232,7 +232,7 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
     end
 
     field :unassign_workflow, :task do
-      arg :task_id, non_null(:id)
+      arg :task_id, non_null(:uuid4)
 
       resolve(fn %{task_id: task_id}, %{context: %{current_user: user}} ->
         with {:ok, task} <- Accounts.Tasks.find(user.id, task_id) do
@@ -242,8 +242,8 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
     end
 
     field :move_to_step, :task do
-      arg :task_id, non_null(:id)
-      arg :step_id, non_null(:id)
+      arg :task_id, non_null(:uuid4)
+      arg :step_id, non_null(:uuid4)
 
       resolve(fn %{task_id: task_id, step_id: step_id}, %{context: %{current_user: user}} ->
         with {:ok, task} <- Accounts.Tasks.find(user.id, task_id) do
@@ -254,7 +254,7 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
   end
 
   input_object :task_section_input do
-    field :id, :id
+    field :id, :uuid4
     field :section_type, non_null(:string)
     field :content, non_null(:string)
     field :section_order, :integer

@@ -63,7 +63,7 @@ defmodule SacrumWeb.Graphql.Types.SectionTypes do
 
   object :section_mutations do
     field :create_section, :task_section do
-      arg :task_id, non_null(:id)
+      arg :task_id, non_null(:uuid4)
       arg :section_type, non_null(:string)
       arg :content, non_null(:string)
       arg :section_order, :integer
@@ -80,7 +80,7 @@ defmodule SacrumWeb.Graphql.Types.SectionTypes do
     end
 
     field :update_section, :task_section do
-      arg :id, non_null(:id)
+      arg :id, non_null(:uuid4)
       arg :section_type, :string
       arg :content, :string
       arg :section_order, :integer
@@ -96,7 +96,7 @@ defmodule SacrumWeb.Graphql.Types.SectionTypes do
     end
 
     field :delete_section, :task_section do
-      arg :id, non_null(:id)
+      arg :id, non_null(:uuid4)
 
       resolve(fn %{id: id}, %{context: %{current_user: user}} ->
         with {:ok, section} <- Accounts.Sections.get_by(user.id, conditions: [id: id]) do
@@ -106,8 +106,8 @@ defmodule SacrumWeb.Graphql.Types.SectionTypes do
     end
 
     field :create_code_ref, :code_ref do
-      arg :task_id, :id
-      arg :section_id, :id
+      arg :task_id, :uuid4
+      arg :section_id, :uuid4
       arg :path, non_null(:string)
       arg :line_start, :integer
       arg :line_end, :integer
@@ -142,7 +142,7 @@ defmodule SacrumWeb.Graphql.Types.SectionTypes do
     end
 
     field :delete_code_ref, :code_ref do
-      arg :id, non_null(:id)
+      arg :id, non_null(:uuid4)
 
       resolve(fn %{id: id}, %{context: %{current_user: user}} ->
         with {:ok, code_ref} <- Accounts.CodeRefs.get_by(user.id, conditions: [id: id]) do

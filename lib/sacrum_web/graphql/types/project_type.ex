@@ -31,7 +31,7 @@ defmodule SacrumWeb.Graphql.Types.ProjectType do
     end
 
     field :project, :project do
-      arg :id, non_null(:id)
+      arg :id, non_null(:uuid4)
 
       resolve(fn %{id: id}, %{context: %{current_user: user}} ->
         case Accounts.Projects.get_by(user.id, conditions: [id: id]) do
@@ -54,7 +54,7 @@ defmodule SacrumWeb.Graphql.Types.ProjectType do
     end
 
     field :update_project, :project do
-      arg :id, non_null(:id)
+      arg :id, non_null(:uuid4)
       arg :name, :string
       arg :description, :string
       arg :slug, :string
@@ -68,7 +68,7 @@ defmodule SacrumWeb.Graphql.Types.ProjectType do
     end
 
     field :delete_project, :project do
-      arg :id, non_null(:id)
+      arg :id, non_null(:uuid4)
 
       resolve(fn %{id: id}, %{context: %{current_user: user}} ->
         with {:ok, project} <- Accounts.Projects.get_by(user.id, conditions: [id: id]) do

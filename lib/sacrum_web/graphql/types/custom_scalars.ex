@@ -5,6 +5,24 @@ defmodule SacrumWeb.Graphql.Types.CustomScalars do
 
   use Absinthe.Schema.Notation
 
+  @uuid_regex ~r/\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i
+
+  @desc "UUID v4 identifier"
+  scalar :uuid4, description: "UUID v4 string (e.g. 550e8400-e29b-41d4-a716-446655440000)" do
+    parse(fn
+      %Absinthe.Blueprint.Input.String{value: value} ->
+        if Regex.match?(@uuid_regex, value), do: {:ok, value}, else: :error
+
+      %Absinthe.Blueprint.Input.Null{} ->
+        {:ok, nil}
+
+      _ ->
+        :error
+    end)
+
+    serialize(fn value -> value end)
+  end
+
   @desc "UTC datetime with microsecond precision"
   scalar :datetime, description: "ISO 8601 datetime with microsecond precision" do
     parse(fn

@@ -1246,6 +1246,19 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
       assert result["errors"] != nil
     end
+
+    test "returns validation error for invalid UUID format", %{conn: conn} do
+      user = create_user()
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql(~s|{ task(id: "not-a-uuid") { id } }|)
+        |> json_response(200)
+
+      assert [%{"message" => message}] = result["errors"]
+      assert message =~ "Argument \"id\" has invalid value \"not-a-uuid\""
+    end
   end
 
   describe "transition mutations" do
