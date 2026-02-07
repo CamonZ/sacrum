@@ -423,15 +423,17 @@ defmodule SacrumWeb.TaskControllerTest do
   describe "GET /api/tasks/ready" do
     setup :setup_authenticated
 
-    test "returns root tasks with no incomplete blockers", %{conn: conn, project: project} do
+    test "returns tasks with no incomplete blockers", %{conn: conn, project: project} do
       {:ok, root} = Tasks.insert(project, %{title: "Root Task"})
       {:ok, child} = Tasks.insert(project, %{title: "Child Task"})
       {:ok, _} = Sacrum.Repo.TaskHierarchy.set_parent(child, root)
 
       conn = get(conn, ~p"/api/tasks/ready?project_id=#{project.id}")
       assert %{"data" => tasks} = json_response(conn, 200)
-      assert length(tasks) == 1
-      assert hd(tasks)["title"] == "Root Task"
+      # After root_only constraint removal, listReady returns all unblocked tasks
+      titles = Enum.map(tasks, & &1["title"])
+      assert "Root Task" in titles
+      assert "Child Task" in titles
     end
 
     test "excludes tasks with incomplete blockers", %{conn: conn, project: project} do

@@ -131,7 +131,8 @@ defmodule Sacrum.Accounts.Tasks do
     end
   end
 
-  defp maybe_update_dependencies(task, attrs) when is_map_key(attrs, "depends_on_ids") or is_map_key(attrs, :depends_on_ids) do
+  defp maybe_update_dependencies(task, attrs)
+       when is_map_key(attrs, "depends_on_ids") or is_map_key(attrs, :depends_on_ids) do
     ids = Map.get(attrs, "depends_on_ids", Map.get(attrs, :depends_on_ids))
     # Get current dependencies
     current = Sacrum.Repo.TaskDependencies.get_direct_blockers(task)
