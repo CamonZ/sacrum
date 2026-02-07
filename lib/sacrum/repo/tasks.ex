@@ -48,7 +48,7 @@ defmodule Sacrum.Repo.Tasks do
   end
 
   @doc """
-  Returns root tasks (no parent) that are not completed and have no
+  Returns tasks that are not completed and have no
   incomplete blockers for a project.
   """
   def ready(project_id, user_id) do
@@ -56,7 +56,6 @@ defmodule Sacrum.Repo.Tasks do
       conditions: [
         project_id: project_id,
         user_id: user_id,
-        root_only: true,
         blocked: false,
         completed: false,
         step_entered: true

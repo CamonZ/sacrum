@@ -50,8 +50,8 @@ defmodule Sacrum.Accounts.Tasks do
   end
 
   @doc """
-  Returns root tasks (no parent) with no incomplete blockers for a project.
-  These are the highest-level actionable items ready for work.
+  Returns tasks with no incomplete blockers for a project.
+  These are the actionable items ready for work.
   """
   def ready(user_id, project_id) when is_binary(user_id) and is_binary(project_id) do
     TasksRepo.ready(project_id, user_id)
