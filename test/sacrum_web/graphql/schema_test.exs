@@ -1001,7 +1001,11 @@ defmodule SacrumWeb.Graphql.SchemaTest do
   describe "task ready query" do
     setup [:setup_user_and_project]
 
-    test "returns root tasks with no incomplete blockers", %{conn: conn, user: user, project: project} do
+    test "returns root tasks with no incomplete blockers", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
       {:ok, root} = Accounts.Tasks.insert(user.id, project.id, %{title: "Root Task"})
       {:ok, child} = Accounts.Tasks.insert(user.id, project.id, %{title: "Child Task"})
       {:ok, _} = Sacrum.Repo.TaskHierarchy.set_parent(child, root)
@@ -1036,7 +1040,11 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       refute "Blocked" in titles
     end
 
-    test "includes tasks whose blockers are all completed", %{conn: conn, user: user, project: project} do
+    test "includes tasks whose blockers are all completed", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
       {:ok, blocker} = Accounts.Tasks.insert(user.id, project.id, %{title: "Done Blocker"})
       {:ok, _} = Accounts.Tasks.update(blocker, %{completed_at: DateTime.utc_now()})
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Unblocked"})
@@ -1058,7 +1066,11 @@ defmodule SacrumWeb.Graphql.SchemaTest do
   describe "task find path query" do
     setup [:setup_user_and_project]
 
-    test "returns shortest dependency path between tasks", %{conn: conn, user: user, project: project} do
+    test "returns shortest dependency path between tasks", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
       {:ok, a} = Accounts.Tasks.insert(user.id, project.id, %{title: "A"})
       {:ok, b} = Accounts.Tasks.insert(user.id, project.id, %{title: "B"})
       {:ok, c} = Accounts.Tasks.insert(user.id, project.id, %{title: "C"})
@@ -1078,7 +1090,11 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert path == [a.id, b.id, c.id]
     end
 
-    test "returns empty path when no dependency path exists", %{conn: conn, user: user, project: project} do
+    test "returns empty path when no dependency path exists", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
       {:ok, a} = Accounts.Tasks.insert(user.id, project.id, %{title: "A"})
       {:ok, b} = Accounts.Tasks.insert(user.id, project.id, %{title: "B"})
 
@@ -1093,7 +1109,11 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert result["data"]["findPath"] == []
     end
 
-    test "returns single-element path for direct dependency", %{conn: conn, user: user, project: project} do
+    test "returns single-element path for direct dependency", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
       {:ok, a} = Accounts.Tasks.insert(user.id, project.id, %{title: "A"})
       {:ok, b} = Accounts.Tasks.insert(user.id, project.id, %{title: "B"})
       {:ok, _} = Sacrum.Repo.TaskDependencies.add_dependency(a, b)
@@ -1110,7 +1130,11 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert path == [a.id, b.id]
     end
 
-    test "returns 404-like error when task does not exist", %{conn: conn, user: user, project: project} do
+    test "returns 404-like error when task does not exist", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
       {:ok, a} = Accounts.Tasks.insert(user.id, project.id, %{title: "A"})
       fake_id = Ecto.UUID.generate()
 
@@ -1127,10 +1151,157 @@ defmodule SacrumWeb.Graphql.SchemaTest do
     end
   end
 
+  describe "step lifecycle mutations" do
+    setup [:setup_user_and_project]
+
+    defp setup_workflow_and_task(user, project) do
+      {:ok, workflow} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+      {:ok, step1} = Accounts.WorkflowSteps.insert(workflow, %{name: "Step 1", step_order: 1})
+
+      {:ok, step2} =
+        Accounts.WorkflowSteps.insert(workflow, %{
+          name: "Step 2",
+          step_order: 2,
+          is_final: true
+        })
+
+      {:ok, _} =
+        Accounts.StepTransitions.insert(user.id, %{
+          from_step_id: step1.id,
+          to_step_id: step2.id,
+          project_id: project.id
+        })
+
+      {:ok, workflow} = Accounts.Workflows.update(workflow, %{initial_step_id: step1.id})
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+
+      conn = build_conn() |> authenticate(user)
+
+      conn
+      |> graphql("""
+        mutation { assignWorkflow(taskId: "#{task.id}", workflowId: "#{workflow.id}") { id } }
+      """)
+
+      %{task: task, workflow: workflow, step1: step1, step2: step2, conn: conn}
+    end
+
+    test "starts a step", %{conn: _conn, user: user, project: project} do
+      %{task: task, conn: auth_conn} = setup_workflow_and_task(user, project)
+
+      result =
+        auth_conn
+        |> graphql("""
+          mutation { startStep(taskId: "#{task.id}") { id startedAt } }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] == nil
+      assert result["data"]["startStep"]["startedAt"] != nil
+    end
+
+    test "completes a non-final step", %{conn: _conn, user: user, project: project} do
+      %{task: task, conn: auth_conn} = setup_workflow_and_task(user, project)
+
+      # Start first
+      auth_conn
+      |> graphql("""
+        mutation { startStep(taskId: "#{task.id}") { id } }
+      """)
+
+      result =
+        build_conn()
+        |> authenticate(user)
+        |> graphql("""
+          mutation { completeStep(taskId: "#{task.id}") { id completedAt } }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] == nil
+      assert result["data"]["completeStep"]["completedAt"] == nil
+    end
+
+    test "completes a final step and sets completed_at", %{
+      conn: _conn,
+      user: user,
+      project: project
+    } do
+      %{task: task, step2: step2, conn: auth_conn} = setup_workflow_and_task(user, project)
+
+      # Start, complete, move to final step, start, complete
+      auth_conn
+      |> graphql(~s|mutation { startStep(taskId: "#{task.id}") { id } }|)
+
+      build_conn()
+      |> authenticate(user)
+      |> graphql(~s|mutation { completeStep(taskId: "#{task.id}") { id } }|)
+
+      build_conn()
+      |> authenticate(user)
+      |> graphql(~s|mutation { moveToStep(taskId: "#{task.id}", stepId: "#{step2.id}") { id } }|)
+
+      build_conn()
+      |> authenticate(user)
+      |> graphql(~s|mutation { startStep(taskId: "#{task.id}") { id } }|)
+
+      result =
+        build_conn()
+        |> authenticate(user)
+        |> graphql("""
+          mutation { completeStep(taskId: "#{task.id}") { id completedAt } }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] == nil
+      assert result["data"]["completeStep"]["completedAt"] != nil
+    end
+
+    test "rejects a step with feedback", %{conn: _conn, user: user, project: project} do
+      %{task: task, step2: step2, step1: step1} = setup_workflow_and_task(user, project)
+
+      # Start, complete, move to step2, start, then reject back to step1
+      build_conn()
+      |> authenticate(user)
+      |> graphql(~s|mutation { startStep(taskId: "#{task.id}") { id } }|)
+
+      build_conn()
+      |> authenticate(user)
+      |> graphql(~s|mutation { completeStep(taskId: "#{task.id}") { id } }|)
+
+      build_conn()
+      |> authenticate(user)
+      |> graphql(~s|mutation { moveToStep(taskId: "#{task.id}", stepId: "#{step2.id}") { id } }|)
+
+      build_conn()
+      |> authenticate(user)
+      |> graphql(~s|mutation { startStep(taskId: "#{task.id}") { id } }|)
+
+      result =
+        build_conn()
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            rejectStep(
+              taskId: "#{task.id}"
+              targetStepId: "#{step1.id}"
+              feedback: "needs rework"
+            ) { id currentStepId }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] == nil
+      assert result["data"]["rejectStep"]["currentStepId"] == step1.id
+    end
+  end
+
   describe "task cascade delete" do
     setup [:setup_user_and_project]
 
-    test "deleting parent task also deletes all child tasks", %{conn: conn, user: user, project: project} do
+    test "deleting parent task also deletes all child tasks", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
       {:ok, parent} = Accounts.Tasks.insert(user.id, project.id, %{title: "Parent"})
       {:ok, child1} = Accounts.Tasks.insert(user.id, project.id, %{title: "Child 1"})
       {:ok, child2} = Accounts.Tasks.insert(user.id, project.id, %{title: "Child 2"})
@@ -1170,7 +1341,11 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert result["data"]["tasks"] == []
     end
 
-    test "deleting task also deletes task dependencies and step executions", %{conn: conn, user: user, project: project} do
+    test "deleting task also deletes task dependencies and step executions", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
       {:ok, dep} = Accounts.Tasks.insert(user.id, project.id, %{title: "Dependency"})
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})

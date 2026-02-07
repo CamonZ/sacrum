@@ -123,6 +123,81 @@ defmodule Sacrum.Repo.TaskWorkflows do
     end
   end
 
+  @doc """
+  Starts the current step by updating the latest StepExecution from "entered" to "started".
+  Also sets `started_at` on the task if it hasn't been set yet.
+  """
+  def start_current_step(%Task{} = task) do
+    with {:ok, execution, _step} <- get_latest_step_execution(task),
+         :ok <- validate_execution_status(execution, "entered", :not_in_entered_status) do
+      Multi.new()
+      |> Multi.update(:execution, StepExecution.update_changeset(execution, %{status: "started"}))
+      |> maybe_set_started_at(task)
+      |> Repo.transaction()
+      |> case do
+        {:ok, %{task: task}} ->
+          broadcast_workflow_changed(task)
+          {:ok, task}
+
+        {:ok, %{execution: _execution}} ->
+          task = Repo.get!(Task, task.id)
+          broadcast_workflow_changed(task)
+          {:ok, task}
+
+        {:error, _op, changeset, _changes} ->
+          {:error, changeset}
+      end
+    end
+  end
+
+  @doc """
+  Completes the current step by updating the latest StepExecution from "started" to "completed".
+
+  If the step is final:
+  - If the workflow has `on_done_workflow_id`, chains to that workflow via `assign_workflow/2`
+  - Otherwise, sets `completed_at` on the task
+
+  If the step is not final, just completes the execution (caller uses `move_to_step` to advance).
+  """
+  def complete_current_step(%Task{} = task) do
+    with {:ok, execution, step} <- get_latest_step_execution(task),
+         :ok <- validate_execution_status(execution, "started", :not_in_started_status) do
+      if step.is_final do
+        complete_final_step(task, execution, step)
+      else
+        complete_non_final_step(task, execution)
+      end
+    end
+  end
+
+  @doc """
+  Rejects the current step by updating the latest StepExecution from "started" to "rejected",
+  then moves the task to the target step.
+
+  Optionally stores feedback in the execution's `transition_result` field.
+  """
+  def reject_current_step(%Task{} = task, target_step_id, feedback \\ nil) do
+    with {:ok, execution, _step} <- get_latest_step_execution(task),
+         :ok <- validate_execution_status(execution, "started", :not_in_started_status) do
+      reject_attrs = %{status: "rejected"}
+
+      reject_attrs =
+        if feedback, do: Map.put(reject_attrs, :transition_result, feedback), else: reject_attrs
+
+      Multi.new()
+      |> Multi.update(:execution, StepExecution.update_changeset(execution, reject_attrs))
+      |> Repo.transaction()
+      |> case do
+        {:ok, _} ->
+          task = Repo.get!(Task, task.id)
+          move_to_step(task, target_step_id)
+
+        {:error, _op, changeset, _changes} ->
+          {:error, changeset}
+      end
+    end
+  end
+
   # Private helpers
 
   defp resolve_initial_step(%Workflow{initial_step_id: step_id})
@@ -182,6 +257,95 @@ defmodule Sacrum.Repo.TaskWorkflows do
       :ok
     else
       {:error, :no_transition}
+    end
+  end
+
+  defp get_latest_step_execution(%Task{} = task) do
+    with {:ok, step} <- get_current_step(task) do
+      query =
+        from(se in StepExecution,
+          where:
+            se.task_id == ^task.id and
+              se.step_name == ^step.name and
+              se.workflow_id == ^task.workflow_id,
+          order_by: [desc: se.inserted_at],
+          limit: 1
+        )
+
+      case Repo.one(query) do
+        nil -> {:error, :no_step_execution}
+        execution -> {:ok, execution, step}
+      end
+    end
+  end
+
+  defp validate_execution_status(%StepExecution{status: status}, expected, _error)
+       when status == expected,
+       do: :ok
+
+  defp validate_execution_status(_execution, _expected, error), do: {:error, error}
+
+  defp maybe_set_started_at(multi, %Task{started_at: nil} = task) do
+    Multi.update(multi, :task, Ecto.Changeset.change(task, %{started_at: DateTime.utc_now()}))
+  end
+
+  defp maybe_set_started_at(multi, _task), do: multi
+
+  defp complete_final_step(task, execution, _step) do
+    workflow = Repo.preload(task, :workflow).workflow
+
+    Multi.new()
+    |> Multi.update(:execution, StepExecution.update_changeset(execution, %{status: "completed"}))
+    |> maybe_complete_or_chain(task, workflow)
+    |> Repo.transaction()
+    |> case do
+      {:ok, %{task: task}} ->
+        broadcast_workflow_changed(task)
+        {:ok, task}
+
+      {:ok, _} ->
+        # on_done_workflow chain case — assign_workflow handles its own transaction
+        task = Repo.get!(Task, task.id)
+
+        case chain_to_workflow(task, workflow) do
+          {:ok, task} -> {:ok, task}
+          {:error, reason} -> {:error, reason}
+        end
+
+      {:error, _op, changeset, _changes} ->
+        {:error, changeset}
+    end
+  end
+
+  defp complete_non_final_step(task, execution) do
+    Multi.new()
+    |> Multi.update(:execution, StepExecution.update_changeset(execution, %{status: "completed"}))
+    |> Repo.transaction()
+    |> case do
+      {:ok, _} ->
+        task = Repo.get!(Task, task.id)
+        broadcast_workflow_changed(task)
+        {:ok, task}
+
+      {:error, _op, changeset, _changes} ->
+        {:error, changeset}
+    end
+  end
+
+  defp maybe_complete_or_chain(multi, task, %Workflow{on_done_workflow_id: nil}) do
+    Multi.update(multi, :task, Ecto.Changeset.change(task, %{completed_at: DateTime.utc_now()}))
+  end
+
+  defp maybe_complete_or_chain(multi, _task, %Workflow{on_done_workflow_id: _id}) do
+    # Don't set completed_at — will chain to next workflow after transaction
+    multi
+  end
+
+  defp chain_to_workflow(task, %Workflow{on_done_workflow_id: wf_id})
+       when not is_nil(wf_id) do
+    case Repo.get(Workflow, wf_id) do
+      nil -> {:error, :on_done_workflow_not_found}
+      next_workflow -> assign_workflow(task, next_workflow)
     end
   end
 

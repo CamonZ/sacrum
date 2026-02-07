@@ -14,6 +14,7 @@ defmodule Sacrum.Accounts.Tasks do
   alias Sacrum.Repo
   alias Sacrum.Repo.Tasks, as: TasksRepo
   alias Sacrum.Repo.Schemas.Task
+  alias Sacrum.Repo.Schemas.Workflow
   alias Sacrum.Repo.Broadcaster
 
   @doc """
@@ -69,6 +70,7 @@ defmodule Sacrum.Accounts.Tasks do
     |> Task.create_changeset(attrs)
     |> TasksRepo.insert()
     |> preload_sections()
+    |> maybe_assign_default_workflow(project_id)
     |> Broadcaster.broadcast(:task_created, :project)
   end
 
@@ -202,6 +204,31 @@ defmodule Sacrum.Accounts.Tasks do
   end
 
   defp validate_section_ownership(_task, _attrs), do: :ok
+
+  defp maybe_assign_default_workflow({:ok, %Task{workflow_id: nil} = task}, project_id) do
+    case find_default_workflow(project_id) do
+      nil ->
+        {:ok, task}
+
+      workflow ->
+        case Sacrum.Repo.TaskWorkflows.assign_workflow(task, workflow) do
+          {:ok, task} -> {:ok, task}
+          {:error, _} -> {:ok, task}
+        end
+    end
+  end
+
+  defp maybe_assign_default_workflow(result, _project_id), do: result
+
+  defp find_default_workflow(project_id) do
+    import Ecto.Query
+
+    from(w in Workflow,
+      where: w.project_id == ^project_id and w.is_default == true,
+      limit: 1
+    )
+    |> Repo.one()
+  end
 
   defp preload_sections({:ok, task}), do: {:ok, Repo.preload(task, :sections, force: true)}
   defp preload_sections(error), do: error

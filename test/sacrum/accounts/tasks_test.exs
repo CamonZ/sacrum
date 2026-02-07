@@ -45,6 +45,53 @@ defmodule Sacrum.Accounts.TasksTest do
       assert task.user_id == user.id
       assert task.project_id == project.id
     end
+
+    test "auto-assigns default workflow when project has one" do
+      user = create_user()
+      project = create_project(user)
+
+      {:ok, workflow} =
+        Sacrum.Accounts.Workflows.insert(user.id, project.id, %{
+          name: "Default WF",
+          is_default: true
+        })
+
+      {:ok, step} =
+        Sacrum.Accounts.WorkflowSteps.insert(workflow, %{name: "Step 1", step_order: 1})
+
+      {:ok, workflow} = Sacrum.Repo.Workflows.update(workflow, %{initial_step_id: step.id})
+
+      {:ok, task} = Tasks.insert(user.id, project.id, %{title: "Auto WF Task"})
+
+      assert task.workflow_id == workflow.id
+      assert task.current_step_id == step.id
+    end
+
+    test "does not assign workflow when no default exists" do
+      user = create_user()
+      project = create_project(user)
+
+      {:ok, task} = Tasks.insert(user.id, project.id, %{title: "No WF Task"})
+
+      assert is_nil(task.workflow_id)
+      assert is_nil(task.current_step_id)
+    end
+
+    test "does not fail when default workflow has no steps" do
+      user = create_user()
+      project = create_project(user)
+
+      {:ok, _workflow} =
+        Sacrum.Accounts.Workflows.insert(user.id, project.id, %{
+          name: "Empty Default WF",
+          is_default: true
+        })
+
+      {:ok, task} = Tasks.insert(user.id, project.id, %{title: "Graceful Task"})
+
+      # Should return task without workflow (graceful failure)
+      assert is_nil(task.workflow_id)
+    end
   end
 
   describe "find/2" do

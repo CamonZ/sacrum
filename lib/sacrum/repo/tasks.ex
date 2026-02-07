@@ -21,6 +21,7 @@ defmodule Sacrum.Repo.Tasks do
   alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.Schemas.Project
   alias Sacrum.Repo.Schemas.TaskDependency
+  alias Sacrum.Repo.Schemas.StepExecution
   alias Sacrum.Repo.Broadcaster
 
   @doc """
@@ -57,7 +58,8 @@ defmodule Sacrum.Repo.Tasks do
         user_id: user_id,
         root_only: true,
         blocked: false,
-        completed: false
+        completed: false,
+        step_entered: true
       ]
     )
   end
@@ -171,6 +173,24 @@ defmodule Sacrum.Repo.Tasks do
 
   defp apply_filter(query, :workflow_id, workflow_id) do
     where(query, [t], t.workflow_id == ^workflow_id)
+  end
+
+  defp apply_filter(query, :step_entered, nil), do: query
+  defp apply_filter(query, :step_entered, false), do: query
+
+  defp apply_filter(query, :step_entered, true) do
+    latest_exec_query =
+      from(se in StepExecution,
+        distinct: se.task_id,
+        order_by: [asc: se.task_id, desc: se.inserted_at],
+        select: %{task_id: se.task_id, status: se.status}
+      )
+
+    from(t in query,
+      left_join: le in subquery(latest_exec_query),
+      on: le.task_id == t.id,
+      where: is_nil(t.workflow_id) or le.status == "entered"
+    )
   end
 
   def insert(%Project{id: project_id, user_id: user_id}, attrs) when is_binary(user_id) do
