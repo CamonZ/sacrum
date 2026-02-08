@@ -14,11 +14,6 @@ defmodule SacrumWeb.Router do
     plug :accepts, ["json"]
   end
 
-  pipeline :api_authenticated do
-    plug :accepts, ["json"]
-    plug SacrumWeb.Plugs.ApiAuthPlug
-  end
-
   pipeline :graphql do
     plug :accepts, ["json"]
     plug SacrumWeb.Plugs.ApiAuthPlug
@@ -44,44 +39,6 @@ defmodule SacrumWeb.Router do
       forward "/", Absinthe.Plug.GraphiQL,
         schema: SacrumWeb.Graphql.Schema,
         interface: :playground
-    end
-  end
-
-  scope "/api", SacrumWeb do
-    pipe_through :api_authenticated
-
-    resources "/projects", ProjectController, except: [:new, :edit]
-
-    resources "/workflows", WorkflowController, except: [:new, :edit] do
-      resources "/transitions", WorkflowTransitionController,
-        only: [:create, :delete],
-        param: "id",
-        name: "transition"
-    end
-
-    resources "/workflow-steps", WorkflowStepController, except: [:new, :edit]
-
-    get "/tasks/ready", TaskController, :ready
-
-    resources "/tasks", TaskController, except: [:new, :edit] do
-      get "/path", TaskController, :path
-      get "/blockers", TaskController, :blockers
-
-      post "/dependencies/:dependency_id", TaskController, :create_dependency
-      delete "/dependencies/:dependency_id", TaskController, :delete_dependency
-
-      resources "/sections", SectionController, only: [:create, :update, :delete]
-      resources "/refs", CodeRefController, only: [:index, :create, :delete]
-
-      post "/assign-workflow", TaskWorkflowController, :assign
-      delete "/assign-workflow", TaskWorkflowController, :unassign
-      post "/move-to", TaskWorkflowController, :move_to
-
-      resources "/executions", StepExecutionController, only: [:index, :create]
-    end
-
-    resources "/executions", StepExecutionController, only: [:show, :update] do
-      resources "/logs", SessionLogController, only: [:index, :create]
     end
   end
 
