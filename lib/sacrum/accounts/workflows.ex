@@ -44,14 +44,7 @@ defmodule Sacrum.Accounts.Workflows do
   Delete a workflow.
   """
   def delete(%Workflow{} = workflow) do
-    case WorkflowsRepo.delete(workflow) do
-      {:ok, deleted} ->
-        Broadcaster.broadcast_event(deleted, :workflow_deleted, :project)
-        {:ok, deleted}
-
-      error ->
-        error
-    end
+    WorkflowsRepo.delete(workflow)
   end
 
   @doc """

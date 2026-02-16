@@ -29,7 +29,9 @@ defmodule SacrumWeb.Router do
   scope "/graphql" do
     pipe_through :graphql
 
-    forward "/", Absinthe.Plug, schema: SacrumWeb.Graphql.Schema
+    forward "/", Absinthe.Plug,
+      schema: SacrumWeb.Graphql.Schema,
+      before_send: {SacrumWeb.Graphql.Logger, :log}
   end
 
   if Mix.env() == :dev do

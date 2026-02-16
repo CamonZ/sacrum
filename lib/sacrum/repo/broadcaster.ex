@@ -69,10 +69,14 @@ defmodule Sacrum.Repo.Broadcaster do
   def broadcast_event(entity, event, preload_path) do
     case extract_project_id(entity, preload_path) do
       {:ok, project_id} ->
+        require Logger
+        Logger.info("[Broadcast] #{event} for project #{project_id}")
         channel_func = Map.fetch!(@channel_broadcasts, event)
         apply(SacrumWeb.ProjectChannel, channel_func, [project_id, entity])
 
       :error ->
+        require Logger
+        Logger.warning("[Broadcast] #{event} failed to extract project_id")
         :ok
     end
   end
@@ -185,6 +189,7 @@ defmodule Sacrum.Repo.Broadcaster do
 
   # Private helper for step execution broadcast
   defp broadcast_step_execution_event(execution, event) do
+    require Logger
     task = Repo.get(Sacrum.Repo.Schemas.Task, execution.task_id)
 
     if task do
@@ -192,10 +197,12 @@ defmodule Sacrum.Repo.Broadcaster do
 
       case task.project do
         %Project{id: project_id} ->
+          Logger.info("[Broadcast] #{event} for project #{project_id}")
           channel_func = Map.fetch!(@channel_broadcasts, event)
           apply(SacrumWeb.ProjectChannel, channel_func, [project_id, execution])
 
         _ ->
+          Logger.warning("[Broadcast] #{event} failed to extract project_id")
           :ok
       end
     end
@@ -203,6 +210,7 @@ defmodule Sacrum.Repo.Broadcaster do
 
   # Private helper for session log broadcast
   defp broadcast_session_log_event(log, event) do
+    require Logger
     log = Repo.preload(log, :step_execution)
 
     if log.step_execution do
@@ -213,10 +221,12 @@ defmodule Sacrum.Repo.Broadcaster do
 
         case task.project do
           %Project{id: project_id} ->
+            Logger.info("[Broadcast] #{event} for project #{project_id}")
             channel_func = Map.fetch!(@channel_broadcasts, event)
             apply(SacrumWeb.ProjectChannel, channel_func, [project_id, log])
 
           _ ->
+            Logger.warning("[Broadcast] #{event} failed to extract project_id")
             :ok
         end
       end
@@ -225,6 +235,7 @@ defmodule Sacrum.Repo.Broadcaster do
 
   # Private helper for section broadcast
   defp broadcast_section_event(section, event) do
+    require Logger
     task = Repo.get(Sacrum.Repo.Schemas.Task, section.task_id)
 
     if task do
@@ -232,10 +243,12 @@ defmodule Sacrum.Repo.Broadcaster do
 
       case task.project do
         %Project{id: project_id} ->
+          Logger.info("[Broadcast] #{event} for project #{project_id}")
           channel_func = Map.fetch!(@channel_broadcasts, event)
           apply(SacrumWeb.ProjectChannel, channel_func, [project_id, section])
 
         _ ->
+          Logger.warning("[Broadcast] #{event} failed to extract project_id")
           :ok
       end
     end

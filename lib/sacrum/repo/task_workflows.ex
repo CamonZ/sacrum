@@ -55,7 +55,7 @@ defmodule Sacrum.Repo.TaskWorkflows do
       |> Repo.transaction()
       |> case do
         {:ok, %{task: task}} ->
-          broadcast_workflow_changed(task)
+          broadcast_task_changed(task)
           {:ok, task}
 
         {:error, _op, changeset, _changes} ->
@@ -102,7 +102,7 @@ defmodule Sacrum.Repo.TaskWorkflows do
       |> Repo.transaction()
       |> case do
         {:ok, %{task: task}} ->
-          broadcast_workflow_changed(task)
+          broadcast_task_changed(task)
           {:ok, task}
 
         {:error, _op, changeset, _changes} ->
@@ -136,12 +136,12 @@ defmodule Sacrum.Repo.TaskWorkflows do
       |> Repo.transaction()
       |> case do
         {:ok, %{task: task}} ->
-          broadcast_workflow_changed(task)
+          broadcast_task_changed(task)
           {:ok, task}
 
         {:ok, %{execution: _execution}} ->
           task = Repo.get!(Task, task.id)
-          broadcast_workflow_changed(task)
+          broadcast_task_changed(task)
           {:ok, task}
 
         {:error, _op, changeset, _changes} ->
@@ -300,7 +300,7 @@ defmodule Sacrum.Repo.TaskWorkflows do
     |> Repo.transaction()
     |> case do
       {:ok, %{task: task}} ->
-        broadcast_workflow_changed(task)
+        broadcast_task_changed(task)
         {:ok, task}
 
       {:ok, _} ->
@@ -324,7 +324,7 @@ defmodule Sacrum.Repo.TaskWorkflows do
     |> case do
       {:ok, _} ->
         task = Repo.get!(Task, task.id)
-        broadcast_workflow_changed(task)
+        broadcast_task_changed(task)
         {:ok, task}
 
       {:error, _op, changeset, _changes} ->
@@ -349,14 +349,17 @@ defmodule Sacrum.Repo.TaskWorkflows do
     end
   end
 
-  defp broadcast_workflow_changed(task) do
+  defp broadcast_task_changed(task) do
+    require Logger
     task = Repo.preload(task, :project)
 
     case task.project do
-      %Project{slug: slug} ->
-        SacrumWeb.ProjectChannel.broadcast_workflow_changed(slug, task)
+      %Project{id: project_id} ->
+        Logger.info("[Broadcast] task_updated for project #{project_id}")
+        SacrumWeb.ProjectChannel.broadcast_task_updated(project_id, task)
 
       _ ->
+        Logger.warning("[Broadcast] task_updated failed to extract project_id")
         :ok
     end
   end

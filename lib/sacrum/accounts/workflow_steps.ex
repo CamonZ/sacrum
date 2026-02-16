@@ -53,14 +53,7 @@ defmodule Sacrum.Accounts.WorkflowSteps do
   Delete a workflow step.
   """
   def delete(%WorkflowStep{} = step) do
-    case WorkflowStepsRepo.delete(step) do
-      {:ok, deleted} ->
-        Broadcaster.broadcast_event(deleted, :step_deleted, workflow: :project)
-        {:ok, deleted}
-
-      error ->
-        error
-    end
+    WorkflowStepsRepo.delete(step)
   end
 
   @doc """

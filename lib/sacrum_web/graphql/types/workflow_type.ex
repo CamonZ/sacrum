@@ -127,8 +127,9 @@ defmodule SacrumWeb.Graphql.Types.WorkflowType do
       arg(:transitions, non_null(list_of(non_null(:workflow_transition_input))))
 
       resolve(fn %{id: id, transitions: transitions}, %{context: %{current_user: user}} ->
-        with {:ok, workflow} <- Accounts.Workflows.get_by(user.id, conditions: [id: id]) do
-          Accounts.Workflows.sync_transitions(workflow, transitions)
+        with {:ok, workflow} <- Accounts.Workflows.get_by(user.id, conditions: [id: id]),
+             {:ok, _transitions} <- Accounts.Workflows.sync_transitions(workflow, transitions) do
+          {:ok, workflow}
         end
       end)
     end
