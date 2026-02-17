@@ -30,14 +30,6 @@ defmodule SacrumWeb.ProjectChannel do
     SacrumWeb.Endpoint.broadcast("project:#{project_id}", "task_deleted", %{id: task.id})
   end
 
-  def broadcast_workflow_changed(project_id, task) do
-    SacrumWeb.Endpoint.broadcast(
-      "project:#{project_id}",
-      "workflow_changed",
-      workflow_payload(task)
-    )
-  end
-
   # Workflow broadcasts
 
   def broadcast_workflow_created(project_id, workflow) do
@@ -184,16 +176,6 @@ defmodule SacrumWeb.ProjectChannel do
     }
   end
 
-  defp workflow_payload(task) do
-    %{
-      id: task.id,
-      short_id: task.short_id,
-      title: task.title,
-      workflow_id: task.workflow_id,
-      current_step_id: task.current_step_id,
-      updated_at: task.updated_at
-    }
-  end
 
   defp workflow_entity_payload(workflow) do
     %{

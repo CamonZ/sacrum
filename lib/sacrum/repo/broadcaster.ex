@@ -14,7 +14,6 @@ defmodule Sacrum.Repo.Broadcaster do
     task_created: :broadcast_task_created,
     task_updated: :broadcast_task_updated,
     task_deleted: :broadcast_task_deleted,
-    workflow_changed: :broadcast_workflow_changed,
     workflow_created: :broadcast_workflow_created,
     workflow_updated: :broadcast_workflow_updated,
     workflow_deleted: :broadcast_workflow_deleted,

@@ -135,13 +135,15 @@ defmodule Sacrum.Repo.TaskWorkflows do
       |> maybe_set_started_at(task)
       |> Repo.transaction()
       |> case do
-        {:ok, %{task: task}} ->
+        {:ok, %{task: task, execution: execution}} ->
           broadcast_task_changed(task)
+          broadcast_execution_changed(execution)
           {:ok, task}
 
-        {:ok, %{execution: _execution}} ->
+        {:ok, %{execution: execution}} ->
           task = Repo.get!(Task, task.id)
           broadcast_task_changed(task)
+          broadcast_execution_changed(execution)
           {:ok, task}
 
         {:error, _op, changeset, _changes} ->
@@ -188,7 +190,8 @@ defmodule Sacrum.Repo.TaskWorkflows do
       |> Multi.update(:execution, StepExecution.update_changeset(execution, reject_attrs))
       |> Repo.transaction()
       |> case do
-        {:ok, _} ->
+        {:ok, %{execution: execution}} ->
+          broadcast_execution_changed(execution)
           task = Repo.get!(Task, task.id)
           move_to_step(task, target_step_id)
 
@@ -299,11 +302,13 @@ defmodule Sacrum.Repo.TaskWorkflows do
     |> maybe_complete_or_chain(task, workflow)
     |> Repo.transaction()
     |> case do
-      {:ok, %{task: task}} ->
+      {:ok, %{task: task, execution: execution}} ->
         broadcast_task_changed(task)
+        broadcast_execution_changed(execution)
         {:ok, task}
 
-      {:ok, _} ->
+      {:ok, %{execution: execution}} ->
+        broadcast_execution_changed(execution)
         # on_done_workflow chain case — assign_workflow handles its own transaction
         task = Repo.get!(Task, task.id)
 
@@ -322,9 +327,10 @@ defmodule Sacrum.Repo.TaskWorkflows do
     |> Multi.update(:execution, StepExecution.update_changeset(execution, %{status: "completed"}))
     |> Repo.transaction()
     |> case do
-      {:ok, _} ->
+      {:ok, %{execution: execution}} ->
         task = Repo.get!(Task, task.id)
         broadcast_task_changed(task)
+        broadcast_execution_changed(execution)
         {:ok, task}
 
       {:error, _op, changeset, _changes} ->
@@ -346,6 +352,28 @@ defmodule Sacrum.Repo.TaskWorkflows do
     case Repo.get(Workflow, wf_id) do
       nil -> {:error, :on_done_workflow_not_found}
       next_workflow -> assign_workflow(task, next_workflow)
+    end
+  end
+
+  defp broadcast_execution_changed(execution) do
+    require Logger
+    task = Repo.get(Task, execution.task_id)
+
+    if task do
+      task = Repo.preload(task, :project)
+
+      case task.project do
+        %Project{id: project_id} ->
+          Logger.info("[Broadcast] step_execution_status_changed for project #{project_id}")
+
+          SacrumWeb.ProjectChannel.broadcast_step_execution_status_changed(
+            project_id,
+            execution
+          )
+
+        _ ->
+          :ok
+      end
     end
   end
 

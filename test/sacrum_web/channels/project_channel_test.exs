@@ -94,18 +94,6 @@ defmodule SacrumWeb.ProjectChannelTest do
       assert id == task.id
     end
 
-    test "broadcast_workflow_changed sends workflow_changed event" do
-      {_user, project, socket} = setup_socket()
-      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}")
-
-      task = build_task(project)
-
-      SacrumWeb.ProjectChannel.broadcast_workflow_changed(project.id, task)
-
-      assert_broadcast "workflow_changed", payload
-      assert payload.id == task.id
-      assert payload.workflow_id == task.workflow_id
-    end
   end
 
   defp build_task(project) do
