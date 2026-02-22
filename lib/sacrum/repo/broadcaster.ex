@@ -27,7 +27,9 @@ defmodule Sacrum.Repo.Broadcaster do
     session_log_created: :broadcast_session_log_created,
     section_created: :broadcast_section_created,
     section_updated: :broadcast_section_updated,
-    section_deleted: :broadcast_section_deleted
+    section_deleted: :broadcast_section_deleted,
+    run_step: :broadcast_run_step,
+    cancel_step: :broadcast_cancel_step
   }
 
   @doc """
@@ -251,5 +253,45 @@ defmodule Sacrum.Repo.Broadcaster do
           :ok
       end
     end
+  end
+
+  @doc """
+  Broadcast a run_step event with step execution and step definition data.
+
+  Takes a step execution, its corresponding workflow step definition, and project ID,
+  then constructs the combined payload and broadcasts to the daemon.
+
+  Args:
+    - execution: the StepExecution to broadcast
+    - step: the WorkflowStep definition
+    - project_id: the project ID to broadcast to
+
+  Returns:
+    - :ok
+  """
+  def broadcast_run_step(execution, step, project_id) do
+    require Logger
+    Logger.info("[Broadcast] run_step for project #{project_id}")
+    data = %{execution: execution, step: step}
+    SacrumWeb.ProjectChannel.broadcast_run_step(project_id, data)
+  end
+
+  @doc """
+  Broadcast a cancel_step event with step execution and task information.
+
+  Takes a step execution and project ID, then constructs the payload and broadcasts.
+
+  Args:
+    - execution: the StepExecution to cancel
+    - project_id: the project ID to broadcast to
+
+  Returns:
+    - :ok
+  """
+  def broadcast_cancel_step(execution, project_id) do
+    require Logger
+    Logger.info("[Broadcast] cancel_step for project #{project_id}")
+    data = %{step_execution_id: execution.id, task_id: execution.task_id}
+    SacrumWeb.ProjectChannel.broadcast_cancel_step(project_id, data)
   end
 end

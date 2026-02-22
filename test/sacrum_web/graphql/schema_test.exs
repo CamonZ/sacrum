@@ -713,6 +713,105 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["inputTokens"] == 100
       assert data["outputTokens"] == 50
     end
+
+    test "runStep creates pending StepExecution", %{conn: conn, user: user, project: project} do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+      {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "step_1", goal: "Do something"})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            runStep(
+              taskId: "#{task.id}"
+              workflowId: "#{wf.id}"
+              stepId: "#{step.id}"
+            ) { id stepName status taskId }
+          }
+        """)
+        |> json_response(200)
+
+      data = result["data"]["runStep"]
+      assert data["stepName"] == "step_1"
+      assert data["status"] == "pending"
+      assert data["taskId"] == task.id
+      assert data["id"] != nil
+    end
+
+    test "runStep with invalid task_id returns error", %{conn: conn, user: user, project: project} do
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+      {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "step_1", goal: "Do something"})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            runStep(
+              taskId: "#{Ecto.UUID.generate()}"
+              workflowId: "#{wf.id}"
+              stepId: "#{step.id}"
+            ) { id stepName status taskId }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] != nil
+    end
+
+    test "runStep with invalid step_id returns error", %{conn: conn, user: user, project: project} do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            runStep(
+              taskId: "#{task.id}"
+              workflowId: "#{wf.id}"
+              stepId: "#{Ecto.UUID.generate()}"
+            ) { id stepName status taskId }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] != nil
+    end
+
+    test "cancelStepExecution returns execution", %{conn: conn, user: user, project: project} do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+
+      {:ok, exec} =
+        Accounts.StepExecutions.insert(user.id, %{
+          task_id: task.id,
+          workflow_id: wf.id,
+          project_id: project.id,
+          step_name: "step_1",
+          status: "running"
+        })
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            cancelStepExecution(
+              stepExecutionId: "#{exec.id}"
+            ) { id stepName status taskId }
+          }
+        """)
+        |> json_response(200)
+
+      data = result["data"]["cancelStepExecution"]
+      assert data["id"] == exec.id
+      assert data["stepName"] == "step_1"
+      assert data["taskId"] == task.id
+    end
   end
 
   describe "session log mutations" do

@@ -164,5 +164,45 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
         end
       end)
     end
+
+    field :run_step, :step_execution do
+      arg(:task_id, non_null(:uuid4))
+      arg(:workflow_id, non_null(:uuid4))
+      arg(:step_id, non_null(:uuid4))
+
+      resolve(fn args, %{context: %{current_user: user}} ->
+        task_id = Map.get(args, :task_id)
+        workflow_id = Map.get(args, :workflow_id)
+        step_id = Map.get(args, :step_id)
+
+        with {:ok, task} <- Accounts.Tasks.find(user.id, task_id),
+             {:ok, _workflow} <- Accounts.Workflows.get_by(user.id, conditions: [id: workflow_id]),
+             {:ok, step} <- Accounts.WorkflowSteps.get_by(user.id, conditions: [id: step_id]) do
+          attrs = %{
+            task_id: task_id,
+            workflow_id: workflow_id,
+            step_name: step.name,
+            status: "pending",
+            project_id: task.project_id
+          }
+
+          with {:ok, execution} <- Accounts.StepExecutions.insert(user.id, attrs) do
+            Sacrum.Repo.Broadcaster.broadcast_run_step(execution, step, task.project_id)
+            {:ok, execution}
+          end
+        end
+      end)
+    end
+
+    field :cancel_step_execution, :step_execution do
+      arg(:step_execution_id, non_null(:uuid4))
+
+      resolve(fn %{step_execution_id: execution_id}, %{context: %{current_user: user}} ->
+        with {:ok, execution} <- Accounts.StepExecutions.get_by(user.id, conditions: [id: execution_id]) do
+          Sacrum.Repo.Broadcaster.broadcast_cancel_step(execution, execution.project_id)
+          {:ok, execution}
+        end
+      end)
+    end
   end
 end
