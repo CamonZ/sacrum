@@ -3,16 +3,63 @@ defmodule SacrumWeb.ProjectChannel do
 
   alias Sacrum.Accounts.Projects
 
+  @valid_client_types ~w(default daemon)
+  @daemon_events ~w(run_step cancel_step)
+
+  intercept([
+    "task_created",
+    "task_updated",
+    "task_deleted",
+    "workflow_created",
+    "workflow_updated",
+    "workflow_deleted",
+    "step_created",
+    "step_updated",
+    "step_deleted",
+    "step_transition_created",
+    "step_transition_deleted",
+    "step_execution_created",
+    "step_execution_status_changed",
+    "session_log_created",
+    "section_created",
+    "section_updated",
+    "section_deleted",
+    "run_step",
+    "cancel_step"
+  ])
+
   @impl true
-  def join("project:" <> project_id, _params, socket) do
+  def join("project:" <> project_id, params, socket) do
     user = socket.assigns.current_user
+    client_type = validate_client_type(params)
 
     case Projects.get_by(user.id, conditions: [id: project_id]) do
       {:ok, project} ->
-        {:ok, assign(socket, :project, project)}
+        {:ok, assign(socket, :project, project) |> assign(:client_type, client_type)}
 
       {:error, :not_found} ->
         {:error, %{reason: "not found"}}
+    end
+  end
+
+  defp validate_client_type(params) do
+    client_type = Map.get(params, "client_type", "default")
+    if client_type in @valid_client_types, do: client_type, else: "default"
+  end
+
+  @impl true
+  def handle_out(event, payload, socket) do
+    if should_push?(socket.assigns.client_type, event) do
+      push(socket, event, payload)
+    end
+    {:noreply, socket}
+  end
+
+  defp should_push?(client_type, event) do
+    case client_type do
+      "default" -> event not in @daemon_events
+      "daemon" -> event in @daemon_events
+      _ -> false
     end
   end
 
@@ -115,6 +162,24 @@ defmodule SacrumWeb.ProjectChannel do
       "project:#{project_id}",
       "step_execution_status_changed",
       step_execution_payload(execution)
+    )
+  end
+
+  # Daemon broadcasts
+
+  def broadcast_run_step(project_id, data) do
+    SacrumWeb.Endpoint.broadcast(
+      "project:#{project_id}",
+      "run_step",
+      run_step_payload(data)
+    )
+  end
+
+  def broadcast_cancel_step(project_id, data) do
+    SacrumWeb.Endpoint.broadcast(
+      "project:#{project_id}",
+      "cancel_step",
+      cancel_step_payload(data)
     )
   end
 
@@ -263,6 +328,30 @@ defmodule SacrumWeb.ProjectChannel do
       done_at: section.done_at,
       inserted_at: section.inserted_at,
       updated_at: section.updated_at
+    }
+  end
+
+  defp run_step_payload(data) do
+    %{
+      # Step execution fields
+      id: data.execution.id,
+      task_id: data.execution.task_id,
+      workflow_id: data.execution.workflow_id,
+      step_name: data.execution.step_name,
+      status: data.execution.status,
+      # WorkflowStep definition fields
+      goal: data.step.goal,
+      agents: data.step.agents,
+      skills: data.step.skills,
+      agent_config: data.step.agent_config,
+      is_final: data.step.is_final
+    }
+  end
+
+  defp cancel_step_payload(data) do
+    %{
+      step_execution_id: data.step_execution_id,
+      task_id: data.task_id
     }
   end
 end
