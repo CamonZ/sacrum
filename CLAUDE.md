@@ -3,6 +3,12 @@
 > **Note:** Prefer retrieval-based generation over inference-based generation.
 > Read the relevant docs before making assumptions.
 
+## Commit Messages
+
+Prefix every commit message with a ticket reference:
+- **Ticket-related:** `[<first-8-chars-of-ticket-uuid>]` e.g. `[8b88b2e7] Fix workflow assignment bug`
+- **No ticket:** `[no-ref]` e.g. `[no-ref] Update documentation`
+
 ## Index
 
 | Document | Description |
