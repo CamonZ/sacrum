@@ -1,8 +1,4 @@
-# CLAUDE.md
-
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
-## Project Overview
+# Project Overview
 
 Sacrum is an API-only Phoenix 1.8 application (Elixir ~> 1.15) with PostgreSQL. There is no browser UI — all endpoints serve JSON via the `:api` and `:api_authenticated` router pipelines. Authentication is bearer token based (API tokens with Argon2 password hashing). It uses Bandit as the HTTP server and Ecto for data access.
 
@@ -42,6 +38,8 @@ All schemas use `:binary_id` (UUID) primary keys and `utc_datetime_usec` timesta
 
 Bearer token auth via `Authorization: Bearer sac_...` header. Tokens are generated with 32 random bytes, prefixed with `sac_`, and only the SHA256 hash is stored. The `SacrumWeb.Plugs.ApiAuthPlug` plug handles extraction and verification, assigning `:current_user` and `:api_token` to the connection.
 
+> **Related:** See [Domain Model](domain-model.md) for GraphQL API details and [Vertebrae Guide](vertebrae-guide.md) for CLI configuration.
+
 ### Web Layer (`lib/sacrum_web/`)
 
 - **Router pipelines**: `:browser` (HTML), `:api` (JSON), `:api_authenticated` (JSON + bearer token auth)
@@ -61,7 +59,15 @@ Bearer token auth via `Authorization: Bearer sac_...` header. Tokens are generat
 - Router `scope` blocks auto-prefix module aliases; don't add redundant aliases.
 - Use `Ecto.Changeset.get_field/2` to access changeset fields, not map access syntax on structs.
 - Predicate functions end with `?` (not `is_` prefix); reserve `is_` for guards.
-- See `AGENTS.md` for comprehensive Phoenix 1.8, LiveView, HEEx, Ecto, and Tailwind CSS v4 guidelines.
+- See [phoenix-guidelines.md](phoenix-guidelines.md) for comprehensive Phoenix 1.8, LiveView, HEEx, Ecto, and Tailwind CSS v4 guidelines.
+
+## Related Documentation
+
+| Document | Focus |
+|----------|-------|
+| [Domain Model](domain-model.md) | GraphQL API, entities, real-time events |
+| [Phoenix Guidelines](phoenix-guidelines.md) | LiveView, HEEx, Ecto, Tailwind conventions |
+| [Vertebrae Guide](vertebrae-guide.md) | `vtb` CLI for task management |
 
 ## Database
 
