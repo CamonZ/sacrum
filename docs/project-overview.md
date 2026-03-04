@@ -22,15 +22,7 @@ The `precommit` alias runs in the `:test` environment (configured in `cli/0`).
 
 ## Architecture
 
-### Data Layer (`lib/sacrum/repo/`)
-
-The project uses a repository pattern with dedicated modules instead of Phoenix contexts:
-
-- `Sacrum.Repo` - Ecto repository (PostgreSQL)
-- `Sacrum.Repo.Users` - User CRUD operations
-- `Sacrum.Repo.ApiTokens` - API token CRUD operations
-- `Sacrum.Repo.Schemas.User` - User schema (UUID primary keys, Argon2 password hashing)
-- `Sacrum.Repo.Schemas.ApiToken` - API token schema (SHA256 hashed, `sac_` prefixed plaintext)
+The project uses a **three-layer architecture** (Accounts → Repo → Ecto) instead of Phoenix contexts. See [Repository & Accounts Pattern](patterns.md) for the full reference.
 
 All schemas use `:binary_id` (UUID) primary keys and `utc_datetime_usec` timestamps.
 
@@ -59,14 +51,14 @@ Bearer token auth via `Authorization: Bearer sac_...` header. Tokens are generat
 - Router `scope` blocks auto-prefix module aliases; don't add redundant aliases.
 - Use `Ecto.Changeset.get_field/2` to access changeset fields, not map access syntax on structs.
 - Predicate functions end with `?` (not `is_` prefix); reserve `is_` for guards.
-- See [phoenix-guidelines.md](phoenix-guidelines.md) for comprehensive Phoenix 1.8, LiveView, HEEx, Ecto, and Tailwind CSS v4 guidelines.
+- See [phoenix-guidelines.md](phoenix-guidelines.md) for Elixir, Ecto, Mix, test, and router conventions.
 
 ## Related Documentation
 
 | Document | Focus |
 |----------|-------|
 | [Domain Model](domain-model.md) | GraphQL API, entities, real-time events |
-| [Phoenix Guidelines](phoenix-guidelines.md) | LiveView, HEEx, Ecto, Tailwind conventions |
+| [Phoenix Guidelines](phoenix-guidelines.md) | Elixir, Ecto, Mix, test, router conventions |
 | [Vertebrae Guide](vertebrae-guide.md) | `vtb` CLI for task management |
 
 ## Database
