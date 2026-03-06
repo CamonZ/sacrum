@@ -18,11 +18,13 @@ defmodule Sacrum.Repo.Tasks do
 
   import Ecto.Query
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.Task
-  alias Sacrum.Repo.Schemas.Project
-  alias Sacrum.Repo.Schemas.TaskDependency
-  alias Sacrum.Repo.Schemas.StepExecution
   alias Sacrum.Repo.Broadcaster
+  alias Sacrum.Repo.Schemas.Project
+  alias Sacrum.Repo.Schemas.StepExecution
+  alias Sacrum.Repo.Schemas.Task
+  alias Sacrum.Repo.Schemas.TaskDependency
+  alias Sacrum.Repo.TaskDependencies
+  alias Sacrum.Repo.TaskHierarchy
 
   @doc """
   Lists tasks with optional filters.
@@ -241,7 +243,7 @@ defmodule Sacrum.Repo.Tasks do
   end
 
   defp maybe_update_parent(task, %{"parent_id" => nil}) do
-    case Sacrum.Repo.TaskHierarchy.remove_parent(task) do
+    case TaskHierarchy.remove_parent(task) do
       {:ok, updated} -> {:ok, updated}
       {:error, :not_found} -> {:ok, task}
       error -> error
@@ -249,41 +251,49 @@ defmodule Sacrum.Repo.Tasks do
   end
 
   defp maybe_update_parent(task, %{"parent_id" => parent_id}) do
-    case Repo.get(Sacrum.Repo.Schemas.Task, parent_id) do
+    case Repo.get(Task, parent_id) do
       nil ->
         {:error, :not_found}
 
       parent ->
-        Sacrum.Repo.TaskHierarchy.set_parent(task, parent)
+        TaskHierarchy.set_parent(task, parent)
     end
   end
 
   defp maybe_update_parent(task, _attrs), do: {:ok, task}
 
   defp maybe_update_dependencies(task, %{"depends_on_ids" => ids}) when is_list(ids) do
-    current = Sacrum.Repo.TaskDependencies.get_direct_blockers(task)
+    current = TaskDependencies.get_direct_blockers(task)
     current_ids = MapSet.new(Enum.map(current, & &1.id))
     desired_ids = MapSet.new(ids)
 
-    to_remove = MapSet.difference(current_ids, desired_ids)
+    remove_stale_dependencies(task, MapSet.difference(current_ids, desired_ids))
+    to_add = MapSet.difference(desired_ids, current_ids)
+    results = add_new_dependencies(to_add, task)
+    translate_dependency_error(results)
+  end
 
+  defp maybe_update_dependencies(_task, _attrs), do: :ok
+
+  defp remove_stale_dependencies(task, to_remove) do
     for id <- to_remove do
-      case Repo.get(Sacrum.Repo.Schemas.Task, id) do
+      case Repo.get(Task, id) do
         nil -> :ok
-        dep -> Sacrum.Repo.TaskDependencies.remove_dependency(task, dep)
+        dep -> TaskDependencies.remove_dependency(task, dep)
       end
     end
+  end
 
-    to_add = MapSet.difference(desired_ids, current_ids)
-
-    results =
-      for id <- to_add do
-        case Repo.get(Sacrum.Repo.Schemas.Task, id) do
-          nil -> {:error, :not_found}
-          dep -> Sacrum.Repo.TaskDependencies.add_dependency(task, dep)
-        end
+  defp add_new_dependencies(to_add, task) do
+    for id <- to_add do
+      case Repo.get(Task, id) do
+        nil -> {:error, :not_found}
+        dep -> TaskDependencies.add_dependency(task, dep)
       end
+    end
+  end
 
+  defp translate_dependency_error(results) do
     case Enum.find(results, &match?({:error, _}, &1)) do
       nil ->
         :ok
@@ -305,14 +315,14 @@ defmodule Sacrum.Repo.Tasks do
     end
   end
 
-  defp maybe_update_dependencies(_task, _attrs), do: :ok
-
   def delete(%Task{} = task, opts \\ []) do
     cascade = Keyword.get(opts, :cascade, true)
 
     unless cascade do
-      from(t in Task, where: t.parent_id == ^task.id)
-      |> Repo.update_all(set: [parent_id: nil])
+      Repo.update_all(
+        from(t in Task, where: t.parent_id == ^task.id),
+        set: [parent_id: nil]
+      )
     end
 
     case Repo.delete(task) do

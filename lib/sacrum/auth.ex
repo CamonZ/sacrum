@@ -80,8 +80,10 @@ defmodule Sacrum.Auth do
   def update_token_last_used(plaintext_token) when is_binary(plaintext_token) do
     token_hash = hash_token(plaintext_token)
 
-    from(t in ApiToken, where: t.token_hash == ^token_hash)
-    |> Repo.update_all(set: [last_used_at: DateTime.utc_now()])
+    Repo.update_all(
+      from(t in ApiToken, where: t.token_hash == ^token_hash),
+      set: [last_used_at: DateTime.utc_now()]
+    )
 
     :ok
   end
@@ -92,7 +94,6 @@ defmodule Sacrum.Auth do
   end
 
   defp hash_token(token) do
-    :crypto.hash(:sha256, token)
-    |> Base.encode64()
+    Base.encode64(:crypto.hash(:sha256, token))
   end
 end

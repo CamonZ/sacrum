@@ -21,6 +21,7 @@ defmodule Sacrum.Repo.TaskDependencies do
   """
 
   import Ecto.Query
+  alias Ecto.Adapters.SQL
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.Schemas.TaskDependency
@@ -56,14 +57,15 @@ defmodule Sacrum.Repo.TaskDependencies do
   end
 
   def get_direct_blockers(%Task{id: task_id}) do
-    from(d in TaskDependency,
-      where: d.task_id == ^task_id,
-      join: t in Task,
-      on: t.id == d.depends_on_id,
-      select: t,
-      order_by: [asc: t.inserted_at]
+    Repo.all(
+      from(d in TaskDependency,
+        where: d.task_id == ^task_id,
+        join: t in Task,
+        on: t.id == d.depends_on_id,
+        select: t,
+        order_by: [asc: t.inserted_at]
+      )
     )
-    |> Repo.all()
   end
 
   def get_blockers(%Task{} = task) do
@@ -84,7 +86,7 @@ defmodule Sacrum.Repo.TaskDependencies do
     blocker_cte = union_all(base_query, ^recursive_query)
 
     # Main query using the CTE
-    from(t in Task)
+    Task
     |> with_cte("blockers", as: ^blocker_cte)
     |> recursive_ctes(true)
     |> join(:inner, [t], b in fragment("blockers"), on: t.id == b.id)
@@ -95,14 +97,15 @@ defmodule Sacrum.Repo.TaskDependencies do
   end
 
   def get_blocking(%Task{id: task_id}) do
-    from(d in TaskDependency,
-      where: d.depends_on_id == ^task_id,
-      join: t in Task,
-      on: t.id == d.task_id,
-      select: t,
-      order_by: [asc: t.inserted_at]
+    Repo.all(
+      from(d in TaskDependency,
+        where: d.depends_on_id == ^task_id,
+        join: t in Task,
+        on: t.id == d.task_id,
+        select: t,
+        order_by: [asc: t.inserted_at]
+      )
     )
-    |> Repo.all()
   end
 
   @doc """
@@ -138,7 +141,7 @@ defmodule Sacrum.Repo.TaskDependencies do
     LIMIT 1
     """
 
-    case Ecto.Adapters.SQL.query(Repo, sql, [from_bin, to_bin]) do
+    case SQL.query(Repo, sql, [from_bin, to_bin]) do
       {:ok, %{rows: [[path]]}} -> {:ok, Enum.map(path, &Ecto.UUID.cast!/1)}
       {:ok, %{rows: []}} -> {:ok, []}
     end
@@ -150,21 +153,18 @@ defmodule Sacrum.Repo.TaskDependencies do
     reachable_from?(depends_on_id, task_id, MapSet.new())
   end
 
+  defp reachable_from?(target, target, _visited), do: true
+
   defp reachable_from?(current, target, visited) do
-    if current == target do
-      true
+    if MapSet.member?(visited, current) do
+      false
     else
-      if MapSet.member?(visited, current) do
-        false
-      else
-        visited = MapSet.put(visited, current)
+      visited = MapSet.put(visited, current)
 
-        deps =
-          from(d in TaskDependency, where: d.task_id == ^current, select: d.depends_on_id)
-          |> Repo.all()
+      deps =
+        Repo.all(from(d in TaskDependency, where: d.task_id == ^current, select: d.depends_on_id))
 
-        Enum.any?(deps, fn dep_id -> reachable_from?(dep_id, target, visited) end)
-      end
+      Enum.any?(deps, fn dep_id -> reachable_from?(dep_id, target, visited) end)
     end
   end
 end

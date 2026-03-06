@@ -35,7 +35,7 @@ defmodule SacrumWeb.ProjectChannel do
 
     case Projects.get_by(user.id, conditions: [id: project_id]) do
       {:ok, project} ->
-        {:ok, assign(socket, :project, project) |> assign(:client_type, client_type)}
+        {:ok, socket |> assign(:project, project) |> assign(:client_type, client_type)}
 
       {:error, :not_found} ->
         {:error, %{reason: "not found"}}
@@ -52,6 +52,7 @@ defmodule SacrumWeb.ProjectChannel do
     if should_push?(socket.assigns.client_type, event) do
       push(socket, event, payload)
     end
+
     {:noreply, socket}
   end
 
@@ -240,7 +241,6 @@ defmodule SacrumWeb.ProjectChannel do
       updated_at: task.updated_at
     }
   end
-
 
   defp workflow_entity_payload(workflow) do
     %{

@@ -43,11 +43,12 @@ defmodule Sacrum.Repo.TaskHierarchy do
   end
 
   def get_children(%Task{id: parent_id}) do
-    from(t in Task,
-      where: t.parent_id == ^parent_id,
-      order_by: [asc: t.inserted_at]
+    Repo.all(
+      from(t in Task,
+        where: t.parent_id == ^parent_id,
+        order_by: [asc: t.inserted_at]
+      )
     )
-    |> Repo.all()
   end
 
   def get_ancestors(%Task{parent_id: nil}), do: []
@@ -65,7 +66,7 @@ defmodule Sacrum.Repo.TaskHierarchy do
         )
       )
 
-    from(t in Task)
+    Task
     |> with_cte("ancestors", as: ^ancestor_cte)
     |> recursive_ctes(true)
     |> join(:inner, [t], a in fragment("ancestors"), on: t.id == a.id)
@@ -87,7 +88,7 @@ defmodule Sacrum.Repo.TaskHierarchy do
         )
       )
 
-    from(t in Task)
+    Task
     |> with_cte("descendants", as: ^descendant_cte)
     |> recursive_ctes(true)
     |> join(:inner, [t], d in fragment("descendants"), on: t.id == d.id)

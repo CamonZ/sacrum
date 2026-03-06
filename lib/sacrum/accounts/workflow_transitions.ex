@@ -11,8 +11,8 @@ defmodule Sacrum.Accounts.WorkflowTransitions do
     default_order: [asc: :inserted_at]
 
   alias Sacrum.Repo
-  alias Sacrum.Repo.WorkflowTransitions, as: WorkflowTransitionsRepo
   alias Sacrum.Repo.Schemas.WorkflowTransition
+  alias Sacrum.Repo.WorkflowTransitions, as: WorkflowTransitionsRepo
 
   @doc """
   Insert a new workflow transition for a user.

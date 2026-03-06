@@ -6,9 +6,9 @@ defmodule Sacrum.Accounts.Sections do
   """
 
   alias Sacrum.Repo
-  alias Sacrum.Repo.TaskSections
-  alias Sacrum.Repo.Schemas.TaskSection
   alias Sacrum.Repo.Broadcaster
+  alias Sacrum.Repo.Schemas.TaskSection
+  alias Sacrum.Repo.TaskSections
 
   @doc """
   Get a section by ID, scoped to a user.

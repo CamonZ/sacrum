@@ -12,10 +12,13 @@ defmodule Sacrum.Accounts.Tasks do
     default_order: [asc: :inserted_at]
 
   alias Sacrum.Repo
-  alias Sacrum.Repo.Tasks, as: TasksRepo
+  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.Schemas.Workflow
-  alias Sacrum.Repo.Broadcaster
+  alias Sacrum.Repo.TaskDependencies
+  alias Sacrum.Repo.TaskHierarchy
+  alias Sacrum.Repo.Tasks, as: TasksRepo
+  alias Sacrum.Repo.TaskWorkflows
 
   @doc """
   Find a task by UUID or short_id within a user's scope.
@@ -110,7 +113,7 @@ defmodule Sacrum.Accounts.Tasks do
         {:ok, task}
 
       nil ->
-        case Sacrum.Repo.TaskHierarchy.remove_parent(task) do
+        case TaskHierarchy.remove_parent(task) do
           {:ok, updated} -> {:ok, updated}
           {:error, :not_found} -> {:ok, task}
           error -> error
@@ -119,7 +122,7 @@ defmodule Sacrum.Accounts.Tasks do
       id ->
         case Repo.get(Task, id) do
           nil -> {:error, :not_found}
-          parent -> Sacrum.Repo.TaskHierarchy.set_parent(task, parent)
+          parent -> TaskHierarchy.set_parent(task, parent)
         end
     end
   end
@@ -127,32 +130,37 @@ defmodule Sacrum.Accounts.Tasks do
   defp maybe_update_dependencies(task, attrs)
        when is_map_key(attrs, "depends_on_ids") or is_map_key(attrs, :depends_on_ids) do
     ids = Map.get(attrs, "depends_on_ids", Map.get(attrs, :depends_on_ids))
-    # Get current dependencies
-    current = Sacrum.Repo.TaskDependencies.get_direct_blockers(task)
+    current = TaskDependencies.get_direct_blockers(task)
     current_ids = MapSet.new(Enum.map(current, & &1.id))
     desired_ids = MapSet.new(ids)
 
-    # Remove dependencies that are no longer desired
-    to_remove = MapSet.difference(current_ids, desired_ids)
+    remove_stale_dependencies(task, MapSet.difference(current_ids, desired_ids))
+    to_add = MapSet.difference(desired_ids, current_ids)
+    results = add_new_dependencies(to_add, task)
+    translate_dependency_error(results)
+  end
 
+  defp maybe_update_dependencies(_task, _attrs), do: :ok
+
+  defp remove_stale_dependencies(task, to_remove) do
     for id <- to_remove do
       case Repo.get(Task, id) do
         nil -> :ok
-        dep -> Sacrum.Repo.TaskDependencies.remove_dependency(task, dep)
+        dep -> TaskDependencies.remove_dependency(task, dep)
       end
     end
+  end
 
-    # Add new dependencies
-    to_add = MapSet.difference(desired_ids, current_ids)
-
-    results =
-      for id <- to_add do
-        case Repo.get(Task, id) do
-          nil -> {:error, :not_found}
-          dep -> Sacrum.Repo.TaskDependencies.add_dependency(task, dep)
-        end
+  defp add_new_dependencies(to_add, task) do
+    for id <- to_add do
+      case Repo.get(Task, id) do
+        nil -> {:error, :not_found}
+        dep -> TaskDependencies.add_dependency(task, dep)
       end
+    end
+  end
 
+  defp translate_dependency_error(results) do
     case Enum.find(results, &match?({:error, _}, &1)) do
       nil ->
         :ok
@@ -173,8 +181,6 @@ defmodule Sacrum.Accounts.Tasks do
         error
     end
   end
-
-  defp maybe_update_dependencies(_task, _attrs), do: :ok
 
   defp validate_section_ownership(%Task{} = task, attrs) do
     sections = Map.get(attrs, "sections", Map.get(attrs, :sections))
@@ -216,7 +222,7 @@ defmodule Sacrum.Accounts.Tasks do
         {:ok, task}
 
       workflow ->
-        case Sacrum.Repo.TaskWorkflows.assign_workflow(task, workflow) do
+        case TaskWorkflows.assign_workflow(task, workflow) do
           {:ok, task} -> {:ok, task}
           {:error, _} -> {:ok, task}
         end
@@ -228,11 +234,12 @@ defmodule Sacrum.Accounts.Tasks do
   defp find_default_workflow(project_id) do
     import Ecto.Query
 
-    from(w in Workflow,
-      where: w.project_id == ^project_id and w.is_default == true,
-      limit: 1
+    Repo.one(
+      from(w in Workflow,
+        where: w.project_id == ^project_id and w.is_default == true,
+        limit: 1
+      )
     )
-    |> Repo.one()
   end
 
   defp preload_sections({:ok, task}), do: {:ok, Repo.preload(task, :sections, force: true)}

@@ -7,6 +7,7 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
   import Absinthe.Resolution.Helpers
 
   alias Sacrum.Accounts
+  alias Sacrum.Repo.Broadcaster
 
   object :step_execution do
     field :id, :id
@@ -187,7 +188,7 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
           }
 
           with {:ok, execution} <- Accounts.StepExecutions.insert(user.id, attrs) do
-            Sacrum.Repo.Broadcaster.broadcast_run_step(execution, step, task.project_id)
+            Broadcaster.broadcast_run_step(execution, step, task.project_id)
             {:ok, execution}
           end
         end
@@ -198,8 +199,9 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
       arg(:step_execution_id, non_null(:uuid4))
 
       resolve(fn %{step_execution_id: execution_id}, %{context: %{current_user: user}} ->
-        with {:ok, execution} <- Accounts.StepExecutions.get_by(user.id, conditions: [id: execution_id]) do
-          Sacrum.Repo.Broadcaster.broadcast_cancel_step(execution, execution.project_id)
+        with {:ok, execution} <-
+               Accounts.StepExecutions.get_by(user.id, conditions: [id: execution_id]) do
+          Broadcaster.broadcast_cancel_step(execution, execution.project_id)
           {:ok, execution}
         end
       end)

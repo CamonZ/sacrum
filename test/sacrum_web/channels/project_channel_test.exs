@@ -176,7 +176,9 @@ defmodule SacrumWeb.ProjectChannelTest do
   describe "client_type filtering - daemon client" do
     test "daemon client receives run_step event" do
       {_user, project, socket} = setup_socket()
-      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
+
+      {:ok, _reply, _socket} =
+        subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
 
       data = %{
         execution: build_step_execution(project),
@@ -191,7 +193,9 @@ defmodule SacrumWeb.ProjectChannelTest do
 
     test "daemon client receives cancel_step event" do
       {_user, project, socket} = setup_socket()
-      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
+
+      {:ok, _reply, _socket} =
+        subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
 
       data = %{step_execution_id: Ecto.UUID.generate(), task_id: Ecto.UUID.generate()}
       SacrumWeb.ProjectChannel.broadcast_cancel_step(project.id, data)
@@ -202,7 +206,9 @@ defmodule SacrumWeb.ProjectChannelTest do
 
     test "daemon client does NOT receive task_created event" do
       {_user, project, socket} = setup_socket()
-      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
+
+      {:ok, _reply, _socket} =
+        subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
 
       task = build_task(project)
       SacrumWeb.ProjectChannel.broadcast_task_created(project.id, task)
@@ -212,7 +218,9 @@ defmodule SacrumWeb.ProjectChannelTest do
 
     test "daemon client does NOT receive workflow_created event" do
       {_user, project, socket} = setup_socket()
-      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
+
+      {:ok, _reply, _socket} =
+        subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
 
       workflow = build_workflow(project)
       SacrumWeb.ProjectChannel.broadcast_workflow_created(project.id, workflow)
@@ -222,7 +230,9 @@ defmodule SacrumWeb.ProjectChannelTest do
 
     test "daemon client does NOT receive section_created event" do
       {_user, project, socket} = setup_socket()
-      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
+
+      {:ok, _reply, _socket} =
+        subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
 
       section = build_section(project)
       SacrumWeb.ProjectChannel.broadcast_section_created(project.id, section)

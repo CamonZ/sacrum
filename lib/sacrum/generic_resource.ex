@@ -110,7 +110,7 @@ defmodule Sacrum.GenericResource do
       end
 
       defp merge_preloads(module_preloads, runtime_preloads) do
-        (module_preloads ++ runtime_preloads) |> Enum.uniq()
+        Enum.uniq(module_preloads ++ runtime_preloads)
       end
     end
   end

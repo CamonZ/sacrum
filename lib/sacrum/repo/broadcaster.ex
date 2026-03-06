@@ -214,23 +214,16 @@ defmodule Sacrum.Repo.Broadcaster do
     require Logger
     log = Repo.preload(log, :step_execution)
 
-    if log.step_execution do
-      task = Repo.get(Sacrum.Repo.Schemas.Task, log.step_execution.task_id)
-
-      if task do
-        task = Repo.preload(task, :project)
-
-        case task.project do
-          %Project{id: project_id} ->
-            Logger.info("[Broadcast] #{event} for project #{project_id}")
-            channel_func = Map.fetch!(@channel_broadcasts, event)
-            apply(SacrumWeb.ProjectChannel, channel_func, [project_id, log])
-
-          _ ->
-            Logger.warning("[Broadcast] #{event} failed to extract project_id")
-            :ok
-        end
-      end
+    with %{step_execution: %{task_id: task_id}} when not is_nil(task_id) <- log,
+         task when not is_nil(task) <- Repo.get(Sacrum.Repo.Schemas.Task, task_id),
+         %{project: %Project{id: project_id}} <- Repo.preload(task, :project) do
+      Logger.info("[Broadcast] #{event} for project #{project_id}")
+      channel_func = Map.fetch!(@channel_broadcasts, event)
+      apply(SacrumWeb.ProjectChannel, channel_func, [project_id, log])
+    else
+      _ ->
+        Logger.warning("[Broadcast] #{event} failed to extract project_id")
+        :ok
     end
   end
 

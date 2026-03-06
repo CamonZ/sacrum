@@ -24,10 +24,10 @@ defmodule Sacrum.Repo.Workflows do
 
   import Ecto.Query
   alias Sacrum.Repo
+  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.Project
   alias Sacrum.Repo.Schemas.Workflow
   alias Sacrum.Repo.Schemas.WorkflowTransition
-  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.SyncHelper
 
   def insert(%Project{id: project_id, user_id: user_id}, attrs),
@@ -101,7 +101,8 @@ defmodule Sacrum.Repo.Workflows do
         end)
       end,
       to_update_fn: fn incoming, existing_by_target ->
-        Enum.filter(incoming, fn m ->
+        incoming
+        |> Enum.filter(fn m ->
           Map.has_key?(existing_by_target, m["to_workflow_id"])
         end)
         |> Enum.map(fn m -> {existing_by_target[m["to_workflow_id"]], m} end)
@@ -111,12 +112,13 @@ defmodule Sacrum.Repo.Workflows do
         end)
       end,
       build_changeset_fn: fn m ->
-        %WorkflowTransition{user_id: workflow.user_id, project_id: workflow.project_id}
-        |> WorkflowTransition.create_changeset(Map.merge(m, %{"from_workflow_id" => workflow.id}))
+        WorkflowTransition.create_changeset(
+          %WorkflowTransition{user_id: workflow.user_id, project_id: workflow.project_id},
+          Map.merge(m, %{"from_workflow_id" => workflow.id})
+        )
       end,
       build_update_changeset_fn: fn existing_rec, m ->
-        existing_rec
-        |> Ecto.Changeset.change(%{
+        Ecto.Changeset.change(existing_rec, %{
           label: m["label"],
           target_step_id: m["target_step_id"]
         })

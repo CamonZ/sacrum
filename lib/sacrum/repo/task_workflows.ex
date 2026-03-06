@@ -35,8 +35,8 @@ defmodule Sacrum.Repo.TaskWorkflows do
   import Ecto.Query
   alias Ecto.Multi
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.{Task, Workflow, WorkflowStep, StepExecution, StepTransition}
   alias Sacrum.Repo.Schemas.Project
+  alias Sacrum.Repo.Schemas.{StepExecution, StepTransition, Task, Workflow, WorkflowStep}
 
   @doc """
   Assigns a workflow to a task, setting current_step_id to the workflow's initial step.

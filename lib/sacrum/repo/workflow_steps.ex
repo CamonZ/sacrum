@@ -28,11 +28,11 @@ defmodule Sacrum.Repo.WorkflowSteps do
 
   import Ecto.Query
   alias Sacrum.Repo
+  alias Sacrum.Repo.Broadcaster
+  alias Sacrum.Repo.Schemas.StepTransition
   alias Sacrum.Repo.Schemas.Workflow
   alias Sacrum.Repo.Schemas.WorkflowStep
-  alias Sacrum.Repo.Schemas.StepTransition
   alias Sacrum.Repo.SyncHelper
-  alias Sacrum.Repo.Broadcaster
 
   @doc """
   Insert a new workflow step. Accepts Workflow struct (with or without user_id).
@@ -94,8 +94,7 @@ defmodule Sacrum.Repo.WorkflowSteps do
     with :ok <- validate_no_duplicate_targets(transitions),
          :ok <- validate_same_workflow(step, transitions) do
       existing =
-        from(t in StepTransition, where: t.from_step_id == ^step.id)
-        |> Repo.all()
+        Repo.all(from(t in StepTransition, where: t.from_step_id == ^step.id))
 
       SyncHelper.diff_and_sync(existing, transitions, %{
         target_key: :to_step_id,
@@ -130,11 +129,12 @@ defmodule Sacrum.Repo.WorkflowSteps do
         end,
         fetch_final_fn: fn ->
           updated =
-            from(t in StepTransition,
-              where: t.from_step_id == ^step.id,
-              order_by: [asc: t.inserted_at]
+            Repo.all(
+              from(t in StepTransition,
+                where: t.from_step_id == ^step.id,
+                order_by: [asc: t.inserted_at]
+              )
             )
-            |> Repo.all()
 
           {:ok, updated}
         end
@@ -168,10 +168,12 @@ defmodule Sacrum.Repo.WorkflowSteps do
       :ok
     else
       count =
-        from(s in WorkflowStep,
-          where: s.id in ^to_ids and s.workflow_id == ^wf_id
+        Repo.aggregate(
+          from(s in WorkflowStep,
+            where: s.id in ^to_ids and s.workflow_id == ^wf_id
+          ),
+          :count
         )
-        |> Repo.aggregate(:count)
 
       if count == length(to_ids) do
         :ok

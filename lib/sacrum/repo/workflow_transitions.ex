@@ -25,25 +25,27 @@ defmodule Sacrum.Repo.WorkflowTransitions do
   alias Sacrum.Repo.Schemas.WorkflowTransition
 
   def list_for_project(project_id) when is_binary(project_id) do
-    from(t in WorkflowTransition,
-      join: w in Workflow,
-      on: w.id == t.from_workflow_id,
-      where: w.project_id == ^project_id,
-      preload: [:from_workflow, :to_workflow],
-      order_by: [asc: t.inserted_at]
+    Repo.all(
+      from(t in WorkflowTransition,
+        join: w in Workflow,
+        on: w.id == t.from_workflow_id,
+        where: w.project_id == ^project_id,
+        preload: [:from_workflow, :to_workflow],
+        order_by: [asc: t.inserted_at]
+      )
     )
-    |> Repo.all()
   end
 
   def list_for_project(project_id, user_id) when is_binary(project_id) and is_binary(user_id) do
-    from(t in WorkflowTransition,
-      join: w in Workflow,
-      on: w.id == t.from_workflow_id,
-      where: w.project_id == ^project_id and t.user_id == ^user_id,
-      preload: [:from_workflow, :to_workflow],
-      order_by: [asc: t.inserted_at]
+    Repo.all(
+      from(t in WorkflowTransition,
+        join: w in Workflow,
+        on: w.id == t.from_workflow_id,
+        where: w.project_id == ^project_id and t.user_id == ^user_id,
+        preload: [:from_workflow, :to_workflow],
+        order_by: [asc: t.inserted_at]
+      )
     )
-    |> Repo.all()
   end
 
   @doc """

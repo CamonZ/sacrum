@@ -29,7 +29,7 @@ defmodule SacrumWeb.Graphql.Types.CustomScalars do
       %Absinthe.Blueprint.Input.String{value: value} ->
         case DateTime.from_iso8601(value) do
           {:ok, datetime, _offset} -> {:ok, datetime}
-          :error -> :error
+          {:error, _reason} -> :error
         end
 
       null when is_nil(null) ->
@@ -52,7 +52,7 @@ defmodule SacrumWeb.Graphql.Types.CustomScalars do
       %Absinthe.Blueprint.Input.String{value: value} ->
         case Jason.decode(value) do
           {:ok, decoded} -> {:ok, decoded}
-          :error -> :error
+          {:error, _reason} -> :error
         end
 
       null when is_nil(null) ->

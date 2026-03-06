@@ -11,9 +11,9 @@ defmodule Sacrum.Accounts.Workflows do
     preloads: [:transitions],
     default_order: [asc: :display_order, asc: :inserted_at]
 
-  alias Sacrum.Repo.Workflows, as: WorkflowsRepo
-  alias Sacrum.Repo.Schemas.Workflow
   alias Sacrum.Repo.Broadcaster
+  alias Sacrum.Repo.Schemas.Workflow
+  alias Sacrum.Repo.Workflows, as: WorkflowsRepo
 
   @doc """
   Insert a new workflow for a user within a project.

@@ -11,8 +11,8 @@ defmodule Sacrum.Accounts.StepExecutions do
     default_order: [asc: :inserted_at]
 
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.StepExecution
   alias Sacrum.Repo.Broadcaster
+  alias Sacrum.Repo.Schemas.StepExecution
 
   @doc """
   Insert a new step execution for a user.

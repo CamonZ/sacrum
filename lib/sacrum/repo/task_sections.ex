@@ -40,7 +40,8 @@ defmodule Sacrum.Repo.TaskSections do
   end
 
   def delete(%TaskSection{} = section) do
-    Repo.delete(section)
+    section
+    |> Repo.delete()
     |> Broadcaster.broadcast_section(:section_deleted)
   end
 end

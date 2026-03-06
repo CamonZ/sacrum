@@ -11,9 +11,9 @@ defmodule Sacrum.Accounts.WorkflowSteps do
     preloads: [],
     default_order: [asc: :step_order, asc: :inserted_at]
 
-  alias Sacrum.Repo.WorkflowSteps, as: WorkflowStepsRepo
-  alias Sacrum.Repo.Schemas.WorkflowStep
   alias Sacrum.Repo.Broadcaster
+  alias Sacrum.Repo.Schemas.WorkflowStep
+  alias Sacrum.Repo.WorkflowSteps, as: WorkflowStepsRepo
 
   @doc """
   Insert a new workflow step for a user within a workflow.

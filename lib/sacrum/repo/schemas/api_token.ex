@@ -32,7 +32,6 @@ defmodule Sacrum.Repo.Schemas.ApiToken do
   Changeset for updating last_used_at timestamp.
   """
   def touch_changeset(api_token) do
-    api_token
-    |> change(last_used_at: DateTime.utc_now())
+    change(api_token, last_used_at: DateTime.utc_now())
   end
 end

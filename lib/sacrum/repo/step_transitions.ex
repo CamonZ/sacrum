@@ -55,27 +55,21 @@ defmodule Sacrum.Repo.StepTransitions do
     from_id = attrs[:from_step_id] || attrs["from_step_id"]
     to_id = attrs[:to_step_id] || attrs["to_step_id"]
 
-    case {from_id, to_id} do
-      {nil, _} ->
-        :ok
+    if is_nil(from_id) or is_nil(to_id) do
+      :ok
+    else
+      compare_step_workflows(from_id, to_id)
+    end
+  end
 
-      {_, nil} ->
-        :ok
+  defp compare_step_workflows(from_id, to_id) do
+    from_step = Repo.get(WorkflowStep, from_id)
+    to_step = Repo.get(WorkflowStep, to_id)
 
-      {from_id, to_id} ->
-        from_step = Repo.get(WorkflowStep, from_id)
-        to_step = Repo.get(WorkflowStep, to_id)
-
-        cond do
-          is_nil(from_step) or is_nil(to_step) ->
-            :ok
-
-          from_step.workflow_id == to_step.workflow_id ->
-            :ok
-
-          true ->
-            {:error, :different_workflows}
-        end
+    cond do
+      is_nil(from_step) or is_nil(to_step) -> :ok
+      from_step.workflow_id == to_step.workflow_id -> :ok
+      true -> {:error, :different_workflows}
     end
   end
 end

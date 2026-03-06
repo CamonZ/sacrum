@@ -10,9 +10,9 @@ defmodule Sacrum.Accounts.StepTransitions do
     preloads: [],
     default_order: [asc: :inserted_at]
 
-  alias Sacrum.Repo.StepTransitions, as: StepTransitionsRepo
-  alias Sacrum.Repo.Schemas.StepTransition
   alias Sacrum.Repo.Broadcaster
+  alias Sacrum.Repo.Schemas.StepTransition
+  alias Sacrum.Repo.StepTransitions, as: StepTransitionsRepo
 
   @doc """
   Insert a new step transition for a user.
