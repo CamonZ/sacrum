@@ -26,6 +26,8 @@ defmodule Sacrum.Repo.TaskDependencies do
   alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.Schemas.TaskDependency
 
+  @spec add_dependency(Task.t(), Task.t()) ::
+          {:ok, TaskDependency.t()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
   def add_dependency(%Task{} = task, %Task{} = depends_on) do
     cond do
       task.project_id != depends_on.project_id ->
@@ -49,6 +51,8 @@ defmodule Sacrum.Repo.TaskDependencies do
     end
   end
 
+  @spec remove_dependency(Task.t(), Task.t()) ::
+          {:ok, TaskDependency.t()} | {:error, :not_found} | {:error, Ecto.Changeset.t()}
   def remove_dependency(%Task{} = task, %Task{} = depends_on) do
     case Repo.get_by(TaskDependency, task_id: task.id, depends_on_id: depends_on.id) do
       nil -> {:error, :not_found}
@@ -56,6 +60,7 @@ defmodule Sacrum.Repo.TaskDependencies do
     end
   end
 
+  @spec get_direct_blockers(Task.t()) :: [Task.t()]
   def get_direct_blockers(%Task{id: task_id}) do
     Repo.all(
       from(d in TaskDependency,
@@ -68,6 +73,7 @@ defmodule Sacrum.Repo.TaskDependencies do
     )
   end
 
+  @spec get_blockers(Task.t()) :: [Task.t()]
   def get_blockers(%Task{} = task) do
     # Build the recursive CTE query for transitive blockers
     base_query =
@@ -96,6 +102,7 @@ defmodule Sacrum.Repo.TaskDependencies do
     |> Repo.all()
   end
 
+  @spec get_blocking(Task.t()) :: [Task.t()]
   def get_blocking(%Task{id: task_id}) do
     Repo.all(
       from(d in TaskDependency,
@@ -112,6 +119,7 @@ defmodule Sacrum.Repo.TaskDependencies do
   Finds the shortest dependency path between two tasks using a recursive CTE.
   Returns {:ok, [task_ids]} or {:ok, []} if no path exists.
   """
+  @spec find_path(Task.t(), Task.t()) :: {:ok, [String.t()]}
   def find_path(%Task{id: id}, %Task{id: id}), do: {:ok, [id]}
 
   def find_path(%Task{id: from_id}, %Task{id: to_id}) do

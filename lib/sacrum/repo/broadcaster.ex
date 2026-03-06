@@ -46,6 +46,8 @@ defmodule Sacrum.Repo.Broadcaster do
     - {:ok, entity} on success
     - {:error, reason} on error
   """
+  @spec broadcast({:ok, struct()} | {:error, term()}, atom(), atom() | keyword()) ::
+          {:ok, struct()} | {:error, term()}
   def broadcast({:ok, entity}, event, preload_path) do
     broadcast_event(entity, event, preload_path)
     {:ok, entity}
@@ -67,6 +69,7 @@ defmodule Sacrum.Repo.Broadcaster do
   Returns:
     - :ok
   """
+  @spec broadcast_event(struct(), atom(), atom() | keyword()) :: :ok
   def broadcast_event(entity, event, preload_path) do
     case extract_project_id(entity, preload_path) do
       {:ok, project_id} ->
@@ -141,6 +144,8 @@ defmodule Sacrum.Repo.Broadcaster do
     - {:ok, execution} on success
     - {:error, reason} on error
   """
+  @spec broadcast_step_execution({:ok, struct()} | {:error, term()}, atom()) ::
+          {:ok, struct()} | {:error, term()}
   def broadcast_step_execution({:ok, execution}, event) do
     broadcast_step_execution_event(execution, event)
     {:ok, execution}
@@ -161,6 +166,8 @@ defmodule Sacrum.Repo.Broadcaster do
     - {:ok, log} on success
     - {:error, reason} on error
   """
+  @spec broadcast_session_log({:ok, struct()} | {:error, term()}, atom()) ::
+          {:ok, struct()} | {:error, term()}
   def broadcast_session_log({:ok, log}, event) do
     broadcast_session_log_event(log, event)
     {:ok, log}
@@ -181,6 +188,8 @@ defmodule Sacrum.Repo.Broadcaster do
     - {:ok, section} on success
     - {:error, reason} on error
   """
+  @spec broadcast_section({:ok, struct()} | {:error, term()}, atom()) ::
+          {:ok, struct()} | {:error, term()}
   def broadcast_section({:ok, section}, event) do
     broadcast_section_event(section, event)
     {:ok, section}
@@ -262,6 +271,7 @@ defmodule Sacrum.Repo.Broadcaster do
   Returns:
     - :ok
   """
+  @spec broadcast_run_step(struct(), struct(), String.t()) :: :ok
   def broadcast_run_step(execution, step, project_id) do
     require Logger
     Logger.info("[Broadcast] run_step for project #{project_id}")
@@ -281,6 +291,7 @@ defmodule Sacrum.Repo.Broadcaster do
   Returns:
     - :ok
   """
+  @spec broadcast_cancel_step(struct(), String.t()) :: :ok
   def broadcast_cancel_step(execution, project_id) do
     require Logger
     Logger.info("[Broadcast] cancel_step for project #{project_id}")

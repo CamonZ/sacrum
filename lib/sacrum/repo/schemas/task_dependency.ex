@@ -2,6 +2,7 @@ defmodule Sacrum.Repo.Schemas.TaskDependency do
   use Ecto.Schema
   import Ecto.Changeset
 
+  @type t :: %__MODULE__{}
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
@@ -14,6 +15,7 @@ defmodule Sacrum.Repo.Schemas.TaskDependency do
     timestamps(type: :utc_datetime_usec)
   end
 
+  @spec changeset(t(), map()) :: Ecto.Changeset.t()
   def changeset(dep, attrs \\ %{}) do
     dep
     |> cast(attrs, [])

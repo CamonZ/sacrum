@@ -2,6 +2,7 @@ defmodule Sacrum.Repo.Schemas.User do
   use Ecto.Schema
   import Ecto.Changeset
 
+  @type t :: %__MODULE__{}
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
@@ -22,6 +23,7 @@ defmodule Sacrum.Repo.Schemas.User do
   @doc """
   Changeset for creating a new user.
   """
+  @spec create_changeset(t(), map()) :: Ecto.Changeset.t()
   def create_changeset(user, attrs) do
     user
     |> cast(attrs, [:email, :username, :name, :password])
@@ -40,6 +42,7 @@ defmodule Sacrum.Repo.Schemas.User do
   @doc """
   Changeset for updating user profile fields.
   """
+  @spec update_changeset(t(), map()) :: Ecto.Changeset.t()
   def update_changeset(user, attrs) do
     user
     |> cast(attrs, [:email, :username, :name])
@@ -55,6 +58,7 @@ defmodule Sacrum.Repo.Schemas.User do
   @doc """
   Changeset for changing password.
   """
+  @spec password_changeset(t(), map()) :: Ecto.Changeset.t()
   def password_changeset(user, attrs) do
     user
     |> cast(attrs, [:password])
@@ -78,6 +82,7 @@ defmodule Sacrum.Repo.Schemas.User do
   @doc """
   Verifies the password against the stored hash.
   """
+  @spec valid_password?(t(), String.t()) :: boolean()
   def valid_password?(%__MODULE__{password_hash: hash}, password)
       when is_binary(hash) and byte_size(password) > 0 do
     Argon2.verify_pass(password, hash)

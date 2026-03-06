@@ -24,6 +24,8 @@ defmodule Sacrum.Repo.WorkflowTransitions do
   alias Sacrum.Repo.Schemas.Workflow
   alias Sacrum.Repo.Schemas.WorkflowTransition
 
+  @spec list_for_project(String.t()) :: [WorkflowTransition.t()]
+  @spec list_for_project(String.t(), String.t()) :: [WorkflowTransition.t()]
   def list_for_project(project_id) when is_binary(project_id) do
     Repo.all(
       from(t in WorkflowTransition,
@@ -52,6 +54,7 @@ defmodule Sacrum.Repo.WorkflowTransitions do
   Insert a new workflow transition with user_id.
   Extracts from_workflow_id, to_workflow_id, and project_id from attrs.
   """
+  @spec insert(String.t(), map()) :: {:ok, WorkflowTransition.t()} | {:error, Ecto.Changeset.t()}
   def insert(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
     from_workflow_id = Map.get(attrs, "from_workflow_id") || Map.get(attrs, :from_workflow_id)
     to_workflow_id = Map.get(attrs, "to_workflow_id") || Map.get(attrs, :to_workflow_id)

@@ -24,8 +24,10 @@ defmodule Sacrum.Repo.Projects do
 
   use Sacrum.GenericRepo, schema: Sacrum.Repo.Schemas.Project
 
+  @spec insert(User.t(), map()) :: {:ok, Project.t()} | {:error, Ecto.Changeset.t()}
   def insert(%User{id: user_id}, attrs), do: insert(user_id, attrs)
 
+  @spec insert(String.t(), map()) :: {:ok, Project.t()} | {:error, Ecto.Changeset.t()}
   def insert(user_id, attrs) when is_binary(user_id) do
     %Project{user_id: user_id}
     |> Project.create_changeset(attrs)
@@ -34,6 +36,7 @@ defmodule Sacrum.Repo.Projects do
 
   defoverridable insert: 2
 
+  @spec update(Project.t(), map()) :: {:ok, Project.t()} | {:error, Ecto.Changeset.t()}
   def update(%Project{} = project, attrs) do
     project
     |> Project.update_changeset(attrs)

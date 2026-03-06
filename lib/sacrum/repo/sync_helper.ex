@@ -68,6 +68,7 @@ defmodule Sacrum.Repo.SyncHelper do
   })
   ```
   """
+  @spec diff_and_sync(list(), list(), map()) :: {:ok, list()} | {:error, Ecto.Changeset.t()}
   def diff_and_sync(existing, incoming_maps, config)
       when is_list(existing) and is_list(incoming_maps) and is_map(config) do
     {to_delete, to_insert, to_update} = compute_diffs(existing, incoming_maps, config)

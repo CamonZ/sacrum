@@ -16,6 +16,7 @@ defmodule Sacrum.Accounts.CodeRefs do
   @doc """
   Insert a code ref for a task.
   """
+  @spec insert_for_task(String.t(), map()) :: {:ok, CodeRef.t()} | {:error, Ecto.Changeset.t()}
   def insert_for_task(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
     task_id = Map.get(attrs, "task_id") || Map.get(attrs, :task_id)
     project_id = Map.get(attrs, "project_id") || Map.get(attrs, :project_id)
@@ -28,6 +29,7 @@ defmodule Sacrum.Accounts.CodeRefs do
   @doc """
   Insert a code ref for a task section.
   """
+  @spec insert_for_section(String.t(), map()) :: {:ok, CodeRef.t()} | {:error, Ecto.Changeset.t()}
   def insert_for_section(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
     section_id = Map.get(attrs, "section_id") || Map.get(attrs, :section_id)
     project_id = Map.get(attrs, "project_id") || Map.get(attrs, :project_id)
@@ -40,6 +42,7 @@ defmodule Sacrum.Accounts.CodeRefs do
   @doc """
   Delete a code ref.
   """
+  @spec delete(CodeRef.t()) :: {:ok, CodeRef.t()} | {:error, Ecto.Changeset.t()}
   def delete(%CodeRef{} = ref) do
     CodeRefsRepo.delete(ref)
   end

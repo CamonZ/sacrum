@@ -41,6 +41,7 @@ defmodule Sacrum.Repo.Tasks do
     - `:root_only` - when true, exclude tasks that have a parent
     - `:workflow_id` - filter by assigned workflow
   """
+  @spec list_tasks(keyword()) :: [Task.t()]
   def list_tasks(opts) do
     Task
     |> apply_filters(opts)
@@ -53,6 +54,7 @@ defmodule Sacrum.Repo.Tasks do
   Returns tasks that are not completed and have no
   incomplete blockers for a project.
   """
+  @spec ready(String.t(), String.t()) :: [Task.t()]
   def ready(project_id, user_id) do
     list_tasks(
       conditions: [
@@ -194,6 +196,7 @@ defmodule Sacrum.Repo.Tasks do
     )
   end
 
+  @spec insert(Project.t(), map()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
   def insert(%Project{id: project_id, user_id: user_id}, attrs) when is_binary(user_id) do
     insert(project_id, user_id, attrs)
   end
@@ -206,6 +209,7 @@ defmodule Sacrum.Repo.Tasks do
     |> Broadcaster.broadcast(:task_created, :project)
   end
 
+  @spec insert(String.t(), map()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
   def insert(project_id, attrs) when is_binary(project_id) and is_map(attrs) do
     %Task{project_id: project_id}
     |> Task.create_changeset(attrs)
@@ -216,6 +220,7 @@ defmodule Sacrum.Repo.Tasks do
 
   defoverridable insert: 2
 
+  @spec insert(String.t(), String.t(), map()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
   def insert(project_id, user_id, attrs) when is_binary(project_id) and is_binary(user_id) do
     %Task{project_id: project_id, user_id: user_id}
     |> Task.create_changeset(attrs)
@@ -224,6 +229,7 @@ defmodule Sacrum.Repo.Tasks do
     |> Broadcaster.broadcast(:task_created, :project)
   end
 
+  @spec update(Task.t(), map()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
   def update(%Task{} = task, attrs) do
     task = Repo.preload(task, :sections)
 
@@ -315,6 +321,7 @@ defmodule Sacrum.Repo.Tasks do
     end
   end
 
+  @spec delete(Task.t(), keyword()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
   def delete(%Task{} = task, opts \\ []) do
     cascade = Keyword.get(opts, :cascade, true)
 

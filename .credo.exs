@@ -25,7 +25,18 @@
         {Credo.Check.Design.TagFIXME, false},
         {Credo.Check.Refactor.LongQuoteBlocks, false},
         {Credo.Check.Refactor.PipeChainStart, []},
-        {Credo.Check.Readability.SinglePipe, []}
+        {Credo.Check.Readability.SinglePipe, []},
+        {Credo.Check.Readability.Specs, []},
+        {Credo.Check.Refactor.WithClauses, []},
+        {Credo.Check.Refactor.RedundantWithClauseResult, []},
+        {Credo.Check.Refactor.AppendSingleItem, []},
+        {Credo.Check.Refactor.FilterCount, []},
+        {Credo.Check.Refactor.FilterFilter, []},
+        {Credo.Check.Refactor.FilterReject, []},
+        {Credo.Check.Refactor.RejectReject, []},
+        {Credo.Check.Refactor.MapJoin, []},
+        {Credo.Check.Refactor.MapInto, []},
+        {Credo.Check.Refactor.MapMap, []}
       ]
     }
   ]

@@ -26,6 +26,7 @@ defmodule Sacrum.Repo.StepExecutions do
   Insert a new step execution with user_id.
   Extracts task_id and project_id from attrs.
   """
+  @spec insert(String.t(), map()) :: {:ok, StepExecution.t()} | {:error, Ecto.Changeset.t()}
   def insert(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
     task_id = Map.get(attrs, "task_id") || Map.get(attrs, :task_id)
     project_id = Map.get(attrs, "project_id") || Map.get(attrs, :project_id)

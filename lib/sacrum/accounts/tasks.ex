@@ -23,6 +23,7 @@ defmodule Sacrum.Accounts.Tasks do
   @doc """
   Find a task by UUID or short_id within a user's scope.
   """
+  @spec find(String.t(), String.t()) :: {:ok, Task.t()} | {:error, :not_found}
   def find(user_id, id) when is_binary(user_id) do
     case Ecto.UUID.cast(id) do
       {:ok, _uuid} ->
@@ -47,6 +48,7 @@ defmodule Sacrum.Accounts.Tasks do
     - `:root_only` - when true, exclude tasks with parents
     - `:workflow_id` - filter by assigned workflow
   """
+  @spec list_tasks(String.t(), keyword()) :: [Task.t()]
   def list_tasks(user_id, opts \\ []) when is_binary(user_id) do
     conditions = [{:user_id, user_id} | Keyword.get(opts, :conditions, [])]
     TasksRepo.list_tasks(Keyword.put(opts, :conditions, conditions))
@@ -56,6 +58,7 @@ defmodule Sacrum.Accounts.Tasks do
   Returns tasks with no incomplete blockers for a project.
   These are the actionable items ready for work.
   """
+  @spec ready(String.t(), String.t()) :: [Task.t()]
   def ready(user_id, project_id) when is_binary(user_id) and is_binary(project_id) do
     TasksRepo.ready(project_id, user_id)
   end
@@ -64,10 +67,12 @@ defmodule Sacrum.Accounts.Tasks do
   Insert a new task for a user within a project.
   Accepts either (project_struct, attrs) or (user_id, project_id, attrs).
   """
+  @spec insert(map(), map()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
   def insert(%{id: project_id, user_id: user_id}, attrs) do
     insert(user_id, project_id, attrs)
   end
 
+  @spec insert(String.t(), String.t(), map()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
   def insert(user_id, project_id, attrs) when is_binary(user_id) and is_binary(project_id) do
     %Task{project_id: project_id, user_id: user_id}
     |> Task.create_changeset(attrs)
@@ -80,6 +85,7 @@ defmodule Sacrum.Accounts.Tasks do
   @doc """
   Update a task with support for section, parent, and dependency management.
   """
+  @spec update(Task.t(), map()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
   def update(%Task{} = task, attrs) do
     task = Repo.preload(task, :sections)
 
@@ -94,6 +100,7 @@ defmodule Sacrum.Accounts.Tasks do
   @doc """
   Delete a task.
   """
+  @spec delete(Task.t(), keyword()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
   def delete(%Task{} = task, opts \\ []) do
     TasksRepo.delete(task, opts)
   end

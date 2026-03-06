@@ -19,10 +19,13 @@ defmodule Sacrum.Accounts.Workflows do
   Insert a new workflow for a user within a project.
   Accepts either (project_struct, attrs) or (user_id, project_id, attrs).
   """
+  @spec insert(map(), map()) :: {:ok, Workflow.t()} | {:error, Ecto.Changeset.t()}
   def insert(%{id: project_id, user_id: user_id}, attrs) do
     insert(user_id, project_id, attrs)
   end
 
+  @spec insert(String.t(), String.t(), map()) ::
+          {:ok, Workflow.t()} | {:error, Ecto.Changeset.t()}
   def insert(user_id, project_id, attrs) when is_binary(user_id) and is_binary(project_id) do
     %Workflow{project_id: project_id, user_id: user_id}
     |> Workflow.create_changeset(attrs)
@@ -33,6 +36,7 @@ defmodule Sacrum.Accounts.Workflows do
   @doc """
   Update a workflow.
   """
+  @spec update(Workflow.t(), map()) :: {:ok, Workflow.t()} | {:error, Ecto.Changeset.t()}
   def update(%Workflow{} = workflow, attrs) do
     workflow
     |> Workflow.update_changeset(attrs)
@@ -43,6 +47,7 @@ defmodule Sacrum.Accounts.Workflows do
   @doc """
   Delete a workflow.
   """
+  @spec delete(Workflow.t()) :: {:ok, Workflow.t()} | {:error, Ecto.Changeset.t()}
   def delete(%Workflow{} = workflow) do
     WorkflowsRepo.delete(workflow)
   end
@@ -50,6 +55,7 @@ defmodule Sacrum.Accounts.Workflows do
   @doc """
   Syncs the transitions for a workflow.
   """
+  @spec sync_transitions(Workflow.t(), list()) :: {:ok, list()} | {:error, Ecto.Changeset.t()}
   def sync_transitions(%Workflow{} = workflow, transition_maps) when is_list(transition_maps) do
     WorkflowsRepo.sync_transitions(workflow, transition_maps)
   end

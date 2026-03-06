@@ -66,20 +66,24 @@ defmodule SacrumWeb.ProjectChannel do
 
   # Task broadcasts
 
+  @spec broadcast_task_created(String.t(), map()) :: :ok | {:error, term()}
   def broadcast_task_created(project_id, task) do
     SacrumWeb.Endpoint.broadcast("project:#{project_id}", "task_created", task_payload(task))
   end
 
+  @spec broadcast_task_updated(String.t(), map()) :: :ok | {:error, term()}
   def broadcast_task_updated(project_id, task) do
     SacrumWeb.Endpoint.broadcast("project:#{project_id}", "task_updated", task_payload(task))
   end
 
+  @spec broadcast_task_deleted(String.t(), map()) :: :ok | {:error, term()}
   def broadcast_task_deleted(project_id, task) do
     SacrumWeb.Endpoint.broadcast("project:#{project_id}", "task_deleted", %{id: task.id})
   end
 
   # Workflow broadcasts
 
+  @spec broadcast_workflow_created(String.t(), map()) :: :ok | {:error, term()}
   def broadcast_workflow_created(project_id, workflow) do
     SacrumWeb.Endpoint.broadcast(
       "project:#{project_id}",
@@ -88,6 +92,7 @@ defmodule SacrumWeb.ProjectChannel do
     )
   end
 
+  @spec broadcast_workflow_updated(String.t(), map()) :: :ok | {:error, term()}
   def broadcast_workflow_updated(project_id, workflow) do
     SacrumWeb.Endpoint.broadcast(
       "project:#{project_id}",
@@ -96,6 +101,7 @@ defmodule SacrumWeb.ProjectChannel do
     )
   end
 
+  @spec broadcast_workflow_deleted(String.t(), map()) :: :ok | {:error, term()}
   def broadcast_workflow_deleted(project_id, workflow) do
     SacrumWeb.Endpoint.broadcast(
       "project:#{project_id}",
@@ -106,6 +112,7 @@ defmodule SacrumWeb.ProjectChannel do
 
   # Step broadcasts
 
+  @spec broadcast_step_created(String.t(), map()) :: :ok | {:error, term()}
   def broadcast_step_created(project_id, step) do
     SacrumWeb.Endpoint.broadcast(
       "project:#{project_id}",
@@ -114,6 +121,7 @@ defmodule SacrumWeb.ProjectChannel do
     )
   end
 
+  @spec broadcast_step_updated(String.t(), map()) :: :ok | {:error, term()}
   def broadcast_step_updated(project_id, step) do
     SacrumWeb.Endpoint.broadcast(
       "project:#{project_id}",
@@ -122,6 +130,7 @@ defmodule SacrumWeb.ProjectChannel do
     )
   end
 
+  @spec broadcast_step_deleted(String.t(), map()) :: :ok | {:error, term()}
   def broadcast_step_deleted(project_id, step) do
     SacrumWeb.Endpoint.broadcast(
       "project:#{project_id}",
@@ -132,6 +141,7 @@ defmodule SacrumWeb.ProjectChannel do
 
   # Step transition broadcasts
 
+  @spec broadcast_step_transition_created(String.t(), map()) :: :ok | {:error, term()}
   def broadcast_step_transition_created(project_id, transition) do
     SacrumWeb.Endpoint.broadcast(
       "project:#{project_id}",
@@ -140,6 +150,7 @@ defmodule SacrumWeb.ProjectChannel do
     )
   end
 
+  @spec broadcast_step_transition_deleted(String.t(), map()) :: :ok | {:error, term()}
   def broadcast_step_transition_deleted(project_id, transition) do
     SacrumWeb.Endpoint.broadcast(
       "project:#{project_id}",
@@ -150,6 +161,7 @@ defmodule SacrumWeb.ProjectChannel do
 
   # Step execution broadcasts
 
+  @spec broadcast_step_execution_created(String.t(), map()) :: :ok | {:error, term()}
   def broadcast_step_execution_created(project_id, execution) do
     SacrumWeb.Endpoint.broadcast(
       "project:#{project_id}",
@@ -158,6 +170,7 @@ defmodule SacrumWeb.ProjectChannel do
     )
   end
 
+  @spec broadcast_step_execution_status_changed(String.t(), map()) :: :ok | {:error, term()}
   def broadcast_step_execution_status_changed(project_id, execution) do
     SacrumWeb.Endpoint.broadcast(
       "project:#{project_id}",
@@ -168,6 +181,7 @@ defmodule SacrumWeb.ProjectChannel do
 
   # Daemon broadcasts
 
+  @spec broadcast_run_step(String.t(), map()) :: :ok | {:error, term()}
   def broadcast_run_step(project_id, data) do
     SacrumWeb.Endpoint.broadcast(
       "project:#{project_id}",
@@ -176,6 +190,7 @@ defmodule SacrumWeb.ProjectChannel do
     )
   end
 
+  @spec broadcast_cancel_step(String.t(), map()) :: :ok | {:error, term()}
   def broadcast_cancel_step(project_id, data) do
     SacrumWeb.Endpoint.broadcast(
       "project:#{project_id}",
@@ -186,6 +201,7 @@ defmodule SacrumWeb.ProjectChannel do
 
   # Session log broadcasts
 
+  @spec broadcast_session_log_created(String.t(), map()) :: :ok | {:error, term()}
   def broadcast_session_log_created(project_id, log) do
     SacrumWeb.Endpoint.broadcast(
       "project:#{project_id}",
@@ -196,6 +212,7 @@ defmodule SacrumWeb.ProjectChannel do
 
   # Section broadcasts
 
+  @spec broadcast_section_created(String.t(), map()) :: :ok | {:error, term()}
   def broadcast_section_created(project_id, section) do
     SacrumWeb.Endpoint.broadcast(
       "project:#{project_id}",
@@ -204,6 +221,7 @@ defmodule SacrumWeb.ProjectChannel do
     )
   end
 
+  @spec broadcast_section_updated(String.t(), map()) :: :ok | {:error, term()}
   def broadcast_section_updated(project_id, section) do
     SacrumWeb.Endpoint.broadcast(
       "project:#{project_id}",
@@ -212,6 +230,7 @@ defmodule SacrumWeb.ProjectChannel do
     )
   end
 
+  @spec broadcast_section_deleted(String.t(), map()) :: :ok | {:error, term()}
   def broadcast_section_deleted(project_id, section) do
     SacrumWeb.Endpoint.broadcast(
       "project:#{project_id}",

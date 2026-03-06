@@ -2,6 +2,7 @@ defmodule Sacrum.Repo.Schemas.ApiToken do
   use Ecto.Schema
   import Ecto.Changeset
 
+  @type t :: %__MODULE__{}
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
@@ -21,6 +22,7 @@ defmodule Sacrum.Repo.Schemas.ApiToken do
   @doc """
   Changeset for creating a new API token.
   """
+  @spec changeset(t(), map()) :: Ecto.Changeset.t()
   def changeset(api_token, attrs) do
     api_token
     |> cast(attrs, [:token_hash, :name, :token_type, :scopes, :expires_at, :user_id])
@@ -31,6 +33,7 @@ defmodule Sacrum.Repo.Schemas.ApiToken do
   @doc """
   Changeset for updating last_used_at timestamp.
   """
+  @spec touch_changeset(t()) :: Ecto.Changeset.t()
   def touch_changeset(api_token) do
     change(api_token, last_used_at: DateTime.utc_now())
   end

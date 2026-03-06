@@ -19,12 +19,15 @@ defmodule Sacrum.Repo.TaskHierarchy do
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.Task
 
+  @spec set_parent(Task.t(), Task.t()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
   def set_parent(%Task{} = child, %Task{} = parent) do
     child
     |> Ecto.Changeset.change(parent_id: parent.id)
     |> Repo.update()
   end
 
+  @spec remove_parent(Task.t()) ::
+          {:ok, Task.t()} | {:error, :not_found} | {:error, Ecto.Changeset.t()}
   def remove_parent(%Task{parent_id: nil}), do: {:error, :not_found}
 
   def remove_parent(%Task{} = task) do
@@ -33,6 +36,7 @@ defmodule Sacrum.Repo.TaskHierarchy do
     |> Repo.update()
   end
 
+  @spec get_parent(Task.t()) :: {:ok, Task.t()} | {:error, :not_found}
   def get_parent(%Task{parent_id: nil}), do: {:error, :not_found}
 
   def get_parent(%Task{parent_id: parent_id}) do
@@ -42,6 +46,7 @@ defmodule Sacrum.Repo.TaskHierarchy do
     end
   end
 
+  @spec get_children(Task.t()) :: [Task.t()]
   def get_children(%Task{id: parent_id}) do
     Repo.all(
       from(t in Task,
@@ -51,6 +56,7 @@ defmodule Sacrum.Repo.TaskHierarchy do
     )
   end
 
+  @spec get_ancestors(Task.t()) :: [Task.t()]
   def get_ancestors(%Task{parent_id: nil}), do: []
 
   def get_ancestors(%Task{} = task) do
@@ -75,6 +81,7 @@ defmodule Sacrum.Repo.TaskHierarchy do
     |> Repo.all()
   end
 
+  @spec get_descendants(Task.t()) :: [Task.t()]
   def get_descendants(%Task{} = task) do
     descendant_cte =
       Task
@@ -101,6 +108,7 @@ defmodule Sacrum.Repo.TaskHierarchy do
   Builds a recursive tree structure from a root task.
   Returns a map with the task data and a :children list.
   """
+  @spec build_tree(Task.t()) :: %{task: Task.t(), children: list()}
   def build_tree(%Task{} = task) do
     children = get_children(task)
 

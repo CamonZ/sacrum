@@ -4,6 +4,7 @@ defmodule SacrumWeb.Endpoint do
   @doc """
   Callback invoked to get the node name for Absinthe subscriptions.
   """
+  @spec node_name() :: node()
   def node_name, do: node()
 
   # The session will be stored in the cookie and signed,

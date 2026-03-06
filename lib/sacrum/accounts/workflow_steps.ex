@@ -19,6 +19,7 @@ defmodule Sacrum.Accounts.WorkflowSteps do
   Insert a new workflow step for a user within a workflow.
   Accepts either (workflow_struct, attrs) or (user_id, attrs).
   """
+  @spec insert(map(), map()) :: {:ok, WorkflowStep.t()} | {:error, Ecto.Changeset.t()}
   def insert(%{id: workflow_id, project_id: project_id, user_id: user_id}, attrs) do
     attrs =
       attrs
@@ -29,6 +30,7 @@ defmodule Sacrum.Accounts.WorkflowSteps do
     insert(user_id, attrs)
   end
 
+  @spec insert(String.t(), map()) :: {:ok, WorkflowStep.t()} | {:error, Ecto.Changeset.t()}
   def insert(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
     workflow_id = Map.get(attrs, "workflow_id") || Map.get(attrs, :workflow_id)
     project_id = Map.get(attrs, "project_id") || Map.get(attrs, :project_id)
@@ -42,6 +44,7 @@ defmodule Sacrum.Accounts.WorkflowSteps do
   @doc """
   Update a workflow step.
   """
+  @spec update(WorkflowStep.t(), map()) :: {:ok, WorkflowStep.t()} | {:error, Ecto.Changeset.t()}
   def update(%WorkflowStep{} = step, attrs) do
     step
     |> WorkflowStep.update_changeset(attrs)
@@ -52,6 +55,7 @@ defmodule Sacrum.Accounts.WorkflowSteps do
   @doc """
   Delete a workflow step.
   """
+  @spec delete(WorkflowStep.t()) :: {:ok, WorkflowStep.t()} | {:error, Ecto.Changeset.t()}
   def delete(%WorkflowStep{} = step) do
     WorkflowStepsRepo.delete(step)
   end
@@ -59,6 +63,8 @@ defmodule Sacrum.Accounts.WorkflowSteps do
   @doc """
   Syncs the outgoing transitions for a workflow step.
   """
+  @spec sync_transitions(WorkflowStep.t(), list()) ::
+          {:ok, list()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
   def sync_transitions(%WorkflowStep{} = step, transitions) when is_list(transitions) do
     WorkflowStepsRepo.sync_transitions(step, transitions)
   end

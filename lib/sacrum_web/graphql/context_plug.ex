@@ -6,10 +6,12 @@ defmodule SacrumWeb.Graphql.ContextPlug do
 
   import Plug.Conn
 
+  @spec init(keyword()) :: keyword()
   def init(opts) do
     opts
   end
 
+  @spec call(Plug.Conn.t(), keyword()) :: Plug.Conn.t()
   def call(conn, _opts) do
     context = %{
       current_user: conn.assigns[:current_user],

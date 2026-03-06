@@ -2,6 +2,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowTransition do
   use Ecto.Schema
   import Ecto.Changeset
 
+  @type t :: %__MODULE__{}
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
@@ -17,6 +18,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowTransition do
     timestamps(type: :utc_datetime_usec)
   end
 
+  @spec create_changeset(t(), map()) :: Ecto.Changeset.t()
   def create_changeset(transition, attrs) do
     transition
     |> cast(attrs, [:label, :from_workflow_id, :to_workflow_id, :target_step_id])

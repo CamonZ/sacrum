@@ -13,6 +13,7 @@ defmodule Sacrum.Accounts.Sections do
   @doc """
   Get a section by ID, scoped to a user.
   """
+  @spec get_by(String.t(), keyword()) :: {:ok, TaskSection.t()} | {:error, :not_found}
   def get_by(user_id, conditions: conditions) when is_binary(user_id) do
     case TaskSections.get_by(conditions) do
       {:ok, %TaskSection{} = section} ->
@@ -33,6 +34,7 @@ defmodule Sacrum.Accounts.Sections do
   Insert a section for a task.
   Extracts task_id and project_id from attrs.
   """
+  @spec insert(String.t(), map()) :: {:ok, TaskSection.t()} | {:error, Ecto.Changeset.t()}
   def insert(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
     task_id = Map.get(attrs, "task_id") || Map.get(attrs, :task_id)
     project_id = Map.get(attrs, "project_id") || Map.get(attrs, :project_id)
@@ -46,6 +48,7 @@ defmodule Sacrum.Accounts.Sections do
   @doc """
   Update a section.
   """
+  @spec update(TaskSection.t(), map()) :: {:ok, TaskSection.t()} | {:error, Ecto.Changeset.t()}
   def update(%TaskSection{} = section, attrs) do
     TaskSections.update(section, attrs)
   end
@@ -53,6 +56,7 @@ defmodule Sacrum.Accounts.Sections do
   @doc """
   Delete a section.
   """
+  @spec delete(TaskSection.t()) :: {:ok, TaskSection.t()} | {:error, Ecto.Changeset.t()}
   def delete(%TaskSection{} = section) do
     TaskSections.delete(section)
   end

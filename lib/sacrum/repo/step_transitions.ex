@@ -32,6 +32,8 @@ defmodule Sacrum.Repo.StepTransitions do
   Insert a new step transition with user_id.
   Extracts from_step_id, to_step_id, and project_id from attrs.
   """
+  @spec insert(String.t(), map()) ::
+          {:ok, StepTransition.t()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
   def insert(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
     from_step_id = Map.get(attrs, "from_step_id") || Map.get(attrs, :from_step_id)
     to_step_id = Map.get(attrs, "to_step_id") || Map.get(attrs, :to_step_id)
