@@ -253,11 +253,15 @@ defmodule SacrumWeb.ProjectChannelTest do
       priority: "medium",
       tags: ["test"],
       needs_human_review: false,
+      review_comment: nil,
+      rejection_reason: nil,
+      revision_feedback: nil,
       started_at: now,
       completed_at: nil,
       project_id: project.id,
       workflow_id: nil,
       current_step_id: nil,
+      worktree: nil,
       inserted_at: now,
       updated_at: now
     }
