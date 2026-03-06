@@ -18,6 +18,7 @@ defmodule Sacrum.Repo.ApiTokens do
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.ApiToken
 
+  @spec get(String.t()) :: {:ok, ApiToken.t()} | {:error, :not_found}
   def get(id) do
     case Repo.get(ApiToken, id) do
       nil -> {:error, :not_found}
@@ -25,20 +26,24 @@ defmodule Sacrum.Repo.ApiTokens do
     end
   end
 
+  @spec insert(map()) :: {:ok, ApiToken.t()} | {:error, Ecto.Changeset.t()}
   def insert(attrs) do
     %ApiToken{}
     |> ApiToken.changeset(attrs)
     |> Repo.insert()
   end
 
+  @spec update(ApiToken.t(), map()) :: {:ok, ApiToken.t()} | {:error, Ecto.Changeset.t()}
   def update(%ApiToken{} = token, attrs) do
     token
     |> ApiToken.changeset(attrs)
     |> Repo.update()
   end
 
+  @spec delete(ApiToken.t()) :: {:ok, ApiToken.t()} | {:error, Ecto.Changeset.t()}
   def delete(%ApiToken{} = token), do: Repo.delete(token)
 
+  @spec for_user(String.t()) :: Ecto.Query.t()
   def for_user(user_id) do
     from(t in ApiToken, where: t.user_id == ^user_id)
   end

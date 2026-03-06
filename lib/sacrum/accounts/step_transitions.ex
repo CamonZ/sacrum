@@ -10,14 +10,15 @@ defmodule Sacrum.Accounts.StepTransitions do
     preloads: [],
     default_order: [asc: :inserted_at]
 
-  alias Sacrum.Repo.StepTransitions, as: StepTransitionsRepo
-  alias Sacrum.Repo.Schemas.StepTransition
   alias Sacrum.Repo.Broadcaster
+  alias Sacrum.Repo.Schemas.StepTransition
+  alias Sacrum.Repo.StepTransitions, as: StepTransitionsRepo
 
   @doc """
   Insert a new step transition for a user.
   Extracts from_step_id, to_step_id, and project_id from attrs.
   """
+  @spec insert(String.t(), map()) :: {:ok, StepTransition.t()} | {:error, Ecto.Changeset.t()}
   def insert(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
     from_step_id = Map.get(attrs, "from_step_id") || Map.get(attrs, :from_step_id)
     to_step_id = Map.get(attrs, "to_step_id") || Map.get(attrs, :to_step_id)
@@ -37,6 +38,7 @@ defmodule Sacrum.Accounts.StepTransitions do
   @doc """
   Delete a step transition.
   """
+  @spec delete(StepTransition.t()) :: {:ok, StepTransition.t()} | {:error, Ecto.Changeset.t()}
   def delete(%StepTransition{} = transition) do
     case StepTransitionsRepo.delete(transition) do
       {:ok, deleted} ->

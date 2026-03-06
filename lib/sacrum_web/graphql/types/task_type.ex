@@ -7,6 +7,8 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
   import Absinthe.Resolution.Helpers
 
   alias Sacrum.Accounts
+  alias Sacrum.Repo.TaskDependencies
+  alias Sacrum.Repo.TaskWorkflows
 
   object :task do
     field :id, :id
@@ -88,18 +90,20 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
 
         with {:ok, _project} <- Accounts.Projects.get_by(user.id, conditions: [id: project_id]) do
           conditions =
-            [
-              project_id: project_id,
-              level: Map.get(args, :level),
-              parent_id: Map.get(args, :parent_id),
-              status: Map.get(args, :status),
-              tags: Map.get(args, :tags),
-              search: Map.get(args, :search),
-              workflow_id: Map.get(args, :workflow_id),
-              root_only: Map.get(args, :root_only),
-              blocked: Map.get(args, :blocked)
-            ]
-            |> Enum.reject(fn {_k, v} -> v == nil end)
+            Enum.reject(
+              [
+                project_id: project_id,
+                level: Map.get(args, :level),
+                parent_id: Map.get(args, :parent_id),
+                status: Map.get(args, :status),
+                tags: Map.get(args, :tags),
+                search: Map.get(args, :search),
+                workflow_id: Map.get(args, :workflow_id),
+                root_only: Map.get(args, :root_only),
+                blocked: Map.get(args, :blocked)
+              ],
+              fn {_k, v} -> is_nil(v) end
+            )
 
           tasks = Accounts.Tasks.list_tasks(user.id, conditions: conditions)
           {:ok, tasks}
@@ -136,7 +140,7 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
       resolve(fn %{from_id: from_id, to_id: to_id}, %{context: %{current_user: user}} ->
         with {:ok, from_task} <- Accounts.Tasks.find(user.id, from_id),
              {:ok, to_task} <- Accounts.Tasks.find(user.id, to_id) do
-          Sacrum.Repo.TaskDependencies.find_path(from_task, to_task)
+          TaskDependencies.find_path(from_task, to_task)
         end
       end)
     end
@@ -206,7 +210,7 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
       resolve(fn %{task_id: task_id, depends_on_id: dep_id}, %{context: %{current_user: user}} ->
         with {:ok, task} <- Accounts.Tasks.find(user.id, task_id),
              {:ok, dep_task} <- Accounts.Tasks.find(user.id, dep_id) do
-          Sacrum.Repo.TaskDependencies.add_dependency(task, dep_task)
+          TaskDependencies.add_dependency(task, dep_task)
         end
       end)
     end
@@ -218,7 +222,7 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
       resolve(fn %{task_id: task_id, depends_on_id: dep_id}, %{context: %{current_user: user}} ->
         with {:ok, task} <- Accounts.Tasks.find(user.id, task_id),
              {:ok, dep_task} <- Accounts.Tasks.find(user.id, dep_id) do
-          Sacrum.Repo.TaskDependencies.remove_dependency(task, dep_task)
+          TaskDependencies.remove_dependency(task, dep_task)
         end
       end)
     end
@@ -230,7 +234,7 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
       resolve(fn %{task_id: task_id, workflow_id: wf_id}, %{context: %{current_user: user}} ->
         with {:ok, task} <- Accounts.Tasks.find(user.id, task_id),
              {:ok, workflow} <- Accounts.Workflows.get_by(user.id, conditions: [id: wf_id]) do
-          Sacrum.Repo.TaskWorkflows.assign_workflow(task, workflow)
+          TaskWorkflows.assign_workflow(task, workflow)
         end
       end)
     end
@@ -240,7 +244,7 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
 
       resolve(fn %{task_id: task_id}, %{context: %{current_user: user}} ->
         with {:ok, task} <- Accounts.Tasks.find(user.id, task_id) do
-          Sacrum.Repo.TaskWorkflows.unassign_workflow(task)
+          TaskWorkflows.unassign_workflow(task)
         end
       end)
     end
@@ -251,7 +255,7 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
 
       resolve(fn %{task_id: task_id, step_id: step_id}, %{context: %{current_user: user}} ->
         with {:ok, task} <- Accounts.Tasks.find(user.id, task_id) do
-          Sacrum.Repo.TaskWorkflows.move_to_step(task, step_id)
+          TaskWorkflows.move_to_step(task, step_id)
         end
       end)
     end
@@ -261,7 +265,7 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
 
       resolve(fn %{task_id: task_id}, %{context: %{current_user: user}} ->
         with {:ok, task} <- Accounts.Tasks.find(user.id, task_id) do
-          Sacrum.Repo.TaskWorkflows.start_current_step(task)
+          TaskWorkflows.start_current_step(task)
         end
       end)
     end
@@ -271,7 +275,7 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
 
       resolve(fn %{task_id: task_id}, %{context: %{current_user: user}} ->
         with {:ok, task} <- Accounts.Tasks.find(user.id, task_id) do
-          Sacrum.Repo.TaskWorkflows.complete_current_step(task)
+          TaskWorkflows.complete_current_step(task)
         end
       end)
     end
@@ -283,7 +287,7 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
 
       resolve(fn args, %{context: %{current_user: user}} ->
         with {:ok, task} <- Accounts.Tasks.find(user.id, args.task_id) do
-          Sacrum.Repo.TaskWorkflows.reject_current_step(
+          TaskWorkflows.reject_current_step(
             task,
             args.target_step_id,
             Map.get(args, :feedback)

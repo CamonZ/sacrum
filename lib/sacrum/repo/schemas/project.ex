@@ -2,6 +2,7 @@ defmodule Sacrum.Repo.Schemas.Project do
   use Ecto.Schema
   import Ecto.Changeset
 
+  @type t :: %__MODULE__{}
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
@@ -21,6 +22,7 @@ defmodule Sacrum.Repo.Schemas.Project do
   Changeset for creating a new project.
   Auto-generates slug from name if slug is not provided.
   """
+  @spec create_changeset(t(), map()) :: Ecto.Changeset.t()
   def create_changeset(project, attrs) do
     project
     |> cast(attrs, [:name, :slug, :description])
@@ -36,6 +38,7 @@ defmodule Sacrum.Repo.Schemas.Project do
   @doc """
   Changeset for updating a project.
   """
+  @spec update_changeset(t(), map()) :: Ecto.Changeset.t()
   def update_changeset(project, attrs) do
     project
     |> cast(attrs, [:name, :slug, :description])

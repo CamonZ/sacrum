@@ -16,6 +16,7 @@ defmodule Sacrum.Accounts.Projects do
   @doc """
   Insert a new project for a user.
   """
+  @spec insert(String.t(), map()) :: {:ok, Project.t()} | {:error, Ecto.Changeset.t()}
   def insert(user_id, attrs) when is_binary(user_id) do
     %Project{user_id: user_id}
     |> Project.create_changeset(attrs)
@@ -25,6 +26,7 @@ defmodule Sacrum.Accounts.Projects do
   @doc """
   Update a project.
   """
+  @spec update(Project.t(), map()) :: {:ok, Project.t()} | {:error, Ecto.Changeset.t()}
   def update(%Project{} = project, attrs) do
     project
     |> Project.update_changeset(attrs)
@@ -34,6 +36,7 @@ defmodule Sacrum.Accounts.Projects do
   @doc """
   Delete a project.
   """
+  @spec delete(Project.t()) :: {:ok, Project.t()} | {:error, Ecto.Changeset.t()}
   def delete(%Project{} = project) do
     ProjectsRepo.delete(project)
   end

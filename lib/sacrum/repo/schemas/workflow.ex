@@ -2,6 +2,7 @@ defmodule Sacrum.Repo.Schemas.Workflow do
   use Ecto.Schema
   import Ecto.Changeset
 
+  @type t :: %__MODULE__{}
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
@@ -27,6 +28,7 @@ defmodule Sacrum.Repo.Schemas.Workflow do
   @create_fields ~w(name description metadata auto_advance display_order is_default user_id)a
   @update_fields ~w(name description metadata auto_advance display_order is_default initial_step_id on_done_workflow_id on_reject_workflow_id)a
 
+  @spec create_changeset(t(), map()) :: Ecto.Changeset.t()
   def create_changeset(workflow, attrs) do
     workflow
     |> cast(attrs, @create_fields)
@@ -35,6 +37,7 @@ defmodule Sacrum.Repo.Schemas.Workflow do
     |> foreign_key_constraint(:project_id)
   end
 
+  @spec update_changeset(t(), map()) :: Ecto.Changeset.t()
   def update_changeset(workflow, attrs) do
     workflow
     |> cast(attrs, @update_fields)

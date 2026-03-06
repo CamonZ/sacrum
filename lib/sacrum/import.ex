@@ -29,14 +29,14 @@ defmodule Sacrum.Import do
   alias Sacrum.Repo
 
   alias Sacrum.Repo.Schemas.{
+    CodeRef,
+    StepExecution,
+    StepTransition,
+    Task,
+    TaskDependency,
     Workflow,
     WorkflowStep,
-    StepTransition,
-    WorkflowTransition,
-    Task,
-    CodeRef,
-    TaskDependency,
-    StepExecution
+    WorkflowTransition
   }
 
   # --- Public types ---
@@ -124,17 +124,25 @@ defmodule Sacrum.Import do
     }
 
     Enum.reduce_while(files, {:ok, %{}}, fn {key, path}, {:ok, acc} ->
-      case File.read(path) do
-        {:ok, contents} ->
-          case Jason.decode(contents) do
-            {:ok, data} -> {:cont, {:ok, Map.put(acc, key, data)}}
-            {:error, reason} -> {:halt, {:error, {:json_decode, key, reason}}}
-          end
-
-        {:error, reason} ->
-          {:halt, {:error, {:file_read, key, reason}}}
+      case read_and_decode_file(key, path) do
+        {:ok, data} -> {:cont, {:ok, Map.put(acc, key, data)}}
+        {:error, _} = err -> {:halt, err}
       end
     end)
+  end
+
+  @spec read_and_decode_file(atom(), String.t()) :: {:ok, term()} | {:error, import_error()}
+  defp read_and_decode_file(key, path) do
+    case File.read(path) do
+      {:ok, contents} ->
+        case Jason.decode(contents) do
+          {:ok, data} -> {:ok, data}
+          {:error, reason} -> {:error, {:json_decode, key, reason}}
+        end
+
+      {:error, reason} ->
+        {:error, {:file_read, key, reason}}
+    end
   end
 
   # --- Orchestration ---
@@ -226,18 +234,13 @@ defmodule Sacrum.Import do
 
       steps = wf_data["steps"] || []
 
-      case import_steps_for_workflow(user, new_wf_id, steps, step_map, step_count) do
-        {:ok, updated_step_map, updated_step_count} ->
-          case import_step_transitions_for_workflow(user, steps, updated_step_map, st_count) do
-            {:ok, updated_st_count} ->
-              {:cont, {:ok, updated_step_map, updated_step_count, updated_st_count}}
-
-            {:error, _} = err ->
-              {:halt, err}
-          end
-
-        {:error, _} = err ->
-          {:halt, err}
+      with {:ok, updated_step_map, updated_step_count} <-
+             import_steps_for_workflow(user, new_wf_id, steps, step_map, step_count),
+           {:ok, updated_st_count} <-
+             import_step_transitions_for_workflow(user, steps, updated_step_map, st_count) do
+        {:cont, {:ok, updated_step_map, updated_step_count, updated_st_count}}
+      else
+        {:error, _} = err -> {:halt, err}
       end
     end)
   end
@@ -262,8 +265,10 @@ defmodule Sacrum.Import do
       }
 
       changeset =
-        %WorkflowStep{workflow_id: new_wf_id, user_id: user.id}
-        |> WorkflowStep.create_changeset(attrs)
+        WorkflowStep.create_changeset(
+          %WorkflowStep{workflow_id: new_wf_id, user_id: user.id},
+          attrs
+        )
 
       case Repo.insert(changeset) do
         {:ok, step} ->
@@ -284,38 +289,42 @@ defmodule Sacrum.Import do
       new_from_id = Map.fetch!(step_map, old_from_id)
       transitions = step_data["transitions"] || []
 
-      result =
-        Enum.reduce_while(transitions, {:ok, count}, fn old_to_id, {:ok, c} ->
-          old_to_id = to_string(old_to_id)
-
-          case Map.fetch(step_map, old_to_id) do
-            {:ok, new_to_id} ->
-              changeset =
-                %StepTransition{user_id: user.id}
-                |> StepTransition.create_changeset(%{
-                  "from_step_id" => new_from_id,
-                  "to_step_id" => new_to_id
-                })
-
-              case Repo.insert(changeset) do
-                {:ok, _} -> {:cont, {:ok, c + 1}}
-                {:error, cs} -> {:halt, {:error, {:step_transition, old_from_id, old_to_id, cs}}}
-              end
-
-            :error ->
-              Logger.warning(
-                "Skipping step transition: target step #{old_to_id} not found in map"
-              )
-
-              {:cont, {:ok, c}}
-          end
-        end)
-
-      case result do
-        {:ok, updated_count} -> {:cont, {:ok, updated_count}}
+      case insert_step_transitions(user, old_from_id, new_from_id, transitions, step_map, count) do
+        {:ok, _} = ok -> {:cont, ok}
         {:error, _} = err -> {:halt, err}
       end
     end)
+  end
+
+  defp insert_step_transitions(_user, _old_from_id, _new_from_id, [], _step_map, count),
+    do: {:ok, count}
+
+  defp insert_step_transitions(user, old_from_id, new_from_id, transitions, step_map, count) do
+    Enum.reduce_while(transitions, {:ok, count}, fn raw_to_id, {:ok, c} ->
+      old_to_id = to_string(raw_to_id)
+
+      case Map.fetch(step_map, old_to_id) do
+        {:ok, new_to_id} ->
+          insert_step_transition(user, old_from_id, old_to_id, new_from_id, new_to_id, c)
+
+        :error ->
+          Logger.warning("Skipping step transition: target step #{old_to_id} not found in map")
+          {:cont, {:ok, c}}
+      end
+    end)
+  end
+
+  defp insert_step_transition(user, old_from_id, old_to_id, new_from_id, new_to_id, count) do
+    changeset =
+      StepTransition.create_changeset(
+        %StepTransition{user_id: user.id},
+        %{"from_step_id" => new_from_id, "to_step_id" => new_to_id}
+      )
+
+    case Repo.insert(changeset) do
+      {:ok, _} -> {:cont, {:ok, count + 1}}
+      {:error, cs} -> {:halt, {:error, {:step_transition, old_from_id, old_to_id, cs}}}
+    end
   end
 
   # --- Backfill initial_step_id ---
@@ -324,38 +333,49 @@ defmodule Sacrum.Import do
           {:ok, non_neg_integer()} | {:error, import_error()}
   defp backfill_initial_step_ids(workflow_map, step_map, workflows_data) do
     Enum.reduce_while(workflows_data, {:ok, 0}, fn wf_data, {:ok, count} ->
-      old_wf_id = to_string(wf_data["id"])
-      new_wf_id = Map.fetch!(workflow_map, old_wf_id)
-
-      case wf_data["initial_step_id"] do
-        nil ->
-          {:cont, {:ok, count}}
-
-        old_step_id ->
-          old_step_id = to_string(old_step_id)
-
-          case Map.fetch(step_map, old_step_id) do
-            {:ok, new_step_id} ->
-              workflow = Repo.get!(Workflow, new_wf_id)
-
-              changeset =
-                workflow
-                |> Workflow.update_changeset(%{"initial_step_id" => new_step_id})
-
-              case Repo.update(changeset) do
-                {:ok, _} -> {:cont, {:ok, count + 1}}
-                {:error, cs} -> {:halt, {:error, {:backfill_initial_step, old_wf_id, cs}}}
-              end
-
-            :error ->
-              Logger.warning(
-                "Skipping initial_step_id for workflow #{old_wf_id}: step #{old_step_id} not found"
-              )
-
-              {:cont, {:ok, count}}
-          end
+      case backfill_workflow_initial_step(workflow_map, step_map, wf_data) do
+        :skip -> {:cont, {:ok, count}}
+        :ok -> {:cont, {:ok, count + 1}}
+        {:error, _} = err -> {:halt, err}
       end
     end)
+  end
+
+  defp backfill_workflow_initial_step(workflow_map, step_map, wf_data) do
+    old_wf_id = to_string(wf_data["id"])
+
+    case wf_data["initial_step_id"] do
+      nil ->
+        :skip
+
+      old_step_id ->
+        old_step_id = to_string(old_step_id)
+        new_wf_id = Map.fetch!(workflow_map, old_wf_id)
+        do_backfill_initial_step(old_wf_id, old_step_id, new_wf_id, step_map)
+    end
+  end
+
+  defp do_backfill_initial_step(old_wf_id, old_step_id, new_wf_id, step_map) do
+    case Map.fetch(step_map, old_step_id) do
+      {:ok, new_step_id} ->
+        changeset =
+          Workflow.update_changeset(
+            Repo.get!(Workflow, new_wf_id),
+            %{"initial_step_id" => new_step_id}
+          )
+
+        case Repo.update(changeset) do
+          {:ok, _} -> :ok
+          {:error, cs} -> {:error, {:backfill_initial_step, old_wf_id, cs}}
+        end
+
+      :error ->
+        Logger.warning(
+          "Skipping initial_step_id for workflow #{old_wf_id}: step #{old_step_id} not found"
+        )
+
+        :skip
+    end
   end
 
   # --- Workflow Transitions ---
@@ -364,41 +384,51 @@ defmodule Sacrum.Import do
           {:ok, non_neg_integer()} | {:error, import_error()}
   defp import_workflow_transitions(user, workflow_map, step_map, transitions_data) do
     Enum.reduce_while(transitions_data, {:ok, 0}, fn wt_data, {:ok, count} ->
-      old_from = to_string(wt_data["from_workflow_id"])
-      old_to = to_string(wt_data["to_workflow_id"])
-
-      with {:ok, new_from} <- Map.fetch(workflow_map, old_from),
-           {:ok, new_to} <- Map.fetch(workflow_map, old_to) do
-        target_step_id =
-          case wt_data["target_step"] do
-            nil -> nil
-            old_step_id -> Map.get(step_map, to_string(old_step_id))
-          end
-
-        attrs = %{
-          "from_workflow_id" => new_from,
-          "to_workflow_id" => new_to,
-          "label" => wt_data["label"],
-          "target_step_id" => target_step_id
-        }
-
-        changeset =
-          %WorkflowTransition{user_id: user.id}
-          |> WorkflowTransition.create_changeset(attrs)
-
-        case Repo.insert(changeset) do
-          {:ok, _} -> {:cont, {:ok, count + 1}}
-          {:error, cs} -> {:halt, {:error, {:workflow_transition, old_from, old_to, cs}}}
-        end
-      else
-        :error ->
-          Logger.warning(
-            "Skipping workflow transition #{old_from} -> #{old_to}: workflow not found in map"
-          )
-
-          {:cont, {:ok, count}}
+      case import_single_workflow_transition(user, workflow_map, step_map, wt_data) do
+        :ok -> {:cont, {:ok, count + 1}}
+        :skip -> {:cont, {:ok, count}}
+        {:error, _} = err -> {:halt, err}
       end
     end)
+  end
+
+  defp import_single_workflow_transition(user, workflow_map, step_map, wt_data) do
+    old_from = to_string(wt_data["from_workflow_id"])
+    old_to = to_string(wt_data["to_workflow_id"])
+
+    with {:ok, new_from} <- Map.fetch(workflow_map, old_from),
+         {:ok, new_to} <- Map.fetch(workflow_map, old_to) do
+      target_step_id =
+        case wt_data["target_step"] do
+          nil -> nil
+          old_step_id -> Map.get(step_map, to_string(old_step_id))
+        end
+
+      attrs = %{
+        "from_workflow_id" => new_from,
+        "to_workflow_id" => new_to,
+        "label" => wt_data["label"],
+        "target_step_id" => target_step_id
+      }
+
+      changeset =
+        WorkflowTransition.create_changeset(
+          %WorkflowTransition{user_id: user.id},
+          attrs
+        )
+
+      case Repo.insert(changeset) do
+        {:ok, _} -> :ok
+        {:error, cs} -> {:error, {:workflow_transition, old_from, old_to, cs}}
+      end
+    else
+      :error ->
+        Logger.warning(
+          "Skipping workflow transition #{old_from} -> #{old_to}: workflow not found in map"
+        )
+
+        :skip
+    end
   end
 
   # --- Tasks ---
@@ -410,62 +440,68 @@ defmodule Sacrum.Import do
     Enum.reduce_while(tasks_data, {:ok, %{}, 0, 0, 0}, fn task_data,
                                                           {:ok, task_map, task_count, sec_count,
                                                            ref_count} ->
-      workflow_id = resolve_id(workflow_map, task_data["workflow_id"])
-      current_step_id = resolve_id(step_map, task_data["current_step_id"])
+      case import_single_task(project, user, workflow_map, step_map, task_data) do
+        {:ok, old_id, task_id, new_sec_count, new_ref_count} ->
+          {:cont,
+           {:ok, Map.put(task_map, old_id, task_id), task_count + 1, sec_count + new_sec_count,
+            ref_count + new_ref_count}}
 
-      sections_attrs =
-        (task_data["sections"] || [])
-        |> Enum.map(fn sec ->
-          %{
-            "section_type" => sec["section_type"],
-            "content" => sec["content"],
-            "section_order" => sec["order"]
-          }
-        end)
-
-      attrs = %{
-        "title" => task_data["title"],
-        "description" => task_data["description"],
-        "level" => task_data["level"],
-        "priority" => task_data["priority"],
-        "needs_human_review" => task_data["needs_human_review"] || false,
-        "revision_feedback" => task_data["revision_feedback"],
-        "sections" => sections_attrs
-      }
-
-      completed_at = parse_datetime(task_data["completed_at"])
-
-      changeset =
-        %Task{
-          project_id: project.id,
-          user_id: user.id,
-          workflow_id: workflow_id,
-          current_step_id: current_step_id
-        }
-        |> Task.create_changeset(attrs)
-        |> maybe_put_completed_at(completed_at)
-
-      case Repo.insert(changeset) do
-        {:ok, task} ->
-          old_id = to_string(task_data["id"])
-          new_sec_count = sec_count + length(sections_attrs)
-
-          refs = task_data["refs"] || []
-
-          case insert_code_refs(user, task, refs) do
-            {:ok, inserted_ref_count} ->
-              {:cont,
-               {:ok, Map.put(task_map, old_id, task.id), task_count + 1, new_sec_count,
-                ref_count + inserted_ref_count}}
-
-            {:error, _} = err ->
-              {:halt, err}
-          end
-
-        {:error, changeset} ->
-          {:halt, {:error, {:task, task_data["id"], changeset}}}
+        {:error, _} = err ->
+          {:halt, err}
       end
     end)
+  end
+
+  defp import_single_task(project, user, workflow_map, step_map, task_data) do
+    workflow_id = resolve_id(workflow_map, task_data["workflow_id"])
+    current_step_id = resolve_id(step_map, task_data["current_step_id"])
+
+    sections_attrs =
+      Enum.map(task_data["sections"] || [], fn sec ->
+        %{
+          "section_type" => sec["section_type"],
+          "content" => sec["content"],
+          "section_order" => sec["order"]
+        }
+      end)
+
+    attrs = %{
+      "title" => task_data["title"],
+      "description" => task_data["description"],
+      "level" => task_data["level"],
+      "priority" => task_data["priority"],
+      "needs_human_review" => task_data["needs_human_review"] || false,
+      "revision_feedback" => task_data["revision_feedback"],
+      "sections" => sections_attrs
+    }
+
+    completed_at = parse_datetime(task_data["completed_at"])
+
+    changeset =
+      %Task{
+        project_id: project.id,
+        user_id: user.id,
+        workflow_id: workflow_id,
+        current_step_id: current_step_id
+      }
+      |> Task.create_changeset(attrs)
+      |> maybe_put_completed_at(completed_at)
+
+    case Repo.insert(changeset) do
+      {:ok, task} ->
+        old_id = to_string(task_data["id"])
+
+        case insert_code_refs(user, task, task_data["refs"] || []) do
+          {:ok, inserted_ref_count} ->
+            {:ok, old_id, task.id, length(sections_attrs), inserted_ref_count}
+
+          {:error, _} = err ->
+            err
+        end
+
+      {:error, cs} ->
+        {:error, {:task, task_data["id"], cs}}
+    end
   end
 
   @spec insert_code_refs(user(), %{:id => Ecto.UUID.t(), optional(atom()) => term()}, [json_map()]) ::
@@ -481,8 +517,10 @@ defmodule Sacrum.Import do
       }
 
       changeset =
-        %CodeRef{task_id: task.id, user_id: user.id}
-        |> CodeRef.changeset(attrs)
+        CodeRef.changeset(
+          %CodeRef{task_id: task.id, user_id: user.id},
+          attrs
+        )
 
       case Repo.insert(changeset) do
         {:ok, _} -> {:cont, {:ok, count + 1}}
@@ -499,28 +537,35 @@ defmodule Sacrum.Import do
     child_of = relationships_data["child_of"] || []
 
     Enum.reduce_while(child_of, {:ok, 0}, fn rel, {:ok, count} ->
-      old_child = to_string(rel["child_id"])
-      old_parent = to_string(rel["parent_id"])
-
-      with {:ok, new_child} <- Map.fetch(task_map, old_child),
-           {:ok, new_parent} <- Map.fetch(task_map, old_parent) do
-        task = Repo.get!(Task, new_child)
-
-        changeset = Ecto.Changeset.change(task, parent_id: new_parent)
-
-        case Repo.update(changeset) do
-          {:ok, _} -> {:cont, {:ok, count + 1}}
-          {:error, cs} -> {:halt, {:error, {:hierarchy, old_child, old_parent, cs}}}
-        end
-      else
-        :error ->
-          Logger.warning(
-            "Skipping hierarchy: child=#{old_child} parent=#{old_parent} (task not found)"
-          )
-
-          {:cont, {:ok, count}}
+      case import_single_hierarchy(task_map, rel) do
+        :ok -> {:cont, {:ok, count + 1}}
+        :skip -> {:cont, {:ok, count}}
+        {:error, _} = err -> {:halt, err}
       end
     end)
+  end
+
+  defp import_single_hierarchy(task_map, rel) do
+    old_child = to_string(rel["child_id"])
+    old_parent = to_string(rel["parent_id"])
+
+    with {:ok, new_child} <- Map.fetch(task_map, old_child),
+         {:ok, new_parent} <- Map.fetch(task_map, old_parent) do
+      task = Repo.get!(Task, new_child)
+      changeset = Ecto.Changeset.change(task, parent_id: new_parent)
+
+      case Repo.update(changeset) do
+        {:ok, _} -> :ok
+        {:error, cs} -> {:error, {:hierarchy, old_child, old_parent, cs}}
+      end
+    else
+      :error ->
+        Logger.warning(
+          "Skipping hierarchy: child=#{old_child} parent=#{old_parent} (task not found)"
+        )
+
+        :skip
+    end
   end
 
   # --- Task Dependencies ---
@@ -531,28 +576,39 @@ defmodule Sacrum.Import do
     depends_on = relationships_data["depends_on"] || []
 
     Enum.reduce_while(depends_on, {:ok, 0}, fn rel, {:ok, count} ->
-      old_task = to_string(rel["task_id"])
-      old_dep = to_string(rel["depends_on_id"])
-
-      with {:ok, new_task} <- Map.fetch(task_map, old_task),
-           {:ok, new_dep} <- Map.fetch(task_map, old_dep) do
-        changeset =
-          %TaskDependency{task_id: new_task, depends_on_id: new_dep, user_id: user.id}
-          |> TaskDependency.changeset()
-
-        case Repo.insert(changeset) do
-          {:ok, _} -> {:cont, {:ok, count + 1}}
-          {:error, cs} -> {:halt, {:error, {:dependency, old_task, old_dep, cs}}}
-        end
-      else
-        :error ->
-          Logger.warning(
-            "Skipping dependency: task=#{old_task} depends_on=#{old_dep} (task not found)"
-          )
-
-          {:cont, {:ok, count}}
+      case import_single_dependency(user, task_map, rel) do
+        :ok -> {:cont, {:ok, count + 1}}
+        :skip -> {:cont, {:ok, count}}
+        {:error, _} = err -> {:halt, err}
       end
     end)
+  end
+
+  defp import_single_dependency(user, task_map, rel) do
+    old_task = to_string(rel["task_id"])
+    old_dep = to_string(rel["depends_on_id"])
+
+    with {:ok, new_task} <- Map.fetch(task_map, old_task),
+         {:ok, new_dep} <- Map.fetch(task_map, old_dep) do
+      changeset =
+        TaskDependency.changeset(%TaskDependency{
+          task_id: new_task,
+          depends_on_id: new_dep,
+          user_id: user.id
+        })
+
+      case Repo.insert(changeset) do
+        {:ok, _} -> :ok
+        {:error, cs} -> {:error, {:dependency, old_task, old_dep, cs}}
+      end
+    else
+      :error ->
+        Logger.warning(
+          "Skipping dependency: task=#{old_task} depends_on=#{old_dep} (task not found)"
+        )
+
+        :skip
+    end
   end
 
   # --- Step Executions ---
@@ -561,40 +617,47 @@ defmodule Sacrum.Import do
           {:ok, non_neg_integer()} | {:error, import_error()}
   defp import_step_executions(user, workflow_map, task_map, executions_data) do
     Enum.reduce_while(executions_data, {:ok, 0}, fn se_data, {:ok, count} ->
-      old_task_id = to_string(se_data["task_id"])
-      old_wf_id = to_string(se_data["workflow_id"])
-
-      new_task_id = Map.get(task_map, old_task_id)
-      new_wf_id = Map.get(workflow_map, old_wf_id)
-
-      if is_nil(new_task_id) do
-        Logger.warning("Skipping step execution: task #{old_task_id} not found in map")
-        {:cont, {:ok, count}}
-      else
-        attrs = %{
-          "task_id" => new_task_id,
-          "workflow_id" => new_wf_id,
-          "step_name" => se_data["step_name"],
-          "status" => se_data["status"],
-          "model" => se_data["model_used"],
-          "prompt" => se_data["prompt"],
-          "output" => se_data["output"],
-          "transition_result" => se_data["transition_result"],
-          "duration_ms" => se_data["duration_ms"],
-          "cost" => se_data["cost_usd"],
-          "context" => se_data["context"]
-        }
-
-        changeset =
-          %StepExecution{user_id: user.id}
-          |> StepExecution.create_changeset(attrs)
-
-        case Repo.insert(changeset) do
-          {:ok, _} -> {:cont, {:ok, count + 1}}
-          {:error, cs} -> {:halt, {:error, {:step_execution, se_data["id"], cs}}}
-        end
+      case import_single_step_execution(user, workflow_map, task_map, se_data) do
+        :ok -> {:cont, {:ok, count + 1}}
+        :skip -> {:cont, {:ok, count}}
+        {:error, _} = err -> {:halt, err}
       end
     end)
+  end
+
+  defp import_single_step_execution(user, workflow_map, task_map, se_data) do
+    old_task_id = to_string(se_data["task_id"])
+    old_wf_id = to_string(se_data["workflow_id"])
+
+    new_task_id = Map.get(task_map, old_task_id)
+    new_wf_id = Map.get(workflow_map, old_wf_id)
+
+    if is_nil(new_task_id) do
+      Logger.warning("Skipping step execution: task #{old_task_id} not found in map")
+      :skip
+    else
+      attrs = %{
+        "task_id" => new_task_id,
+        "workflow_id" => new_wf_id,
+        "step_name" => se_data["step_name"],
+        "status" => se_data["status"],
+        "model" => se_data["model_used"],
+        "prompt" => se_data["prompt"],
+        "output" => se_data["output"],
+        "transition_result" => se_data["transition_result"],
+        "duration_ms" => se_data["duration_ms"],
+        "cost" => se_data["cost_usd"],
+        "context" => se_data["context"]
+      }
+
+      changeset =
+        StepExecution.create_changeset(%StepExecution{user_id: user.id}, attrs)
+
+      case Repo.insert(changeset) do
+        {:ok, _} -> :ok
+        {:error, cs} -> {:error, {:step_execution, se_data["id"], cs}}
+      end
+    end
   end
 
   # --- Helpers ---

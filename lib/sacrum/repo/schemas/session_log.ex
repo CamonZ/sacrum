@@ -2,6 +2,7 @@ defmodule Sacrum.Repo.Schemas.SessionLog do
   use Ecto.Schema
   import Ecto.Changeset
 
+  @type t :: %__MODULE__{}
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
@@ -15,6 +16,7 @@ defmodule Sacrum.Repo.Schemas.SessionLog do
     timestamps(type: :utc_datetime_usec)
   end
 
+  @spec create_changeset(t(), map()) :: Ecto.Changeset.t()
   def create_changeset(log, attrs) do
     log
     |> cast(attrs, [:content, :step_execution_id])

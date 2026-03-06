@@ -11,13 +11,14 @@ defmodule Sacrum.Accounts.StepExecutions do
     default_order: [asc: :inserted_at]
 
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.StepExecution
   alias Sacrum.Repo.Broadcaster
+  alias Sacrum.Repo.Schemas.StepExecution
 
   @doc """
   Insert a new step execution for a user.
   Extracts task_id and project_id from attrs.
   """
+  @spec insert(String.t(), map()) :: {:ok, StepExecution.t()} | {:error, Ecto.Changeset.t()}
   def insert(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
     task_id = Map.get(attrs, "task_id") || Map.get(attrs, :task_id)
     project_id = Map.get(attrs, "project_id") || Map.get(attrs, :project_id)
@@ -32,6 +33,8 @@ defmodule Sacrum.Accounts.StepExecutions do
   Update an existing step execution.
   Applies the update_changeset and broadcasts the status change event.
   """
+  @spec update(StepExecution.t(), map()) ::
+          {:ok, StepExecution.t()} | {:error, Ecto.Changeset.t()}
   def update(%StepExecution{} = execution, attrs) do
     execution
     |> StepExecution.update_changeset(attrs)

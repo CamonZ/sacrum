@@ -28,15 +28,17 @@ defmodule Sacrum.Repo.WorkflowSteps do
 
   import Ecto.Query
   alias Sacrum.Repo
+  alias Sacrum.Repo.Broadcaster
+  alias Sacrum.Repo.Schemas.StepTransition
   alias Sacrum.Repo.Schemas.Workflow
   alias Sacrum.Repo.Schemas.WorkflowStep
-  alias Sacrum.Repo.Schemas.StepTransition
   alias Sacrum.Repo.SyncHelper
-  alias Sacrum.Repo.Broadcaster
 
   @doc """
   Insert a new workflow step. Accepts Workflow struct (with or without user_id).
   """
+  @spec insert(Workflow.t(), map()) :: {:ok, WorkflowStep.t()} | {:error, Ecto.Changeset.t()}
+  @spec insert(String.t(), map()) :: {:ok, WorkflowStep.t()} | {:error, Ecto.Changeset.t()}
   def insert(%Workflow{id: workflow_id, project_id: project_id, user_id: user_id}, attrs)
       when is_binary(user_id) do
     insert(workflow_id, project_id, user_id, attrs)
@@ -58,6 +60,8 @@ defmodule Sacrum.Repo.WorkflowSteps do
 
   defoverridable insert: 2
 
+  @spec insert(String.t(), String.t(), map()) ::
+          {:ok, WorkflowStep.t()} | {:error, Ecto.Changeset.t()}
   def insert(workflow_id, user_id, attrs)
       when is_binary(workflow_id) and is_binary(user_id) and is_map(attrs) do
     %WorkflowStep{workflow_id: workflow_id, user_id: user_id}
@@ -66,6 +70,8 @@ defmodule Sacrum.Repo.WorkflowSteps do
     |> Broadcaster.broadcast(:step_created, workflow: :project)
   end
 
+  @spec insert(String.t(), String.t(), String.t(), map()) ::
+          {:ok, WorkflowStep.t()} | {:error, Ecto.Changeset.t()}
   def insert(workflow_id, project_id, user_id, attrs)
       when is_binary(workflow_id) and is_binary(project_id) and is_binary(user_id) do
     %WorkflowStep{workflow_id: workflow_id, project_id: project_id, user_id: user_id}
@@ -74,6 +80,7 @@ defmodule Sacrum.Repo.WorkflowSteps do
     |> Broadcaster.broadcast(:step_created, workflow: :project)
   end
 
+  @spec update(WorkflowStep.t(), map()) :: {:ok, WorkflowStep.t()} | {:error, Ecto.Changeset.t()}
   def update(%WorkflowStep{} = step, attrs) do
     step
     |> WorkflowStep.update_changeset(attrs)
@@ -88,14 +95,15 @@ defmodule Sacrum.Repo.WorkflowSteps do
 
   Returns `{:ok, [%StepTransition{}]}` or `{:error, reason}`.
   """
+  @spec sync_transitions(WorkflowStep.t(), list()) ::
+          {:ok, list()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
   def sync_transitions(%WorkflowStep{} = step, transitions) when is_list(transitions) do
     step = Repo.preload(step, :workflow)
 
     with :ok <- validate_no_duplicate_targets(transitions),
          :ok <- validate_same_workflow(step, transitions) do
       existing =
-        from(t in StepTransition, where: t.from_step_id == ^step.id)
-        |> Repo.all()
+        Repo.all(from(t in StepTransition, where: t.from_step_id == ^step.id))
 
       SyncHelper.diff_and_sync(existing, transitions, %{
         target_key: :to_step_id,
@@ -130,11 +138,12 @@ defmodule Sacrum.Repo.WorkflowSteps do
         end,
         fetch_final_fn: fn ->
           updated =
-            from(t in StepTransition,
-              where: t.from_step_id == ^step.id,
-              order_by: [asc: t.inserted_at]
+            Repo.all(
+              from(t in StepTransition,
+                where: t.from_step_id == ^step.id,
+                order_by: [asc: t.inserted_at]
+              )
             )
-            |> Repo.all()
 
           {:ok, updated}
         end
@@ -168,10 +177,12 @@ defmodule Sacrum.Repo.WorkflowSteps do
       :ok
     else
       count =
-        from(s in WorkflowStep,
-          where: s.id in ^to_ids and s.workflow_id == ^wf_id
+        Repo.aggregate(
+          from(s in WorkflowStep,
+            where: s.id in ^to_ids and s.workflow_id == ^wf_id
+          ),
+          :count
         )
-        |> Repo.aggregate(:count)
 
       if count == length(to_ids) do
         :ok
@@ -181,6 +192,7 @@ defmodule Sacrum.Repo.WorkflowSteps do
     end
   end
 
+  @spec delete(WorkflowStep.t()) :: {:ok, WorkflowStep.t()} | {:error, Ecto.Changeset.t()}
   def delete(%WorkflowStep{} = step) do
     case Repo.delete(step) do
       {:ok, deleted} ->

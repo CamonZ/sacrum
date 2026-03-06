@@ -19,6 +19,8 @@ defmodule Sacrum.Auth do
       iex> create_api_token(user, %{name: "My API Token"})
       {:ok, "sac_abc123...", %ApiToken{}}
   """
+  @spec create_api_token(User.t(), map()) ::
+          {:ok, String.t(), ApiToken.t()} | {:error, Ecto.Changeset.t()}
   def create_api_token(%User{id: user_id}, attrs \\ %{}) do
     plaintext_token = generate_token()
     token_hash = hash_token(plaintext_token)
@@ -48,6 +50,7 @@ defmodule Sacrum.Auth do
       iex> verify_token("sac_expired_token")
       {:error, :expired}
   """
+  @spec verify_token(String.t()) :: {:ok, User.t()} | {:error, :invalid | :expired}
   def verify_token(plaintext_token) when is_binary(plaintext_token) do
     token_hash = hash_token(plaintext_token)
 
@@ -72,16 +75,20 @@ defmodule Sacrum.Auth do
     end
   end
 
+  @spec verify_token(term()) :: {:error, :invalid}
   def verify_token(_), do: {:error, :invalid}
 
   @doc """
   Updates the last_used_at timestamp for a token.
   """
+  @spec update_token_last_used(String.t()) :: :ok
   def update_token_last_used(plaintext_token) when is_binary(plaintext_token) do
     token_hash = hash_token(plaintext_token)
 
-    from(t in ApiToken, where: t.token_hash == ^token_hash)
-    |> Repo.update_all(set: [last_used_at: DateTime.utc_now()])
+    Repo.update_all(
+      from(t in ApiToken, where: t.token_hash == ^token_hash),
+      set: [last_used_at: DateTime.utc_now()]
+    )
 
     :ok
   end
@@ -92,7 +99,6 @@ defmodule Sacrum.Auth do
   end
 
   defp hash_token(token) do
-    :crypto.hash(:sha256, token)
-    |> Base.encode64()
+    Base.encode64(:crypto.hash(:sha256, token))
   end
 end

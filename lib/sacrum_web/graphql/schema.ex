@@ -33,6 +33,7 @@ defmodule SacrumWeb.Graphql.Schema do
     import_fields(:execution_mutations)
   end
 
+  @spec context(map()) :: map()
   def context(ctx) do
     loader =
       Dataloader.new()
@@ -53,6 +54,7 @@ defmodule SacrumWeb.Graphql.Schema do
     Map.put(ctx, :loader, loader)
   end
 
+  @spec plugins() :: [atom()]
   def plugins do
     [Absinthe.Middleware.Dataloader] ++ Absinthe.Plugin.defaults()
   end

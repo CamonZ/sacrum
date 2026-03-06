@@ -20,23 +20,27 @@ defmodule Sacrum.Repo.Users do
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.User
 
+  @spec insert(map()) :: {:ok, User.t()} | {:error, Ecto.Changeset.t()}
   def insert(attrs) do
     %User{}
     |> User.create_changeset(attrs)
     |> Repo.insert()
   end
 
+  @spec update(User.t(), map()) :: {:ok, User.t()} | {:error, Ecto.Changeset.t()}
   def update(%User{} = user, attrs) do
     user
     |> User.update_changeset(attrs)
     |> Repo.update()
   end
 
+  @spec update_password(User.t(), map()) :: {:ok, User.t()} | {:error, Ecto.Changeset.t()}
   def update_password(%User{} = user, attrs) do
     user
     |> User.password_changeset(attrs)
     |> Repo.update()
   end
 
+  @spec delete(User.t()) :: {:ok, User.t()} | {:error, Ecto.Changeset.t()}
   def delete(%User{} = user), do: Repo.delete(user)
 end

@@ -11,13 +11,14 @@ defmodule Sacrum.Accounts.SessionLogs do
     default_order: [asc: :inserted_at]
 
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.SessionLog
   alias Sacrum.Repo.Broadcaster
+  alias Sacrum.Repo.Schemas.SessionLog
 
   @doc """
   Insert a new session log for a user.
   Extracts step_execution_id and project_id from attrs.
   """
+  @spec insert(String.t(), map()) :: {:ok, SessionLog.t()} | {:error, Ecto.Changeset.t()}
   def insert(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
     step_execution_id = Map.get(attrs, "step_execution_id") || Map.get(attrs, :step_execution_id)
     project_id = Map.get(attrs, "project_id") || Map.get(attrs, :project_id)

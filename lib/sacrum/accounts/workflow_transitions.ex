@@ -11,13 +11,14 @@ defmodule Sacrum.Accounts.WorkflowTransitions do
     default_order: [asc: :inserted_at]
 
   alias Sacrum.Repo
-  alias Sacrum.Repo.WorkflowTransitions, as: WorkflowTransitionsRepo
   alias Sacrum.Repo.Schemas.WorkflowTransition
+  alias Sacrum.Repo.WorkflowTransitions, as: WorkflowTransitionsRepo
 
   @doc """
   Insert a new workflow transition for a user.
   Extracts from_workflow_id, to_workflow_id, and project_id from attrs.
   """
+  @spec insert(String.t(), map()) :: {:ok, WorkflowTransition.t()} | {:error, Ecto.Changeset.t()}
   def insert(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
     from_workflow_id = Map.get(attrs, "from_workflow_id") || Map.get(attrs, :from_workflow_id)
     to_workflow_id = Map.get(attrs, "to_workflow_id") || Map.get(attrs, :to_workflow_id)
@@ -36,6 +37,8 @@ defmodule Sacrum.Accounts.WorkflowTransitions do
   @doc """
   Delete a workflow transition.
   """
+  @spec delete(WorkflowTransition.t()) ::
+          {:ok, WorkflowTransition.t()} | {:error, Ecto.Changeset.t()}
   def delete(%WorkflowTransition{} = transition) do
     WorkflowTransitionsRepo.delete(transition)
   end

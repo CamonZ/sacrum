@@ -2,9 +2,10 @@ defmodule Sacrum.Repo.Schemas.Task do
   use Ecto.Schema
   import Ecto.Changeset
 
-  alias Sacrum.Repo.Schemas.TaskSection
   alias Sacrum.Repo.Schemas.TaskDependency
+  alias Sacrum.Repo.Schemas.TaskSection
 
+  @type t :: %__MODULE__{}
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
@@ -62,6 +63,7 @@ defmodule Sacrum.Repo.Schemas.Task do
     timestamps(type: :utc_datetime_usec)
   end
 
+  @spec create_changeset(t(), map()) :: Ecto.Changeset.t()
   def create_changeset(task, attrs) do
     user_id = task.user_id
     project_id = task.project_id
@@ -71,7 +73,8 @@ defmodule Sacrum.Repo.Schemas.Task do
     |> validate_required([:title])
     |> cast_assoc(:sections,
       with: fn section, section_attrs ->
-        TaskSection.changeset(section, section_attrs)
+        section
+        |> TaskSection.changeset(section_attrs)
         |> Ecto.Changeset.put_change(:user_id, user_id)
         |> Ecto.Changeset.put_change(:project_id, project_id)
       end
@@ -81,6 +84,7 @@ defmodule Sacrum.Repo.Schemas.Task do
     |> foreign_key_constraint(:project_id)
   end
 
+  @spec update_changeset(t(), map()) :: Ecto.Changeset.t()
   def update_changeset(task, attrs) do
     user_id = task.user_id
     project_id = task.project_id
@@ -90,7 +94,8 @@ defmodule Sacrum.Repo.Schemas.Task do
     |> validate_required([:title])
     |> cast_assoc(:sections,
       with: fn section, section_attrs ->
-        TaskSection.changeset(section, section_attrs)
+        section
+        |> TaskSection.changeset(section_attrs)
         |> Ecto.Changeset.put_change(:user_id, user_id)
         |> Ecto.Changeset.put_change(:project_id, project_id)
       end
@@ -105,6 +110,6 @@ defmodule Sacrum.Repo.Schemas.Task do
   end
 
   defp generate_short_id do
-    "x" <> (:crypto.strong_rand_bytes(3) |> Base.encode16(case: :lower))
+    "x" <> Base.encode16(:crypto.strong_rand_bytes(3), case: :lower)
   end
 end

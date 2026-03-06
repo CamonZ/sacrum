@@ -46,11 +46,8 @@ defmodule Sacrum.GenericRepo do
       """
       def get(id, opts \\ []) do
         case Repo.get(Schema, id) do
-          nil ->
-            {:error, :not_found}
-
-          record ->
-            {:ok, apply_preloads(record, Keyword.get(opts, :preloads, []))}
+          nil -> {:error, :not_found}
+          record -> {:ok, apply_preloads(record, Keyword.get(opts, :preloads, []))}
         end
       end
 
@@ -59,9 +56,7 @@ defmodule Sacrum.GenericRepo do
       @doc """
       Retrieve a single record by primary key, raising if not found.
       """
-      def get!(id) do
-        Repo.get!(Schema, id)
-      end
+      def get!(id), do: Repo.get!(Schema, id)
 
       defoverridable get!: 1
 
@@ -79,17 +74,11 @@ defmodule Sacrum.GenericRepo do
       """
       def get_by(opts) do
         {conditions, preloads, _order_by} = extract_opts(opts)
-
-        query =
-          from(s in Schema)
-          |> apply_conditions(conditions)
+        query = apply_conditions(from(s in Schema), conditions)
 
         case Repo.one(query) do
-          nil ->
-            {:error, :not_found}
-
-          record ->
-            {:ok, apply_preloads(record, preloads)}
+          nil -> {:error, :not_found}
+          record -> {:ok, apply_preloads(record, preloads)}
         end
       end
 
@@ -98,9 +87,7 @@ defmodule Sacrum.GenericRepo do
       @doc """
       Retrieve all records of this schema.
       """
-      def all do
-        Repo.all(Schema)
-      end
+      def all, do: Repo.all(Schema)
 
       defoverridable all: 0
 
@@ -115,7 +102,7 @@ defmodule Sacrum.GenericRepo do
              Keyword.has_key?(opts_or_queryable, :conditions) do
           {conditions, preloads, order_by} = extract_opts(opts_or_queryable)
 
-          from(s in Schema)
+          Schema
           |> apply_conditions(conditions)
           |> apply_order_by(order_by)
           |> apply_query_preloads(preloads)
@@ -130,39 +117,28 @@ defmodule Sacrum.GenericRepo do
       @doc """
       Return a base query for this schema.
       """
-      def query do
-        from(Schema)
-      end
+      def query, do: from(Schema)
 
       defoverridable query: 0
 
       @doc """
       Count all records of this schema.
       """
-      def count do
-        from(s in Schema, select: count(s.id))
-        |> Repo.one()
-      end
+      def count, do: Repo.one(from(s in Schema, select: count(s.id)))
 
       defoverridable count: 0
 
       @doc """
       Count records matching a queryable.
       """
-      def count(queryable) do
-        from(s in queryable, select: count(s.id))
-        |> Repo.one()
-      end
+      def count(queryable), do: Repo.one(from(s in queryable, select: count(s.id)))
 
       defoverridable count: 1
 
       @doc """
       Check if a record exists by primary key.
       """
-      def exists?(id) do
-        from(s in Schema, where: s.id == ^id, select: true)
-        |> Repo.exists?()
-      end
+      def exists?(id), do: Repo.exists?(from(s in Schema, where: s.id == ^id, select: true))
 
       defoverridable exists?: 1
 
@@ -171,9 +147,7 @@ defmodule Sacrum.GenericRepo do
 
       Returns `{:ok, record}` or `{:error, changeset}`.
       """
-      def insert(changeset) do
-        Repo.insert(changeset)
-      end
+      def insert(changeset), do: Repo.insert(changeset)
 
       defoverridable insert: 1
 
@@ -182,9 +156,7 @@ defmodule Sacrum.GenericRepo do
 
       Returns `{:ok, record}` or `{:error, changeset}`.
       """
-      def update(changeset) do
-        Repo.update(changeset)
-      end
+      def update(changeset), do: Repo.update(changeset)
 
       defoverridable update: 1
 
@@ -193,9 +165,7 @@ defmodule Sacrum.GenericRepo do
 
       Returns `{:ok, record}` or `{:error, changeset}`.
       """
-      def delete(record) do
-        Repo.delete(record)
-      end
+      def delete(record), do: Repo.delete(record)
 
       defoverridable delete: 1
 
@@ -206,7 +176,6 @@ defmodule Sacrum.GenericRepo do
           {Keyword.get(opts, :conditions, []), Keyword.get(opts, :preloads, []),
            Keyword.get(opts, :order_by, [])}
         else
-          # Flat clauses (backward compat) — treat entire list as conditions
           {opts, [], []}
         end
       end

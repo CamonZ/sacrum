@@ -35,13 +35,15 @@ defmodule Sacrum.Repo.TaskWorkflows do
   import Ecto.Query
   alias Ecto.Multi
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.{Task, Workflow, WorkflowStep, StepExecution, StepTransition}
   alias Sacrum.Repo.Schemas.Project
+  alias Sacrum.Repo.Schemas.{StepExecution, StepTransition, Task, Workflow, WorkflowStep}
 
   @doc """
   Assigns a workflow to a task, setting current_step_id to the workflow's initial step.
   Creates a StepExecution audit record for the initial step entry.
   """
+  @spec assign_workflow(Task.t(), Workflow.t()) ::
+          {:ok, Task.t()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
   def assign_workflow(%Task{} = task, %Workflow{} = workflow) do
     workflow = Repo.preload(workflow, :workflow_steps)
 
@@ -67,6 +69,7 @@ defmodule Sacrum.Repo.TaskWorkflows do
   @doc """
   Removes the workflow assignment from a task, clearing workflow_id and current_step_id.
   """
+  @spec unassign_workflow(Task.t()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
   def unassign_workflow(%Task{} = task) do
     task
     |> task_workflow_changeset(nil, nil)
@@ -81,6 +84,8 @@ defmodule Sacrum.Repo.TaskWorkflows do
 
   Creates a StepExecution audit record for the new step.
   """
+  @spec move_to_step(Task.t(), String.t()) ::
+          {:ok, Task.t()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
   def move_to_step(%Task{workflow_id: nil}, _step_id), do: {:error, :no_workflow}
   def move_to_step(%Task{current_step_id: nil}, _step_id), do: {:error, :no_current_step}
 
@@ -114,6 +119,7 @@ defmodule Sacrum.Repo.TaskWorkflows do
   @doc """
   Returns the current WorkflowStep for a task, or {:error, :no_current_step}.
   """
+  @spec get_current_step(Task.t()) :: {:ok, WorkflowStep.t()} | {:error, atom()}
   def get_current_step(%Task{current_step_id: nil}), do: {:error, :no_current_step}
 
   def get_current_step(%Task{current_step_id: step_id}) do
@@ -127,6 +133,8 @@ defmodule Sacrum.Repo.TaskWorkflows do
   Starts the current step by updating the latest StepExecution from "entered" to "started".
   Also sets `started_at` on the task if it hasn't been set yet.
   """
+  @spec start_current_step(Task.t()) ::
+          {:ok, Task.t()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
   def start_current_step(%Task{} = task) do
     with {:ok, execution, _step} <- get_latest_step_execution(task),
          :ok <- validate_execution_status(execution, "entered", :not_in_entered_status) do
@@ -161,6 +169,8 @@ defmodule Sacrum.Repo.TaskWorkflows do
 
   If the step is not final, just completes the execution (caller uses `move_to_step` to advance).
   """
+  @spec complete_current_step(Task.t()) ::
+          {:ok, Task.t()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
   def complete_current_step(%Task{} = task) do
     with {:ok, execution, step} <- get_latest_step_execution(task),
          :ok <- validate_execution_status(execution, "started", :not_in_started_status) do
@@ -178,6 +188,8 @@ defmodule Sacrum.Repo.TaskWorkflows do
 
   Optionally stores feedback in the execution's `transition_result` field.
   """
+  @spec reject_current_step(Task.t(), String.t(), String.t() | nil) ::
+          {:ok, Task.t()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
   def reject_current_step(%Task{} = task, target_step_id, feedback \\ nil) do
     with {:ok, execution, _step} <- get_latest_step_execution(task),
          :ok <- validate_execution_status(execution, "started", :not_in_started_status) do

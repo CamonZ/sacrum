@@ -2,6 +2,7 @@ defmodule Sacrum.Repo.Schemas.CodeRef do
   use Ecto.Schema
   import Ecto.Changeset
 
+  @type t :: %__MODULE__{}
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
@@ -22,6 +23,7 @@ defmodule Sacrum.Repo.Schemas.CodeRef do
     timestamps(type: :utc_datetime_usec)
   end
 
+  @spec changeset(t(), map()) :: Ecto.Changeset.t()
   def changeset(code_ref, attrs) do
     code_ref
     |> cast(attrs, @fields)

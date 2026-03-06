@@ -68,18 +68,32 @@ defmodule Sacrum.Repo.SyncHelper do
   })
   ```
   """
+  @spec diff_and_sync(list(), list(), map()) :: {:ok, list()} | {:error, Ecto.Changeset.t()}
   def diff_and_sync(existing, incoming_maps, config)
       when is_list(existing) and is_list(incoming_maps) and is_map(config) do
+    {to_delete, to_insert, to_update} = compute_diffs(existing, incoming_maps, config)
+    name_fns = build_name_fns(config)
+
+    multi =
+      Multi.new()
+      |> build_deletes(to_delete, name_fns.delete)
+      |> build_inserts(to_insert, config[:build_changeset_fn], name_fns.insert)
+      |> build_updates(to_update, config[:build_update_changeset_fn], name_fns.update)
+
+    case Repo.transaction(multi) do
+      {:ok, _} -> config[:fetch_final_fn].()
+      {:error, _name, changeset, _changes} -> {:error, changeset}
+    end
+  end
+
+  defp compute_diffs(existing, incoming_maps, config) do
     target_key = config[:target_key]
 
-    # Build the map for lookups
     existing_by_target =
       Map.new(existing, fn record ->
-        target = Map.fetch!(record, target_key)
-        {target, record}
+        {Map.fetch!(record, target_key), record}
       end)
 
-    # Get set of incoming target IDs (handling both string and atom keys)
     target_key_str = Atom.to_string(target_key)
 
     incoming_target_ids =
@@ -87,43 +101,26 @@ defmodule Sacrum.Repo.SyncHelper do
         map[target_key_str] || map[target_key]
       end)
 
-    # Call user-provided functions to determine operations
-    to_delete = config[:to_delete_fn].(existing, incoming_target_ids)
-    to_insert = config[:to_insert_fn].(incoming_maps, existing_by_target)
-    to_update = config[:to_update_fn].(incoming_maps, existing_by_target)
+    {
+      config[:to_delete_fn].(existing, incoming_target_ids),
+      config[:to_insert_fn].(incoming_maps, existing_by_target),
+      config[:to_update_fn].(incoming_maps, existing_by_target)
+    }
+  end
 
-    # Helper functions for operation naming
-    delete_name_fn = config[:delete_name_fn] || fn record -> {:delete, record.id} end
+  defp build_name_fns(config) do
+    target_key = config[:target_key]
+    target_key_str = Atom.to_string(target_key)
 
-    insert_name_fn =
-      config[:insert_name_fn] ||
-        fn map ->
-          target = map[target_key_str] || map[target_key]
-          {:insert, target}
-        end
-
-    update_name_fn =
-      config[:update_name_fn] ||
-        fn map ->
-          target = map[target_key_str] || map[target_key]
-          {:update, target}
-        end
-
-    # Build the transaction
-    multi =
-      Multi.new()
-      |> build_deletes(to_delete, delete_name_fn)
-      |> build_inserts(to_insert, config[:build_changeset_fn], insert_name_fn)
-      |> build_updates(to_update, config[:build_update_changeset_fn], update_name_fn)
-
-    # Execute and fetch results
-    case Repo.transaction(multi) do
-      {:ok, _} ->
-        config[:fetch_final_fn].()
-
-      {:error, _name, changeset, _changes} ->
-        {:error, changeset}
+    default_target_name = fn map ->
+      map[target_key_str] || map[target_key]
     end
+
+    %{
+      delete: config[:delete_name_fn] || fn record -> {:delete, record.id} end,
+      insert: config[:insert_name_fn] || fn map -> {:insert, default_target_name.(map)} end,
+      update: config[:update_name_fn] || fn map -> {:update, default_target_name.(map)} end
+    }
   end
 
   defp build_deletes(multi, records, name_fn) do

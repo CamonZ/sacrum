@@ -18,7 +18,7 @@ Sacrum is an API-only workflow engine and task management system built with Phoe
 
 **Execution tracking** — Every step transition creates an immutable `StepExecution` record capturing the step name, status, and optional LLM metadata (model, provider, token counts, cost, duration). Session logs attach free-text content to executions.
 
-**Real-time updates** — State changes broadcast to a Phoenix channel (`ProjectChannel`) keyed by project slug, so connected clients receive live events for task, workflow, and step mutations.
+**Real-time updates** — State changes broadcast to a Phoenix channel (`ProjectChannel`) keyed by project ID (`project:<project_id>`), so connected clients receive live events for task, workflow, and step mutations.
 
 ## Domain Model
 
@@ -43,34 +43,110 @@ All entities use UUID primary keys and `utc_datetime_usec` timestamps.
 
 The API is exposed via **GraphQL** at `/graphql` (GraphiQL playground available at `/graphiql` in development). All requests require bearer token auth (`Authorization: Bearer sac_...`).
 
-### Core Queries
+**13 queries** across 5 type files, **36 mutations** across 7 type files.
 
+### Queries
+
+**`project_type.ex`** — Project queries
 | Query | Arguments | Description |
 |-------|-----------|-------------|
-| `tasks` | `project_id` (required), `level`, `parent_id`, `status`, `tags`, `search`, `workflow_id`, `root_only`, `blocked` | List tasks with filters |
-| `task` | `id` (required) | Single task by ID |
-| `listReady` | `project_id` (required) | Tasks ready for work (no blockers, not completed) |
-| `findPath` | `from_id`, `to_id` | Shortest dependency path between tasks |
-| `workflows` | `project_id` (required) | List workflows |
-| `workflowSteps` | `workflow_id` (required) | List steps in a workflow |
+| `projects` | — | List all user's projects |
+| `project` | `id!` | Single project by ID |
 
-### Core Mutations
+**`workflow_type.ex`** — Workflow queries
+| Query | Arguments | Description |
+|-------|-----------|-------------|
+| `workflows` | `project_id!` | List workflows in a project |
+| `workflow` | `id!` | Single workflow by ID |
 
-| Mutation | Arguments | Description |
-|----------|-----------|-------------|
-| `createTask` | `project_id`, `title`, `description`, `level`, `priority`, `tags`, `parent_id`, `sections` | Create a task |
-| `updateTask` | `id`, `title`, `description`, `level`, `priority`, `tags`, `needs_human_review`, `parent_id`, `depends_on_ids`, `sections` | Update a task |
-| `deleteTask` | `id`, `cascade` | Delete task (cascade removes children) |
-| `assignWorkflow` | `task_id`, `workflow_id` | Assign task to a workflow |
-| `unassignWorkflow` | `task_id` | Remove workflow from task |
-| `moveToStep` | `task_id`, `step_id` | Move task to a specific step |
-| `startStep` | `task_id` | Mark current step as in progress |
-| `completeStep` | `task_id` | Mark current step as complete |
-| `rejectStep` | `task_id`, `target_step_id`, `feedback` | Reject and send back to target step |
-| `createTaskDependency` | `task_id`, `depends_on_id` | Add a dependency |
-| `deleteTaskDependency` | `task_id`, `depends_on_id` | Remove a dependency |
+**`workflow_step_type.ex`** — WorkflowStep queries
+| Query | Arguments | Description |
+|-------|-----------|-------------|
+| `workflowSteps` | `workflow_id!` | List steps in a workflow |
+| `workflowStep` | `id!` | Single step by ID |
 
-> **Implementation:** See `lib/sacrum_web/graphql/schema.ex` for the full schema and `lib/sacrum_web/graphql/types/*.ex` for type definitions.
+**`task_type.ex`** — Task queries
+| Query | Arguments | Description |
+|-------|-----------|-------------|
+| `tasks` | `project_id!`, `level`, `parent_id`, `status`, `tags`, `search`, `workflow_id`, `root_only`, `blocked` | List tasks with filters |
+| `task` | `id!` | Single task by ID (accepts UUID or short_id) |
+| `listReady` | `project_id!` | Tasks with no incomplete blockers |
+| `findPath` | `from_id!`, `to_id!` | Shortest dependency path between tasks |
+
+**`execution_types.ex`** — Execution queries
+| Query | Arguments | Description |
+|-------|-----------|-------------|
+| `stepExecutions` | `task_id!` | List executions for a task |
+| `stepExecution` | `id!` | Single execution by ID |
+| `sessionLogs` | `step_execution_id!` | List logs for an execution |
+
+### Mutations
+
+**`project_type.ex`** — 3 mutations (all via `Accounts.Projects`)
+| Mutation | Arguments | Returns |
+|----------|-----------|---------|
+| `createProject` | `name!`, `description`, `slug` | `:project` |
+| `updateProject` | `id!`, `name`, `description`, `slug` | `:project` |
+| `deleteProject` | `id!` | `:project` |
+
+**`workflow_type.ex`** — 4 mutations (all via `Accounts.Workflows`)
+| Mutation | Arguments | Returns |
+|----------|-----------|---------|
+| `createWorkflow` | `project_id!`, `name!`, `description`, `metadata`, `auto_advance`, `display_order`, `is_default` | `:workflow` |
+| `updateWorkflow` | `id!`, `name`, `description`, `metadata`, `auto_advance`, `display_order`, `is_default`, `initial_step_id`, `on_done_workflow_id`, `on_reject_workflow_id` | `:workflow` |
+| `deleteWorkflow` | `id!` | `:workflow` |
+| `syncWorkflowTransitions` | `id!`, `transitions!` (list of `WorkflowTransitionInput`) | `:workflow` |
+
+**`workflow_step_type.ex`** — 4 mutations (all via `Accounts.WorkflowSteps`)
+| Mutation | Arguments | Returns |
+|----------|-----------|---------|
+| `createWorkflowStep` | `workflow_id!`, `name!`, `goal`, `agents`, `skills`, `agent_config`, `is_final`, `step_order` | `:workflow_step` |
+| `updateWorkflowStep` | `id!`, `name`, `goal`, `agents`, `skills`, `agent_config`, `is_final`, `step_order` | `:workflow_step` |
+| `deleteWorkflowStep` | `id!` | `:workflow_step` |
+| `syncStepTransitions` | `id!`, `transitions!` (list of `StepTransitionInput`) | `:workflow_step` |
+
+**`task_type.ex`** — 11 mutations (CRUD via `Accounts.Tasks`, workflow ops via `Repo.TaskWorkflows`, deps via `Repo.TaskDependencies`)
+| Mutation | Arguments | Returns |
+|----------|-----------|---------|
+| `createTask` | `project_id!`, `title!`, `description`, `level`, `priority`, `tags`, `parent_id`, `sections` | `:task` |
+| `updateTask` | `id!`, `title`, `description`, `level`, `priority`, `tags`, `needs_human_review`, `review_comment`, `rejection_reason`, `revision_feedback`, `started_at`, `completed_at`, `parent_id`, `depends_on_ids`, `sections` | `:task` |
+| `deleteTask` | `id!`, `cascade` (default: true) | `:task` |
+| `createTaskDependency` | `task_id!`, `depends_on_id!` | `:task` |
+| `deleteTaskDependency` | `task_id!`, `depends_on_id!` | `:task` |
+| `assignWorkflow` | `task_id!`, `workflow_id!` | `:task` |
+| `unassignWorkflow` | `task_id!` | `:task` |
+| `moveToStep` | `task_id!`, `step_id!` | `:task` |
+| `startStep` | `task_id!` | `:task` |
+| `completeStep` | `task_id!` | `:task` |
+| `rejectStep` | `task_id!`, `target_step_id!`, `feedback` | `:task` |
+
+**`section_types.ex`** — 5 mutations (all via `Accounts.Sections` / `Accounts.CodeRefs`)
+| Mutation | Arguments | Returns |
+|----------|-----------|---------|
+| `createSection` | `task_id!`, `section_type!`, `content!`, `section_order`, `done` | `:task_section` |
+| `updateSection` | `id!`, `section_type`, `content`, `section_order`, `done`, `done_at` | `:task_section` |
+| `deleteSection` | `id!` | `:task_section` |
+| `createCodeRef` | `task_id` or `section_id`, `path!`, `line_start`, `line_end`, `name`, `description` | `:code_ref` |
+| `deleteCodeRef` | `id!` | `:code_ref` |
+
+**`transition_types.ex`** — 4 mutations (via `Accounts.WorkflowTransitions` / `Accounts.StepTransitions`)
+| Mutation | Arguments | Returns |
+|----------|-----------|---------|
+| `createWorkflowTransition` | `from_workflow_id!`, `to_workflow_id!`, `label`, `target_step_id` | `:workflow_transition` |
+| `deleteWorkflowTransition` | `id!` | `:workflow_transition` |
+| `createStepTransition` | `from_step_id!`, `to_step_id!`, `label` | `:step_transition` |
+| `deleteStepTransition` | `id!` | `:step_transition` |
+
+**`execution_types.ex`** — 5 mutations (via `Accounts.StepExecutions` / `Accounts.SessionLogs`)
+| Mutation | Arguments | Returns |
+|----------|-----------|---------|
+| `createStepExecution` | `task_id!`, `workflow_id!`, `step_name!`, `status`, `context`, `prompt`, `output`, `transition_result`, `model`, `model_provider`, `input_tokens`, `output_tokens`, `cost`, `duration_ms` | `:step_execution` |
+| `updateStepExecution` | `id!`, `step_name`, `status`, `context`, `prompt`, `output`, `transition_result`, `model`, `model_provider`, `input_tokens`, `output_tokens`, `cost`, `duration_ms` | `:step_execution` |
+| `createSessionLog` | `step_execution_id!`, `content!` | `:session_log` |
+| `runStep` | `task_id!`, `workflow_id!`, `step_id!` | `:step_execution` |
+| `cancelStepExecution` | `step_execution_id!` | `:step_execution` |
+
+> **Implementation:** See `lib/sacrum_web/graphql/schema.ex` for the root schema and `lib/sacrum_web/graphql/types/*.ex` for type definitions. `!` denotes required arguments.
 
 ## Tech Stack
 
@@ -111,25 +187,15 @@ Connect to `project:<project_id>` via WebSocket to receive real-time updates. Th
 
 ## Architecture Pattern
 
-The codebase uses a **repository pattern** instead of Phoenix contexts:
+The codebase uses a **three-layer architecture** (Accounts → Repo → Ecto) instead of Phoenix contexts. See [Repository & Accounts Pattern](patterns.md) for the full reference, including GenericRepo, GenericResource, and Accounts layer documentation.
 
-| Layer | Location | Purpose |
-|-------|----------|---------|
-| Schemas | `lib/sacrum/repo/schemas/` | Ecto schemas with changeset validation |
-| Repositories | `lib/sacrum/repo/` | CRUD and domain queries per entity |
-| GraphQL Types | `lib/sacrum_web/graphql/types/` | Schema definitions, queries, mutations |
-| Channel | `lib/sacrum_web/channels/project_channel.ex` | Real-time WebSocket broadcasts |
-| Auth | `lib/sacrum/auth.ex` | Token generation, verification, expiration |
-
-### Key Modules by Entity
-
-| Entity | Schema | Repository | GraphQL Type |
-|--------|--------|------------|--------------|
-| Task | `Sacrum.Repo.Schemas.Task` | `Sacrum.Repo.Tasks` | `lib/sacrum_web/graphql/types/task_type.ex` |
-| Workflow | `Sacrum.Repo.Schemas.Workflow` | `Sacrum.Repo.Workflows` | `lib/sacrum_web/graphql/types/workflow_type.ex` |
-| WorkflowStep | `Sacrum.Repo.Schemas.WorkflowStep` | `Sacrum.Repo.WorkflowSteps` | `lib/sacrum_web/graphql/types/workflow_step_type.ex` |
-| Section | `Sacrum.Repo.Schemas.TaskSection` | `Sacrum.Repo.TaskSections` | `lib/sacrum_web/graphql/types/section_types.ex` |
-| StepExecution | `Sacrum.Repo.Schemas.StepExecution` | `Sacrum.Repo.StepExecutions` | `lib/sacrum_web/graphql/types/execution_types.ex` |
-| Project | `Sacrum.Repo.Schemas.Project` | `Sacrum.Repo.Projects` | `lib/sacrum_web/graphql/types/project_type.ex` |
+| Entity | Schema | Repository | Accounts | GraphQL Type |
+|--------|--------|------------|----------|--------------|
+| Task | `Schemas.Task` | `Repo.Tasks` | `Accounts.Tasks` | `task_type.ex` |
+| Workflow | `Schemas.Workflow` | `Repo.Workflows` | `Accounts.Workflows` | `workflow_type.ex` |
+| WorkflowStep | `Schemas.WorkflowStep` | `Repo.WorkflowSteps` | `Accounts.WorkflowSteps` | `workflow_step_type.ex` |
+| Section | `Schemas.TaskSection` | `Repo.TaskSections` | `Accounts.Sections` | `section_types.ex` |
+| StepExecution | `Schemas.StepExecution` | `Repo.StepExecutions` | `Accounts.StepExecutions` | `execution_types.ex` |
+| Project | `Schemas.Project` | `Repo.Projects` | `Accounts.Projects` | `project_type.ex` |
 
 Complex operations (transition syncing, workflow assignment, step movement) use `Ecto.Multi` for transactional safety. Dependency management includes BFS shortest-path and DFS cycle-detection algorithms.

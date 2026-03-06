@@ -2,6 +2,7 @@ defmodule Sacrum.Repo.Schemas.StepExecution do
   use Ecto.Schema
   import Ecto.Changeset
 
+  @type t :: %__MODULE__{}
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
@@ -32,6 +33,7 @@ defmodule Sacrum.Repo.Schemas.StepExecution do
   @create_fields ~w(task_id step_name status context prompt output transition_result model model_provider input_tokens output_tokens cost duration_ms workflow_id)a
   @update_fields ~w(step_name status context prompt output transition_result model model_provider input_tokens output_tokens cost duration_ms)a
 
+  @spec create_changeset(t(), map()) :: Ecto.Changeset.t()
   def create_changeset(execution, attrs) do
     execution
     |> cast(attrs, @create_fields)
@@ -41,6 +43,7 @@ defmodule Sacrum.Repo.Schemas.StepExecution do
     |> foreign_key_constraint(:project_id)
   end
 
+  @spec update_changeset(t(), map()) :: Ecto.Changeset.t()
   def update_changeset(execution, attrs) do
     execution
     |> cast(attrs, @update_fields)

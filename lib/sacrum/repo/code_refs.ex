@@ -24,6 +24,7 @@ defmodule Sacrum.Repo.CodeRefs do
   alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.Schemas.TaskSection
 
+  @spec insert_for_task(Task.t(), map()) :: {:ok, CodeRef.t()} | {:error, Ecto.Changeset.t()}
   def insert_for_task(%Task{id: task_id, project_id: project_id, user_id: user_id}, attrs)
       when is_binary(user_id),
       do: insert_for_task(task_id, project_id, user_id, attrs)
@@ -31,12 +32,15 @@ defmodule Sacrum.Repo.CodeRefs do
   def insert_for_task(%Task{id: task_id, project_id: project_id}, attrs),
     do: insert_for_task(task_id, project_id, attrs)
 
+  @spec insert_for_task(String.t(), map()) :: {:ok, CodeRef.t()} | {:error, Ecto.Changeset.t()}
   def insert_for_task(task_id, attrs) when is_binary(task_id) and is_map(attrs) do
     %CodeRef{task_id: task_id}
     |> CodeRef.changeset(attrs)
     |> Repo.insert()
   end
 
+  @spec insert_for_task(String.t(), String.t(), map()) ::
+          {:ok, CodeRef.t()} | {:error, Ecto.Changeset.t()}
   def insert_for_task(task_id, project_id, attrs)
       when is_binary(task_id) and is_binary(project_id) and is_map(attrs) do
     %CodeRef{task_id: task_id, project_id: project_id}
@@ -51,6 +55,8 @@ defmodule Sacrum.Repo.CodeRefs do
     |> Repo.insert()
   end
 
+  @spec insert_for_task(String.t(), String.t(), String.t(), map()) ::
+          {:ok, CodeRef.t()} | {:error, Ecto.Changeset.t()}
   def insert_for_task(task_id, project_id, user_id, attrs)
       when is_binary(task_id) and is_binary(project_id) and is_binary(user_id) do
     %CodeRef{task_id: task_id, project_id: project_id, user_id: user_id}
@@ -58,6 +64,8 @@ defmodule Sacrum.Repo.CodeRefs do
     |> Repo.insert()
   end
 
+  @spec insert_for_section(TaskSection.t(), map()) ::
+          {:ok, CodeRef.t()} | {:error, Ecto.Changeset.t()}
   def insert_for_section(
         %TaskSection{id: section_id, project_id: project_id, user_id: user_id},
         attrs
@@ -68,12 +76,15 @@ defmodule Sacrum.Repo.CodeRefs do
   def insert_for_section(%TaskSection{id: section_id, project_id: project_id}, attrs),
     do: insert_for_section(section_id, project_id, attrs)
 
+  @spec insert_for_section(String.t(), map()) :: {:ok, CodeRef.t()} | {:error, Ecto.Changeset.t()}
   def insert_for_section(section_id, attrs) when is_binary(section_id) and is_map(attrs) do
     %CodeRef{section_id: section_id}
     |> CodeRef.changeset(attrs)
     |> Repo.insert()
   end
 
+  @spec insert_for_section(String.t(), String.t(), map()) ::
+          {:ok, CodeRef.t()} | {:error, Ecto.Changeset.t()}
   def insert_for_section(section_id, project_id, attrs)
       when is_binary(section_id) and is_binary(project_id) and is_map(attrs) do
     %CodeRef{section_id: section_id, project_id: project_id}
@@ -88,6 +99,8 @@ defmodule Sacrum.Repo.CodeRefs do
     |> Repo.insert()
   end
 
+  @spec insert_for_section(String.t(), String.t(), String.t(), map()) ::
+          {:ok, CodeRef.t()} | {:error, Ecto.Changeset.t()}
   def insert_for_section(section_id, project_id, user_id, attrs)
       when is_binary(section_id) and is_binary(project_id) and is_binary(user_id) do
     %CodeRef{section_id: section_id, project_id: project_id, user_id: user_id}
