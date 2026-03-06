@@ -24,6 +24,7 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
     field :revision_feedback, :string
     field :started_at, :datetime
     field :completed_at, :datetime
+    field :worktree, :string
     field :inserted_at, :datetime
     field :updated_at, :datetime
 
@@ -154,6 +155,7 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
       arg(:level, :string)
       arg(:priority, :string)
       arg(:tags, list_of(:string))
+      arg(:worktree, :string)
       arg(:parent_id, :uuid4)
       arg(:sections, list_of(:task_section_input))
 
@@ -180,6 +182,7 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
       arg(:revision_feedback, :string)
       arg(:started_at, :datetime)
       arg(:completed_at, :datetime)
+      arg(:worktree, :string)
       arg(:parent_id, :uuid4)
       arg(:depends_on_ids, list_of(:uuid4))
       arg(:sections, list_of(:task_section_input))

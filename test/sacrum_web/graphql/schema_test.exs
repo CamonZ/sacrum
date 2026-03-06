@@ -238,6 +238,27 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["shortId"] != nil
     end
 
+    test "creates a task with worktree field", %{conn: conn, user: user, project: project} do
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createTask(
+              projectId: "#{project.id}"
+              title: "Task with Worktree"
+              description: "Test worktree field"
+              worktree: "/path/to/worktree"
+            ) { id title worktree }
+          }
+        """)
+        |> json_response(200)
+
+      data = result["data"]["createTask"]
+      assert data["title"] == "Task with Worktree"
+      assert data["worktree"] == "/path/to/worktree"
+    end
+
     test "updates a task", %{conn: conn, user: user, project: project} do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Original"})
 
@@ -255,6 +276,24 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
       assert result["data"]["updateTask"]["title"] == "Updated"
       assert result["data"]["updateTask"]["description"] == "New desc"
+    end
+
+    test "updates a task with worktree field", %{conn: conn, user: user, project: project} do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            updateTask(id: "#{task.id}", worktree: "/updated/worktree/path") {
+              id worktree
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["updateTask"]["worktree"] == "/updated/worktree/path"
     end
 
     test "sets parent_id via updateTask", %{conn: conn, user: user, project: project} do
