@@ -21,7 +21,8 @@ defmodule Sacrum.Repo.Schemas.Task do
     :started_at,
     :completed_at,
     :revision_feedback,
-    :worktree
+    :worktree,
+    :archived
   ]
 
   schema "tasks" do
@@ -38,6 +39,7 @@ defmodule Sacrum.Repo.Schemas.Task do
     field :started_at, :utc_datetime_usec
     field :completed_at, :utc_datetime_usec
     field :worktree, :string
+    field :archived, :boolean, default: false
 
     belongs_to :project, Sacrum.Repo.Schemas.Project
     belongs_to :workflow, Sacrum.Repo.Schemas.Workflow

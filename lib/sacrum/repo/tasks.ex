@@ -40,6 +40,7 @@ defmodule Sacrum.Repo.Tasks do
     - `:tags` - filter by tags (any match)
     - `:root_only` - when true, exclude tasks that have a parent
     - `:workflow_id` - filter by assigned workflow
+    - `:archived` - when false (default), exclude archived tasks; when true, include all tasks
   """
   @spec list_tasks(keyword()) :: [Task.t()]
   def list_tasks(opts) do
@@ -195,6 +196,14 @@ defmodule Sacrum.Repo.Tasks do
       where: is_nil(t.workflow_id) or le.status == "entered"
     )
   end
+
+  defp apply_filter(query, :archived, nil), do: query
+
+  defp apply_filter(query, :archived, false) do
+    where(query, [t], t.archived == false)
+  end
+
+  defp apply_filter(query, :archived, true), do: query
 
   @hex_prefix_regex ~r/\A[0-9a-f]{1,8}\z/i
 

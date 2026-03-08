@@ -25,6 +25,7 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
     field :started_at, :datetime
     field :completed_at, :datetime
     field :worktree, :string
+    field :archived, :boolean
     field :inserted_at, :datetime
     field :updated_at, :datetime
 
@@ -85,9 +86,11 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
       arg(:workflow_id, :uuid4)
       arg(:root_only, :boolean)
       arg(:blocked, :boolean)
+      arg(:include_archived, :boolean, default_value: false)
 
       resolve(fn args, %{context: %{current_user: user}} ->
         project_id = Map.get(args, :project_id)
+        include_archived = Map.get(args, :include_archived, false)
 
         with {:ok, _project} <- Accounts.Projects.get_by(user.id, conditions: [id: project_id]) do
           conditions =
@@ -101,7 +104,8 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
                 search: Map.get(args, :search),
                 workflow_id: Map.get(args, :workflow_id),
                 root_only: Map.get(args, :root_only),
-                blocked: Map.get(args, :blocked)
+                blocked: Map.get(args, :blocked),
+                archived: if(include_archived, do: nil, else: false)
               ],
               fn {_k, v} -> is_nil(v) end
             )
@@ -194,6 +198,7 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
       arg(:started_at, :datetime)
       arg(:completed_at, :datetime)
       arg(:worktree, :string)
+      arg(:archived, :boolean)
       arg(:parent_id, :uuid4)
       arg(:depends_on_ids, list_of(:uuid4))
       arg(:sections, list_of(:task_section_input))

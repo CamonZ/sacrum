@@ -3630,4 +3630,140 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert [%{"message" => _}] = result["errors"]
     end
   end
+
+  describe "task archived field" do
+    setup [:setup_user_and_project]
+
+    test "tasks query with default args excludes archived tasks", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, active_task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Active Task"})
+      {:ok, archived_task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Archived Task"})
+
+      # Archive the second task
+      Accounts.Tasks.update(archived_task, %{archived: true})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          { tasks(projectId: "#{project.id}") { id title archived } }
+        """)
+        |> json_response(200)
+
+      tasks = result["data"]["tasks"]
+      assert length(tasks) == 1
+      assert hd(tasks)["id"] == active_task.id
+      assert hd(tasks)["archived"] == false
+    end
+
+    test "tasks query with include_archived: true returns all tasks", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, active_task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Active Task"})
+      {:ok, archived_task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Archived Task"})
+
+      # Archive the second task
+      Accounts.Tasks.update(archived_task, %{archived: true})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          { tasks(projectId: "#{project.id}", includeArchived: true) { id title archived } }
+        """)
+        |> json_response(200)
+
+      tasks = result["data"]["tasks"]
+      assert length(tasks) == 2
+
+      # Find each task
+      active = Enum.find(tasks, &(&1["id"] == active_task.id))
+      archived = Enum.find(tasks, &(&1["id"] == archived_task.id))
+
+      assert active["archived"] == false
+      assert archived["archived"] == true
+    end
+
+    test "updateTask mutation can set archived: true on a task", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task to Archive"})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            updateTask(id: "#{task.id}", archived: true) {
+              id title archived
+            }
+          }
+        """)
+        |> json_response(200)
+
+      data = result["data"]["updateTask"]
+      assert data["archived"] == true
+      assert data["title"] == "Task to Archive"
+    end
+
+    test "archived task is excluded from subsequent tasks query", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task to Archive"})
+
+      # Archive the task
+      conn
+      |> authenticate(user)
+      |> graphql("""
+        mutation {
+          updateTask(id: "#{task.id}", archived: true) { id }
+        }
+      """)
+
+      # Query again with default args (should not include archived)
+      result =
+        build_conn()
+        |> authenticate(user)
+        |> graphql("""
+          { tasks(projectId: "#{project.id}") { id } }
+        """)
+        |> json_response(200)
+
+      tasks = result["data"]["tasks"]
+      assert length(tasks) == 0
+    end
+
+    test "createTask does not support archived: true — field is ignored", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      # Try to create task without archived arg; it should default to false
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createTask(
+              projectId: "#{project.id}"
+              title: "New Task"
+            ) { id archived }
+          }
+        """)
+        |> json_response(200)
+
+      # The archived field will be false because that's the default
+      data = result["data"]["createTask"]
+      assert data["archived"] == false
+    end
+  end
 end
