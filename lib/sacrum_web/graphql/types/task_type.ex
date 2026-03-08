@@ -134,6 +134,17 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
       end)
     end
 
+    field :resolve_short_id, :task do
+      arg(:project_id, non_null(:uuid4))
+      arg(:prefix, non_null(:string))
+
+      resolve(fn %{project_id: project_id, prefix: prefix}, %{context: %{current_user: user}} ->
+        with {:ok, _project} <- Accounts.Projects.get_by(user.id, conditions: [id: project_id]) do
+          Accounts.Tasks.resolve_short_id(user.id, project_id, prefix)
+        end
+      end)
+    end
+
     field :find_path, list_of(:id) do
       arg(:from_id, non_null(:uuid4))
       arg(:to_id, non_null(:uuid4))

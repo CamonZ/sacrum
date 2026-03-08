@@ -115,6 +115,108 @@ defmodule Sacrum.Repo.TasksTest do
     end
   end
 
+  describe "find_by_uuid_prefix/3" do
+    test "finds task by the first 8 characters of its UUID" do
+      user = create_user()
+      project = create_project(user)
+      {:ok, task} = Tasks.insert(project, %{title: "Prefix Task"})
+
+      prefix = String.slice(task.id, 0, 8)
+      assert {:ok, found} = Tasks.find_by_uuid_prefix(prefix, project.id, user.id)
+      assert found.id == task.id
+    end
+
+    test "finds task by shorter prefixes" do
+      user = create_user()
+      project = create_project(user)
+      {:ok, task} = Tasks.insert(project, %{title: "Short Prefix"})
+
+      prefix = String.slice(task.id, 0, 4)
+      assert {:ok, found} = Tasks.find_by_uuid_prefix(prefix, project.id, user.id)
+      assert found.id == task.id
+    end
+
+    test "is case-insensitive" do
+      user = create_user()
+      project = create_project(user)
+      {:ok, task} = Tasks.insert(project, %{title: "Case Task"})
+
+      prefix = task.id |> String.slice(0, 8) |> String.upcase()
+      assert {:ok, found} = Tasks.find_by_uuid_prefix(prefix, project.id, user.id)
+      assert found.id == task.id
+    end
+
+    test "returns :not_found for non-matching prefix" do
+      user = create_user()
+      project = create_project(user)
+      {:ok, _task} = Tasks.insert(project, %{title: "Task"})
+
+      assert {:error, :not_found} = Tasks.find_by_uuid_prefix("00000000", project.id, user.id)
+    end
+
+    test "scopes to project" do
+      user = create_user()
+      p1 = create_project(user)
+      {:ok, p2} = Projects.insert(user, %{name: "Other Project"})
+      {:ok, task} = Tasks.insert(p1, %{title: "P1 Task"})
+
+      prefix = String.slice(task.id, 0, 8)
+
+      assert {:ok, _} = Tasks.find_by_uuid_prefix(prefix, p1.id, user.id)
+      assert {:error, :not_found} = Tasks.find_by_uuid_prefix(prefix, p2.id, user.id)
+    end
+
+    test "scopes to user" do
+      user1 = create_user()
+
+      user2 =
+        create_user(%{email: "other@example.com", username: "other", password: "password123"})
+
+      project = create_project(user1)
+      {:ok, task} = Tasks.insert(project, %{title: "User1 Task"})
+
+      prefix = String.slice(task.id, 0, 8)
+
+      assert {:ok, _} = Tasks.find_by_uuid_prefix(prefix, project.id, user1.id)
+      assert {:error, :not_found} = Tasks.find_by_uuid_prefix(prefix, project.id, user2.id)
+    end
+
+    test "returns :invalid_prefix for non-hex input" do
+      user = create_user()
+      project = create_project(user)
+
+      assert {:error, :invalid_prefix} =
+               Tasks.find_by_uuid_prefix("ghijklmn", project.id, user.id)
+    end
+
+    test "returns :invalid_prefix for prefix longer than 8 characters" do
+      user = create_user()
+      project = create_project(user)
+
+      assert {:error, :invalid_prefix} =
+               Tasks.find_by_uuid_prefix("abcdef012", project.id, user.id)
+    end
+
+    test "returns :invalid_prefix for empty string" do
+      user = create_user()
+      project = create_project(user)
+
+      assert {:error, :invalid_prefix} = Tasks.find_by_uuid_prefix("", project.id, user.id)
+    end
+
+    test "preloads sections and parent" do
+      user = create_user()
+      project = create_project(user)
+      {:ok, task} = Tasks.insert(project, %{title: "Preload Task"})
+
+      prefix = String.slice(task.id, 0, 8)
+      {:ok, found} = Tasks.find_by_uuid_prefix(prefix, project.id, user.id)
+
+      assert Ecto.assoc_loaded?(found.sections)
+      assert Ecto.assoc_loaded?(found.parent)
+    end
+  end
+
   describe "list_tasks/1" do
     test "filters by project_id" do
       user = create_user()

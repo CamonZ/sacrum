@@ -3556,4 +3556,78 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert check["data"]["task"]["parentId"] == nil
     end
   end
+
+  describe "resolveShortId query" do
+    setup [:setup_user_and_project]
+
+    test "resolves UUID prefix to task", %{conn: conn, user: user, project: project} do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Prefix Task"})
+      prefix = String.slice(task.id, 0, 8)
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          { resolveShortId(projectId: "#{project.id}", prefix: "#{prefix}") { id title } }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["resolveShortId"]["id"] == task.id
+      assert result["data"]["resolveShortId"]["title"] == "Prefix Task"
+    end
+
+    test "returns null for non-matching prefix", %{conn: conn, user: user, project: project} do
+      {:ok, _task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          { resolveShortId(projectId: "#{project.id}", prefix: "00000000") { id } }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["resolveShortId"] == nil
+      assert [%{"message" => _}] = result["errors"]
+    end
+
+    test "does not resolve tasks from another user's project", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Secret"})
+      prefix = String.slice(task.id, 0, 8)
+
+      other_user = create_user(%{email: "other@example.com", username: "other"})
+
+      result =
+        conn
+        |> authenticate(other_user)
+        |> graphql("""
+          { resolveShortId(projectId: "#{project.id}", prefix: "#{prefix}") { id } }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["resolveShortId"] == nil
+      assert [%{"message" => _}] = result["errors"]
+    end
+
+    test "returns error for invalid (non-hex) prefix", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          { resolveShortId(projectId: "#{project.id}", prefix: "zzzzzzzz") { id } }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["resolveShortId"] == nil
+      assert [%{"message" => _}] = result["errors"]
+    end
+  end
 end
