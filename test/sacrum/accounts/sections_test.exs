@@ -33,14 +33,14 @@ defmodule Sacrum.Accounts.SectionsTest do
                Sections.insert(user.id, %{
                  "task_id" => task.id,
                  "project_id" => project.id,
-                 "section_type" => "description",
+                 "section_type" => "context",
                  "content" => "Some content"
                })
 
       assert section.user_id == user.id
       assert section.project_id == project.id
       assert section.task_id == task.id
-      assert section.section_type == "description"
+      assert section.section_type == "context"
       assert section.content == "Some content"
     end
   end
@@ -59,7 +59,7 @@ defmodule Sacrum.Accounts.SectionsTest do
         Sections.insert(user1.id, %{
           "task_id" => task1.id,
           "project_id" => project1.id,
-          "section_type" => "description",
+          "section_type" => "context",
           "content" => "User1 content"
         })
 
@@ -67,7 +67,7 @@ defmodule Sacrum.Accounts.SectionsTest do
         Sections.insert(user2.id, %{
           "task_id" => task2.id,
           "project_id" => project2.id,
-          "section_type" => "description",
+          "section_type" => "context",
           "content" => "User2 content"
         })
 

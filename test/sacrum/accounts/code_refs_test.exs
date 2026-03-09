@@ -54,7 +54,7 @@ defmodule Sacrum.Accounts.CodeRefsTest do
         Sections.insert(user.id, %{
           "task_id" => task.id,
           "project_id" => project.id,
-          "section_type" => "implementation",
+          "section_type" => "context",
           "content" => "Implementation details"
         })
 

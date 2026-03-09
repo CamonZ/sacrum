@@ -936,7 +936,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
           mutation {
             createSection(
               taskId: "#{task.id}"
-              sectionType: "description"
+              sectionType: "context"
               content: "Section content"
               sectionOrder: 1
             ) { id sectionType content sectionOrder taskId }
@@ -945,7 +945,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         |> json_response(200)
 
       data = result["data"]["createSection"]
-      assert data["sectionType"] == "description"
+      assert data["sectionType"] == "context"
       assert data["content"] == "Section content"
       assert data["sectionOrder"] == 1
       assert data["taskId"] == task.id
@@ -958,7 +958,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         Accounts.Sections.insert(user.id, %{
           task_id: task.id,
           project_id: project.id,
-          section_type: "description",
+          section_type: "context",
           content: "Original"
         })
 
@@ -985,7 +985,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         Accounts.Sections.insert(user.id, %{
           task_id: task.id,
           project_id: project.id,
-          section_type: "description",
+          section_type: "context",
           content: "To delete"
         })
 
@@ -2544,7 +2544,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         Accounts.Sections.insert(user.id, %{
           task_id: task.id,
           project_id: project.id,
-          section_type: "description",
+          section_type: "context",
           content: "Content"
         })
 
@@ -2645,7 +2645,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         Accounts.Sections.insert(user.id, %{
           task_id: task.id,
           project_id: project.id,
-          section_type: "description",
+          section_type: "context",
           content: "Hello"
         })
 
@@ -2659,7 +2659,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
       assert [s] = result["data"]["task"]["sections"]
       assert s["id"] == section.id
-      assert s["sectionType"] == "description"
+      assert s["sectionType"] == "context"
       assert s["content"] == "Hello"
     end
 
@@ -2836,7 +2836,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         Accounts.Sections.insert(user.id, %{
           task_id: task.id,
           project_id: project.id,
-          section_type: "description",
+          section_type: "context",
           content: "Content"
         })
 
@@ -3091,7 +3091,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         Accounts.Sections.insert(user.id, %{
           task_id: task.id,
           project_id: project.id,
-          section_type: "description",
+          section_type: "context",
           content: "Secret"
         })
 
@@ -3274,7 +3274,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         Accounts.Sections.insert(user.id, %{
           task_id: task.id,
           project_id: project.id,
-          section_type: "description",
+          section_type: "context",
           content: "Content"
         })
 
@@ -3307,7 +3307,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         Accounts.Sections.insert(user.id, %{
           task_id: task.id,
           project_id: project.id,
-          section_type: "description",
+          section_type: "context",
           content: "Content"
         })
 
