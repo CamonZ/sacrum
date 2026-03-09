@@ -333,7 +333,7 @@ defmodule SacrumWeb.ProjectChannelTest do
     %{
       id: Ecto.UUID.generate(),
       task_id: Ecto.UUID.generate(),
-      section_type: "description",
+      section_type: "context",
       content: "Test content",
       section_order: 1,
       done: false,
