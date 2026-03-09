@@ -7,6 +7,17 @@ defmodule Sacrum.Repo.Schemas.TaskSection do
   @foreign_key_type :binary_id
 
   @fields [:section_type, :content, :section_order, :done, :done_at]
+  @allowed_section_types [
+    "anti_pattern",
+    "checklist_item",
+    "constraint",
+    "context",
+    "current_behavior",
+    "desired_behavior",
+    "failure_test",
+    "goal",
+    "testing_criterion"
+  ]
 
   schema "task_sections" do
     field :section_type, :string
@@ -28,6 +39,7 @@ defmodule Sacrum.Repo.Schemas.TaskSection do
     section
     |> cast(attrs, @fields)
     |> validate_required([:section_type, :content])
+    |> validate_inclusion(:section_type, @allowed_section_types)
     |> foreign_key_constraint(:task_id)
     |> foreign_key_constraint(:project_id)
   end

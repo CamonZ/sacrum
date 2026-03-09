@@ -45,7 +45,7 @@ defmodule Sacrum.Repo.TaskSectionsTest do
     test "returns sections belonging to the given task" do
       task = setup_task()
       {:ok, _} = TaskSections.insert(task, %{section_type: "goal", content: "Goal 1"})
-      {:ok, _} = TaskSections.insert(task, %{section_type: "step", content: "Step 1"})
+      {:ok, _} = TaskSections.insert(task, %{section_type: "checklist_item", content: "Checklist Item 1"})
 
       sections =
         TaskSections.all(
@@ -75,6 +75,35 @@ defmodule Sacrum.Repo.TaskSectionsTest do
 
       {:ok, _} = TaskSections.delete(section)
       assert {:error, :not_found} = TaskSections.get(section.id)
+    end
+  end
+
+  describe "section_type validation" do
+    test "accepts valid section types" do
+      task = setup_task()
+      valid_types = [
+        "anti_pattern",
+        "checklist_item",
+        "constraint",
+        "context",
+        "current_behavior",
+        "desired_behavior",
+        "failure_test",
+        "goal",
+        "testing_criterion"
+      ]
+
+      for section_type <- valid_types do
+        {:ok, section} = TaskSections.insert(task, %{section_type: section_type, content: "Test content"})
+        assert section.section_type == section_type
+      end
+    end
+
+    test "rejects invalid section type" do
+      task = setup_task()
+      {:error, changeset} = TaskSections.insert(task, %{section_type: "invalid_type", content: "Test"})
+      errors = errors_on(changeset)
+      assert errors[:section_type]
     end
   end
 end
