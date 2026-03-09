@@ -630,6 +630,53 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
       assert result["data"]["deleteWorkflowStep"]["id"] == step.id
     end
+
+    test "creates workflow step with prompt and eval_prompt", %{conn: conn, user: user, project: project} do
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createWorkflowStep(
+              workflowId: "#{wf.id}"
+              name: "Review Step"
+              prompt: "Please review the content"
+              evalPrompt: "Is the content complete and accurate?"
+            ) { id name prompt evalPrompt }
+          }
+        """)
+        |> json_response(200)
+
+      data = result["data"]["createWorkflowStep"]
+      assert data["name"] == "Review Step"
+      assert data["prompt"] == "Please review the content"
+      assert data["evalPrompt"] == "Is the content complete and accurate?"
+    end
+
+    test "updates workflow step with prompt and eval_prompt", %{conn: conn, user: user, project: project} do
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+      {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "Step"})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            updateWorkflowStep(
+              id: "#{step.id}"
+              prompt: "Updated prompt"
+              evalPrompt: "Updated eval prompt"
+            ) { id prompt evalPrompt }
+          }
+        """)
+        |> json_response(200)
+
+      data = result["data"]["updateWorkflowStep"]
+      assert data["prompt"] == "Updated prompt"
+      assert data["evalPrompt"] == "Updated eval prompt"
+    end
   end
 
   describe "step execution queries" do
@@ -2484,6 +2531,33 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["agents"] == ["updated"]
       assert data["skills"] == ["new_skill"]
       assert data["agentConfig"] == %{"key" => "val"}
+    end
+
+    test "returns prompt and eval_prompt fields", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+
+      {:ok, step} =
+        Accounts.WorkflowSteps.insert(wf, %{
+          name: "S1",
+          prompt: "Execute the task",
+          eval_prompt: "Evaluate the result"
+        })
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          { workflowStep(id: "#{step.id}") { id prompt evalPrompt } }
+        """)
+        |> json_response(200)
+
+      data = result["data"]["workflowStep"]
+      assert data["prompt"] == "Execute the task"
+      assert data["evalPrompt"] == "Evaluate the result"
     end
   end
 
