@@ -14,6 +14,8 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     field :agent_config, :map, default: %{}
     field :is_final, :boolean, default: false
     field :step_order, :integer
+    field :prompt, :string
+    field :eval_prompt, :string
 
     belongs_to :workflow, Sacrum.Repo.Schemas.Workflow
     belongs_to :project, Sacrum.Repo.Schemas.Project
@@ -24,8 +26,8 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     timestamps(type: :utc_datetime_usec)
   end
 
-  @create_fields ~w(name goal agents skills agent_config is_final step_order)a
-  @update_fields ~w(name goal agents skills agent_config is_final step_order)a
+  @create_fields ~w(name goal agents skills agent_config is_final step_order prompt eval_prompt)a
+  @update_fields ~w(name goal agents skills agent_config is_final step_order prompt eval_prompt)a
 
   @spec create_changeset(t(), map()) :: Ecto.Changeset.t()
   def create_changeset(step, attrs) do

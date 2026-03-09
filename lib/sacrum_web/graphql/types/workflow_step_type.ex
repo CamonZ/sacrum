@@ -17,6 +17,8 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
     field :agent_config, :json
     field :is_final, :boolean
     field :step_order, :integer
+    field :prompt, :string
+    field :eval_prompt, :string
     field :inserted_at, :datetime
     field :updated_at, :datetime
 
@@ -72,6 +74,8 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
       arg(:agent_config, :json)
       arg(:is_final, :boolean)
       arg(:step_order, :integer)
+      arg(:prompt, :string)
+      arg(:eval_prompt, :string)
 
       resolve(fn args, %{context: %{current_user: user}} ->
         workflow_id = Map.get(args, :workflow_id)
@@ -92,6 +96,8 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
       arg(:agent_config, :json)
       arg(:is_final, :boolean)
       arg(:step_order, :integer)
+      arg(:prompt, :string)
+      arg(:eval_prompt, :string)
 
       resolve(fn %{id: id} = args, %{context: %{current_user: user}} ->
         with {:ok, step} <- Accounts.WorkflowSteps.get_by(user.id, conditions: [id: id]) do
