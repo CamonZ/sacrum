@@ -32,6 +32,9 @@ defmodule SacrumWeb.Graphql.Types.CustomScalars do
           {:error, _reason} -> :error
         end
 
+      %Absinthe.Blueprint.Input.Null{} ->
+        {:ok, nil}
+
       null when is_nil(null) ->
         {:ok, nil}
 
