@@ -1,8 +1,6 @@
 ---
-name: Show Task
+name: vtb-show
 description: Display full details of a task including sections, refs, and relationships
-user-invocable: true
-allowed-tools: ["Bash"]
 ---
 
 # /vtb-show
@@ -16,8 +14,11 @@ vtb show <task-id>
 ```
 
 ## Output includes
-- Task metadata (level, status, priority, tags)
-- Sections (goals, steps, constraints, context)
-- Code references
-- Parent task
-- Blocking and blocked-by relationships
+- Task metadata (level, status, priority, tags, human review flag)
+- Timestamps (started, updated, completed)
+- Workflow assignment (name, current step, step progress)
+- Description
+- All sections: goal, context, current_behavior, desired_behavior, checklist_items, testing_criteria, anti_patterns, failure_tests, constraints
+- Code references (file paths with line numbers)
+- Relationships: parent, children, blocked-by, blocks
+- Revision feedback and rejection reason (when present)
