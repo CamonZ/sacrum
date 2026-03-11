@@ -86,6 +86,7 @@ defmodule Sacrum.Repo.TaskSectionsTest do
 
       valid_types = [
         "anti_pattern",
+        "assumptions",
         "checklist_item",
         "constraint",
         "context",
@@ -112,6 +113,20 @@ defmodule Sacrum.Repo.TaskSectionsTest do
 
       errors = errors_on(changeset)
       assert errors[:section_type]
+    end
+
+    test "creates assumptions section with plain text content" do
+      task = setup_task()
+
+      {:ok, section} =
+        TaskSections.insert(task, %{
+          section_type: "assumptions",
+          content: "This is a plain text assumption for the task"
+        })
+
+      assert section.section_type == "assumptions"
+      assert section.content == "This is a plain text assumption for the task"
+      assert section.task_id == task.id
     end
   end
 end
