@@ -9,6 +9,7 @@ defmodule Sacrum.Repo.Schemas.TaskSection do
   @fields [:section_type, :content, :section_order, :done, :done_at]
   @allowed_section_types [
     "anti_pattern",
+    "assumptions",
     "checklist_item",
     "constraint",
     "context",
