@@ -367,7 +367,9 @@ defmodule SacrumWeb.ProjectChannel do
       agents: data.step.agents,
       skills: data.step.skills,
       agent_config: data.step.agent_config,
-      is_final: data.step.is_final
+      is_final: data.step.is_final,
+      prompt: data.step.prompt,
+      eval_prompt: data.step.eval_prompt
     }
   end
 

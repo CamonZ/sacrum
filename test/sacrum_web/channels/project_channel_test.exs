@@ -191,6 +191,46 @@ defmodule SacrumWeb.ProjectChannelTest do
       assert payload.id == data.execution.id
     end
 
+    test "daemon client receives run_step payload with prompt and eval_prompt fields" do
+      {_user, project, socket} = setup_socket()
+
+      {:ok, _reply, _socket} =
+        subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
+
+      step = build_workflow_step(project)
+
+      data = %{
+        execution: build_step_execution(project),
+        step: step
+      }
+
+      SacrumWeb.ProjectChannel.broadcast_run_step(project.id, data)
+
+      assert_push "run_step", payload
+      assert payload.prompt == step.prompt
+      assert payload.eval_prompt == step.eval_prompt
+    end
+
+    test "run_step payload includes nil for prompt and eval_prompt when step has no values" do
+      {_user, project, socket} = setup_socket()
+
+      {:ok, _reply, _socket} =
+        subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
+
+      step = build_workflow_step(project) |> Map.put(:prompt, nil) |> Map.put(:eval_prompt, nil)
+
+      data = %{
+        execution: build_step_execution(project),
+        step: step
+      }
+
+      SacrumWeb.ProjectChannel.broadcast_run_step(project.id, data)
+
+      assert_push "run_step", payload
+      assert payload.prompt == nil
+      assert payload.eval_prompt == nil
+    end
+
     test "daemon client receives cancel_step event" do
       {_user, project, socket} = setup_socket()
 
@@ -322,6 +362,8 @@ defmodule SacrumWeb.ProjectChannelTest do
       is_final: false,
       step_order: 1,
       workflow_id: Ecto.UUID.generate(),
+      prompt: "Execute the test step",
+      eval_prompt: "Evaluate the test step result",
       inserted_at: now,
       updated_at: now
     }
