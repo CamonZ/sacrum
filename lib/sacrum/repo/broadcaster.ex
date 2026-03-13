@@ -200,21 +200,16 @@ defmodule Sacrum.Repo.Broadcaster do
   # Private helper for step execution broadcast
   defp broadcast_step_execution_event(execution, event) do
     require Logger
-    task = Repo.get(Sacrum.Repo.Schemas.Task, execution.task_id)
 
-    if task do
-      task = Repo.preload(task, :project)
+    case execution.project_id do
+      nil ->
+        Logger.warning("[Broadcast] #{event} failed to extract project_id")
+        :ok
 
-      case task.project do
-        %Project{id: project_id} ->
-          Logger.info("[Broadcast] #{event} for project #{project_id}")
-          channel_func = Map.fetch!(@channel_broadcasts, event)
-          apply(SacrumWeb.ProjectChannel, channel_func, [project_id, execution])
-
-        _ ->
-          Logger.warning("[Broadcast] #{event} failed to extract project_id")
-          :ok
-      end
+      project_id ->
+        Logger.info("[Broadcast] #{event} for project #{project_id}")
+        channel_func = Map.fetch!(@channel_broadcasts, event)
+        apply(SacrumWeb.ProjectChannel, channel_func, [project_id, execution])
     end
   end
 
@@ -260,22 +255,24 @@ defmodule Sacrum.Repo.Broadcaster do
   @doc """
   Broadcast a run_step event with step execution and step definition data.
 
-  Takes a step execution, its corresponding workflow step definition, and project ID,
+  Takes a step execution, its corresponding workflow step definition, workflow, transitions, and project ID,
   then constructs the combined payload and broadcasts to the daemon.
 
   Args:
     - execution: the StepExecution to broadcast
     - step: the WorkflowStep definition
+    - workflow: the Workflow that contains the step
+    - transitions: list of StepTransitions from the current step
     - project_id: the project ID to broadcast to
 
   Returns:
     - :ok
   """
-  @spec broadcast_run_step(struct(), struct(), String.t()) :: :ok
-  def broadcast_run_step(execution, step, project_id) do
+  @spec broadcast_run_step(struct(), struct(), struct(), list(), String.t()) :: :ok
+  def broadcast_run_step(execution, step, workflow, transitions, project_id) do
     require Logger
     Logger.info("[Broadcast] run_step for project #{project_id}")
-    data = %{execution: execution, step: step}
+    data = %{execution: execution, step: step, workflow: workflow, transitions: transitions}
     SacrumWeb.ProjectChannel.broadcast_run_step(project_id, data)
   end
 

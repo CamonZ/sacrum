@@ -35,6 +35,11 @@ defmodule SacrumWeb.ProjectChannel do
 
     case Projects.get_by(user.id, conditions: [id: project_id]) do
       {:ok, project} ->
+        # Register daemon with the DaemonRegistry if client_type is daemon
+        if client_type == "daemon" do
+          Sacrum.DaemonRegistry.register_daemon(project_id)
+        end
+
         {:ok, socket |> assign(:project, project) |> assign(:client_type, client_type)}
 
       {:error, :not_found} ->
@@ -45,6 +50,17 @@ defmodule SacrumWeb.ProjectChannel do
   defp validate_client_type(params) do
     client_type = Map.get(params, "client_type", "default")
     if client_type in @valid_client_types, do: client_type, else: "default"
+  end
+
+  @impl true
+  def terminate(_reason, socket) do
+    # Unregister daemon when it disconnects
+    if Map.get(socket.assigns, :client_type) == "daemon" do
+      project_id = socket.assigns.project.id
+      Sacrum.DaemonRegistry.unregister_daemon(project_id)
+    end
+
+    :ok
   end
 
   @impl true
@@ -367,7 +383,13 @@ defmodule SacrumWeb.ProjectChannel do
       agents: data.step.agents,
       skills: data.step.skills,
       agent_config: data.step.agent_config,
-      is_final: data.step.is_final
+      is_final: data.step.is_final,
+      prompt: data.step.prompt,
+      eval_prompt: data.step.eval_prompt,
+      # Workflow auto_advance
+      auto_advance: data.workflow.auto_advance,
+      # Available transitions from current step
+      transitions: Enum.map(data.transitions, &step_transition_payload/1)
     }
   end
 

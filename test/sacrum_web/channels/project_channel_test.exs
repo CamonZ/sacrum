@@ -86,6 +86,71 @@ defmodule SacrumWeb.ProjectChannelTest do
     end
   end
 
+  describe "daemon registry integration" do
+    test "joining as daemon registers presence for the project" do
+      {_user, project, socket} = setup_socket()
+
+      # Verify no daemon connected initially
+      assert Sacrum.DaemonRegistry.daemon_connected?(project.id) == false
+
+      # Join as daemon
+      {:ok, _reply, _socket} =
+        subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
+
+      # Verify daemon is registered
+      assert Sacrum.DaemonRegistry.daemon_connected?(project.id) == true
+      assert Sacrum.DaemonRegistry.daemon_count(project.id) == 1
+    end
+
+    test "multiple daemons for the same project are tracked correctly" do
+      {_user, project, _socket} = setup_socket()
+
+      # No daemons initially
+      assert Sacrum.DaemonRegistry.daemon_count(project.id) == 0
+
+      # Register first daemon
+      Sacrum.DaemonRegistry.register_daemon(project.id)
+      assert Sacrum.DaemonRegistry.daemon_count(project.id) == 1
+
+      # Register second daemon
+      Sacrum.DaemonRegistry.register_daemon(project.id)
+      assert Sacrum.DaemonRegistry.daemon_count(project.id) == 2
+
+      # Unregister one
+      Sacrum.DaemonRegistry.unregister_daemon(project.id)
+      assert Sacrum.DaemonRegistry.daemon_count(project.id) == 1
+
+      # Unregister the other
+      Sacrum.DaemonRegistry.unregister_daemon(project.id)
+      assert Sacrum.DaemonRegistry.daemon_count(project.id) == 0
+    end
+
+    test "joining as default client does not register daemon" do
+      {_user, project, socket} = setup_socket()
+
+      # Join as default client
+      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}", %{})
+
+      # Verify daemon is not registered
+      assert Sacrum.DaemonRegistry.daemon_connected?(project.id) == false
+    end
+
+    test "daemon joins project registers presence" do
+      {_user, project, socket} = setup_socket()
+
+      # No daemon initially
+      assert Sacrum.DaemonRegistry.daemon_connected?(project.id) == false
+
+      # Join as daemon
+      {:ok, _reply, _socket} =
+        subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
+
+      # Daemon is registered
+      assert Sacrum.DaemonRegistry.daemon_connected?(project.id) == true
+      assert Sacrum.DaemonRegistry.daemon_count(project.id) == 1
+    end
+  end
+
   describe "broadcast helpers" do
     test "broadcast_task_created sends task_created event" do
       {_user, project, socket} = setup_socket()
@@ -143,7 +208,9 @@ defmodule SacrumWeb.ProjectChannelTest do
 
       data = %{
         execution: build_step_execution(project),
-        step: build_workflow_step(project)
+        step: build_workflow_step(project),
+        workflow: build_workflow(project),
+        transitions: []
       }
 
       SacrumWeb.ProjectChannel.broadcast_run_step(project.id, data)
@@ -182,13 +249,104 @@ defmodule SacrumWeb.ProjectChannelTest do
 
       data = %{
         execution: build_step_execution(project),
-        step: build_workflow_step(project)
+        step: build_workflow_step(project),
+        workflow: build_workflow(project),
+        transitions: []
       }
 
       SacrumWeb.ProjectChannel.broadcast_run_step(project.id, data)
 
       assert_push "run_step", payload
       assert payload.id == data.execution.id
+    end
+
+    test "daemon client receives run_step payload with prompt and eval_prompt fields" do
+      {_user, project, socket} = setup_socket()
+
+      {:ok, _reply, _socket} =
+        subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
+
+      step = build_workflow_step(project)
+
+      data = %{
+        execution: build_step_execution(project),
+        step: step,
+        workflow: build_workflow(project),
+        transitions: []
+      }
+
+      SacrumWeb.ProjectChannel.broadcast_run_step(project.id, data)
+
+      assert_push "run_step", payload
+      assert payload.prompt == step.prompt
+      assert payload.eval_prompt == step.eval_prompt
+    end
+
+    test "run_step payload includes nil for prompt and eval_prompt when step has no values" do
+      {_user, project, socket} = setup_socket()
+
+      {:ok, _reply, _socket} =
+        subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
+
+      step = build_workflow_step(project) |> Map.put(:prompt, nil) |> Map.put(:eval_prompt, nil)
+
+      data = %{
+        execution: build_step_execution(project),
+        step: step,
+        workflow: build_workflow(project),
+        transitions: []
+      }
+
+      SacrumWeb.ProjectChannel.broadcast_run_step(project.id, data)
+
+      assert_push "run_step", payload
+      assert payload.prompt == nil
+      assert payload.eval_prompt == nil
+    end
+
+    test "run_step payload includes auto_advance from workflow" do
+      {_user, project, socket} = setup_socket()
+
+      {:ok, _reply, _socket} =
+        subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
+
+      workflow = build_workflow(project) |> Map.put(:auto_advance, true)
+
+      data = %{
+        execution: build_step_execution(project),
+        step: build_workflow_step(project),
+        workflow: workflow,
+        transitions: []
+      }
+
+      SacrumWeb.ProjectChannel.broadcast_run_step(project.id, data)
+
+      assert_push "run_step", payload
+      assert payload.auto_advance == true
+    end
+
+    test "run_step payload includes transitions list" do
+      {_user, project, socket} = setup_socket()
+
+      {:ok, _reply, _socket} =
+        subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
+
+      transition = build_step_transition()
+
+      data = %{
+        execution: build_step_execution(project),
+        step: build_workflow_step(project),
+        workflow: build_workflow(project),
+        transitions: [transition]
+      }
+
+      SacrumWeb.ProjectChannel.broadcast_run_step(project.id, data)
+
+      assert_push "run_step", payload
+      assert is_list(payload.transitions)
+      assert length(payload.transitions) == 1
+      assert hd(payload.transitions).id == transition.id
+      assert hd(payload.transitions).to_step_id == transition.to_step_id
     end
 
     test "daemon client receives cancel_step event" do
@@ -322,6 +480,8 @@ defmodule SacrumWeb.ProjectChannelTest do
       is_final: false,
       step_order: 1,
       workflow_id: Ecto.UUID.generate(),
+      prompt: "Execute the test step",
+      eval_prompt: "Evaluate the test step result",
       inserted_at: now,
       updated_at: now
     }
@@ -338,6 +498,19 @@ defmodule SacrumWeb.ProjectChannelTest do
       section_order: 1,
       done: false,
       done_at: nil,
+      inserted_at: now,
+      updated_at: now
+    }
+  end
+
+  defp build_step_transition do
+    now = DateTime.utc_now()
+
+    %{
+      id: Ecto.UUID.generate(),
+      from_step_id: Ecto.UUID.generate(),
+      to_step_id: Ecto.UUID.generate(),
+      label: "Continue",
       inserted_at: now,
       updated_at: now
     }

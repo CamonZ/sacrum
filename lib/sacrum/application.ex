@@ -12,6 +12,10 @@ defmodule Sacrum.Application do
       Sacrum.Repo,
       {DNSCluster, query: Application.get_env(:sacrum, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Sacrum.PubSub},
+      # Daemon presence tracking
+      Sacrum.DaemonRegistry,
+      # Pending execution timeout checker
+      Sacrum.PendingExecutionTimeoutChecker,
       # Start to serve requests before Absinthe.Subscription
       SacrumWeb.Endpoint,
       # Absinthe subscriptions (must come after Endpoint)
