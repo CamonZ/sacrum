@@ -178,16 +178,21 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
 
         with {:ok, task} <- Accounts.Tasks.find(user.id, task_id),
              {:ok, workflow} <- Accounts.Workflows.get_by(user.id, conditions: [id: workflow_id]),
-             {:ok, step} <- Accounts.WorkflowSteps.get_by(user.id, conditions: [id: step_id]) do
+             {:ok, step} <- Accounts.WorkflowSteps.get_by(user.id, conditions: [id: step_id]),
+             {:ok, task_with_refs} <- Accounts.Tasks.get_by(user.id, conditions: [id: task_id], preloads: [:code_refs, sections: :code_refs]) do
           # Load transitions from the current step
           transitions = Accounts.StepTransitions.list_by(user.id, conditions: [from_step_id: step_id])
+
+          # Build context snapshot from task
+          context = build_context(task_with_refs)
 
           attrs = %{
             task_id: task_id,
             workflow_id: workflow_id,
             step_name: step.name,
             status: "pending",
-            project_id: task.project_id
+            project_id: task.project_id,
+            context: context
           }
 
           with {:ok, execution} <- Accounts.StepExecutions.insert(user.id, attrs) do
@@ -195,6 +200,39 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
             {:ok, execution}
           end
         end
+      end)
+    end
+
+    defp build_context(task) do
+      %{
+        title: task.title,
+        description: task.description,
+        sections: build_sections_context(task.sections || []),
+        code_refs: build_code_refs_context(task.code_refs || [])
+      }
+    end
+
+    defp build_sections_context(sections) do
+      Enum.map(sections, fn section ->
+        %{
+          section_type: section.section_type,
+          content: section.content,
+          section_order: section.section_order,
+          done: section.done,
+          code_refs: build_code_refs_context(section.code_refs || [])
+        }
+      end)
+    end
+
+    defp build_code_refs_context(code_refs) do
+      Enum.map(code_refs, fn ref ->
+        %{
+          path: ref.path,
+          line_start: ref.line_start,
+          line_end: ref.line_end,
+          name: ref.name,
+          description: ref.description
+        }
       end)
     end
 
