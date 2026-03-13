@@ -39,3 +39,8 @@ config :phoenix_live_view,
 # Sort query params output of verified routes for robust url comparisons
 config :phoenix,
   sort_verified_routes_query_params: true
+
+# Daemon configuration for tests
+config :sacrum,
+  daemon_presence_required: false,
+  pending_execution_timeout_ms: 1_000

@@ -9,7 +9,10 @@ import Config
 
 config :sacrum,
   ecto_repos: [Sacrum.Repo],
-  generators: [timestamp_type: :utc_datetime, binary_id: true]
+  generators: [timestamp_type: :utc_datetime, binary_id: true],
+  # Daemon configuration
+  daemon_presence_required: false,
+  pending_execution_timeout_ms: 60_000
 
 # Configure the endpoint
 config :sacrum, SacrumWeb.Endpoint,

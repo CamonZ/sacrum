@@ -179,7 +179,8 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
         with {:ok, task} <- Accounts.Tasks.find(user.id, task_id),
              {:ok, workflow} <- Accounts.Workflows.get_by(user.id, conditions: [id: workflow_id]),
              {:ok, step} <- Accounts.WorkflowSteps.get_by(user.id, conditions: [id: step_id]),
-             {:ok, task_with_refs} <- Accounts.Tasks.get_by(user.id, conditions: [id: task_id], preloads: [:code_refs, sections: :code_refs]) do
+             {:ok, task_with_refs} <- Accounts.Tasks.get_by(user.id, conditions: [id: task_id], preloads: [:code_refs, sections: :code_refs]),
+             :ok <- check_daemon_presence(task.project_id) do
           # Load transitions from the current step
           transitions = Accounts.StepTransitions.list_by(user.id, conditions: [from_step_id: step_id])
 
@@ -234,6 +235,20 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
           description: ref.description
         }
       end)
+    end
+
+    defp check_daemon_presence(project_id) do
+      daemon_presence_required = Application.get_env(:sacrum, :daemon_presence_required, false)
+
+      if daemon_presence_required do
+        if Sacrum.DaemonRegistry.daemon_connected?(project_id) do
+          :ok
+        else
+          {:error, "No daemon is currently connected for this project"}
+        end
+      else
+        :ok
+      end
     end
 
     field :cancel_step_execution, :step_execution do

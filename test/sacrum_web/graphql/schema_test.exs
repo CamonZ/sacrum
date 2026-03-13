@@ -1000,6 +1000,62 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert section_ref["line_end"] == 40
     end
 
+    test "runStep succeeds when daemon_presence_required is false (default)", %{conn: conn, user: user, project: project} do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+      {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "step_1", goal: "Do something"})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            runStep(
+              taskId: "#{task.id}"
+              workflowId: "#{wf.id}"
+              stepId: "#{step.id}"
+            ) { id stepName status taskId }
+          }
+        """)
+        |> json_response(200)
+
+      data = result["data"]["runStep"]
+      assert data["status"] == "pending"
+      assert data["id"] != nil
+    end
+
+    test "runStep returns error when no daemon connected and daemon_presence_required is true", %{conn: conn, user: user, project: project} do
+      # Enable daemon presence requirement
+      Application.put_env(:sacrum, :daemon_presence_required, true)
+
+      on_exit(fn ->
+        Application.put_env(:sacrum, :daemon_presence_required, false)
+      end)
+
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+      {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "step_1", goal: "Do something"})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            runStep(
+              taskId: "#{task.id}"
+              workflowId: "#{wf.id}"
+              stepId: "#{step.id}"
+            ) { id stepName status taskId }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] != nil
+      assert Enum.any?(result["errors"], fn error ->
+        String.contains?(error["message"], "No daemon is currently connected")
+      end)
+    end
+
     test "cancelStepExecution returns execution", %{conn: conn, user: user, project: project} do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})

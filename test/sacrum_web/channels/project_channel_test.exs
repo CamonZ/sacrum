@@ -86,6 +86,71 @@ defmodule SacrumWeb.ProjectChannelTest do
     end
   end
 
+  describe "daemon registry integration" do
+    test "joining as daemon registers presence for the project" do
+      {_user, project, socket} = setup_socket()
+
+      # Verify no daemon connected initially
+      assert Sacrum.DaemonRegistry.daemon_connected?(project.id) == false
+
+      # Join as daemon
+      {:ok, _reply, _socket} =
+        subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
+
+      # Verify daemon is registered
+      assert Sacrum.DaemonRegistry.daemon_connected?(project.id) == true
+      assert Sacrum.DaemonRegistry.daemon_count(project.id) == 1
+    end
+
+    test "multiple daemons for the same project are tracked correctly" do
+      {_user, project, _socket} = setup_socket()
+
+      # No daemons initially
+      assert Sacrum.DaemonRegistry.daemon_count(project.id) == 0
+
+      # Register first daemon
+      Sacrum.DaemonRegistry.register_daemon(project.id)
+      assert Sacrum.DaemonRegistry.daemon_count(project.id) == 1
+
+      # Register second daemon
+      Sacrum.DaemonRegistry.register_daemon(project.id)
+      assert Sacrum.DaemonRegistry.daemon_count(project.id) == 2
+
+      # Unregister one
+      Sacrum.DaemonRegistry.unregister_daemon(project.id)
+      assert Sacrum.DaemonRegistry.daemon_count(project.id) == 1
+
+      # Unregister the other
+      Sacrum.DaemonRegistry.unregister_daemon(project.id)
+      assert Sacrum.DaemonRegistry.daemon_count(project.id) == 0
+    end
+
+    test "joining as default client does not register daemon" do
+      {_user, project, socket} = setup_socket()
+
+      # Join as default client
+      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}", %{})
+
+      # Verify daemon is not registered
+      assert Sacrum.DaemonRegistry.daemon_connected?(project.id) == false
+    end
+
+    test "daemon joins project registers presence" do
+      {_user, project, socket} = setup_socket()
+
+      # No daemon initially
+      assert Sacrum.DaemonRegistry.daemon_connected?(project.id) == false
+
+      # Join as daemon
+      {:ok, _reply, _socket} =
+        subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
+
+      # Daemon is registered
+      assert Sacrum.DaemonRegistry.daemon_connected?(project.id) == true
+      assert Sacrum.DaemonRegistry.daemon_count(project.id) == 1
+    end
+  end
+
   describe "broadcast helpers" do
     test "broadcast_task_created sends task_created event" do
       {_user, project, socket} = setup_socket()
