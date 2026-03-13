@@ -1056,7 +1056,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       end)
     end
 
-    test "cancelStepExecution returns execution", %{conn: conn, user: user, project: project} do
+    test "cancelStepExecution returns execution with status cancelling", %{conn: conn, user: user, project: project} do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
 
@@ -1066,7 +1066,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
           workflow_id: wf.id,
           project_id: project.id,
           step_name: "step_1",
-          status: "running"
+          status: "in_progress"
         })
 
       result =
@@ -1085,6 +1085,94 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["id"] == exec.id
       assert data["stepName"] == "step_1"
       assert data["taskId"] == task.id
+      assert data["status"] == "cancelling"
+    end
+
+    test "cancelStepExecution on a pending execution sets status to cancelling", %{conn: conn, user: user, project: project} do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+
+      {:ok, exec} =
+        Accounts.StepExecutions.insert(user.id, %{
+          task_id: task.id,
+          workflow_id: wf.id,
+          project_id: project.id,
+          step_name: "step_1",
+          status: "pending"
+        })
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            cancelStepExecution(
+              stepExecutionId: "#{exec.id}"
+            ) { id status }
+          }
+        """)
+        |> json_response(200)
+
+      data = result["data"]["cancelStepExecution"]
+      assert data["status"] == "cancelling"
+    end
+
+    test "cancelStepExecution on a completed execution returns error", %{conn: conn, user: user, project: project} do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+
+      {:ok, exec} =
+        Accounts.StepExecutions.insert(user.id, %{
+          task_id: task.id,
+          workflow_id: wf.id,
+          project_id: project.id,
+          step_name: "step_1",
+          status: "completed"
+        })
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            cancelStepExecution(
+              stepExecutionId: "#{exec.id}"
+            ) { id }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] != nil
+      assert Enum.any?(result["errors"], &String.contains?(&1["message"], "Cannot cancel"))
+    end
+
+    test "cancelStepExecution on a failed execution returns error", %{conn: conn, user: user, project: project} do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+
+      {:ok, exec} =
+        Accounts.StepExecutions.insert(user.id, %{
+          task_id: task.id,
+          workflow_id: wf.id,
+          project_id: project.id,
+          step_name: "step_1",
+          status: "failed"
+        })
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            cancelStepExecution(
+              stepExecutionId: "#{exec.id}"
+            ) { id }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] != nil
+      assert Enum.any?(result["errors"], &String.contains?(&1["message"], "Cannot cancel"))
     end
   end
 

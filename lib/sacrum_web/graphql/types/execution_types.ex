@@ -176,16 +176,15 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
         workflow_id = Map.get(args, :workflow_id)
         step_id = Map.get(args, :step_id)
 
-        with {:ok, task} <- Accounts.Tasks.find(user.id, task_id),
+        with {:ok, task} <- Accounts.Tasks.get_by(user.id, conditions: [id: task_id], preloads: [:code_refs, sections: :code_refs]),
              {:ok, workflow} <- Accounts.Workflows.get_by(user.id, conditions: [id: workflow_id]),
              {:ok, step} <- Accounts.WorkflowSteps.get_by(user.id, conditions: [id: step_id]),
-             {:ok, task_with_refs} <- Accounts.Tasks.get_by(user.id, conditions: [id: task_id], preloads: [:code_refs, sections: :code_refs]),
              :ok <- check_daemon_presence(task.project_id) do
           # Load transitions from the current step
           transitions = Accounts.StepTransitions.list_by(user.id, conditions: [from_step_id: step_id])
 
           # Build context snapshot from task
-          context = build_context(task_with_refs)
+          context = build_context(task)
 
           attrs = %{
             task_id: task_id,
@@ -257,8 +256,21 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
       resolve(fn %{step_execution_id: execution_id}, %{context: %{current_user: user}} ->
         with {:ok, execution} <-
                Accounts.StepExecutions.get_by(user.id, conditions: [id: execution_id]) do
-          Broadcaster.broadcast_cancel_step(execution, execution.project_id)
-          {:ok, execution}
+          # Only allow cancellation if the execution is in pending or in_progress status
+          case execution.status do
+            status when status in ["pending", "in_progress"] ->
+              # Update the execution status to cancelling
+              with {:ok, updated_execution} <-
+                     Accounts.StepExecutions.update(execution, %{status: "cancelling"}) do
+                # After status update, broadcast the cancel_step event to the daemon
+                Broadcaster.broadcast_cancel_step(updated_execution, updated_execution.project_id)
+                {:ok, updated_execution}
+              end
+
+            _ ->
+              # Execution is already completed, failed, or in another terminal state
+              {:error, "Cannot cancel an execution with status: #{execution.status}"}
+          end
         end
       end)
     end

@@ -68,8 +68,8 @@ defmodule Sacrum.DaemonRegistry do
 
   @impl true
   def handle_call({:register_daemon, project_id}, _from, state) do
-    count = Map.get(state, project_id, 0) + 1
-    new_state = Map.put(state, project_id, count)
+    new_state = Map.update(state, project_id, 1, &(&1 + 1))
+    count = Map.get(new_state, project_id)
     Logger.info("[DaemonRegistry] Daemon registered for project #{project_id}. Count: #{count}")
     {:reply, count, new_state}
   end
@@ -92,8 +92,7 @@ defmodule Sacrum.DaemonRegistry do
 
   @impl true
   def handle_call({:daemon_connected?, project_id}, _from, state) do
-    connected? = Map.has_key?(state, project_id) and Map.get(state, project_id, 0) > 0
-    {:reply, connected?, state}
+    {:reply, Map.has_key?(state, project_id), state}
   end
 
   @impl true

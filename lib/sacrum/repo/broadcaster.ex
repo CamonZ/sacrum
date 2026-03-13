@@ -154,23 +154,6 @@ defmodule Sacrum.Repo.Broadcaster do
   def broadcast_step_execution({:error, _} = error, _event), do: error
 
   @doc """
-  Broadcast a step execution directly (not wrapped in a tuple).
-
-  This is useful when you already have an updated execution and want to broadcast it directly.
-
-  Args:
-    - execution: the StepExecution to broadcast
-    - event: event name (atom, e.g. :step_execution_status_changed)
-
-  Returns:
-    - :ok
-  """
-  @spec broadcast_step_execution_direct(struct(), atom()) :: :ok
-  def broadcast_step_execution_direct(execution, event) do
-    broadcast_step_execution_event(execution, event)
-  end
-
-  @doc """
   Broadcast a session log by looking up its step execution and task to get the project.
 
   This is a specialized helper for session logs which don't have direct project associations.
@@ -217,21 +200,16 @@ defmodule Sacrum.Repo.Broadcaster do
   # Private helper for step execution broadcast
   defp broadcast_step_execution_event(execution, event) do
     require Logger
-    task = Repo.get(Sacrum.Repo.Schemas.Task, execution.task_id)
 
-    if task do
-      task = Repo.preload(task, :project)
+    case execution.project_id do
+      nil ->
+        Logger.warning("[Broadcast] #{event} failed to extract project_id")
+        :ok
 
-      case task.project do
-        %Project{id: project_id} ->
-          Logger.info("[Broadcast] #{event} for project #{project_id}")
-          channel_func = Map.fetch!(@channel_broadcasts, event)
-          apply(SacrumWeb.ProjectChannel, channel_func, [project_id, execution])
-
-        _ ->
-          Logger.warning("[Broadcast] #{event} failed to extract project_id")
-          :ok
-      end
+      project_id ->
+        Logger.info("[Broadcast] #{event} for project #{project_id}")
+        channel_func = Map.fetch!(@channel_broadcasts, event)
+        apply(SacrumWeb.ProjectChannel, channel_func, [project_id, execution])
     end
   end
 

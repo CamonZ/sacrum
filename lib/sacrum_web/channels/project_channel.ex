@@ -55,7 +55,7 @@ defmodule SacrumWeb.ProjectChannel do
   @impl true
   def terminate(_reason, socket) do
     # Unregister daemon when it disconnects
-    if socket.assigns.client_type == "daemon" do
+    if Map.get(socket.assigns, :client_type) == "daemon" do
       project_id = socket.assigns.project.id
       Sacrum.DaemonRegistry.unregister_daemon(project_id)
     end

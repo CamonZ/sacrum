@@ -11,8 +11,8 @@ defmodule Sacrum.PendingExecutionTimeoutChecker do
   require Logger
   import Ecto.Query
 
+  alias Sacrum.Accounts
   alias Sacrum.Repo
-  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.StepExecution
 
   # Run check every 5 seconds
@@ -62,35 +62,27 @@ defmodule Sacrum.PendingExecutionTimeoutChecker do
 
     timed_out_executions = Repo.all(query)
 
+    count = length(timed_out_executions)
+
     Enum.each(timed_out_executions, fn execution ->
       fail_execution_with_timeout(execution)
     end)
 
-    case timed_out_executions do
-      [] ->
-        :ok
-
-      _ ->
-        Logger.info(
-          "[PendingExecutionTimeoutChecker] Marked #{Enum.count(timed_out_executions)} executions as failed due to timeout"
-        )
+    if count > 0 do
+      Logger.info(
+        "[PendingExecutionTimeoutChecker] Marked #{count} executions as failed due to timeout"
+      )
     end
   end
 
   defp fail_execution_with_timeout(execution) do
-    # Update the execution to failed status with timeout message
     attrs = %{
       status: "failed",
       output: "No daemon picked up execution within the timeout period"
     }
 
-    # We bypass the user_id check since this is an internal operation
-    changeset = StepExecution.update_changeset(execution, attrs)
-
-    case Repo.update(changeset) do
-      {:ok, updated_execution} ->
-        # Broadcast the status change
-        Broadcaster.broadcast_step_execution_direct(updated_execution, :step_execution_status_changed)
+    case Accounts.StepExecutions.update(execution, attrs) do
+      {:ok, _updated_execution} ->
         Logger.info("[PendingExecutionTimeoutChecker] Failed execution #{execution.id} due to timeout")
 
       {:error, reason} ->
