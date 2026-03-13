@@ -86,7 +86,11 @@ defmodule Sacrum.DaemonRegistry do
       end
 
     new_count = max(0, current_count - 1)
-    Logger.info("[DaemonRegistry] Daemon unregistered for project #{project_id}. Count: #{new_count}")
+
+    Logger.info(
+      "[DaemonRegistry] Daemon unregistered for project #{project_id}. Count: #{new_count}"
+    )
+
     {:reply, new_count, new_state}
   end
 

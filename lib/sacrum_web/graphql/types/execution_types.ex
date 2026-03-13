@@ -176,12 +176,17 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
         workflow_id = Map.get(args, :workflow_id)
         step_id = Map.get(args, :step_id)
 
-        with {:ok, task} <- Accounts.Tasks.get_by(user.id, conditions: [id: task_id], preloads: [:code_refs, sections: :code_refs]),
+        with {:ok, task} <-
+               Accounts.Tasks.get_by(user.id,
+                 conditions: [id: task_id],
+                 preloads: [:code_refs, sections: :code_refs]
+               ),
              {:ok, workflow} <- Accounts.Workflows.get_by(user.id, conditions: [id: workflow_id]),
              {:ok, step} <- Accounts.WorkflowSteps.get_by(user.id, conditions: [id: step_id]),
              :ok <- check_daemon_presence(task.project_id) do
           # Load transitions from the current step
-          transitions = Accounts.StepTransitions.list_by(user.id, conditions: [from_step_id: step_id])
+          transitions =
+            Accounts.StepTransitions.list_by(user.id, conditions: [from_step_id: step_id])
 
           # Build context snapshot from task
           context = build_context(task)
@@ -196,7 +201,14 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
           }
 
           with {:ok, execution} <- Accounts.StepExecutions.insert(user.id, attrs) do
-            Broadcaster.broadcast_run_step(execution, step, workflow, transitions, task.project_id)
+            Broadcaster.broadcast_run_step(
+              execution,
+              step,
+              workflow,
+              transitions,
+              task.project_id
+            )
+
             {:ok, execution}
           end
         end

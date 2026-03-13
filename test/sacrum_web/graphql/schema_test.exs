@@ -631,7 +631,11 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert result["data"]["deleteWorkflowStep"]["id"] == step.id
     end
 
-    test "creates workflow step with prompt and eval_prompt", %{conn: conn, user: user, project: project} do
+    test "creates workflow step with prompt and eval_prompt", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
 
       result =
@@ -655,7 +659,11 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["evalPrompt"] == "Is the content complete and accurate?"
     end
 
-    test "updates workflow step with prompt and eval_prompt", %{conn: conn, user: user, project: project} do
+    test "updates workflow step with prompt and eval_prompt", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
       {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "Step"})
 
@@ -868,7 +876,8 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert result["errors"] != nil
     end
 
-    test "runStep creates execution with populated context field containing task title and sections", %{conn: conn, user: user, project: project} do
+    test "runStep creates execution with populated context field containing task title and sections",
+         %{conn: conn, user: user, project: project} do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task Title"})
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
       {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "step_1", goal: "Do something"})
@@ -904,7 +913,8 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert Enum.at(data["context"]["sections"], 0)["content"] == "Section content"
     end
 
-    test "runStep with task that has no sections creates execution with empty sections list in context", %{conn: conn, user: user, project: project} do
+    test "runStep with task that has no sections creates execution with empty sections list in context",
+         %{conn: conn, user: user, project: project} do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
       {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "step_1", goal: "Do something"})
@@ -927,7 +937,11 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["context"]["sections"] == []
     end
 
-    test "runStep context includes code_refs from both task-level and section-level refs", %{conn: conn, user: user, project: project} do
+    test "runStep context includes code_refs from both task-level and section-level refs", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
       {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "step_1", goal: "Do something"})
@@ -1000,7 +1014,11 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert section_ref["line_end"] == 40
     end
 
-    test "runStep succeeds when daemon_presence_required is false (default)", %{conn: conn, user: user, project: project} do
+    test "runStep succeeds when daemon_presence_required is false (default)", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
       {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "step_1", goal: "Do something"})
@@ -1024,7 +1042,11 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["id"] != nil
     end
 
-    test "runStep returns error when no daemon connected and daemon_presence_required is true", %{conn: conn, user: user, project: project} do
+    test "runStep returns error when no daemon connected and daemon_presence_required is true", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
       # Enable daemon presence requirement
       Application.put_env(:sacrum, :daemon_presence_required, true)
 
@@ -1051,12 +1073,17 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         |> json_response(200)
 
       assert result["errors"] != nil
+
       assert Enum.any?(result["errors"], fn error ->
-        String.contains?(error["message"], "No daemon is currently connected")
-      end)
+               String.contains?(error["message"], "No daemon is currently connected")
+             end)
     end
 
-    test "cancelStepExecution returns execution with status cancelling", %{conn: conn, user: user, project: project} do
+    test "cancelStepExecution returns execution with status cancelling", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
 
@@ -1088,7 +1115,11 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["status"] == "cancelling"
     end
 
-    test "cancelStepExecution on a pending execution sets status to cancelling", %{conn: conn, user: user, project: project} do
+    test "cancelStepExecution on a pending execution sets status to cancelling", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
 
@@ -1117,7 +1148,11 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["status"] == "cancelling"
     end
 
-    test "cancelStepExecution on a completed execution returns error", %{conn: conn, user: user, project: project} do
+    test "cancelStepExecution on a completed execution returns error", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
 
@@ -1146,7 +1181,11 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert Enum.any?(result["errors"], &String.contains?(&1["message"], "Cannot cancel"))
     end
 
-    test "cancelStepExecution on a failed execution returns error", %{conn: conn, user: user, project: project} do
+    test "cancelStepExecution on a failed execution returns error", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
 

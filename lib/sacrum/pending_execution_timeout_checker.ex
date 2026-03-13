@@ -83,7 +83,9 @@ defmodule Sacrum.PendingExecutionTimeoutChecker do
 
     case Accounts.StepExecutions.update(execution, attrs) do
       {:ok, _updated_execution} ->
-        Logger.info("[PendingExecutionTimeoutChecker] Failed execution #{execution.id} due to timeout")
+        Logger.info(
+          "[PendingExecutionTimeoutChecker] Failed execution #{execution.id} due to timeout"
+        )
 
       {:error, reason} ->
         Logger.error(
