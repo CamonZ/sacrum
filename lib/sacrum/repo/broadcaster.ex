@@ -260,22 +260,24 @@ defmodule Sacrum.Repo.Broadcaster do
   @doc """
   Broadcast a run_step event with step execution and step definition data.
 
-  Takes a step execution, its corresponding workflow step definition, and project ID,
+  Takes a step execution, its corresponding workflow step definition, workflow, transitions, and project ID,
   then constructs the combined payload and broadcasts to the daemon.
 
   Args:
     - execution: the StepExecution to broadcast
     - step: the WorkflowStep definition
+    - workflow: the Workflow that contains the step
+    - transitions: list of StepTransitions from the current step
     - project_id: the project ID to broadcast to
 
   Returns:
     - :ok
   """
-  @spec broadcast_run_step(struct(), struct(), String.t()) :: :ok
-  def broadcast_run_step(execution, step, project_id) do
+  @spec broadcast_run_step(struct(), struct(), struct(), list(), String.t()) :: :ok
+  def broadcast_run_step(execution, step, workflow, transitions, project_id) do
     require Logger
     Logger.info("[Broadcast] run_step for project #{project_id}")
-    data = %{execution: execution, step: step}
+    data = %{execution: execution, step: step, workflow: workflow, transitions: transitions}
     SacrumWeb.ProjectChannel.broadcast_run_step(project_id, data)
   end
 

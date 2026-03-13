@@ -369,7 +369,11 @@ defmodule SacrumWeb.ProjectChannel do
       agent_config: data.step.agent_config,
       is_final: data.step.is_final,
       prompt: data.step.prompt,
-      eval_prompt: data.step.eval_prompt
+      eval_prompt: data.step.eval_prompt,
+      # Workflow auto_advance
+      auto_advance: data.workflow.auto_advance,
+      # Available transitions from current step
+      transitions: Enum.map(data.transitions, &step_transition_payload/1)
     }
   end
 

@@ -177,8 +177,11 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
         step_id = Map.get(args, :step_id)
 
         with {:ok, task} <- Accounts.Tasks.find(user.id, task_id),
-             {:ok, _workflow} <- Accounts.Workflows.get_by(user.id, conditions: [id: workflow_id]),
+             {:ok, workflow} <- Accounts.Workflows.get_by(user.id, conditions: [id: workflow_id]),
              {:ok, step} <- Accounts.WorkflowSteps.get_by(user.id, conditions: [id: step_id]) do
+          # Load transitions from the current step
+          transitions = Accounts.StepTransitions.list_by(user.id, conditions: [from_step_id: step_id])
+
           attrs = %{
             task_id: task_id,
             workflow_id: workflow_id,
@@ -188,7 +191,7 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
           }
 
           with {:ok, execution} <- Accounts.StepExecutions.insert(user.id, attrs) do
-            Broadcaster.broadcast_run_step(execution, step, task.project_id)
+            Broadcaster.broadcast_run_step(execution, step, workflow, transitions, task.project_id)
             {:ok, execution}
           end
         end

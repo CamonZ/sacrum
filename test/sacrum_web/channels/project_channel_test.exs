@@ -143,7 +143,9 @@ defmodule SacrumWeb.ProjectChannelTest do
 
       data = %{
         execution: build_step_execution(project),
-        step: build_workflow_step(project)
+        step: build_workflow_step(project),
+        workflow: build_workflow(project),
+        transitions: []
       }
 
       SacrumWeb.ProjectChannel.broadcast_run_step(project.id, data)
@@ -182,7 +184,9 @@ defmodule SacrumWeb.ProjectChannelTest do
 
       data = %{
         execution: build_step_execution(project),
-        step: build_workflow_step(project)
+        step: build_workflow_step(project),
+        workflow: build_workflow(project),
+        transitions: []
       }
 
       SacrumWeb.ProjectChannel.broadcast_run_step(project.id, data)
@@ -201,7 +205,9 @@ defmodule SacrumWeb.ProjectChannelTest do
 
       data = %{
         execution: build_step_execution(project),
-        step: step
+        step: step,
+        workflow: build_workflow(project),
+        transitions: []
       }
 
       SacrumWeb.ProjectChannel.broadcast_run_step(project.id, data)
@@ -221,7 +227,9 @@ defmodule SacrumWeb.ProjectChannelTest do
 
       data = %{
         execution: build_step_execution(project),
-        step: step
+        step: step,
+        workflow: build_workflow(project),
+        transitions: []
       }
 
       SacrumWeb.ProjectChannel.broadcast_run_step(project.id, data)
@@ -229,6 +237,51 @@ defmodule SacrumWeb.ProjectChannelTest do
       assert_push "run_step", payload
       assert payload.prompt == nil
       assert payload.eval_prompt == nil
+    end
+
+    test "run_step payload includes auto_advance from workflow" do
+      {_user, project, socket} = setup_socket()
+
+      {:ok, _reply, _socket} =
+        subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
+
+      workflow = build_workflow(project) |> Map.put(:auto_advance, true)
+
+      data = %{
+        execution: build_step_execution(project),
+        step: build_workflow_step(project),
+        workflow: workflow,
+        transitions: []
+      }
+
+      SacrumWeb.ProjectChannel.broadcast_run_step(project.id, data)
+
+      assert_push "run_step", payload
+      assert payload.auto_advance == true
+    end
+
+    test "run_step payload includes transitions list" do
+      {_user, project, socket} = setup_socket()
+
+      {:ok, _reply, _socket} =
+        subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
+
+      transition = build_step_transition()
+
+      data = %{
+        execution: build_step_execution(project),
+        step: build_workflow_step(project),
+        workflow: build_workflow(project),
+        transitions: [transition]
+      }
+
+      SacrumWeb.ProjectChannel.broadcast_run_step(project.id, data)
+
+      assert_push "run_step", payload
+      assert is_list(payload.transitions)
+      assert length(payload.transitions) == 1
+      assert hd(payload.transitions).id == transition.id
+      assert hd(payload.transitions).to_step_id == transition.to_step_id
     end
 
     test "daemon client receives cancel_step event" do
@@ -380,6 +433,19 @@ defmodule SacrumWeb.ProjectChannelTest do
       section_order: 1,
       done: false,
       done_at: nil,
+      inserted_at: now,
+      updated_at: now
+    }
+  end
+
+  defp build_step_transition do
+    now = DateTime.utc_now()
+
+    %{
+      id: Ecto.UUID.generate(),
+      from_step_id: Ecto.UUID.generate(),
+      to_step_id: Ecto.UUID.generate(),
+      label: "Continue",
       inserted_at: now,
       updated_at: now
     }
