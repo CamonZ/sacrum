@@ -61,6 +61,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   end
 
   defp render_prompt(nil, _short_id), do: ""
+
   defp render_prompt(prompt, short_id) when is_binary(prompt) and is_binary(short_id) do
     String.replace(prompt, "{ticket_id}", short_id)
   end
