@@ -57,6 +57,10 @@ if config_env() == :prod do
 
   config :sacrum, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
+  config :sacrum,
+         :max_concurrent_executions,
+         String.to_integer(System.get_env("MAX_CONCURRENT_EXECUTIONS", "5"))
+
   config :sacrum, SacrumWeb.Endpoint,
     url: [host: host, port: 443, scheme: "https"],
     http: [

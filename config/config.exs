@@ -12,7 +12,9 @@ config :sacrum,
   generators: [timestamp_type: :utc_datetime, binary_id: true],
   # Daemon configuration
   daemon_presence_required: false,
-  pending_execution_timeout_ms: 60_000
+  pending_execution_timeout_ms: 60_000,
+  # Orchestrator configuration
+  max_concurrent_executions: 5
 
 # Configure the endpoint
 config :sacrum, SacrumWeb.Endpoint,
