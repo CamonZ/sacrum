@@ -6,10 +6,17 @@ defmodule Sacrum.Repo.TaskWorkflows do
 
   - `assign_workflow/2` returns `{:ok, task}` or `{:error, changeset}`
   - `unassign_workflow/1` returns `{:ok, task}` or `{:error, changeset}`
+  - `advance_to_step/2` returns `{:ok, task}` or `{:error, changeset}` or `{:error, atom}`
   - `move_to_step/2` returns `{:ok, task}` or `{:error, changeset}` or `{:error, atom}`
   - `get_current_step/1` returns `{:ok, step}` or `{:error, atom}`
 
   ## Domain-Specific Errors
+
+  `advance_to_step/2` may return `{:error, atom}` for:
+  - `:no_workflow` - when task has no workflow assigned
+  - `:no_current_step` - when task has no current step assigned
+  - `:step_not_found` - when target step does not exist
+  - `:step_not_in_workflow` - when target step belongs to a different workflow
 
   `move_to_step/2` may return `{:error, atom}` for:
   - `:no_workflow` - when task has no workflow assigned
@@ -74,6 +81,36 @@ defmodule Sacrum.Repo.TaskWorkflows do
     task
     |> task_workflow_changeset(nil, nil)
     |> Repo.update()
+  end
+
+  @doc """
+  Advances a task to a specific step within its current workflow without creating a StepExecution.
+
+  Validates that the target step belongs to the task's current workflow, then
+  updates the task's current_step_id. Does NOT create a StepExecution record —
+  useful for the orchestrator to move tasks while creating its own execution
+  separately. Transition validity is assumed since transitions are validated
+  on creation.
+
+  Returns:
+    - {:ok, task} with updated current_step_id on success
+    - {:error, :no_workflow} if task has no workflow
+    - {:error, :no_current_step} if task has no current step
+    - {:error, :step_not_found} if target step doesn't exist
+    - {:error, :step_not_in_workflow} if target step belongs to a different workflow
+    - {:error, changeset} on database errors
+  """
+  @spec advance_to_step(Task.t(), String.t()) ::
+          {:ok, Task.t()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
+  def advance_to_step(%Task{workflow_id: nil}, _step_id), do: {:error, :no_workflow}
+  def advance_to_step(%Task{current_step_id: nil}, _step_id), do: {:error, :no_current_step}
+
+  def advance_to_step(%Task{} = task, step_id) do
+    with {:ok, target_step} <- get_workflow_step(task.workflow_id, step_id) do
+      task
+      |> task_workflow_changeset(task.workflow_id, target_step.id)
+      |> Repo.update()
+    end
   end
 
   @doc """
