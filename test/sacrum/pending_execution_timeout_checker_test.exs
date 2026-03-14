@@ -18,7 +18,13 @@ defmodule Sacrum.PendingExecutionTimeoutCheckerTest do
 
   describe "timeout checking" do
     test "marks old pending executions as failed with timeout message" do
-      {:ok, user} = Sacrum.Repo.Users.insert(%{email: "user1@example.com", username: "user1", password: "password123"})
+      {:ok, user} =
+        Sacrum.Repo.Users.insert(%{
+          email: "user1@example.com",
+          username: "user1",
+          password: "password123"
+        })
+
       {:ok, project} = Accounts.Projects.insert(user.id, %{name: "Test Project"})
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Test Task"})
       {:ok, workflow} = Accounts.Workflows.insert(user.id, project.id, %{name: "Test Workflow"})
@@ -52,13 +58,21 @@ defmodule Sacrum.PendingExecutionTimeoutCheckerTest do
       Process.sleep(100)
 
       # Verify the execution was marked as failed
-      {:ok, updated_execution} = Accounts.StepExecutions.get_by(user.id, conditions: [id: old_execution.id])
+      {:ok, updated_execution} =
+        Accounts.StepExecutions.get_by(user.id, conditions: [id: old_execution.id])
+
       assert updated_execution.status == "failed"
       assert String.contains?(String.downcase(updated_execution.output), "no daemon picked up")
     end
 
     test "does not mark recent pending executions as failed" do
-      {:ok, user} = Sacrum.Repo.Users.insert(%{email: "user2@example.com", username: "user2", password: "password123"})
+      {:ok, user} =
+        Sacrum.Repo.Users.insert(%{
+          email: "user2@example.com",
+          username: "user2",
+          password: "password123"
+        })
+
       {:ok, project} = Accounts.Projects.insert(user.id, %{name: "Test Project"})
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Test Task"})
       {:ok, workflow} = Accounts.Workflows.insert(user.id, project.id, %{name: "Test Workflow"})
@@ -90,7 +104,13 @@ defmodule Sacrum.PendingExecutionTimeoutCheckerTest do
     end
 
     test "does not mark running executions as failed" do
-      {:ok, user} = Sacrum.Repo.Users.insert(%{email: "user3@example.com", username: "user3", password: "password123"})
+      {:ok, user} =
+        Sacrum.Repo.Users.insert(%{
+          email: "user3@example.com",
+          username: "user3",
+          password: "password123"
+        })
+
       {:ok, project} = Accounts.Projects.insert(user.id, %{name: "Test Project"})
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Test Task"})
       {:ok, workflow} = Accounts.Workflows.insert(user.id, project.id, %{name: "Test Workflow"})
@@ -129,7 +149,13 @@ defmodule Sacrum.PendingExecutionTimeoutCheckerTest do
     end
 
     test "marks multiple old pending executions as failed" do
-      {:ok, user} = Sacrum.Repo.Users.insert(%{email: "user4@example.com", username: "user4", password: "password123"})
+      {:ok, user} =
+        Sacrum.Repo.Users.insert(%{
+          email: "user4@example.com",
+          username: "user4",
+          password: "password123"
+        })
+
       {:ok, project} = Accounts.Projects.insert(user.id, %{name: "Test Project"})
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Test Task"})
       {:ok, workflow} = Accounts.Workflows.insert(user.id, project.id, %{name: "Test Workflow"})

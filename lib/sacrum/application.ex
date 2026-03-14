@@ -19,7 +19,11 @@ defmodule Sacrum.Application do
       # Start to serve requests before Absinthe.Subscription
       SacrumWeb.Endpoint,
       # Absinthe subscriptions (must come after Endpoint)
-      {Absinthe.Subscription, SacrumWeb.Endpoint}
+      {Absinthe.Subscription, SacrumWeb.Endpoint},
+      # Task registry for orchestration
+      {Registry, keys: :unique, name: Sacrum.Orchestrator.TaskRegistry},
+      # Orchestrator supervision tree
+      Sacrum.Orchestrator.Supervisor
     ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html
