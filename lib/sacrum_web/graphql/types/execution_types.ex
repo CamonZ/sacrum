@@ -177,8 +177,7 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
 
         with {:ok, task} <-
                Accounts.Tasks.get_by(user.id,
-                 conditions: [id: task_id],
-                 preloads: [:code_refs, sections: :code_refs]
+                 conditions: [id: task_id]
                ),
              :ok <- check_daemon_presence(task.project_id) do
           ExecutionDispatcher.create_and_dispatch(user.id, task, step_id)

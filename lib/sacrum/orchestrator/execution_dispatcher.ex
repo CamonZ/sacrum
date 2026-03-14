@@ -3,8 +3,12 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   Handles creation and dispatching of step executions.
 
   Creates pending StepExecution records and broadcasts run_step events
-  to the daemon. Used by both the GraphQL runStep resolver and the
-  TaskOrchestrator to ensure consistent execution dispatch behavior.
+  to the daemon. Uses a prompt-based architecture where the ticket ID
+  acts as a token — the step prompt is rendered with the task's short_id
+  interpolated into {ticket_id} placeholders.
+
+  Used by both the GraphQL runStep resolver and the TaskOrchestrator to
+  ensure consistent execution dispatch behavior.
   """
 
   alias Sacrum.Accounts
@@ -14,9 +18,9 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   @doc """
   Creates and dispatches a step execution.
 
-  Fetches the step (with workflow and transitions preloaded), creates a
-  pending StepExecution with a context snapshot, broadcasts the run_step
-  event, and returns the execution.
+  Fetches the step, creates a pending StepExecution, renders the prompt
+  by interpolating the task's short_id into {ticket_id} placeholders,
+  broadcasts the run_step event, and returns the execution.
 
   Returns:
     - {:ok, execution} on success
@@ -27,11 +31,10 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   def create_and_dispatch(user_id, task, step_id) do
     with {:ok, step} <- fetch_step(user_id, step_id),
          {:ok, execution} <- insert_execution(user_id, task, step) do
+      rendered_prompt = render_prompt(step.prompt, task.short_id)
+
       Broadcaster.broadcast_run_step(
-        execution,
-        step,
-        step.workflow,
-        step.transitions,
+        %{execution: execution, step: step, task: task, rendered_prompt: rendered_prompt},
         task.project_id
       )
 
@@ -41,8 +44,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
 
   defp fetch_step(user_id, step_id) do
     Accounts.WorkflowSteps.get_by(user_id,
-      conditions: [id: step_id],
-      preloads: [:workflow, :transitions]
+      conditions: [id: step_id]
     )
   end
 
@@ -52,43 +54,14 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
       workflow_id: step.workflow_id,
       step_name: step.name,
       status: "pending",
-      project_id: task.project_id,
-      context: build_context(task)
+      project_id: task.project_id
     }
 
     Accounts.StepExecutions.insert(user_id, attrs)
   end
 
-  defp build_context(task) do
-    %{
-      title: task.title,
-      description: task.description,
-      sections: build_sections_context(task.sections),
-      code_refs: build_code_refs_context(task.code_refs)
-    }
-  end
-
-  defp build_sections_context(sections) do
-    Enum.map(sections, fn section ->
-      %{
-        section_type: section.section_type,
-        content: section.content,
-        section_order: section.section_order,
-        done: section.done,
-        code_refs: build_code_refs_context(section.code_refs)
-      }
-    end)
-  end
-
-  defp build_code_refs_context(code_refs) do
-    Enum.map(code_refs, fn ref ->
-      %{
-        path: ref.path,
-        line_start: ref.line_start,
-        line_end: ref.line_end,
-        name: ref.name,
-        description: ref.description
-      }
-    end)
+  defp render_prompt(nil, _short_id), do: ""
+  defp render_prompt(prompt, short_id) when is_binary(prompt) and is_binary(short_id) do
+    String.replace(prompt, "{ticket_id}", short_id)
   end
 end

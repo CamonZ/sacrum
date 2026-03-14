@@ -27,9 +27,7 @@ defmodule Sacrum.Repo.Broadcaster do
     session_log_created: :broadcast_session_log_created,
     section_created: :broadcast_section_created,
     section_updated: :broadcast_section_updated,
-    section_deleted: :broadcast_section_deleted,
-    run_step: :broadcast_run_step,
-    cancel_step: :broadcast_cancel_step
+    section_deleted: :broadcast_section_deleted
   }
 
   @doc """
@@ -255,24 +253,21 @@ defmodule Sacrum.Repo.Broadcaster do
   @doc """
   Broadcast a run_step event with step execution and step definition data.
 
-  Takes a step execution, its corresponding workflow step definition, workflow, transitions, and project ID,
-  then constructs the combined payload and broadcasts to the daemon.
+  Takes a data map and project_id, then broadcasts to the daemon.
+  The payload includes only the fields the daemon needs: execution id, task_id,
+  rendered prompt, agent_config, and worktree path.
 
   Args:
-    - execution: the StepExecution to broadcast
-    - step: the WorkflowStep definition
-    - workflow: the Workflow that contains the step
-    - transitions: list of StepTransitions from the current step
+    - data: map with :execution, :step, :task, :rendered_prompt keys
     - project_id: the project ID to broadcast to
 
   Returns:
     - :ok
   """
-  @spec broadcast_run_step(struct(), struct(), struct(), list(), String.t()) :: :ok
-  def broadcast_run_step(execution, step, workflow, transitions, project_id) do
+  @spec broadcast_run_step(map(), String.t()) :: :ok
+  def broadcast_run_step(data, project_id) do
     require Logger
     Logger.info("[Broadcast] run_step for project #{project_id}")
-    data = %{execution: execution, step: step, workflow: workflow, transitions: transitions}
     SacrumWeb.ProjectChannel.broadcast_run_step(project_id, data)
   end
 
