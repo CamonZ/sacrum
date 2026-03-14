@@ -878,7 +878,13 @@ defmodule SacrumWeb.Graphql.SchemaTest do
          %{conn: conn, user: user, project: project} do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task Title"})
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-      {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "step_1", goal: "Do something", prompt: "Work on ticket {ticket_id}"})
+
+      {:ok, step} =
+        Accounts.WorkflowSteps.insert(wf, %{
+          name: "step_1",
+          goal: "Do something",
+          prompt: "Work on ticket {ticket_id}"
+        })
 
       {:ok, _section} =
         Accounts.Sections.insert(user.id, %{
@@ -939,7 +945,12 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
       # Create step with {ticket_id} placeholder in prompt
-      {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "step_1", goal: "Do something", prompt: "Analyze ticket {ticket_id} from vtb show"})
+      {:ok, step} =
+        Accounts.WorkflowSteps.insert(wf, %{
+          name: "step_1",
+          goal: "Do something",
+          prompt: "Analyze ticket {ticket_id} from vtb show"
+        })
 
       result =
         conn

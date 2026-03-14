@@ -521,5 +521,4 @@ defmodule SacrumWeb.ProjectChannelTest do
       updated_at: now
     }
   end
-
 end
