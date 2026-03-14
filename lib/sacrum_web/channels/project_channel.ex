@@ -372,24 +372,16 @@ defmodule SacrumWeb.ProjectChannel do
 
   defp run_step_payload(data) do
     %{
-      # Step execution fields
+      # Execution id
       id: data.execution.id,
+      # Task context reference
       task_id: data.execution.task_id,
-      workflow_id: data.execution.workflow_id,
-      step_name: data.execution.step_name,
-      status: data.execution.status,
-      # WorkflowStep definition fields
-      goal: data.step.goal,
-      agents: data.step.agents,
-      skills: data.step.skills,
+      # Rendered prompt with ticket_id interpolated
+      prompt: data.rendered_prompt,
+      # Agent configuration
       agent_config: data.step.agent_config,
-      is_final: data.step.is_final,
-      prompt: data.step.prompt,
-      eval_prompt: data.step.eval_prompt,
-      # Workflow auto_advance
-      auto_advance: data.workflow.auto_advance,
-      # Available transitions from current step
-      transitions: Enum.map(data.transitions, &step_transition_payload/1)
+      # Worktree path for execution
+      worktree: data.task.worktree
     }
   end
 

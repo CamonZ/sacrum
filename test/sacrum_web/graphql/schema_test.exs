@@ -874,11 +874,11 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert result["errors"] != nil
     end
 
-    test "runStep creates execution with populated context field containing task title and sections",
+    test "runStep creates execution without context, uses prompt-based architecture",
          %{conn: conn, user: user, project: project} do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task Title"})
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-      {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "step_1", goal: "Do something"})
+      {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "step_1", goal: "Do something", prompt: "Work on ticket {ticket_id}"})
 
       {:ok, _section} =
         Accounts.Sections.insert(user.id, %{
@@ -903,14 +903,11 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         |> json_response(200)
 
       data = result["data"]["runStep"]
-      assert data["context"]["title"] == "Task Title"
-      assert is_list(data["context"]["sections"])
-      assert length(data["context"]["sections"]) == 1
-      assert Enum.at(data["context"]["sections"], 0)["section_type"] == "context"
-      assert Enum.at(data["context"]["sections"], 0)["content"] == "Section content"
+      # Context is no longer populated in the execution (null becomes %{} in JSON)
+      assert data["context"] == %{} or data["context"] == nil
     end
 
-    test "runStep with task that has no sections creates execution with empty sections list in context",
+    test "runStep with task that has sections does not populate context",
          %{conn: conn, user: user, project: project} do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
@@ -930,47 +927,19 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         |> json_response(200)
 
       data = result["data"]["runStep"]
-      assert data["context"]["sections"] == []
+      # Context is no longer populated (null becomes %{} in JSON)
+      assert data["context"] == %{} or data["context"] == nil
     end
 
-    test "runStep context includes code_refs from both task-level and section-level refs", %{
+    test "runStep uses prompt rendering with ticket_id interpolation", %{
       conn: conn,
       user: user,
       project: project
     } do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-      {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "step_1", goal: "Do something"})
-
-      # Insert task-level code ref
-      {:ok, _task_ref} =
-        Accounts.CodeRefs.insert_for_task(user.id, %{
-          task_id: task.id,
-          project_id: project.id,
-          path: "lib/task_level.ex",
-          name: "task_function",
-          line_start: 10,
-          line_end: 20
-        })
-
-      # Insert section and its code ref
-      {:ok, section} =
-        Accounts.Sections.insert(user.id, %{
-          task_id: task.id,
-          project_id: project.id,
-          section_type: "context",
-          content: "Section content"
-        })
-
-      {:ok, _section_ref} =
-        Accounts.CodeRefs.insert_for_section(user.id, %{
-          section_id: section.id,
-          project_id: project.id,
-          path: "lib/section_level.ex",
-          name: "section_function",
-          line_start: 30,
-          line_end: 40
-        })
+      # Create step with {ticket_id} placeholder in prompt
+      {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "step_1", goal: "Do something", prompt: "Analyze ticket {ticket_id} from vtb show"})
 
       result =
         conn
@@ -980,33 +949,15 @@ defmodule SacrumWeb.Graphql.SchemaTest do
             runStep(
               taskId: "#{task.id}"
               stepId: "#{step.id}"
-            ) { id context }
+            ) { id stepName }
           }
         """)
         |> json_response(200)
 
       data = result["data"]["runStep"]
-      context = data["context"]
-
-      # Check task-level code refs
-      assert is_list(context["code_refs"])
-      assert length(context["code_refs"]) == 1
-      task_ref = Enum.at(context["code_refs"], 0)
-      assert task_ref["path"] == "lib/task_level.ex"
-      assert task_ref["name"] == "task_function"
-      assert task_ref["line_start"] == 10
-      assert task_ref["line_end"] == 20
-
-      # Check section-level code refs
-      assert length(context["sections"]) == 1
-      section_data = Enum.at(context["sections"], 0)
-      assert is_list(section_data["code_refs"])
-      assert length(section_data["code_refs"]) == 1
-      section_ref = Enum.at(section_data["code_refs"], 0)
-      assert section_ref["path"] == "lib/section_level.ex"
-      assert section_ref["name"] == "section_function"
-      assert section_ref["line_start"] == 30
-      assert section_ref["line_end"] == 40
+      assert data["stepName"] == "step_1"
+      # The prompt is rendered internally and broadcast to daemon,
+      # but not returned in the GraphQL response (context is no longer populated)
     end
 
     test "runStep succeeds when daemon_presence_required is false (default)", %{

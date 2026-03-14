@@ -209,8 +209,8 @@ defmodule SacrumWeb.ProjectChannelTest do
       data = %{
         execution: build_step_execution(project),
         step: build_workflow_step(project),
-        workflow: build_workflow(project),
-        transitions: []
+        task: build_task(project),
+        rendered_prompt: "Test prompt"
       }
 
       SacrumWeb.ProjectChannel.broadcast_run_step(project.id, data)
@@ -247,106 +247,125 @@ defmodule SacrumWeb.ProjectChannelTest do
       {:ok, _reply, _socket} =
         subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
 
+      execution = build_step_execution(project)
+      task = build_task(project)
+
       data = %{
-        execution: build_step_execution(project),
+        execution: execution,
         step: build_workflow_step(project),
-        workflow: build_workflow(project),
-        transitions: []
+        task: task,
+        rendered_prompt: "Test prompt"
       }
 
       SacrumWeb.ProjectChannel.broadcast_run_step(project.id, data)
 
       assert_push "run_step", payload
-      assert payload.id == data.execution.id
+      assert payload.id == execution.id
     end
 
-    test "daemon client receives run_step payload with prompt and eval_prompt fields" do
+    test "daemon client receives run_step payload with rendered prompt" do
       {_user, project, socket} = setup_socket()
 
       {:ok, _reply, _socket} =
         subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
 
       step = build_workflow_step(project)
+      task = build_task(project)
+      execution = build_step_execution(project)
+
+      data = %{
+        execution: execution,
+        step: step,
+        task: task,
+        rendered_prompt: "Do something with xabc123"
+      }
+
+      SacrumWeb.ProjectChannel.broadcast_run_step(project.id, data)
+
+      assert_push "run_step", payload
+      assert payload.prompt == "Do something with xabc123"
+      assert payload.agent_config == step.agent_config
+      assert payload.worktree == task.worktree
+    end
+
+    test "run_step payload includes empty string for rendered prompt when empty" do
+      {_user, project, socket} = setup_socket()
+
+      {:ok, _reply, _socket} =
+        subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
+
+      step = build_workflow_step(project)
+      task = build_task(project)
 
       data = %{
         execution: build_step_execution(project),
         step: step,
-        workflow: build_workflow(project),
-        transitions: []
+        task: task,
+        rendered_prompt: ""
       }
 
       SacrumWeb.ProjectChannel.broadcast_run_step(project.id, data)
 
       assert_push "run_step", payload
-      assert payload.prompt == step.prompt
-      assert payload.eval_prompt == step.eval_prompt
+      assert payload.prompt == ""
     end
 
-    test "run_step payload includes nil for prompt and eval_prompt when step has no values" do
+    test "run_step payload includes task worktree" do
       {_user, project, socket} = setup_socket()
 
       {:ok, _reply, _socket} =
         subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
 
-      step = build_workflow_step(project) |> Map.put(:prompt, nil) |> Map.put(:eval_prompt, nil)
+      task = build_task(project) |> Map.put(:worktree, "/path/to/worktree")
 
       data = %{
         execution: build_step_execution(project),
+        step: build_workflow_step(project),
+        task: task,
+        rendered_prompt: "Test prompt"
+      }
+
+      SacrumWeb.ProjectChannel.broadcast_run_step(project.id, data)
+
+      assert_push "run_step", payload
+      assert payload.worktree == "/path/to/worktree"
+    end
+
+    test "run_step payload only includes daemon-needed fields" do
+      {_user, project, socket} = setup_socket()
+
+      {:ok, _reply, _socket} =
+        subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
+
+      execution = build_step_execution(project)
+      step = build_workflow_step(project)
+      task = build_task(project)
+
+      data = %{
+        execution: execution,
         step: step,
-        workflow: build_workflow(project),
-        transitions: []
+        task: task,
+        rendered_prompt: "Test prompt"
       }
 
       SacrumWeb.ProjectChannel.broadcast_run_step(project.id, data)
 
       assert_push "run_step", payload
-      assert payload.prompt == nil
-      assert payload.eval_prompt == nil
-    end
-
-    test "run_step payload includes auto_advance from workflow" do
-      {_user, project, socket} = setup_socket()
-
-      {:ok, _reply, _socket} =
-        subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
-
-      workflow = build_workflow(project) |> Map.put(:auto_advance, true)
-
-      data = %{
-        execution: build_step_execution(project),
-        step: build_workflow_step(project),
-        workflow: workflow,
-        transitions: []
-      }
-
-      SacrumWeb.ProjectChannel.broadcast_run_step(project.id, data)
-
-      assert_push "run_step", payload
-      assert payload.auto_advance == true
-    end
-
-    test "run_step payload includes transitions list" do
-      {_user, project, socket} = setup_socket()
-
-      {:ok, _reply, _socket} =
-        subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
-
-      transition = build_step_transition()
-
-      data = %{
-        execution: build_step_execution(project),
-        step: build_workflow_step(project),
-        workflow: build_workflow(project),
-        transitions: [transition]
-      }
-
-      SacrumWeb.ProjectChannel.broadcast_run_step(project.id, data)
-
-      assert_push "run_step", payload
-      assert is_list(payload.transitions)
-      assert length(payload.transitions) == 1
-      assert hd(payload.transitions).id == transition.id
-      assert hd(payload.transitions).to_step_id == transition.to_step_id
+      # Check for expected fields
+      assert payload.id == execution.id
+      assert payload.task_id == execution.task_id
+      assert payload.prompt == "Test prompt"
+      assert payload.agent_config == step.agent_config
+      assert payload.worktree == task.worktree
+      # Ensure orchestration fields are NOT included
+      refute Map.has_key?(payload, :workflow_id)
+      refute Map.has_key?(payload, :step_name)
+      refute Map.has_key?(payload, :status)
+      refute Map.has_key?(payload, :goal)
+      refute Map.has_key?(payload, :auto_advance)
+      refute Map.has_key?(payload, :eval_prompt)
+      refute Map.has_key?(payload, :is_final)
+      refute Map.has_key?(payload, :transitions)
     end
 
     test "daemon client receives cancel_step event" do
@@ -503,16 +522,4 @@ defmodule SacrumWeb.ProjectChannelTest do
     }
   end
 
-  defp build_step_transition do
-    now = DateTime.utc_now()
-
-    %{
-      id: Ecto.UUID.generate(),
-      from_step_id: Ecto.UUID.generate(),
-      to_step_id: Ecto.UUID.generate(),
-      label: "Continue",
-      inserted_at: now,
-      updated_at: now
-    }
-  end
 end
