@@ -7,6 +7,7 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
   import Absinthe.Resolution.Helpers
 
   alias Sacrum.Accounts
+  alias Sacrum.Orchestrator.ExecutionDispatcher
   alias Sacrum.Repo.Broadcaster
 
   object :step_execution do
@@ -168,12 +169,10 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
 
     field :run_step, :step_execution do
       arg(:task_id, non_null(:uuid4))
-      arg(:workflow_id, non_null(:uuid4))
       arg(:step_id, non_null(:uuid4))
 
       resolve(fn args, %{context: %{current_user: user}} ->
         task_id = Map.get(args, :task_id)
-        workflow_id = Map.get(args, :workflow_id)
         step_id = Map.get(args, :step_id)
 
         with {:ok, task} <-
@@ -181,70 +180,9 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
                  conditions: [id: task_id],
                  preloads: [:code_refs, sections: :code_refs]
                ),
-             {:ok, workflow} <- Accounts.Workflows.get_by(user.id, conditions: [id: workflow_id]),
-             {:ok, step} <- Accounts.WorkflowSteps.get_by(user.id, conditions: [id: step_id]),
              :ok <- check_daemon_presence(task.project_id) do
-          # Load transitions from the current step
-          transitions =
-            Accounts.StepTransitions.list_by(user.id, conditions: [from_step_id: step_id])
-
-          # Build context snapshot from task
-          context = build_context(task)
-
-          attrs = %{
-            task_id: task_id,
-            workflow_id: workflow_id,
-            step_name: step.name,
-            status: "pending",
-            project_id: task.project_id,
-            context: context
-          }
-
-          with {:ok, execution} <- Accounts.StepExecutions.insert(user.id, attrs) do
-            Broadcaster.broadcast_run_step(
-              execution,
-              step,
-              workflow,
-              transitions,
-              task.project_id
-            )
-
-            {:ok, execution}
-          end
+          ExecutionDispatcher.create_and_dispatch(user.id, task, step_id)
         end
-      end)
-    end
-
-    defp build_context(task) do
-      %{
-        title: task.title,
-        description: task.description,
-        sections: build_sections_context(task.sections || []),
-        code_refs: build_code_refs_context(task.code_refs || [])
-      }
-    end
-
-    defp build_sections_context(sections) do
-      Enum.map(sections, fn section ->
-        %{
-          section_type: section.section_type,
-          content: section.content,
-          section_order: section.section_order,
-          done: section.done,
-          code_refs: build_code_refs_context(section.code_refs || [])
-        }
-      end)
-    end
-
-    defp build_code_refs_context(code_refs) do
-      Enum.map(code_refs, fn ref ->
-        %{
-          path: ref.path,
-          line_start: ref.line_start,
-          line_end: ref.line_end,
-          name: ref.name,
-          description: ref.description
-        }
       end)
     end
 

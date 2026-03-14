@@ -820,7 +820,6 @@ defmodule SacrumWeb.Graphql.SchemaTest do
           mutation {
             runStep(
               taskId: "#{task.id}"
-              workflowId: "#{wf.id}"
               stepId: "#{step.id}"
             ) { id stepName status taskId }
           }
@@ -845,7 +844,6 @@ defmodule SacrumWeb.Graphql.SchemaTest do
           mutation {
             runStep(
               taskId: "#{Ecto.UUID.generate()}"
-              workflowId: "#{wf.id}"
               stepId: "#{step.id}"
             ) { id stepName status taskId }
           }
@@ -898,7 +896,6 @@ defmodule SacrumWeb.Graphql.SchemaTest do
           mutation {
             runStep(
               taskId: "#{task.id}"
-              workflowId: "#{wf.id}"
               stepId: "#{step.id}"
             ) { id stepName status context }
           }
@@ -926,7 +923,6 @@ defmodule SacrumWeb.Graphql.SchemaTest do
           mutation {
             runStep(
               taskId: "#{task.id}"
-              workflowId: "#{wf.id}"
               stepId: "#{step.id}"
             ) { id context }
           }
@@ -983,7 +979,6 @@ defmodule SacrumWeb.Graphql.SchemaTest do
           mutation {
             runStep(
               taskId: "#{task.id}"
-              workflowId: "#{wf.id}"
               stepId: "#{step.id}"
             ) { id context }
           }
@@ -1030,7 +1025,6 @@ defmodule SacrumWeb.Graphql.SchemaTest do
           mutation {
             runStep(
               taskId: "#{task.id}"
-              workflowId: "#{wf.id}"
               stepId: "#{step.id}"
             ) { id stepName status taskId }
           }
@@ -1065,7 +1059,6 @@ defmodule SacrumWeb.Graphql.SchemaTest do
           mutation {
             runStep(
               taskId: "#{task.id}"
-              workflowId: "#{wf.id}"
               stepId: "#{step.id}"
             ) { id stepName status taskId }
           }
