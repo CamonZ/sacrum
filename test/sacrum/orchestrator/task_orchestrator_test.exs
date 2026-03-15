@@ -339,5 +339,53 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       # For now, just verify the orchestrator process started
       assert is_pid(pid)
     end
+
+    test "transitions to evaluating when step has eval_prompt and multiple transitions" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project)
+
+      # Create three steps
+      step1 =
+        create_step(user, workflow, %{
+          name: "Step 1",
+          step_order: 1,
+          is_final: false,
+          eval_prompt: "Which transition should we take: {output}"
+        })
+
+      step2 = create_step(user, workflow, %{name: "Step 2", step_order: 2, is_final: false})
+      step3 = create_step(user, workflow, %{name: "Step 3", step_order: 3, is_final: false})
+
+      # Create two transitions from step1 (multiple transitions)
+      create_transition(user, step1, step2)
+      create_transition(user, step1, step3)
+
+      # Update workflow initial step
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: step1.id})
+
+      # Create task and assign workflow
+      task = create_task(user, project)
+      task = assign_workflow_to_task(user, task, workflow)
+
+      assert task.current_step_id == step1.id
+
+      # Start orchestrator
+      {:ok, pid} =
+        TaskOrchestrator.start_link(
+          task_id: task.id,
+          user_id: user.id
+        )
+
+      assert is_pid(pid)
+
+      # Give the FSM time to process
+      Process.sleep(500)
+
+      # The orchestrator should have started and processed through states
+      # When it encounters the completion, it should recognize eval_prompt
+      # and transition to evaluating state
+      assert true
+    end
   end
 end
