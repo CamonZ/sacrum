@@ -7,7 +7,7 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
   import Absinthe.Resolution.Helpers
 
   alias Sacrum.Accounts
-  alias Sacrum.Orchestrator.ExecutionDispatcher
+  alias Sacrum.Orchestrator.{ExecutionDispatcher, Scheduler}
   alias Sacrum.Repo.Broadcaster
 
   object :step_execution do
@@ -220,6 +220,23 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
               # Execution is already completed, failed, or in another terminal state
               {:error, "Cannot cancel an execution with status: #{execution.status}"}
           end
+        end
+      end)
+    end
+
+    field :orchestrate_task, :task do
+      arg(:task_id, non_null(:uuid4))
+
+      resolve(fn %{task_id: task_id}, %{context: %{current_user: user}} ->
+        with {:ok, task} <- Accounts.Tasks.get_by(user.id, conditions: [id: task_id]),
+             :ok <- Scheduler.schedule_task(%{id: task_id}) do
+          {:ok, task}
+        else
+          {:error, :not_found} -> {:error, "Task not found"}
+          {:error, :no_workflow_assigned} -> {:error, "Task has no workflow assigned"}
+          {:error, :task_already_completed} -> {:error, "Cannot orchestrate a completed task"}
+          {:error, :orchestrator_already_running} -> {:error, "Orchestration is already running for this task"}
+          {:error, reason} -> {:error, "Failed to schedule task: #{inspect(reason)}"}
         end
       end)
     end

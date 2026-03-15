@@ -1170,6 +1170,79 @@ defmodule SacrumWeb.Graphql.SchemaTest do
     end
   end
 
+  describe "orchestrate task mutations" do
+    setup [:setup_user_and_project]
+
+    test "orchestrateTask starts orchestration and returns task", %{conn: conn, user: user, project: project} do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+      {:ok, _step} = Accounts.WorkflowSteps.insert(wf, %{name: "step_1", goal: "Do something"})
+      {:ok, updated_task} = Sacrum.Repo.TaskWorkflows.assign_workflow(task, wf)
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            orchestrateTask(taskId: "#{updated_task.id}") {
+              id title workflowId
+            }
+          }
+        """)
+        |> json_response(200)
+
+      data = result["data"]["orchestrateTask"]
+      assert data["id"] == updated_task.id
+      assert data["title"] == "Task"
+      assert data["workflowId"] == wf.id
+    end
+
+    test "orchestrateTask returns error when task has no workflow assigned", %{conn: conn, user: user, project: project} do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task Without Workflow"})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            orchestrateTask(taskId: "#{task.id}") {
+              id
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] != nil
+      assert Enum.any?(result["errors"], &String.contains?(&1["message"], "no workflow"))
+    end
+
+    test "orchestrateTask returns error when already running", %{conn: conn, user: user, project: project} do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+      {:ok, _step} = Accounts.WorkflowSteps.insert(wf, %{name: "step_1", goal: "Do something"})
+      {:ok, updated_task} = Sacrum.Repo.TaskWorkflows.assign_workflow(task, wf)
+
+      # Start orchestration once
+      Sacrum.Orchestrator.Scheduler.schedule_task(%{id: updated_task.id})
+
+      # Try to start again - should fail
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            orchestrateTask(taskId: "#{updated_task.id}") {
+              id
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] != nil
+      assert Enum.any?(result["errors"], &String.contains?(&1["message"], "already running"))
+    end
+  end
+
   describe "session log mutations" do
     setup [:setup_user_and_project]
 
