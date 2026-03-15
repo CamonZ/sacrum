@@ -36,8 +36,13 @@ defmodule Sacrum.Orchestrator.Scheduler do
   @impl true
   def init(_opts) do
     Logger.info("[Scheduler] Initialized")
-    Process.send_after(self(), :orphan_check, 30_000)
-    {:ok, %{}, {:continue, :recover}}
+
+    if recovery_enabled?() do
+      Process.send_after(self(), :orphan_check, 30_000)
+      {:ok, %{}, {:continue, :recover}}
+    else
+      {:ok, %{}}
+    end
   end
 
   @impl true
@@ -59,15 +64,21 @@ defmodule Sacrum.Orchestrator.Scheduler do
         {:reply, :ok, state}
 
       {:error, reason} ->
-        Logger.error("[Scheduler] Error notifying dependents of task #{task_id}: #{inspect(reason)}")
+        Logger.error(
+          "[Scheduler] Error notifying dependents of task #{task_id}: #{inspect(reason)}"
+        )
+
         {:reply, {:error, reason}, state}
     end
   end
 
   @impl true
   def handle_info(:orphan_check, state) do
-    check_and_restart_orphaned_tasks()
-    Process.send_after(self(), :orphan_check, 30_000)
+    if recovery_enabled?() do
+      check_and_restart_orphaned_tasks()
+      Process.send_after(self(), :orphan_check, 30_000)
+    end
+
     {:noreply, state}
   end
 
@@ -151,9 +162,7 @@ defmodule Sacrum.Orchestrator.Scheduler do
     alias Sacrum.Orchestrator.TaskFSMSupervisor
     child_opts = [task_id: task_id, user_id: user_id] ++ opts
 
-    case TaskFSMSupervisor.start_child(
-           {TaskOrchestrator, child_opts}
-         ) do
+    case TaskFSMSupervisor.start_child({TaskOrchestrator, child_opts}) do
       {:ok, _pid} ->
         Logger.info("[Scheduler] Started orchestrator for task #{task_id}")
         :ok
@@ -162,7 +171,10 @@ defmodule Sacrum.Orchestrator.Scheduler do
         :ok
 
       {:error, reason} ->
-        Logger.error("[Scheduler] Failed to start orchestrator for task #{task_id}: #{inspect(reason)}")
+        Logger.error(
+          "[Scheduler] Failed to start orchestrator for task #{task_id}: #{inspect(reason)}"
+        )
+
         {:error, reason}
     end
   end
@@ -184,6 +196,10 @@ defmodule Sacrum.Orchestrator.Scheduler do
         start_orchestrator(task.id, task.user_id)
       end
     end)
+  end
+
+  defp recovery_enabled? do
+    Application.get_env(:sacrum, :scheduler_recovery_enabled, true)
   end
 
   defp tasks_with_active_executions do

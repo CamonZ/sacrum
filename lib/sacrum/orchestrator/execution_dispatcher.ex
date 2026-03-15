@@ -3,9 +3,8 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   Handles creation and dispatching of step executions.
 
   Creates pending StepExecution records and broadcasts run_step events
-  to the daemon. Uses a prompt-based architecture where the ticket ID
-  acts as a token — the step prompt is rendered with the task's short_id
-  interpolated into {ticket_id} placeholders.
+  to the daemon. Uses a prompt-based architecture where the task's full
+  UUID is interpolated into {task_id} placeholders in step prompts.
 
   Used by both the GraphQL runStep resolver and the TaskOrchestrator to
   ensure consistent execution dispatch behavior.
@@ -19,7 +18,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   Creates and dispatches a step execution.
 
   Fetches the step, creates a pending StepExecution, renders the prompt
-  by interpolating the task's short_id into {ticket_id} placeholders,
+  by interpolating the task's full UUID into {task_id} placeholders,
   broadcasts the run_step event, and returns the execution.
 
   Returns:
@@ -31,7 +30,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   def create_and_dispatch(user_id, task, step_id) do
     with {:ok, step} <- fetch_step(user_id, step_id),
          {:ok, execution} <- insert_execution(user_id, task, step) do
-      broadcast_and_return(execution, step, task, render_prompt(step.prompt, task.short_id))
+      broadcast_and_return(execution, step, task, render_prompt(step.prompt, task.id))
     end
   end
 
@@ -53,7 +52,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
          {:ok, execution} <- insert_execution(user_id, task, step, "eval:#{step.name}") do
       rendered =
         step.eval_prompt
-        |> render_prompt(task.short_id)
+        |> render_prompt(task.id)
         |> replace_output(previous_output)
 
       broadcast_and_return(execution, step, task, rendered)
@@ -87,10 +86,10 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
     Accounts.StepExecutions.insert(user_id, attrs)
   end
 
-  defp render_prompt(nil, _short_id), do: ""
+  defp render_prompt(nil, _task_id), do: ""
 
-  defp render_prompt(prompt, short_id) when is_binary(prompt) and is_binary(short_id) do
-    String.replace(prompt, "{ticket_id}", short_id)
+  defp render_prompt(prompt, task_id) when is_binary(prompt) and is_binary(task_id) do
+    String.replace(prompt, "{task_id}", task_id)
   end
 
   defp replace_output(prompt, nil), do: prompt

@@ -43,4 +43,5 @@ config :phoenix,
 # Daemon configuration for tests
 config :sacrum,
   daemon_presence_required: false,
-  pending_execution_timeout_ms: 1_000
+  pending_execution_timeout_ms: 1_000,
+  scheduler_recovery_enabled: false

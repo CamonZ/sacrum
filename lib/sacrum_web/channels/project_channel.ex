@@ -376,7 +376,7 @@ defmodule SacrumWeb.ProjectChannel do
       id: data.execution.id,
       # Task context reference
       task_id: data.execution.task_id,
-      # Rendered prompt with ticket_id interpolated
+      # Rendered prompt with task_id interpolated
       prompt: data.rendered_prompt,
       # Agent configuration
       agent_config: data.step.agent_config,

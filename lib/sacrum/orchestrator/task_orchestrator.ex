@@ -78,7 +78,11 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
         }
 
         data = if resume, do: Map.put(data, :resume, true), else: data
-        Logger.info("[TaskOrchestrator:#{task_id}] Starting in :initializing state#{if resume, do: " (resume)", else: ""}")
+
+        Logger.info(
+          "[TaskOrchestrator:#{task_id}] Starting in :initializing state#{if resume, do: " (resume)", else: ""}"
+        )
+
         {:ok, :initializing, data}
     end
   end
@@ -178,7 +182,10 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
              current_step.id,
              data.current_execution_output
            ) do
-      Logger.info("[TaskOrchestrator:#{task_id}] Created eval execution #{evaluation_execution.id}")
+      Logger.info(
+        "[TaskOrchestrator:#{task_id}] Created eval execution #{evaluation_execution.id}"
+      )
+
       {:keep_state, %{data | current_execution_id: evaluation_execution.id}}
     else
       {:error, reason} ->
@@ -388,7 +395,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
 
   defp handle_eval_transition_selection(transition_label, data) do
     with {:ok, current_step} <- get_current_step(data),
-         {:ok, next_step_id} <- find_transition_by_label(current_step.transitions, transition_label) do
+         {:ok, next_step_id} <-
+           find_transition_by_label(current_step.transitions, transition_label) do
       Logger.info(
         "[TaskOrchestrator:#{data.task.id}] Eval selected transition: #{transition_label} -> #{next_step_id}"
       )
@@ -489,7 +497,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
                 workflow: nil,
                 steps: %{},
                 transitions: %{},
-                      current_execution_id: nil,
+                current_execution_id: nil,
                 current_execution_output: nil,
                 eval_selected_step_id: nil
             }

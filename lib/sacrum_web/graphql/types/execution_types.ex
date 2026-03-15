@@ -232,11 +232,20 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
              :ok <- Scheduler.schedule_task(%{id: task_id}) do
           {:ok, task}
         else
-          {:error, :not_found} -> {:error, "Task not found"}
-          {:error, :no_workflow_assigned} -> {:error, "Task has no workflow assigned"}
-          {:error, :task_already_completed} -> {:error, "Cannot orchestrate a completed task"}
-          {:error, :orchestrator_already_running} -> {:error, "Orchestration is already running for this task"}
-          {:error, reason} -> {:error, "Failed to schedule task: #{inspect(reason)}"}
+          {:error, :not_found} ->
+            {:error, "Task not found"}
+
+          {:error, :no_workflow_assigned} ->
+            {:error, "Task has no workflow assigned"}
+
+          {:error, :task_already_completed} ->
+            {:error, "Cannot orchestrate a completed task"}
+
+          {:error, :orchestrator_already_running} ->
+            {:error, "Orchestration is already running for this task"}
+
+          {:error, reason} ->
+            {:error, "Failed to schedule task: #{inspect(reason)}"}
         end
       end)
     end

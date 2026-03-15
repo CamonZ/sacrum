@@ -883,7 +883,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         Accounts.WorkflowSteps.insert(wf, %{
           name: "step_1",
           goal: "Do something",
-          prompt: "Work on ticket {ticket_id}"
+          prompt: "Work on ticket {task_id}"
         })
 
       {:ok, _section} =
@@ -937,19 +937,19 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["context"] == %{} or data["context"] == nil
     end
 
-    test "runStep uses prompt rendering with ticket_id interpolation", %{
+    test "runStep uses prompt rendering with task_id interpolation", %{
       conn: conn,
       user: user,
       project: project
     } do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-      # Create step with {ticket_id} placeholder in prompt
+      # Create step with {task_id} placeholder in prompt
       {:ok, step} =
         Accounts.WorkflowSteps.insert(wf, %{
           name: "step_1",
           goal: "Do something",
-          prompt: "Analyze ticket {ticket_id} from vtb show"
+          prompt: "Analyze task {task_id}"
         })
 
       result =
@@ -1173,7 +1173,11 @@ defmodule SacrumWeb.Graphql.SchemaTest do
   describe "orchestrate task mutations" do
     setup [:setup_user_and_project]
 
-    test "orchestrateTask starts orchestration and returns task", %{conn: conn, user: user, project: project} do
+    test "orchestrateTask starts orchestration and returns task", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
       {:ok, _step} = Accounts.WorkflowSteps.insert(wf, %{name: "step_1", goal: "Do something"})
@@ -1197,7 +1201,11 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["workflowId"] == wf.id
     end
 
-    test "orchestrateTask returns error when task has no workflow assigned", %{conn: conn, user: user, project: project} do
+    test "orchestrateTask returns error when task has no workflow assigned", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task Without Workflow"})
 
       result =
@@ -1216,7 +1224,11 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert Enum.any?(result["errors"], &String.contains?(&1["message"], "no workflow"))
     end
 
-    test "orchestrateTask returns error when already running", %{conn: conn, user: user, project: project} do
+    test "orchestrateTask returns error when already running", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
       {:ok, _step} = Accounts.WorkflowSteps.insert(wf, %{name: "step_1", goal: "Do something"})
