@@ -29,13 +29,25 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   def start_link(opts) do
     task_id = Keyword.fetch!(opts, :task_id)
     user_id = Keyword.fetch!(opts, :user_id)
+    resume = Keyword.get(opts, :resume, false)
 
     :gen_statem.start_link(
       {:via, Registry, {Sacrum.Orchestrator.TaskRegistry, task_id}},
       __MODULE__,
-      {user_id, task_id},
+      {user_id, task_id, resume},
       []
     )
+  end
+
+  @spec child_spec(keyword()) :: Supervisor.child_spec()
+  def child_spec(opts) do
+    %{
+      id: {__MODULE__, Keyword.fetch!(opts, :task_id)},
+      start: {__MODULE__, :start_link, [opts]},
+      type: :worker,
+      restart: :temporary,
+      shutdown: 5000
+    }
   end
 
   @impl :gen_statem
@@ -44,7 +56,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   end
 
   @impl :gen_statem
-  def init({user_id, task_id}) do
+  def init({user_id, task_id, resume}) do
     case Repo.get(Sacrum.Repo.Schemas.Task, task_id) do
       nil ->
         Logger.error("[TaskOrchestrator:#{task_id}] Task not found")
@@ -65,7 +77,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
           subscribed: false
         }
 
-        Logger.info("[TaskOrchestrator:#{task_id}] Starting in :initializing state")
+        data = if resume, do: Map.put(data, :resume, true), else: data
+        Logger.info("[TaskOrchestrator:#{task_id}] Starting in :initializing state#{if resume, do: " (resume)", else: ""}")
         {:ok, :initializing, data}
     end
   end
@@ -85,7 +98,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
             transitions: transitions
         }
 
-        {:next_state, :awaiting_execution, new_data}
+        resolve_initial_target(task_id, new_data)
 
       {:error, reason} ->
         Logger.error("[TaskOrchestrator:#{task_id}] Failed to load workflow: #{inspect(reason)}")
@@ -273,6 +286,22 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   # Catch-all for unhandled events in any state
   def handle_event(_, _, _, _data) do
     :keep_state_and_data
+  end
+
+  defp resolve_initial_target(task_id, data) do
+    if Map.get(data, :resume) do
+      case determine_resume_state(task_id) do
+        {:ok, target_state} ->
+          Logger.info("[TaskOrchestrator:#{task_id}] Recovered to state #{target_state}")
+          {:next_state, target_state, Map.delete(data, :resume)}
+
+        {:error, reason} ->
+          Logger.error("[TaskOrchestrator:#{task_id}] Failed to recover: #{inspect(reason)}")
+          {:next_state, :failed, data}
+      end
+    else
+      {:next_state, :awaiting_execution, data}
+    end
   end
 
   # ===== PRIVATE HELPERS =====
@@ -471,5 +500,27 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
             {:error, reason}
         end
     end
+  end
+
+  defp determine_resume_state(task_id) do
+    case get_latest_execution_status(task_id) do
+      nil -> {:ok, :awaiting_execution}
+      status when status in ["pending", "in_progress"] -> {:ok, :executing}
+      "completed" -> {:ok, :transitioning}
+      status when status in ["failed", "cancelled"] -> {:error, :non_resumable_status}
+    end
+  end
+
+  defp get_latest_execution_status(task_id) do
+    import Ecto.Query
+
+    Repo.one(
+      from(e in Sacrum.Repo.Schemas.StepExecution,
+        where: e.task_id == ^task_id,
+        order_by: [desc: e.inserted_at],
+        limit: 1,
+        select: e.status
+      )
+    )
   end
 end
