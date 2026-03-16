@@ -146,8 +146,19 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
       arg(:duration_ms, :integer)
 
       resolve(fn %{id: id} = args, %{context: %{current_user: user}} ->
+        require Logger
+
+        Logger.info(
+          "[updateStepExecution] Mutation called: exec=#{id} attrs=#{inspect(Map.keys(Map.drop(args, [:id])))}"
+        )
+
         with {:ok, execution} <- Accounts.StepExecutions.get_by(user.id, conditions: [id: id]) do
           attrs = Map.drop(args, [:id])
+
+          Logger.info(
+            "[updateStepExecution] Found execution: status=#{execution.status}, updating with #{inspect(attrs)}"
+          )
+
           Accounts.StepExecutions.update(execution, attrs)
         end
       end)
@@ -228,23 +239,36 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
       arg(:task_id, non_null(:uuid4))
 
       resolve(fn %{task_id: task_id}, %{context: %{current_user: user}} ->
+        require Logger
+        Logger.info("[orchestrateTask] Mutation called for task_id=#{task_id} user=#{user.id}")
+
         with {:ok, task} <- Accounts.Tasks.get_by(user.id, conditions: [id: task_id]),
+             _ =
+               Logger.info(
+                 "[orchestrateTask] Task found, workflow_id=#{task.workflow_id}, current_step_id=#{task.current_step_id}"
+               ),
              :ok <- Scheduler.schedule_task(%{id: task_id}) do
+          Logger.info("[orchestrateTask] Scheduler accepted task #{task_id}")
           {:ok, task}
         else
           {:error, :not_found} ->
+            Logger.warning("[orchestrateTask] Task #{task_id} not found")
             {:error, "Task not found"}
 
           {:error, :no_workflow_assigned} ->
+            Logger.warning("[orchestrateTask] Task #{task_id} has no workflow")
             {:error, "Task has no workflow assigned"}
 
           {:error, :task_already_completed} ->
+            Logger.warning("[orchestrateTask] Task #{task_id} already completed")
             {:error, "Cannot orchestrate a completed task"}
 
           {:error, :orchestrator_already_running} ->
+            Logger.warning("[orchestrateTask] Task #{task_id} orchestrator already running")
             {:error, "Orchestration is already running for this task"}
 
           {:error, reason} ->
+            Logger.error("[orchestrateTask] Failed for task #{task_id}: #{inspect(reason)}")
             {:error, "Failed to schedule task: #{inspect(reason)}"}
         end
       end)

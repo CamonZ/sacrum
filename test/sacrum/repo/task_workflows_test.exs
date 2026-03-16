@@ -432,4 +432,84 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
                TaskWorkflows.reject_current_step(assigned, steps.in_progress.id)
     end
   end
+
+  describe "advance_to_step/2" do
+    test "updates current_step_id to target step" do
+      %{workflow: workflow, steps: steps, task: task} = setup_workflow_with_steps()
+      {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
+
+      {:ok, advanced} = TaskWorkflows.advance_to_step(assigned, steps.in_progress.id)
+
+      assert advanced.current_step_id == steps.in_progress.id
+    end
+
+    test "creates an entered StepExecution for the target step" do
+      %{workflow: workflow, steps: steps, task: task} = setup_workflow_with_steps()
+      {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
+
+      {:ok, _advanced} = TaskWorkflows.advance_to_step(assigned, steps.in_progress.id)
+
+      executions =
+        StepExecutions.all(conditions: [task_id: task.id], order_by: [asc: :inserted_at])
+
+      assert length(executions) == 2
+      assert List.last(executions).step_name == "in_progress"
+      assert List.last(executions).status == "entered"
+    end
+
+    test "does not validate transition existence" do
+      %{workflow: workflow, steps: steps, task: task} = setup_workflow_with_steps()
+      {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
+
+      # backlog -> done has no direct transition, but advance_to_step skips that check
+      {:ok, advanced} = TaskWorkflows.advance_to_step(assigned, steps.done.id)
+
+      assert advanced.current_step_id == steps.done.id
+    end
+
+    test "returns error when task has no workflow" do
+      user = create_user()
+      project = create_project(user)
+      task = create_task(project)
+
+      assert {:error, :no_workflow} =
+               TaskWorkflows.advance_to_step(task, Ecto.UUID.generate())
+    end
+
+    test "returns error when task has no current step" do
+      user = create_user()
+      project = create_project(user)
+      task = create_task(project)
+      workflow = create_workflow(project)
+
+      {:ok, task} =
+        task
+        |> Ecto.Changeset.change(%{workflow_id: workflow.id})
+        |> Sacrum.Repo.update()
+
+      assert {:error, :no_current_step} =
+               TaskWorkflows.advance_to_step(task, Ecto.UUID.generate())
+    end
+
+    test "returns error when step does not belong to workflow" do
+      %{workflow: workflow, task: task} = setup_workflow_with_steps()
+      {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
+
+      user = create_user_with_email("other@example.com")
+      project = create_project(user)
+      other_workflow = create_workflow(project)
+      other_step = create_step(other_workflow, %{name: "other", step_order: 1})
+
+      assert {:error, :step_not_in_workflow} =
+               TaskWorkflows.advance_to_step(assigned, other_step.id)
+    end
+
+    test "returns error when step_id does not exist" do
+      %{workflow: workflow, task: task} = setup_workflow_with_steps()
+      {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
+
+      assert {:error, :step_not_found} =
+               TaskWorkflows.advance_to_step(assigned, Ecto.UUID.generate())
+    end
+  end
 end

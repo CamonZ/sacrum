@@ -1,36 +1,64 @@
 defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   @moduledoc """
-  Handles creation and dispatching of step executions.
+  Dispatches step executions to the daemon.
 
-  Creates pending StepExecution records and broadcasts run_step events
-  to the daemon. Uses a prompt-based architecture where the task's full
-  UUID is interpolated into {task_id} placeholders in step prompts.
+  Finds the existing "entered" StepExecution for the current step and
+  broadcasts a run_step event to the daemon. The task's full UUID is
+  interpolated into {task_id} placeholders in step prompts.
 
   Used by both the GraphQL runStep resolver and the TaskOrchestrator to
   ensure consistent execution dispatch behavior.
   """
 
+  import Ecto.Query
+
   alias Sacrum.Accounts
+  alias Sacrum.Repo
   alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.StepExecution
 
   @doc """
-  Creates and dispatches a step execution.
+  Dispatches a step execution to the daemon.
 
-  Fetches the step, creates a pending StepExecution, renders the prompt
-  by interpolating the task's full UUID into {task_id} placeholders,
-  broadcasts the run_step event, and returns the execution.
+  Fetches the step, finds the existing "entered" StepExecution, renders
+  the prompt by interpolating the task's full UUID into {task_id}
+  placeholders, broadcasts the run_step event, and returns the execution.
 
   Returns:
     - {:ok, execution} on success
-    - {:error, reason} on failure
+    - {:error, :no_entered_execution} if no "entered" execution exists
+    - {:error, reason} on other failures
   """
   @spec create_and_dispatch(String.t(), struct(), String.t()) ::
           {:ok, StepExecution.t()} | {:error, term()}
   def create_and_dispatch(user_id, task, step_id) do
+    require Logger
+
+    Logger.info(
+      "[ExecutionDispatcher] create_and_dispatch user=#{user_id} task=#{task.id} step=#{step_id}"
+    )
+
     with {:ok, step} <- fetch_step(user_id, step_id),
-         {:ok, execution} <- insert_execution(user_id, task, step) do
-      broadcast_and_return(execution, step, task, render_prompt(step.prompt, task.id))
+         {:ok, execution} <- find_entered_execution(task) do
+      Logger.info(
+        "[ExecutionDispatcher] Fetched step: #{step.name}, prompt=#{inspect(String.length(step.prompt || ""))} chars"
+      )
+
+      Logger.info(
+        "[ExecutionDispatcher] Found entered execution: #{execution.id} status=#{execution.status}"
+      )
+
+      rendered = render_prompt(step.prompt, task.id)
+
+      Logger.info(
+        "[ExecutionDispatcher] Broadcasting run_step for execution=#{execution.id} project=#{task.project_id}"
+      )
+
+      broadcast_and_return(execution, step, task, rendered)
+    else
+      {:error, reason} = err ->
+        Logger.error("[ExecutionDispatcher] create_and_dispatch failed: #{inspect(reason)}")
+        err
     end
   end
 
@@ -49,7 +77,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
           {:ok, StepExecution.t()} | {:error, term()}
   def create_and_dispatch_eval(user_id, task, step_id, previous_output) do
     with {:ok, step} <- fetch_step(user_id, step_id),
-         {:ok, execution} <- insert_execution(user_id, task, step, "eval:#{step.name}") do
+         {:ok, execution} <- insert_eval_execution(user_id, task, step) do
       rendered =
         step.eval_prompt
         |> render_prompt(task.id)
@@ -74,11 +102,25 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
     )
   end
 
-  defp insert_execution(user_id, task, step, step_name \\ nil) do
+  defp find_entered_execution(task) do
+    query =
+      from(e in StepExecution,
+        where: e.task_id == ^task.id and e.status == "entered",
+        order_by: [desc: e.inserted_at],
+        limit: 1
+      )
+
+    case Repo.one(query) do
+      nil -> {:error, :no_entered_execution}
+      execution -> {:ok, execution}
+    end
+  end
+
+  defp insert_eval_execution(user_id, task, step) do
     attrs = %{
       task_id: task.id,
       workflow_id: step.workflow_id,
-      step_name: step_name || step.name,
+      step_name: "eval:#{step.name}",
       status: "pending",
       project_id: task.project_id
     }

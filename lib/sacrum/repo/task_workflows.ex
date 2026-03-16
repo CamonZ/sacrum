@@ -84,12 +84,11 @@ defmodule Sacrum.Repo.TaskWorkflows do
   end
 
   @doc """
-  Advances a task to a specific step within its current workflow without creating a StepExecution.
+  Advances a task to a specific step within its current workflow.
 
   Validates that the target step belongs to the task's current workflow, then
-  updates the task's current_step_id. Does NOT create a StepExecution record —
-  useful for the orchestrator to move tasks while creating its own execution
-  separately. Transition validity is assumed since transitions are validated
+  updates the task's current_step_id and creates an "entered" StepExecution
+  audit record. Transition validity is assumed since transitions are validated
   on creation.
 
   Returns:
@@ -107,9 +106,27 @@ defmodule Sacrum.Repo.TaskWorkflows do
 
   def advance_to_step(%Task{} = task, step_id) do
     with {:ok, target_step} <- get_workflow_step(task.workflow_id, step_id) do
-      task
-      |> task_workflow_changeset(task.workflow_id, target_step.id)
-      |> Repo.update()
+      Multi.new()
+      |> Multi.update(:task, task_workflow_changeset(task, task.workflow_id, target_step.id))
+      |> Multi.insert(
+        :step_execution,
+        step_execution_attrs(
+          task.id,
+          task.user_id,
+          task.project_id,
+          task.workflow_id,
+          target_step
+        )
+      )
+      |> Repo.transaction()
+      |> case do
+        {:ok, %{task: task}} ->
+          broadcast_task_changed(task)
+          {:ok, task}
+
+        {:error, _op, changeset, _changes} ->
+          {:error, changeset}
+      end
     end
   end
 

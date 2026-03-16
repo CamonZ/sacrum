@@ -1,21 +1,17 @@
 defmodule Sacrum.Orchestrator.Scheduler do
   @moduledoc """
-  Coordinates task scheduling, dependency unblocking, and crash recovery.
+  Coordinates task scheduling and dependency unblocking.
 
   - `schedule_task/1` starts a TaskOrchestrator for a task
   - `notify_task_completed/2` unblocks dependent tasks and starts their orchestrators
-  - Recovery on init restarts orchestrators for in-flight executions
-  - Periodic orphan check restarts orchestrators for tasks with active executions but no FSM
   """
 
   use GenServer
 
   require Logger
-  import Ecto.Query
-
   alias Sacrum.Orchestrator.{TaskOrchestrator, TaskRegistry}
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.{StepExecution, Task}
+  alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.TaskDependencies
 
   @spec start_link(keyword()) :: {:ok, pid()} | {:error, term()}
@@ -36,19 +32,7 @@ defmodule Sacrum.Orchestrator.Scheduler do
   @impl true
   def init(_opts) do
     Logger.info("[Scheduler] Initialized")
-
-    if recovery_enabled?() do
-      Process.send_after(self(), :orphan_check, 30_000)
-      {:ok, %{}, {:continue, :recover}}
-    else
-      {:ok, %{}}
-    end
-  end
-
-  @impl true
-  def handle_continue(:recover, state) do
-    recover_in_flight_tasks()
-    {:noreply, state}
+    {:ok, %{}}
   end
 
   @impl true
@@ -72,25 +56,25 @@ defmodule Sacrum.Orchestrator.Scheduler do
     end
   end
 
-  @impl true
-  def handle_info(:orphan_check, state) do
-    if recovery_enabled?() do
-      check_and_restart_orphaned_tasks()
-      Process.send_after(self(), :orphan_check, 30_000)
-    end
-
-    {:noreply, state}
-  end
-
   # ===== PRIVATE HELPERS =====
 
   defp validate_and_schedule(task) do
+    Logger.info("[Scheduler] validate_and_schedule called with #{inspect(Map.keys(task))}")
+
     with {:ok, task_id} <- extract_task_id(task),
          {:ok, task_record} <- fetch_task(task_id),
          :ok <- validate_workflow(task_record),
          :ok <- validate_not_completed(task_record),
          :ok <- validate_no_active_fsm(task_id) do
+      Logger.info(
+        "[Scheduler] All validations passed for task_id=#{task_id}, starting orchestrator"
+      )
+
       start_orchestrator(task_id, task_record.user_id)
+    else
+      {:error, reason} = err ->
+        Logger.error("[Scheduler] validate_and_schedule failed: #{inspect(reason)}")
+        err
     end
   end
 
@@ -158,16 +142,22 @@ defmodule Sacrum.Orchestrator.Scheduler do
     Registry.lookup(TaskRegistry, task_id) != []
   end
 
-  defp start_orchestrator(task_id, user_id, opts \\ []) do
+  defp start_orchestrator(task_id, user_id) do
     alias Sacrum.Orchestrator.TaskFSMSupervisor
-    child_opts = [task_id: task_id, user_id: user_id] ++ opts
+    child_opts = [task_id: task_id, user_id: user_id]
+
+    Logger.info("[Scheduler] Starting orchestrator: task=#{task_id} user=#{user_id}")
 
     case TaskFSMSupervisor.start_child({TaskOrchestrator, child_opts}) do
-      {:ok, _pid} ->
-        Logger.info("[Scheduler] Started orchestrator for task #{task_id}")
+      {:ok, pid} ->
+        Logger.info("[Scheduler] Started orchestrator for task #{task_id}, pid=#{inspect(pid)}")
         :ok
 
-      {:error, {:already_started, _pid}} ->
+      {:error, {:already_started, pid}} ->
+        Logger.info(
+          "[Scheduler] Orchestrator already running for task #{task_id}, pid=#{inspect(pid)}"
+        )
+
         :ok
 
       {:error, reason} ->
@@ -177,41 +167,5 @@ defmodule Sacrum.Orchestrator.Scheduler do
 
         {:error, reason}
     end
-  end
-
-  defp recover_in_flight_tasks do
-    Logger.info("[Scheduler] Starting recovery of in-flight tasks")
-
-    Enum.each(tasks_with_active_executions(), fn task ->
-      unless fsm_running?(task.id) do
-        start_orchestrator(task.id, task.user_id, resume: true)
-      end
-    end)
-  end
-
-  defp check_and_restart_orphaned_tasks do
-    Enum.each(tasks_with_active_executions(), fn task ->
-      unless fsm_running?(task.id) do
-        Logger.warning("[Scheduler] Found orphaned task #{task.id}, restarting")
-        start_orchestrator(task.id, task.user_id)
-      end
-    end)
-  end
-
-  defp recovery_enabled? do
-    Application.get_env(:sacrum, :scheduler_recovery_enabled, true)
-  end
-
-  defp tasks_with_active_executions do
-    Repo.all(
-      from(t in Task,
-        where: is_nil(t.completed_at),
-        join: e in StepExecution,
-        on: e.task_id == t.id,
-        where: e.status in ["pending", "in_progress"],
-        select: t,
-        distinct: true
-      )
-    )
   end
 end

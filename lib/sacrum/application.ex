@@ -14,8 +14,6 @@ defmodule Sacrum.Application do
       {Phoenix.PubSub, name: Sacrum.PubSub},
       # Daemon presence tracking
       Sacrum.DaemonRegistry,
-      # Pending execution timeout checker
-      Sacrum.PendingExecutionTimeoutChecker,
       # Start to serve requests before Absinthe.Subscription
       SacrumWeb.Endpoint,
       # Absinthe subscriptions (must come after Endpoint)

@@ -339,7 +339,7 @@ defmodule SacrumWeb.ProjectChannel do
       model_provider: execution.model_provider,
       input_tokens: execution.input_tokens,
       output_tokens: execution.output_tokens,
-      cost: execution.cost,
+      cost: if(execution.cost, do: Decimal.to_string(execution.cost)),
       duration_ms: execution.duration_ms,
       inserted_at: execution.inserted_at,
       updated_at: execution.updated_at

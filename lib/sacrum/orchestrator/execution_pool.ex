@@ -4,6 +4,10 @@ defmodule Sacrum.Orchestrator.ExecutionPool do
 
   Maintains a fixed number of slots. When all are in use, requests are queued (FIFO).
   Monitored processes auto-release their slot on exit.
+
+  Accepts an optional `:name` option on `start_link/1`. When omitted, registers
+  as `__MODULE__` (the global default). Pass a custom name in tests to get an
+  isolated pool instance.
   """
 
   use GenServer
@@ -12,7 +16,8 @@ defmodule Sacrum.Orchestrator.ExecutionPool do
 
   @spec start_link(keyword()) :: {:ok, pid()} | {:error, term()}
   def start_link(opts) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    name = Keyword.get(opts, :name, __MODULE__)
+    GenServer.start_link(__MODULE__, opts, name: name)
   end
 
   @doc """
@@ -21,17 +26,32 @@ defmodule Sacrum.Orchestrator.ExecutionPool do
   """
   @spec request_slot(pid(), timeout()) :: {:ok, integer()} | {:error, atom()}
   def request_slot(pid, timeout \\ :infinity) do
-    GenServer.call(__MODULE__, {:request_slot, pid}, timeout)
+    request_slot(__MODULE__, pid, timeout)
+  end
+
+  @spec request_slot(GenServer.server(), pid(), timeout()) :: {:ok, integer()} | {:error, atom()}
+  def request_slot(server, pid, timeout) do
+    GenServer.call(server, {:request_slot, pid}, timeout)
   end
 
   @spec release_slot(integer()) :: :ok
   def release_slot(slot_id) do
-    GenServer.call(__MODULE__, {:release_slot, slot_id})
+    release_slot(__MODULE__, slot_id)
+  end
+
+  @spec release_slot(GenServer.server(), integer()) :: :ok
+  def release_slot(server, slot_id) do
+    GenServer.call(server, {:release_slot, slot_id})
   end
 
   @spec pool_status() :: map()
   def pool_status do
-    GenServer.call(__MODULE__, :pool_status)
+    pool_status(__MODULE__)
+  end
+
+  @spec pool_status(GenServer.server()) :: map()
+  def pool_status(server) do
+    GenServer.call(server, :pool_status)
   end
 
   # Server Callbacks
@@ -56,8 +76,17 @@ defmodule Sacrum.Orchestrator.ExecutionPool do
   def handle_call({:request_slot, pid}, from, state) do
     if available_slots(state) > 0 do
       {slot_id, new_state} = grant_slot(state, pid)
+
+      Logger.info(
+        "[ExecutionPool] Granted slot #{slot_id} to #{inspect(pid)} (#{available_slots(new_state)} remaining)"
+      )
+
       {:reply, {:ok, slot_id}, new_state}
     else
+      Logger.info(
+        "[ExecutionPool] No slots available, queuing #{inspect(pid)} (queue_len=#{:queue.len(state.queue) + 1})"
+      )
+
       new_state = %{state | queue: :queue.in({pid, from}, state.queue)}
       {:noreply, new_state}
     end

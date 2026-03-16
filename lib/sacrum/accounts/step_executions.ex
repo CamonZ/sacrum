@@ -36,9 +36,29 @@ defmodule Sacrum.Accounts.StepExecutions do
   @spec update(StepExecution.t(), map()) ::
           {:ok, StepExecution.t()} | {:error, Ecto.Changeset.t()}
   def update(%StepExecution{} = execution, attrs) do
-    execution
-    |> StepExecution.update_changeset(attrs)
-    |> Repo.update()
-    |> Broadcaster.broadcast_step_execution(:step_execution_status_changed)
+    require Logger
+
+    Logger.info(
+      "[StepExecutions.update] exec=#{execution.id} current_status=#{execution.status} new_attrs=#{inspect(Map.keys(attrs))}"
+    )
+
+    result =
+      execution
+      |> StepExecution.update_changeset(attrs)
+      |> Repo.update()
+      |> Broadcaster.broadcast_step_execution(:step_execution_status_changed)
+
+    case result do
+      {:ok, updated} ->
+        Logger.info(
+          "[StepExecutions.update] Success: exec=#{updated.id} new_status=#{updated.status}"
+        )
+
+        {:ok, updated}
+
+      {:error, reason} ->
+        Logger.error("[StepExecutions.update] Failed: #{inspect(reason)}")
+        {:error, reason}
+    end
   end
 end

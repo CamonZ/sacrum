@@ -20,6 +20,10 @@ defmodule Sacrum.Orchestrator.TaskFSMSupervisor do
 
   @spec start_child(term()) :: {:ok, pid()} | {:error, term()}
   def start_child(child_spec) do
+    Logger.info(
+      "[TaskFSMSupervisor] Starting child for task #{inspect(child_spec, pretty: true)}"
+    )
+
     DynamicSupervisor.start_child(__MODULE__, child_spec)
   end
 

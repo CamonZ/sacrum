@@ -808,10 +808,15 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["outputTokens"] == 50
     end
 
-    test "runStep creates pending StepExecution", %{conn: conn, user: user, project: project} do
+    test "runStep dispatches existing entered StepExecution", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
       {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "step_1", goal: "Do something"})
+      {:ok, _task} = Sacrum.Repo.TaskWorkflows.assign_workflow(task, wf)
 
       result =
         conn
@@ -828,7 +833,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
       data = result["data"]["runStep"]
       assert data["stepName"] == "step_1"
-      assert data["status"] == "pending"
+      assert data["status"] == "entered"
       assert data["taskId"] == task.id
       assert data["id"] != nil
     end
@@ -886,6 +891,8 @@ defmodule SacrumWeb.Graphql.SchemaTest do
           prompt: "Work on ticket {task_id}"
         })
 
+      {:ok, task} = Sacrum.Repo.TaskWorkflows.assign_workflow(task, wf)
+
       {:ok, _section} =
         Accounts.Sections.insert(user.id, %{
           task_id: task.id,
@@ -909,6 +916,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         |> json_response(200)
 
       data = result["data"]["runStep"]
+      assert data["status"] == "entered"
       # Context is no longer populated in the execution (null becomes %{} in JSON)
       assert data["context"] == %{} or data["context"] == nil
     end
@@ -952,6 +960,8 @@ defmodule SacrumWeb.Graphql.SchemaTest do
           prompt: "Analyze task {task_id}"
         })
 
+      {:ok, _task} = Sacrum.Repo.TaskWorkflows.assign_workflow(task, wf)
+
       result =
         conn
         |> authenticate(user)
@@ -979,6 +989,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
       {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "step_1", goal: "Do something"})
+      {:ok, _task} = Sacrum.Repo.TaskWorkflows.assign_workflow(task, wf)
 
       result =
         conn
@@ -994,7 +1005,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         |> json_response(200)
 
       data = result["data"]["runStep"]
-      assert data["status"] == "pending"
+      assert data["status"] == "entered"
       assert data["id"] != nil
     end
 
