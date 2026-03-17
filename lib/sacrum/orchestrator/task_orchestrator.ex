@@ -102,9 +102,12 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
       "[TaskOrchestrator:#{task_id}] enter #{prev_state} -> :executing, step=#{data.task.current_step_id}"
     )
 
-    with {:ok, current_step} <- get_current_step(data),
+    with {:ok, task} <- reload_task(data.task.id),
+         {:ok, current_step} <- get_current_step(data),
          {:ok, execution} <-
-           ExecutionDispatcher.create_and_dispatch(data.user_id, data.task, current_step.id) do
+           ExecutionDispatcher.create_and_dispatch(data.user_id, task, current_step.id) do
+      data = %{data | task: task}
+
       unless data.subscribed do
         :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{data.project_id}")
       end
@@ -505,6 +508,13 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  defp reload_task(task_id) do
+    case Repo.get(Sacrum.Repo.Schemas.Task, task_id) do
+      nil -> {:error, :task_not_found}
+      task -> {:ok, task}
     end
   end
 

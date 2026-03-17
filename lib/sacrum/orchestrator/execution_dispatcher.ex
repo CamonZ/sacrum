@@ -88,10 +88,17 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   end
 
   defp broadcast_and_return(execution, step, task, rendered_prompt) do
-    Broadcaster.broadcast_run_step(
-      %{execution: execution, step: step, task: task, rendered_prompt: rendered_prompt},
-      task.project_id
+    require Logger
+
+    payload = %{execution: execution, step: step, task: task, rendered_prompt: rendered_prompt}
+
+    Logger.info(
+      "[ExecutionDispatcher] broadcast_run_step payload: " <>
+        "execution_id=#{execution.id} step=#{step.name} task=#{task.id} " <>
+        "worktree=#{inspect(task.worktree)} prompt_length=#{String.length(rendered_prompt)}"
     )
+
+    Broadcaster.broadcast_run_step(payload, task.project_id)
 
     {:ok, execution}
   end
