@@ -1,0 +1,38 @@
+# This file excludes paths from Docker's context to speed up builds.
+# See https://docs.docker.com/engine/reference/builder/#dockerignore-file
+
+# Ignore git
+.git
+
+# Ignore build artifacts
+_build/
+deps/
+
+# Ignore assets that are built during Docker build
+/assets/node_modules/
+
+# Ignore dev/test configs
+/config/*.secret.exs
+
+# Ignore editor and OS files
+.elixir_ls/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Ignore CI and tooling
+.github/
+.dialyzer_ignore.exs
+.formatter.exs
+.credo.exs
+
+# Ignore test files
+/test/
+
+# Ignore Docker files
+Dockerfile*
+.dockerignore
+docker-compose*
