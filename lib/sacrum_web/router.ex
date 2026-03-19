@@ -20,6 +20,8 @@ defmodule SacrumWeb.Router do
     plug SacrumWeb.Graphql.ContextPlug
   end
 
+  get "/healthz", SacrumWeb.HealthController, :index
+
   scope "/", SacrumWeb do
     pipe_through :browser
 

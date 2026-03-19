@@ -6,8 +6,8 @@
 #
 # https://hexdocs.pm/phoenix/releases.html
 #
-ARG ELIXIR_VERSION=1.19.4
-ARG OTP_VERSION=28.0
+ARG ELIXIR_VERSION=1.19.5
+ARG OTP_VERSION=28.4.1
 ARG DEBIAN_VERSION=bookworm-20260316-slim
 
 ARG BUILDER_IMAGE="hexpm/elixir:${ELIXIR_VERSION}-erlang-${OTP_VERSION}-debian-${DEBIAN_VERSION}"
