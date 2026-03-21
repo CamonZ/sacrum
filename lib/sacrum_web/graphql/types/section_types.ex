@@ -155,5 +155,13 @@ defmodule SacrumWeb.Graphql.Types.SectionTypes do
         end
       end)
     end
+
+    field :delete_task_code_refs, list_of(:code_ref) do
+      arg(:task_id, non_null(:uuid4))
+
+      resolve(fn %{task_id: task_id}, %{context: %{current_user: user}} ->
+        Accounts.CodeRefs.delete_task_refs(user.id, task_id)
+      end)
+    end
   end
 end

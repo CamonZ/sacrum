@@ -83,4 +83,31 @@ defmodule Sacrum.Repo.CodeRefsTest do
       assert {:error, :not_found} = CodeRefs.get(ref.id)
     end
   end
+
+  describe "delete_by_task/1" do
+    test "deletes all code refs for a task" do
+      task = setup_task()
+      {:ok, ref1} = CodeRefs.insert_for_task(task, %{path: "lib/a.ex"})
+      {:ok, ref2} = CodeRefs.insert_for_task(task, %{path: "lib/b.ex"})
+      {:ok, ref3} = CodeRefs.insert_for_task(task, %{path: "lib/c.ex"})
+
+      {:ok, deleted_refs} = CodeRefs.delete_by_task(task.id)
+      assert length(deleted_refs) == 3
+
+      assert Enum.map(deleted_refs, & &1.id) |> Enum.sort() ==
+               [ref1.id, ref2.id, ref3.id] |> Enum.sort()
+
+      # Verify all are actually deleted
+      assert {:error, :not_found} = CodeRefs.get(ref1.id)
+      assert {:error, :not_found} = CodeRefs.get(ref2.id)
+      assert {:error, :not_found} = CodeRefs.get(ref3.id)
+    end
+
+    test "returns empty list when task has no code refs" do
+      task = setup_task()
+
+      {:ok, deleted_refs} = CodeRefs.delete_by_task(task.id)
+      assert deleted_refs == []
+    end
+  end
 end

@@ -1491,6 +1491,52 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
       assert result["data"]["deleteCodeRef"]["id"] == ref.id
     end
+
+    test "deletes all code refs for a task", %{conn: conn, user: user, project: project} do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+
+      {:ok, ref1} =
+        Accounts.CodeRefs.insert_for_task(user.id, %{
+          task_id: task.id,
+          project_id: project.id,
+          path: "lib/a.ex"
+        })
+
+      {:ok, ref2} =
+        Accounts.CodeRefs.insert_for_task(user.id, %{
+          task_id: task.id,
+          project_id: project.id,
+          path: "lib/b.ex"
+        })
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation { deleteTaskCodeRefs(taskId: "#{task.id}") { id path } }
+        """)
+        |> json_response(200)
+
+      refs = result["data"]["deleteTaskCodeRefs"]
+      assert length(refs) == 2
+
+      assert Enum.map(refs, & &1["id"]) |> Enum.sort() ==
+               [ref1.id, ref2.id] |> Enum.sort()
+    end
+
+    test "deleteTaskCodeRefs returns error for non-existent task", %{conn: conn, user: user} do
+      fake_task_id = Ecto.UUID.generate()
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation { deleteTaskCodeRefs(taskId: "#{fake_task_id}") { id path } }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] != nil
+    end
   end
 
   describe "association resolution" do
