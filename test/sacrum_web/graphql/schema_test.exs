@@ -259,6 +259,32 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["worktree"] == "/path/to/worktree"
     end
 
+    test "creates a task with parent_id", %{conn: conn, user: user, project: project} do
+      # Create parent task first
+      {:ok, parent_task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Parent Task"})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createTask(
+              projectId: "#{project.id}"
+              title: "Child Task"
+              description: "Task with parent"
+              parentId: "#{parent_task.id}"
+            ) { id title parentId parent { id title } }
+          }
+        """)
+        |> json_response(200)
+
+      data = result["data"]["createTask"]
+      assert data["title"] == "Child Task"
+      assert data["parentId"] == parent_task.id
+      assert data["parent"]["id"] == parent_task.id
+      assert data["parent"]["title"] == "Parent Task"
+    end
+
     test "updates a task", %{conn: conn, user: user, project: project} do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Original"})
 
