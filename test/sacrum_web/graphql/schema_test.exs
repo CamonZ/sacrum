@@ -2552,6 +2552,26 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       refute "No Status" in titles
     end
 
+    test "filters by priority", %{conn: conn, user: user, project: project} do
+      {:ok, _} =
+        Accounts.Tasks.insert(user.id, project.id, %{title: "Urgent", priority: "critical"})
+
+      {:ok, _} =
+        Accounts.Tasks.insert(user.id, project.id, %{title: "Normal", priority: "low"})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          { tasks(projectId: "#{project.id}", priority: "critical") { title priority } }
+        """)
+        |> json_response(200)
+
+      titles = Enum.map(result["data"]["tasks"], & &1["title"])
+      assert "Urgent" in titles
+      refute "Normal" in titles
+    end
+
     test "filters by tags", %{conn: conn, user: user, project: project} do
       {:ok, _} =
         Accounts.Tasks.insert(user.id, project.id, %{title: "Tagged", tags: ["bug", "urgent"]})

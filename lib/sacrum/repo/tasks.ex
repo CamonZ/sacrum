@@ -33,6 +33,7 @@ defmodule Sacrum.Repo.Tasks do
     - `:project_id` - filter by project
     - `:user_id` - filter by user
     - `:level` - filter by task level
+    - `:priority` - filter by task priority
     - `:parent_id` - filter by parent task (via hierarchy)
     - `:blocked` - when false, exclude tasks with incomplete dependencies
     - `:search` - text search on title/description
@@ -105,6 +106,12 @@ defmodule Sacrum.Repo.Tasks do
 
   defp apply_filter(query, :level, level) do
     where(query, [t], t.level == ^level)
+  end
+
+  defp apply_filter(query, :priority, nil), do: query
+
+  defp apply_filter(query, :priority, priority) do
+    where(query, [t], t.priority == ^priority)
   end
 
   defp apply_filter(query, :parent_id, nil), do: query
