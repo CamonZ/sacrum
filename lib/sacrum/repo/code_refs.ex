@@ -107,4 +107,17 @@ defmodule Sacrum.Repo.CodeRefs do
     |> CodeRef.changeset(attrs)
     |> Repo.insert()
   end
+
+  @doc """
+  Delete all code refs associated with a task.
+
+  Returns `{:ok, deleted_refs}` where deleted_refs is a list of the deleted code refs.
+  """
+  @spec delete_by_task(String.t()) :: {:ok, [CodeRef.t()]}
+  def delete_by_task(task_id) when is_binary(task_id) do
+    {_count, refs} =
+      Repo.delete_all(from(cr in CodeRef, where: cr.task_id == ^task_id, select: cr))
+
+    {:ok, refs}
+  end
 end

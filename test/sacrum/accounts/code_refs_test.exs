@@ -140,4 +140,70 @@ defmodule Sacrum.Accounts.CodeRefsTest do
       assert hd(refs).user_id == user1.id
     end
   end
+
+  describe "delete_task_refs/2" do
+    test "deletes all code refs for a task owned by the user" do
+      user = create_user()
+      {project, task} = create_task(user)
+
+      {:ok, _ref1} =
+        CodeRefs.insert_for_task(user.id, %{
+          "task_id" => task.id,
+          "project_id" => project.id,
+          "path" => "lib/a.ex"
+        })
+
+      {:ok, _ref2} =
+        CodeRefs.insert_for_task(user.id, %{
+          "task_id" => task.id,
+          "project_id" => project.id,
+          "path" => "lib/b.ex"
+        })
+
+      {:ok, deleted_refs} = CodeRefs.delete_task_refs(user.id, task.id)
+      assert length(deleted_refs) == 2
+
+      # Verify refs are actually deleted
+      refs = CodeRefs.list_by(user.id)
+      assert length(refs) == 0
+    end
+
+    test "returns error if task does not exist" do
+      user = create_user()
+      fake_task_id = Ecto.UUID.generate()
+
+      {:error, :not_found} = CodeRefs.delete_task_refs(user.id, fake_task_id)
+    end
+
+    test "returns error if user does not own the task" do
+      user1 = create_user()
+
+      user2 =
+        create_user(%{email: "other@example.com", username: "other", password: "password123"})
+
+      {project1, task1} = create_task(user1)
+
+      {:ok, _ref} =
+        CodeRefs.insert_for_task(user1.id, %{
+          "task_id" => task1.id,
+          "project_id" => project1.id,
+          "path" => "lib/test.ex"
+        })
+
+      # User2 cannot delete user1's task's code refs
+      {:error, :not_found} = CodeRefs.delete_task_refs(user2.id, task1.id)
+
+      # Verify the ref was not deleted
+      user1_refs = CodeRefs.list_by(user1.id)
+      assert length(user1_refs) == 1
+    end
+
+    test "returns empty list when task has no code refs" do
+      user = create_user()
+      {_project, task} = create_task(user)
+
+      {:ok, deleted_refs} = CodeRefs.delete_task_refs(user.id, task.id)
+      assert deleted_refs == []
+    end
+  end
 end
