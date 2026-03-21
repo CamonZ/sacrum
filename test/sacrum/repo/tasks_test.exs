@@ -244,6 +244,17 @@ defmodule Sacrum.Repo.TasksTest do
       assert hd(tasks).title == "Ticket"
     end
 
+    test "filters by priority" do
+      user = create_user()
+      project = create_project(user)
+      {:ok, _} = Tasks.insert(project, %{title: "High Priority", priority: "high"})
+      {:ok, _} = Tasks.insert(project, %{title: "Low Priority", priority: "low"})
+
+      tasks = Tasks.list_tasks(conditions: [project_id: project.id, priority: "high"])
+      assert length(tasks) == 1
+      assert hd(tasks).title == "High Priority"
+    end
+
     test "returns all tasks with no filters" do
       user = create_user()
       project = create_project(user)

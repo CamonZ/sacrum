@@ -79,6 +79,7 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
     field :tasks, list_of(:task) do
       arg(:project_id, non_null(:uuid4))
       arg(:level, :string)
+      arg(:priority, :string)
       arg(:parent_id, :uuid4)
       arg(:status, :string)
       arg(:tags, list_of(:string))
@@ -98,6 +99,7 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
               [
                 project_id: project_id,
                 level: Map.get(args, :level),
+                priority: Map.get(args, :priority),
                 parent_id: Map.get(args, :parent_id),
                 status: Map.get(args, :status),
                 tags: Map.get(args, :tags),
