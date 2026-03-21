@@ -4044,6 +4044,79 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert result["errors"] != nil
     end
 
+    test "advanceToStep advances task to target step", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      {:ok, workflow} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+      {:ok, _step1} = Accounts.WorkflowSteps.insert(workflow, %{name: "Step 1", step_order: 1})
+      {:ok, step2} = Accounts.WorkflowSteps.insert(workflow, %{name: "Step 2", step_order: 2})
+
+      # Assign workflow (puts task on step1)
+      conn
+      |> authenticate(user)
+      |> graphql("""
+        mutation { assignWorkflow(taskId: "#{task.id}", workflowId: "#{workflow.id}") { id } }
+      """)
+
+      # Advance directly to step2 (no transition required)
+      result =
+        build_conn()
+        |> authenticate(user)
+        |> graphql("""
+          mutation { advanceToStep(taskId: "#{task.id}", stepId: "#{step2.id}") { id currentStepId } }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["advanceToStep"]["currentStepId"] == step2.id
+    end
+
+    test "advanceToStep when task has no workflow", %{conn: conn, user: user, project: project} do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "No WF Task"})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation { advanceToStep(taskId: "#{task.id}", stepId: "#{Ecto.UUID.generate()}") { id } }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] != nil
+    end
+
+    test "advanceToStep with step from different workflow", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      {:ok, wf1} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF1"})
+      {:ok, _step1} = Accounts.WorkflowSteps.insert(wf1, %{name: "Step 1", step_order: 1})
+      {:ok, wf2} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF2"})
+      {:ok, other_step} = Accounts.WorkflowSteps.insert(wf2, %{name: "Other Step", step_order: 1})
+
+      # Assign wf1
+      conn
+      |> authenticate(user)
+      |> graphql("""
+        mutation { assignWorkflow(taskId: "#{task.id}", workflowId: "#{wf1.id}") { id } }
+      """)
+
+      # Try to advance to a step in wf2
+      result =
+        build_conn()
+        |> authenticate(user)
+        |> graphql("""
+          mutation { advanceToStep(taskId: "#{task.id}", stepId: "#{other_step.id}") { id } }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] != nil
+    end
+
     test "completeStep when task has no workflow", %{conn: conn, user: user, project: project} do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "No WF Task"})
 

@@ -281,6 +281,18 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
       end)
     end
 
+    @desc "Advance a task to a specific step, skipping transition validation"
+    field :advance_to_step, :task do
+      arg(:task_id, non_null(:uuid4))
+      arg(:step_id, non_null(:uuid4))
+
+      resolve(fn %{task_id: task_id, step_id: step_id}, %{context: %{current_user: user}} ->
+        with {:ok, task} <- Accounts.Tasks.find(user.id, task_id) do
+          TaskWorkflows.advance_to_step(task, step_id)
+        end
+      end)
+    end
+
     field :start_step, :task do
       arg(:task_id, non_null(:uuid4))
 
