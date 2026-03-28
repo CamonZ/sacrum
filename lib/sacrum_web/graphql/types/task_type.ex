@@ -25,6 +25,7 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
     field :started_at, :datetime
     field :completed_at, :datetime
     field :worktree, :string
+    field :track, :string
     field :archived, :boolean
     field :inserted_at, :datetime
     field :updated_at, :datetime
@@ -85,6 +86,7 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
       arg(:tags, list_of(:string))
       arg(:search, :string)
       arg(:workflow_id, :uuid4)
+      arg(:track, :string)
       arg(:root_only, :boolean)
       arg(:blocked, :boolean)
       arg(:include_archived, :boolean, default_value: false)
@@ -105,6 +107,7 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
                 tags: Map.get(args, :tags),
                 search: Map.get(args, :search),
                 workflow_id: Map.get(args, :workflow_id),
+                track: Map.get(args, :track),
                 root_only: Map.get(args, :root_only),
                 blocked: Map.get(args, :blocked),
                 archived: if(include_archived, do: nil, else: false)
@@ -173,6 +176,7 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
       arg(:priority, :string)
       arg(:tags, list_of(:string))
       arg(:worktree, :string)
+      arg(:track, :string)
       arg(:parent_id, :uuid4)
       arg(:sections, list_of(:task_section_input))
 
@@ -200,6 +204,7 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
       arg(:started_at, :datetime)
       arg(:completed_at, :datetime)
       arg(:worktree, :string)
+      arg(:track, :string)
       arg(:archived, :boolean)
       arg(:parent_id, :uuid4)
       arg(:depends_on_ids, list_of(:uuid4))

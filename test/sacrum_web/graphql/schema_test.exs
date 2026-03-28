@@ -259,6 +259,46 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["worktree"] == "/path/to/worktree"
     end
 
+    test "creates a task with track field", %{conn: conn, user: user, project: project} do
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createTask(
+              projectId: "#{project.id}"
+              title: "Task with Track"
+              description: "Test track field"
+              track: "backend"
+            ) { id title track }
+          }
+        """)
+        |> json_response(200)
+
+      data = result["data"]["createTask"]
+      assert data["title"] == "Task with Track"
+      assert data["track"] == "backend"
+    end
+
+    test "creates a task without track (nullable)", %{conn: conn, user: user, project: project} do
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createTask(
+              projectId: "#{project.id}"
+              title: "Task without Track"
+            ) { id title track }
+          }
+        """)
+        |> json_response(200)
+
+      data = result["data"]["createTask"]
+      assert data["title"] == "Task without Track"
+      assert data["track"] == nil
+    end
+
     test "creates a task with parent_id", %{conn: conn, user: user, project: project} do
       # Create parent task first
       {:ok, parent_task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Parent Task"})
@@ -320,6 +360,43 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         |> json_response(200)
 
       assert result["data"]["updateTask"]["worktree"] == "/updated/worktree/path"
+    end
+
+    test "updates a task with track field", %{conn: conn, user: user, project: project} do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            updateTask(id: "#{task.id}", track: "frontend") {
+              id track
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["updateTask"]["track"] == "frontend"
+    end
+
+    test "clears track field via updateTask", %{conn: conn, user: user, project: project} do
+      {:ok, task} =
+        Accounts.Tasks.insert(user.id, project.id, %{title: "Task", track: "backend"})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            updateTask(id: "#{task.id}", track: null) {
+              id track
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["updateTask"]["track"] == nil
     end
 
     test "sets parent_id via updateTask", %{conn: conn, user: user, project: project} do
@@ -540,6 +617,73 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
       assert result["data"]["updateWorkflow"]["name"] == "Updated"
       assert result["data"]["updateWorkflow"]["description"] == "New desc"
+    end
+
+    test "creates a workflow with track and kanban_column", %{conn: conn, user: user, project: project} do
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createWorkflow(
+              projectId: "#{project.id}"
+              name: "Kanban WF"
+              track: "backend"
+              kanbanColumn: "in_progress"
+            ) { id name track kanbanColumn }
+          }
+        """)
+        |> json_response(200)
+
+      data = result["data"]["createWorkflow"]
+      assert data["name"] == "Kanban WF"
+      assert data["track"] == "backend"
+      assert data["kanbanColumn"] == "in_progress"
+    end
+
+    test "updates a workflow with track and kanban_column", %{conn: conn, user: user, project: project} do
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            updateWorkflow(id: "#{wf.id}", track: "frontend", kanbanColumn: "done") {
+              id track kanbanColumn
+            }
+          }
+        """)
+        |> json_response(200)
+
+      data = result["data"]["updateWorkflow"]
+      assert data["track"] == "frontend"
+      assert data["kanbanColumn"] == "done"
+    end
+
+    test "clears track and kanban_column on workflow", %{conn: conn, user: user, project: project} do
+      {:ok, wf} =
+        Accounts.Workflows.insert(user.id, project.id, %{
+          name: "WF",
+          track: "backend",
+          kanban_column: "backlog"
+        })
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            updateWorkflow(id: "#{wf.id}", track: null, kanbanColumn: null) {
+              id track kanbanColumn
+            }
+          }
+        """)
+        |> json_response(200)
+
+      data = result["data"]["updateWorkflow"]
+      assert data["track"] == nil
+      assert data["kanbanColumn"] == nil
     end
 
     test "deletes a workflow", %{conn: conn, user: user, project: project} do
@@ -2616,6 +2760,26 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       titles = Enum.map(result["data"]["tasks"], & &1["title"])
       assert "Urgent" in titles
       refute "Normal" in titles
+    end
+
+    test "filters by track", %{conn: conn, user: user, project: project} do
+      {:ok, _} =
+        Accounts.Tasks.insert(user.id, project.id, %{title: "Backend", track: "backend"})
+
+      {:ok, _} =
+        Accounts.Tasks.insert(user.id, project.id, %{title: "Frontend", track: "frontend"})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          { tasks(projectId: "#{project.id}", track: "backend") { title track } }
+        """)
+        |> json_response(200)
+
+      titles = Enum.map(result["data"]["tasks"], & &1["title"])
+      assert "Backend" in titles
+      refute "Frontend" in titles
     end
 
     test "filters by tags", %{conn: conn, user: user, project: project} do

@@ -9,7 +9,7 @@ defmodule Sacrum.Repo.Schemas.Task do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @create_fields [:title, :description, :level, :priority, :tags, :worktree, :parent_id]
+  @create_fields [:title, :description, :level, :priority, :tags, :worktree, :track, :parent_id]
   @update_fields [
     :title,
     :description,
@@ -22,6 +22,7 @@ defmodule Sacrum.Repo.Schemas.Task do
     :completed_at,
     :revision_feedback,
     :worktree,
+    :track,
     :archived
   ]
 
@@ -39,6 +40,7 @@ defmodule Sacrum.Repo.Schemas.Task do
     field :started_at, :utc_datetime_usec
     field :completed_at, :utc_datetime_usec
     field :worktree, :string
+    field :track, :string
     field :archived, :boolean, default: false
 
     belongs_to :project, Sacrum.Repo.Schemas.Project

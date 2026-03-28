@@ -17,6 +17,8 @@ defmodule SacrumWeb.Graphql.Types.WorkflowType do
     field :auto_advance, :boolean
     field :display_order, :integer
     field :is_default, :boolean
+    field :track, :string
+    field :kanban_column, :string
     field :inserted_at, :datetime
     field :updated_at, :datetime
 
@@ -81,6 +83,8 @@ defmodule SacrumWeb.Graphql.Types.WorkflowType do
       arg(:auto_advance, :boolean)
       arg(:display_order, :integer)
       arg(:is_default, :boolean)
+      arg(:track, :string)
+      arg(:kanban_column, :string)
 
       resolve(fn args, %{context: %{current_user: user}} ->
         project_id = Map.get(args, :project_id)
@@ -103,6 +107,8 @@ defmodule SacrumWeb.Graphql.Types.WorkflowType do
       arg(:initial_step_id, :uuid4)
       arg(:on_done_workflow_id, :uuid4)
       arg(:on_reject_workflow_id, :uuid4)
+      arg(:track, :string)
+      arg(:kanban_column, :string)
 
       resolve(fn %{id: id} = args, %{context: %{current_user: user}} ->
         with {:ok, workflow} <- Accounts.Workflows.get_by(user.id, conditions: [id: id]) do
