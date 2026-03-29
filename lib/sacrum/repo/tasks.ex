@@ -41,7 +41,6 @@ defmodule Sacrum.Repo.Tasks do
     - `:tags` - filter by tags (any match)
     - `:root_only` - when true, exclude tasks that have a parent
     - `:workflow_id` - filter by assigned workflow
-    - `:track` - filter by track
     - `:archived` - when false (default), exclude archived tasks; when true, include all tasks
   """
   @spec list_tasks(keyword()) :: [Task.t()]
@@ -113,12 +112,6 @@ defmodule Sacrum.Repo.Tasks do
 
   defp apply_filter(query, :priority, priority) do
     where(query, [t], t.priority == ^priority)
-  end
-
-  defp apply_filter(query, :track, nil), do: query
-
-  defp apply_filter(query, :track, track) do
-    where(query, [t], t.track == ^track)
   end
 
   defp apply_filter(query, :parent_id, nil), do: query
