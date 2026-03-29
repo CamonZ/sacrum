@@ -96,8 +96,10 @@ defmodule Sacrum.Accounts.Tasks do
     task = Repo.preload(task, :sections)
 
     with :ok <- validate_section_ownership(task, attrs),
+         :ok <- validate_track_change(task, attrs),
          {:ok, updated_task} <- do_update_task(task, attrs),
          {:ok, updated_task} <- maybe_update_parent(updated_task, attrs),
+         {:ok, updated_task} <- maybe_assign_track_default_workflow(updated_task, attrs),
          :ok <- maybe_update_dependencies(updated_task, attrs) do
       Broadcaster.broadcast({:ok, updated_task}, :task_updated, :project)
     end
@@ -230,7 +232,7 @@ defmodule Sacrum.Accounts.Tasks do
   end
 
   defp maybe_assign_default_workflow({:ok, %Task{workflow_id: nil} = task}, project_id) do
-    case find_default_workflow(project_id) do
+    case find_default_workflow(project_id, task.track) do
       nil ->
         {:ok, task}
 
@@ -244,15 +246,90 @@ defmodule Sacrum.Accounts.Tasks do
 
   defp maybe_assign_default_workflow(result, _project_id), do: result
 
-  defp find_default_workflow(project_id) do
+  @doc """
+  Find the default workflow for a task, considering track if set.
+
+  If task.track is set, looks for a default workflow in that track first.
+  Falls back to project-level default if no track-specific default exists.
+  If task.track is nil, falls back to project-level default.
+  """
+  @spec find_default_workflow(String.t(), String.t() | nil) :: Workflow.t() | nil
+  def find_default_workflow(project_id, track \\ nil) do
     import Ecto.Query
 
-    Repo.one(
-      from(w in Workflow,
-        where: w.project_id == ^project_id and w.is_default == true,
-        limit: 1
-      )
-    )
+    # Try to find track-specific default if track is set
+    track_default =
+      if is_binary(track) and track != "" do
+        Repo.one(
+          from(w in Workflow,
+            where:
+              w.project_id == ^project_id and
+                w.is_default == true and
+                w.track == ^track,
+            limit: 1
+          )
+        )
+      else
+        nil
+      end
+
+    # Fall back to project-level default (where track is nil)
+    case track_default do
+      nil ->
+        Repo.one(
+          from(w in Workflow,
+            where:
+              w.project_id == ^project_id and
+                w.is_default == true and
+                is_nil(w.track),
+            limit: 1
+          )
+        )
+
+      workflow ->
+        workflow
+    end
+  end
+
+  defp validate_track_change(%Task{track: current_track}, attrs) do
+    new_track = Map.get(attrs, "track", Map.get(attrs, :track, :not_set))
+
+    case new_track do
+      :not_set ->
+        :ok
+
+      # Allow setting track for the first time (when current_track is nil)
+      _new_value when is_nil(current_track) ->
+        :ok
+
+      # Reject track changes if track is already set
+      new_value when new_value != current_track and not is_nil(current_track) ->
+        changeset =
+          %Task{}
+          |> Ecto.Changeset.change()
+          |> Ecto.Changeset.add_error(:track, "cannot be changed after initial assignment")
+
+        {:error, changeset}
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp maybe_assign_track_default_workflow(task, attrs) do
+    # Only auto-assign if track is set and workflow is nil
+    with {nil, track} <- {task.workflow_id, task.track},
+         true <- is_binary(track) and track != "",
+         true <- Map.has_key?(attrs, "track") or Map.has_key?(attrs, :track),
+         workflow <- find_default_workflow(task.project_id, track),
+         true <- !is_nil(workflow) do
+      case TaskWorkflows.assign_workflow(task, workflow) do
+        {:ok, updated_task} -> {:ok, updated_task}
+        {:error, _} -> {:ok, task}
+      end
+    else
+      _ -> {:ok, task}
+    end
   end
 
   defp preload_sections({:ok, task}), do: {:ok, Repo.preload(task, :sections, force: true)}

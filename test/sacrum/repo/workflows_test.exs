@@ -61,7 +61,8 @@ defmodule Sacrum.Repo.WorkflowsTest do
           auto_advance: true,
           is_default: true,
           display_order: 1,
-          metadata: %{"color" => "blue"}
+          metadata: %{"color" => "blue"},
+          track: "general"
         })
 
       assert {:ok, %Workflow{} = workflow} = Workflows.insert(project, attrs)
@@ -69,6 +70,7 @@ defmodule Sacrum.Repo.WorkflowsTest do
       assert workflow.is_default == true
       assert workflow.display_order == 1
       assert workflow.metadata == %{"color" => "blue"}
+      assert workflow.track == "general"
     end
   end
 
@@ -145,9 +147,10 @@ defmodule Sacrum.Repo.WorkflowsTest do
       project = create_project()
       {:ok, workflow} = Workflows.insert(project, @valid_attrs)
 
-      assert {:ok, updated} = Workflows.update(workflow, %{auto_advance: true, is_default: true})
+      assert {:ok, updated} = Workflows.update(workflow, %{auto_advance: true, is_default: true, track: "general"})
       assert updated.auto_advance == true
       assert updated.is_default == true
+      assert updated.track == "general"
     end
   end
 

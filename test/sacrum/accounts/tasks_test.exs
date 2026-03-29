@@ -53,7 +53,8 @@ defmodule Sacrum.Accounts.TasksTest do
       {:ok, workflow} =
         Sacrum.Accounts.Workflows.insert(user.id, project.id, %{
           name: "Default WF",
-          is_default: true
+          is_default: true,
+          track: "general"
         })
 
       {:ok, step} =
@@ -61,7 +62,7 @@ defmodule Sacrum.Accounts.TasksTest do
 
       {:ok, workflow} = Sacrum.Repo.Workflows.update(workflow, %{initial_step_id: step.id})
 
-      {:ok, task} = Tasks.insert(user.id, project.id, %{title: "Auto WF Task"})
+      {:ok, task} = Tasks.insert(user.id, project.id, %{title: "Auto WF Task", track: "general"})
 
       assert task.workflow_id == workflow.id
       assert task.current_step_id == step.id
@@ -84,10 +85,11 @@ defmodule Sacrum.Accounts.TasksTest do
       {:ok, _workflow} =
         Sacrum.Accounts.Workflows.insert(user.id, project.id, %{
           name: "Empty Default WF",
-          is_default: true
+          is_default: true,
+          track: "general"
         })
 
-      {:ok, task} = Tasks.insert(user.id, project.id, %{title: "Graceful Task"})
+      {:ok, task} = Tasks.insert(user.id, project.id, %{title: "Graceful Task", track: "general"})
 
       # Should return task without workflow (graceful failure)
       assert is_nil(task.workflow_id)
@@ -189,6 +191,101 @@ defmodule Sacrum.Accounts.TasksTest do
       tasks = Tasks.list_tasks(user.id, conditions: [project_id: project1.id])
       assert length(tasks) == 1
       assert hd(tasks).project_id == project1.id
+    end
+  end
+
+  describe "track-aware default workflow assignment" do
+    test "Task created with track auto-assigns the default workflow for that track" do
+      user = create_user()
+      project = create_project(user)
+
+      # Create track-specific default workflow
+      {:ok, frontend_workflow} =
+        Sacrum.Accounts.Workflows.insert(user.id, project.id, %{
+          name: "Frontend Default",
+          is_default: true,
+          track: "frontend"
+        })
+
+      {:ok, step} =
+        Sacrum.Accounts.WorkflowSteps.insert(frontend_workflow, %{
+          name: "Step 1",
+          step_order: 1
+        })
+
+      {:ok, frontend_workflow} =
+        Sacrum.Repo.Workflows.update(frontend_workflow, %{initial_step_id: step.id})
+
+      # Create task with track
+      {:ok, task} =
+        Tasks.insert(user.id, project.id, %{title: "Frontend Task", track: "frontend"})
+
+      assert task.track == "frontend"
+      assert task.workflow_id == frontend_workflow.id
+    end
+
+    test "Task created with track but no track-specific default does not auto-assign workflow" do
+      user = create_user()
+      project = create_project(user)
+
+      # Create task with track that has no specific default
+      {:ok, task} =
+        Tasks.insert(user.id, project.id, %{title: "Backend Task", track: "backend"})
+
+      assert task.track == "backend"
+      # Should not auto-assign any workflow
+      assert is_nil(task.workflow_id)
+    end
+
+    test "Task assigned a track gets auto-assigned to the track's default workflow" do
+      user = create_user()
+      project = create_project(user)
+
+      # Create track-specific default workflow
+      {:ok, frontend_workflow} =
+        Sacrum.Accounts.Workflows.insert(user.id, project.id, %{
+          name: "Frontend Default",
+          is_default: true,
+          track: "frontend"
+        })
+
+      {:ok, step} =
+        Sacrum.Accounts.WorkflowSteps.insert(frontend_workflow, %{
+          name: "Step 1",
+          step_order: 1
+        })
+
+      {:ok, _frontend_workflow} =
+        Sacrum.Repo.Workflows.update(frontend_workflow, %{initial_step_id: step.id})
+
+      # Create task without track
+      {:ok, task} = Tasks.insert(user.id, project.id, %{title: "Untracked Task"})
+      assert is_nil(task.track)
+      assert is_nil(task.workflow_id)
+
+      # Assign track to task
+      {:ok, updated_task} = Tasks.update(task, %{track: "frontend"})
+
+      assert updated_task.track == "frontend"
+      # Should auto-assign the track's default workflow
+      assert updated_task.workflow_id == frontend_workflow.id
+    end
+
+    test "Changing a task's track after initial assignment is rejected" do
+      user = create_user()
+      project = create_project(user)
+
+      # Create task with track
+      {:ok, task} = Tasks.insert(user.id, project.id, %{title: "Task", track: "frontend"})
+
+      assert task.track == "frontend"
+
+      # Try to change track
+      assert {:error, changeset} = Tasks.update(task, %{track: "backend"})
+
+      assert Enum.any?(changeset.errors, fn {field, {msg, _meta}} ->
+               field == :track and String.contains?(msg, "cannot be changed")
+             end)
     end
   end
 end
