@@ -37,6 +37,7 @@ defmodule Sacrum.Repo.Schemas.Workflow do
     |> validate_required([:name])
     |> validate_length(:name, min: 1, max: 255)
     |> foreign_key_constraint(:project_id)
+    |> unique_constraint(:workflows_unique_default_per_project)
   end
 
   @spec update_changeset(t(), map()) :: Ecto.Changeset.t()
@@ -47,5 +48,6 @@ defmodule Sacrum.Repo.Schemas.Workflow do
     |> foreign_key_constraint(:initial_step_id)
     |> foreign_key_constraint(:on_done_workflow_id)
     |> foreign_key_constraint(:on_reject_workflow_id)
+    |> unique_constraint(:workflows_unique_default_per_project)
   end
 end
