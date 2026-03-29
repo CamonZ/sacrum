@@ -439,7 +439,6 @@ defmodule SacrumWeb.ProjectChannelTest do
       workflow_id: nil,
       current_step_id: nil,
       worktree: nil,
-      track: nil,
       inserted_at: now,
       updated_at: now
     }
@@ -457,7 +456,6 @@ defmodule SacrumWeb.ProjectChannelTest do
       display_order: 1,
       metadata: %{},
       initial_step_id: nil,
-      track: nil,
       kanban_column: nil,
       project_id: project.id,
       inserted_at: now,

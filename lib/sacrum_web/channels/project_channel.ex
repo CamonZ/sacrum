@@ -276,7 +276,6 @@ defmodule SacrumWeb.ProjectChannel do
       workflow_id: task.workflow_id,
       current_step_id: task.current_step_id,
       worktree: task.worktree,
-      track: task.track,
       inserted_at: task.inserted_at,
       updated_at: task.updated_at
     }
@@ -292,7 +291,6 @@ defmodule SacrumWeb.ProjectChannel do
       display_order: workflow.display_order,
       metadata: workflow.metadata,
       initial_step_id: workflow.initial_step_id,
-      track: workflow.track,
       kanban_column: workflow.kanban_column,
       project_id: workflow.project_id,
       inserted_at: workflow.inserted_at,
