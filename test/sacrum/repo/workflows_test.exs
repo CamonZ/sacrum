@@ -70,6 +70,38 @@ defmodule Sacrum.Repo.WorkflowsTest do
       assert workflow.display_order == 1
       assert workflow.metadata == %{"color" => "blue"}
     end
+
+    test "rejects creating second default workflow in same project" do
+      project = create_project()
+
+      attrs_default = Map.merge(@valid_attrs, %{is_default: true})
+      assert {:ok, _first_default} = Workflows.insert(project, attrs_default)
+
+      attrs_second_default =
+        Map.merge(@valid_attrs, %{name: "Second Default", is_default: true})
+
+      assert {:error, changeset} = Workflows.insert(project, attrs_second_default)
+      assert %{workflows_unique_default_per_project: [_error]} = errors_on(changeset)
+    end
+
+    test "allows creating multiple non-default workflows in same project" do
+      project = create_project()
+
+      assert {:ok, _w1} = Workflows.insert(project, @valid_attrs)
+
+      assert {:ok, _w2} =
+               Workflows.insert(project, Map.merge(@valid_attrs, %{name: "Another"}))
+    end
+
+    test "allows creating default workflow in different projects" do
+      user = create_user()
+      {:ok, project1} = Projects.insert(user, %{name: "Project 1"})
+      {:ok, project2} = Projects.insert(user, %{name: "Project 2"})
+
+      attrs_default = Map.merge(@valid_attrs, %{is_default: true})
+      assert {:ok, _w1} = Workflows.insert(project1, attrs_default)
+      assert {:ok, _w2} = Workflows.insert(project2, attrs_default)
+    end
   end
 
   describe "all/1" do
@@ -148,6 +180,36 @@ defmodule Sacrum.Repo.WorkflowsTest do
       assert {:ok, updated} = Workflows.update(workflow, %{auto_advance: true, is_default: true})
       assert updated.auto_advance == true
       assert updated.is_default == true
+    end
+
+    test "rejects updating workflow to default when another default exists" do
+      project = create_project()
+
+      {:ok, _first_workflow} =
+        Workflows.insert(project, Map.merge(@valid_attrs, %{name: "First", is_default: true}))
+
+      {:ok, second_workflow} =
+        Workflows.insert(project, Map.merge(@valid_attrs, %{name: "Second"}))
+
+      assert {:error, changeset} =
+               Workflows.update(second_workflow, %{is_default: true})
+
+      assert %{workflows_unique_default_per_project: [_error]} = errors_on(changeset)
+    end
+
+    test "allows setting workflow as default by unsetting other default first" do
+      project = create_project()
+
+      {:ok, first_workflow} =
+        Workflows.insert(project, Map.merge(@valid_attrs, %{name: "First", is_default: true}))
+
+      {:ok, second_workflow} =
+        Workflows.insert(project, Map.merge(@valid_attrs, %{name: "Second"}))
+
+      assert {:ok, _updated_first} = Workflows.update(first_workflow, %{is_default: false})
+
+      assert {:ok, updated_second} = Workflows.update(second_workflow, %{is_default: true})
+      assert updated_second.is_default == true
     end
   end
 
