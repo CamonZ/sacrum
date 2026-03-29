@@ -380,7 +380,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert result["data"]["updateTask"]["track"] == "frontend"
     end
 
-    test "rejects clearing track field after initial assignment via updateTask", %{conn: conn, user: user, project: project} do
+    test "rejects clearing track field after initial assignment via updateTask", %{conn: _conn, user: user, project: project} do
       {:ok, task} =
         Accounts.Tasks.insert(user.id, project.id, %{title: "Task", track: "backend"})
 

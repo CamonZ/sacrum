@@ -89,19 +89,12 @@ defmodule Sacrum.Repo.Schemas.Workflow do
     is_default = Ecto.Changeset.get_field(changeset, :is_default)
     workflow_id = Ecto.Changeset.get_field(changeset, :id)
 
-    # Only validate if: is_default is true AND updating an existing workflow (id is set)
-    # AND is_default was just changed to true
-    if should_validate_inbound_transitions?(changeset, is_default, workflow_id) do
+    if is_default == true and not is_nil(workflow_id) and
+         Ecto.Changeset.get_change(changeset, :is_default) == true do
       check_inbound_transitions(changeset, workflow_id)
     else
       changeset
     end
-  end
-
-  defp should_validate_inbound_transitions?(changeset, is_default, workflow_id) do
-    is_default == true and not is_nil(workflow_id) and
-      (Ecto.Changeset.get_change(changeset, :is_default) == true or
-         (changeset.data.is_default == false and is_default == true))
   end
 
   defp check_inbound_transitions(changeset, workflow_id) do

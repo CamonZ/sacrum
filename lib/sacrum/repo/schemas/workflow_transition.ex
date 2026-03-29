@@ -45,10 +45,17 @@ defmodule Sacrum.Repo.Schemas.WorkflowTransition do
   end
 
   defp validate_track_match(changeset, from_id, to_id) do
+    import Ecto.Query
     alias Sacrum.Repo.Schemas.Workflow
 
-    from_wf = fetch_workflow(changeset, :from_workflow, from_id)
-    to_wf = fetch_workflow(changeset, :to_workflow, to_id)
+    workflows =
+      Workflow
+      |> where([w], w.id in ^[from_id, to_id])
+      |> Sacrum.Repo.all()
+      |> Map.new(&{&1.id, &1})
+
+    from_wf = Map.get(workflows, from_id)
+    to_wf = Map.get(workflows, to_id)
 
     case {from_wf, to_wf} do
       {%Workflow{track: from_track}, %Workflow{track: to_track}}
@@ -63,18 +70,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowTransition do
         )
 
       _ ->
-        # Can't fetch workflows - skip validation (foreign key will catch errors)
         changeset
-    end
-  end
-
-  defp fetch_workflow(changeset, field, workflow_id) do
-    alias Sacrum.Repo.Schemas.Workflow
-
-    case Ecto.Changeset.get_change(changeset, field) ||
-           Ecto.Changeset.get_field(changeset, field) do
-      %Workflow{} = w -> w
-      _ -> Sacrum.Repo.get(Workflow, workflow_id)
     end
   end
 end

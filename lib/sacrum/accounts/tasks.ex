@@ -251,44 +251,32 @@ defmodule Sacrum.Accounts.Tasks do
 
   If task.track is set, looks for a default workflow in that track first.
   Falls back to project-level default if no track-specific default exists.
-  If task.track is nil, falls back to project-level default.
   """
   @spec find_default_workflow(String.t(), String.t() | nil) :: Workflow.t() | nil
   def find_default_workflow(project_id, track \\ nil) do
     import Ecto.Query
 
-    # Try to find track-specific default if track is set
-    track_default =
+    query =
       if is_binary(track) and track != "" do
-        Repo.one(
-          from(w in Workflow,
-            where:
-              w.project_id == ^project_id and
-                w.is_default == true and
-                w.track == ^track,
-            limit: 1
-          )
+        from(w in Workflow,
+          where:
+            w.project_id == ^project_id and
+              w.is_default == true and
+              (w.track == ^track or is_nil(w.track)),
+          order_by: [asc_nulls_last: w.track],
+          limit: 1
         )
       else
-        nil
+        from(w in Workflow,
+          where:
+            w.project_id == ^project_id and
+              w.is_default == true and
+              is_nil(w.track),
+          limit: 1
+        )
       end
 
-    # Fall back to project-level default (where track is nil)
-    case track_default do
-      nil ->
-        Repo.one(
-          from(w in Workflow,
-            where:
-              w.project_id == ^project_id and
-                w.is_default == true and
-                is_nil(w.track),
-            limit: 1
-          )
-        )
-
-      workflow ->
-        workflow
-    end
+    Repo.one(query)
   end
 
   defp validate_track_change(%Task{track: current_track}, attrs) do
@@ -298,12 +286,10 @@ defmodule Sacrum.Accounts.Tasks do
       :not_set ->
         :ok
 
-      # Allow setting track for the first time (when current_track is nil)
       _new_value when is_nil(current_track) ->
         :ok
 
-      # Reject track changes if track is already set
-      new_value when new_value != current_track and not is_nil(current_track) ->
+      new_value when new_value != current_track ->
         changeset =
           %Task{}
           |> Ecto.Changeset.change()
@@ -317,7 +303,6 @@ defmodule Sacrum.Accounts.Tasks do
   end
 
   defp maybe_assign_track_default_workflow(task, attrs) do
-    # Only auto-assign if track is set and workflow is nil
     with {nil, track} <- {task.workflow_id, task.track},
          true <- is_binary(track) and track != "",
          true <- Map.has_key?(attrs, "track") or Map.has_key?(attrs, :track),
