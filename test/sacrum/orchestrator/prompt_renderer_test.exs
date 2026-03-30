@@ -286,4 +286,449 @@ defmodule Sacrum.Orchestrator.PromptRendererTest do
     end
   end
 
+  describe "build_task_context/1" do
+    test "returns string-keyed map with id, title, description, level, tags" do
+      task = %Sacrum.Repo.Schemas.Task{
+        id: "550e8400-e29b-41d4-a716-446655440000",
+        title: "Fix login bug",
+        description: "Users cannot log in",
+        level: "ticket",
+        tags: ["urgent", "auth"],
+        sections: [],
+        code_refs: []
+      }
+
+      context = PromptRenderer.build_task_context(task)
+
+      assert context["id"] == "550e8400-e29b-41d4-a716-446655440000"
+      assert context["title"] == "Fix login bug"
+      assert context["description"] == "Users cannot log in"
+      assert context["level"] == "ticket"
+      assert context["tags"] == ["urgent", "auth"]
+      assert context["code_refs"] == []
+      # Verify all keys are strings
+      assert Enum.all?(Map.keys(context), &is_binary/1)
+    end
+
+    test "handles nil values in task fields" do
+      task = %Sacrum.Repo.Schemas.Task{
+        id: "550e8400-e29b-41d4-a716-446655440000",
+        title: "Task",
+        description: nil,
+        level: nil,
+        tags: nil,
+        sections: [],
+        code_refs: []
+      }
+
+      context = PromptRenderer.build_task_context(task)
+
+      assert context["title"] == "Task"
+      assert context["description"] == ""
+      assert context["level"] == ""
+      assert context["tags"] == []
+    end
+
+    test "groups sections by type" do
+      task = %Sacrum.Repo.Schemas.Task{
+        id: "550e8400-e29b-41d4-a716-446655440000",
+        title: "Task",
+        description: nil,
+        level: nil,
+        tags: [],
+        sections: [
+          %Sacrum.Repo.Schemas.TaskSection{
+            section_type: "constraint",
+            content: "Must work offline"
+          },
+          %Sacrum.Repo.Schemas.TaskSection{
+            section_type: "constraint",
+            content: "Must support iOS 14+"
+          },
+          %Sacrum.Repo.Schemas.TaskSection{
+            section_type: "goal",
+            content: "Improve performance"
+          }
+        ],
+        code_refs: []
+      }
+
+      context = PromptRenderer.build_task_context(task)
+
+      assert context["constraints"] == ["Must work offline", "Must support iOS 14+"]
+      assert context["goals"] == ["Improve performance"]
+      # Verify all section keys are strings
+      assert Enum.all?(Map.keys(context), &is_binary/1)
+    end
+
+    test "includes code refs with path, line_start, line_end, name, description" do
+      task = %Sacrum.Repo.Schemas.Task{
+        id: "550e8400-e29b-41d4-a716-446655440000",
+        title: "Task",
+        description: nil,
+        level: nil,
+        tags: [],
+        sections: [],
+        code_refs: [
+          %Sacrum.Repo.Schemas.CodeRef{
+            path: "lib/my_app/auth.ex",
+            line_start: 10,
+            line_end: 25,
+            name: "authenticate",
+            description: "Auth function"
+          },
+          %Sacrum.Repo.Schemas.CodeRef{
+            path: "lib/my_app/auth.ex",
+            line_start: 50,
+            line_end: 60,
+            name: nil,
+            description: nil
+          }
+        ]
+      }
+
+      context = PromptRenderer.build_task_context(task)
+
+      assert length(context["code_refs"]) == 2
+      ref1 = Enum.at(context["code_refs"], 0)
+      assert ref1["path"] == "lib/my_app/auth.ex"
+      assert ref1["line_start"] == 10
+      assert ref1["line_end"] == 25
+      assert ref1["name"] == "authenticate"
+      assert ref1["description"] == "Auth function"
+
+      ref2 = Enum.at(context["code_refs"], 1)
+      assert ref2["path"] == "lib/my_app/auth.ex"
+      assert ref2["line_start"] == 50
+      # Verify all nested keys are strings
+      assert Enum.all?(Map.keys(ref1), &is_binary/1)
+    end
+
+    test "normalizes section types to plural forms" do
+      task = %Sacrum.Repo.Schemas.Task{
+        id: "550e8400-e29b-41d4-a716-446655440000",
+        title: "Task",
+        description: nil,
+        level: nil,
+        tags: [],
+        sections: [
+          %Sacrum.Repo.Schemas.TaskSection{
+            section_type: "testing_criterion",
+            content: "Must handle nulls"
+          },
+          %Sacrum.Repo.Schemas.TaskSection{
+            section_type: "anti_pattern",
+            content: "Avoid loops"
+          }
+        ],
+        code_refs: []
+      }
+
+      context = PromptRenderer.build_task_context(task)
+
+      assert context["testing_criteria"] == ["Must handle nulls"]
+      assert context["anti_patterns"] == ["Avoid loops"]
+    end
+  end
+
+  describe "build_execution_context/1" do
+    test "extracts previous output and retry count" do
+      execution_data = %{
+        previous: %{output: "Some output text"},
+        retry_count: 2,
+        duration_ms: 1500
+      }
+
+      context = PromptRenderer.build_execution_context(execution_data)
+
+      assert context["previous_output"] == "Some output text"
+      assert context["retry_count"] == 2
+      assert context["duration_ms"] == 1500
+      # Verify all keys are strings
+      assert Enum.all?(Map.keys(context), &is_binary/1)
+    end
+
+    test "handles missing previous output" do
+      execution_data = %{
+        retry_count: 0
+      }
+
+      context = PromptRenderer.build_execution_context(execution_data)
+
+      assert context["previous_output"] == ""
+      assert context["retry_count"] == 0
+    end
+
+    test "builds history list from executions" do
+      execution_data = %{
+        previous: %{output: "Output"},
+        retry_count: 1,
+        history: [
+          %{step_name: "draft", status: "completed", output: "First output"},
+          %{step_name: "review", status: "pending", duration_ms: 2000}
+        ]
+      }
+
+      context = PromptRenderer.build_execution_context(execution_data)
+
+      assert length(context["history"]) == 2
+      history_1 = Enum.at(context["history"], 0)
+      assert history_1["step_name"] == "draft"
+      assert history_1["status"] == "completed"
+      assert history_1["output"] == "First output"
+
+      history_2 = Enum.at(context["history"], 1)
+      assert history_2["step_name"] == "review"
+      assert history_2["status"] == "pending"
+      assert history_2["duration_ms"] == 2000
+    end
+
+    test "handles nil execution_data gracefully" do
+      context = PromptRenderer.build_execution_context(nil)
+      assert context == %{}
+    end
+
+    test "excludes nil values from context" do
+      execution_data = %{
+        previous: %{output: "Some output"},
+        retry_count: 0
+      }
+
+      context = PromptRenderer.build_execution_context(execution_data)
+
+      # duration_ms should not be present if nil
+      assert !Map.has_key?(context, "duration_ms")
+      assert context["previous_output"] == "Some output"
+    end
+  end
+
+  describe "build_workflow_context/2" do
+    test "extracts workflow name, current step, and step count" do
+      workflow = %Sacrum.Repo.Schemas.Workflow{
+        id: "wf-id",
+        name: "Task Workflow",
+        workflow_steps: [
+          %Sacrum.Repo.Schemas.WorkflowStep{name: "draft"},
+          %Sacrum.Repo.Schemas.WorkflowStep{name: "review"},
+          %Sacrum.Repo.Schemas.WorkflowStep{name: "done"}
+        ]
+      }
+
+      workflow_step = %Sacrum.Repo.Schemas.WorkflowStep{
+        id: "step-id",
+        name: "review",
+        goal: "Review the implementation",
+        workflow: workflow
+      }
+
+      task = %Sacrum.Repo.Schemas.Task{}
+
+      context = PromptRenderer.build_workflow_context(workflow_step, task)
+
+      assert context["name"] == "Task Workflow"
+      assert context["current_step"] == "review"
+      assert context["current_step_goal"] == "Review the implementation"
+      assert context["step_count"] == 3
+      # Verify all keys are strings
+      assert Enum.all?(Map.keys(context), &is_binary/1)
+    end
+
+    test "uses task.workflow if step.workflow is nil" do
+      task = %Sacrum.Repo.Schemas.Task{
+        workflow: %Sacrum.Repo.Schemas.Workflow{
+          id: "wf-id",
+          name: "Task Workflow",
+          workflow_steps: [
+            %Sacrum.Repo.Schemas.WorkflowStep{name: "step1"},
+            %Sacrum.Repo.Schemas.WorkflowStep{name: "step2"}
+          ]
+        }
+      }
+
+      workflow_step = %Sacrum.Repo.Schemas.WorkflowStep{
+        id: "step-id",
+        name: "step1",
+        goal: "First step",
+        workflow: nil
+      }
+
+      context = PromptRenderer.build_workflow_context(workflow_step, task)
+
+      assert context["name"] == "Task Workflow"
+      assert context["step_count"] == 2
+    end
+
+    test "returns empty map when workflow_step is nil" do
+      task = %Sacrum.Repo.Schemas.Task{workflow: nil}
+      context = PromptRenderer.build_workflow_context(nil, task)
+
+      assert context == %{}
+    end
+
+    test "returns empty map when no workflow is available" do
+      workflow_step = %Sacrum.Repo.Schemas.WorkflowStep{
+        id: "step-id",
+        name: "review",
+        goal: "Review",
+        workflow: nil
+      }
+
+      task = %Sacrum.Repo.Schemas.Task{workflow: nil}
+
+      context = PromptRenderer.build_workflow_context(workflow_step, task)
+
+      assert context == %{}
+    end
+
+    test "handles nil step name and goal" do
+      workflow = %Sacrum.Repo.Schemas.Workflow{
+        id: "wf-id",
+        name: "Workflow",
+        workflow_steps: []
+      }
+
+      workflow_step = %Sacrum.Repo.Schemas.WorkflowStep{
+        id: "step-id",
+        name: nil,
+        goal: nil,
+        workflow: workflow
+      }
+
+      task = %Sacrum.Repo.Schemas.Task{}
+
+      context = PromptRenderer.build_workflow_context(workflow_step, task)
+
+      assert context["current_step"] == ""
+      assert context["current_step_goal"] == ""
+    end
+  end
+
+  describe "build_context/3" do
+    test "merges task, execution, and workflow contexts into single map" do
+      task = %Sacrum.Repo.Schemas.Task{
+        id: "task-id",
+        title: "Test Task",
+        description: "A test task",
+        level: "ticket",
+        tags: ["test"],
+        sections: [],
+        code_refs: [],
+        workflow: %Sacrum.Repo.Schemas.Workflow{
+          name: "Default",
+          workflow_steps: []
+        }
+      }
+
+      execution_data = %{
+        previous: %{output: "Previous output"},
+        retry_count: 1,
+        duration_ms: 500
+      }
+
+      workflow_step = %Sacrum.Repo.Schemas.WorkflowStep{
+        name: "draft",
+        goal: "Initial draft",
+        workflow: nil
+      }
+
+      context = PromptRenderer.build_context(task, execution_data, workflow_step)
+
+      # Verify top-level keys
+      assert Map.has_key?(context, "task")
+      assert Map.has_key?(context, "execution")
+      assert Map.has_key?(context, "workflow")
+
+      # Verify task context
+      assert context["task"]["title"] == "Test Task"
+      assert context["task"]["level"] == "ticket"
+
+      # Verify execution context
+      assert context["execution"]["previous_output"] == "Previous output"
+      assert context["execution"]["retry_count"] == 1
+
+      # Verify workflow context
+      assert context["workflow"]["name"] == "Default"
+      assert context["workflow"]["current_step"] == "draft"
+
+      # Verify all keys at every level are strings
+      assert Enum.all?(Map.keys(context), &is_binary/1)
+      assert Enum.all?(Map.keys(context["task"]), &is_binary/1)
+      assert Enum.all?(Map.keys(context["execution"]), &is_binary/1)
+      assert Enum.all?(Map.keys(context["workflow"]), &is_binary/1)
+    end
+
+    test "handles nil workflow_step gracefully" do
+      task = %Sacrum.Repo.Schemas.Task{
+        id: "task-id",
+        title: "Task",
+        description: nil,
+        level: nil,
+        tags: [],
+        sections: [],
+        code_refs: []
+      }
+
+      execution_data = %{retry_count: 0}
+
+      context = PromptRenderer.build_context(task, execution_data, nil)
+
+      assert context["task"]["title"] == "Task"
+      assert context["execution"]["retry_count"] == 0
+      assert context["workflow"] == %{}
+    end
+
+    test "all nested keys are strings for Liquid compatibility" do
+      task = %Sacrum.Repo.Schemas.Task{
+        id: "task-id",
+        title: "Task",
+        description: nil,
+        level: nil,
+        tags: [],
+        sections: [
+          %Sacrum.Repo.Schemas.TaskSection{section_type: "goal", content: "Test goal"}
+        ],
+        code_refs: [
+          %Sacrum.Repo.Schemas.CodeRef{
+            path: "test.ex",
+            line_start: 1,
+            line_end: 5,
+            name: "test_func",
+            description: "Test"
+          }
+        ]
+      }
+
+      execution_data = %{
+        previous: %{output: "output"},
+        history: [%{step_name: "draft", status: "completed"}]
+      }
+
+      workflow_step = %Sacrum.Repo.Schemas.WorkflowStep{
+        name: "draft",
+        goal: "Draft",
+        workflow: %Sacrum.Repo.Schemas.Workflow{
+          name: "WF",
+          workflow_steps: [%{}]
+        }
+      }
+
+      context = PromptRenderer.build_context(task, execution_data, workflow_step)
+
+      # Recursively check all keys are strings
+      assert all_keys_are_strings(context)
+    end
+  end
+
+  defp all_keys_are_strings(map) when is_map(map) do
+    Enum.all?(map, fn {key, value} ->
+      is_binary(key) && all_keys_are_strings(value)
+    end)
+  end
+
+  defp all_keys_are_strings(list) when is_list(list) do
+    Enum.all?(list, &all_keys_are_strings/1)
+  end
+
+  defp all_keys_are_strings(_), do: true
+
 end
