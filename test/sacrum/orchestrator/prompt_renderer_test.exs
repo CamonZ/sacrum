@@ -239,7 +239,9 @@ defmodule Sacrum.Orchestrator.PromptRendererTest do
 
   describe "render/2 - complex combinations" do
     test "for loop with if inside" do
-      template = "{% for item in items %}{% if item.active %}{{ item.name }} {% endif %}{% endfor %}"
+      template =
+        "{% for item in items %}{% if item.active %}{{ item.name }} {% endif %}{% endfor %}"
+
       context = %{
         "items" => [
           %{"name" => "Item1", "active" => true},
@@ -730,5 +732,4 @@ defmodule Sacrum.Orchestrator.PromptRendererTest do
   end
 
   defp all_keys_are_strings(_), do: true
-
 end
