@@ -4,6 +4,9 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
   """
 
   use Absinthe.Schema.Notation
+
+  require Logger
+
   import Absinthe.Resolution.Helpers
 
   alias Sacrum.Accounts
@@ -146,8 +149,6 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
       arg(:duration_ms, :integer)
 
       resolve(fn %{id: id} = args, %{context: %{current_user: user}} ->
-        require Logger
-
         Logger.info(
           "[updateStepExecution] Mutation called: exec=#{id} attrs=#{inspect(Map.keys(Map.drop(args, [:id])))}"
         )
@@ -188,7 +189,8 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
 
         with {:ok, task} <-
                Accounts.Tasks.get_by(user.id,
-                 conditions: [id: task_id]
+                 conditions: [id: task_id],
+                 preloads: [:sections, :code_refs, :workflow, :current_step]
                ),
              :ok <- check_daemon_presence(task.project_id) do
           ExecutionDispatcher.create_and_dispatch(user.id, task, step_id)
@@ -239,7 +241,6 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
       arg(:task_id, non_null(:uuid4))
 
       resolve(fn %{task_id: task_id}, %{context: %{current_user: user}} ->
-        require Logger
         Logger.info("[orchestrateTask] Mutation called for task_id=#{task_id} user=#{user.id}")
 
         with {:ok, task} <- Accounts.Tasks.get_by(user.id, conditions: [id: task_id]),
