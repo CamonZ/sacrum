@@ -23,7 +23,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   require Logger
 
   alias Sacrum.Accounts
-  alias Sacrum.Orchestrator.{ExecutionDispatcher, ExecutionPool, Scheduler}
+  alias Sacrum.Orchestrator.{ExecutionDispatcher, ExecutionPool, PromptRenderer, Scheduler}
   alias Sacrum.Repo
   alias Sacrum.Repo.TaskWorkflows
 
@@ -514,7 +514,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   defp reload_task(task_id) do
     case Repo.get(Sacrum.Repo.Schemas.Task, task_id) do
       nil -> {:error, :task_not_found}
-      task -> {:ok, task}
+      task ->
+        {:ok, PromptRenderer.preload_for_rendering(task)}
     end
   end
 
