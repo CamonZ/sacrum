@@ -138,8 +138,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
     test "renders {% for constraint in task.constraints %} from task sections", ctx do
       step =
         create_step(ctx.user, ctx.workflow, %{
-          "prompt" =>
-            "Constraints:{% for c in task.constraints %}\n- {{ c }}{% endfor %}"
+          "prompt" => "Constraints:{% for c in task.constraints %}\n- {{ c }}{% endfor %}"
         })
 
       task = create_task(ctx.user, ctx.project)
@@ -260,8 +259,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
     test "renders task context alongside output in eval prompt", ctx do
       step =
         create_step(ctx.user, ctx.workflow, %{
-          "eval_prompt" =>
-            "Task: {{ task.title }}\nOutput: {{ execution.previous_output }}"
+          "eval_prompt" => "Task: {{ task.title }}\nOutput: {{ execution.previous_output }}"
         })
 
       task = create_task(ctx.user, ctx.project)

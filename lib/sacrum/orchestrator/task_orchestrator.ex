@@ -513,7 +513,9 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
 
   defp reload_task(task_id) do
     case Repo.get(Sacrum.Repo.Schemas.Task, task_id) do
-      nil -> {:error, :task_not_found}
+      nil ->
+        {:error, :task_not_found}
+
       task ->
         {:ok, PromptRenderer.preload_for_rendering(task)}
     end

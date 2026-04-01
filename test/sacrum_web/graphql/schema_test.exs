@@ -259,7 +259,6 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["worktree"] == "/path/to/worktree"
     end
 
-
     test "creates a task with parent_id", %{conn: conn, user: user, project: project} do
       # Create parent task first
       {:ok, parent_task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Parent Task"})
@@ -322,7 +321,6 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
       assert result["data"]["updateTask"]["worktree"] == "/updated/worktree/path"
     end
-
 
     test "sets parent_id via updateTask", %{conn: conn, user: user, project: project} do
       {:ok, parent} = Accounts.Tasks.insert(user.id, project.id, %{title: "Parent"})
@@ -543,7 +541,6 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert result["data"]["updateWorkflow"]["name"] == "Updated"
       assert result["data"]["updateWorkflow"]["description"] == "New desc"
     end
-
 
     test "deletes a workflow", %{conn: conn, user: user, project: project} do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "To Delete"})
