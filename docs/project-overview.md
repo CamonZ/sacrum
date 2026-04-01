@@ -12,6 +12,7 @@ mix test                           # Run all tests (auto-creates/migrates DB)
 mix test test/path/to_test.exs     # Run specific test file
 mix test --failed                  # Re-run previously failed tests
 mix precommit                      # Pre-commit checks: compile (warnings-as-errors), deps check, format, test
+mix muex                           # Run mutation testing on business logic (slow, run on-demand)
 mix ecto.gen.migration name        # Generate a new migration (always use this, never create manually)
 mix ecto.migrate                   # Run pending migrations
 mix ecto.reset                     # Drop, recreate, migrate, and seed DB

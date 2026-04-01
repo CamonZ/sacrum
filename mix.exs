@@ -74,6 +74,7 @@ defmodule Sacrum.MixProject do
       {:dataloader, "~> 2.0"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      {:muex, "~> 0.2.0", only: [:dev, :test], runtime: false},
       {:tidewave, "~> 0.5", only: :dev}
     ]
   end
@@ -103,7 +104,8 @@ defmodule Sacrum.MixProject do
         "format",
         "credo --strict",
         "test"
-      ]
+      ],
+      muex: ["muex --files lib/sacrum"]
     ]
   end
 end
