@@ -190,6 +190,7 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
 
       assert length(executions) == 2
       assert List.last(executions).step_name == "in_progress"
+      assert List.last(executions).status == "entered"
     end
 
     test "returns error when no transition exists between steps" do
@@ -341,6 +342,13 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
       {:ok, final} = TaskWorkflows.complete_current_step(started3)
 
       assert not is_nil(final.completed_at)
+
+      executions =
+        StepExecutions.all(conditions: [task_id: task.id], order_by: [asc: :inserted_at])
+
+      latest = List.last(executions)
+      assert latest.status == "completed"
+      assert latest.step_name == "done"
     end
 
     test "returns error when execution is not in started status" do

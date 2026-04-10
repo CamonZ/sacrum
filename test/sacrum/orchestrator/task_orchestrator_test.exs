@@ -175,7 +175,9 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
     # Simulate what the daemon does: update status to "completed" with output
     {:ok, updated} =
-      Accounts.StepExecutions.update(execution, %{status: "completed", output: output})
+      execution
+      |> StepExecution.update_changeset(%{status: "completed", output: output})
+      |> Repo.update()
 
     # The update broadcasts via Broadcaster -> ProjectChannel, but the orchestrator
     # subscribes via Phoenix.PubSub. Broadcast directly to ensure delivery.
@@ -192,7 +194,9 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     execution = get_latest_entered_execution(task_id)
 
     {:ok, updated} =
-      Accounts.StepExecutions.update(execution, %{status: "failed", output: "daemon error"})
+      execution
+      |> StepExecution.update_changeset(%{status: "failed", output: "daemon error"})
+      |> Repo.update()
 
     SacrumWeb.Endpoint.broadcast(
       "project:#{project_id}",
@@ -239,6 +243,11 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
       task = reload_task(task)
       assert task.completed_at != nil
+
+      executions = get_all_executions(task.id)
+      assert length(executions) == 1
+      assert hd(executions).status == "completed"
+      assert hd(executions).step_name == "step_1"
     end
   end
 
@@ -337,8 +346,13 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       simulate_daemon_failure(task.id, project.id)
       wait_for_exit(pid)
 
-      # Task should not be marked completed
-      assert reload_task(task).completed_at == nil
+      task = reload_task(task)
+      assert task.completed_at == nil
+
+      executions = get_all_executions(task.id)
+      latest = List.last(executions)
+      assert latest.status == "failed"
+      assert latest.step_name == "step_1"
     end
   end
 
