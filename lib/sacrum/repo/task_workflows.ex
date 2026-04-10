@@ -217,11 +217,8 @@ defmodule Sacrum.Repo.TaskWorkflows do
   @doc """
   Completes the current step by updating the latest StepExecution from "started" to "completed".
 
-  If the step is final:
-  - If the workflow has `on_done_workflow_id`, chains to that workflow via `assign_workflow/2`
-  - Otherwise, sets `completed_at` on the task
-
-  If the step is not final, just completes the execution (caller uses `move_to_step` to advance).
+  If the step is final, sets `completed_at` on the task. If the step is not final, just completes
+  the execution (caller uses `move_to_step` to advance).
   """
   @spec complete_current_step(Task.t()) ::
           {:ok, Task.t()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
@@ -229,7 +226,7 @@ defmodule Sacrum.Repo.TaskWorkflows do
     with {:ok, execution, step} <- get_latest_step_execution(task),
          :ok <- validate_execution_status(execution, "started", :not_in_started_status) do
       if step.is_final do
-        complete_final_step(task, execution, step)
+        complete_final_step(task, execution)
       else
         complete_non_final_step(task, execution)
       end
@@ -360,28 +357,16 @@ defmodule Sacrum.Repo.TaskWorkflows do
 
   defp maybe_set_started_at(multi, _task), do: multi
 
-  defp complete_final_step(task, execution, _step) do
-    workflow = Repo.preload(task, :workflow).workflow
-
+  defp complete_final_step(task, execution) do
     Multi.new()
     |> Multi.update(:execution, StepExecution.update_changeset(execution, %{status: "completed"}))
-    |> maybe_complete_or_chain(task, workflow)
+    |> Multi.update(:task, Ecto.Changeset.change(task, %{completed_at: DateTime.utc_now()}))
     |> Repo.transaction()
     |> case do
       {:ok, %{task: task, execution: execution}} ->
         broadcast_task_changed(task)
         broadcast_execution_changed(execution)
         {:ok, task}
-
-      {:ok, %{execution: execution}} ->
-        broadcast_execution_changed(execution)
-        # on_done_workflow chain case — assign_workflow handles its own transaction
-        task = Repo.get!(Task, task.id)
-
-        case chain_to_workflow(task, workflow) do
-          {:ok, task} -> {:ok, task}
-          {:error, reason} -> {:error, reason}
-        end
 
       {:error, _op, changeset, _changes} ->
         {:error, changeset}
@@ -401,23 +386,6 @@ defmodule Sacrum.Repo.TaskWorkflows do
 
       {:error, _op, changeset, _changes} ->
         {:error, changeset}
-    end
-  end
-
-  defp maybe_complete_or_chain(multi, task, %Workflow{on_done_workflow_id: nil}) do
-    Multi.update(multi, :task, Ecto.Changeset.change(task, %{completed_at: DateTime.utc_now()}))
-  end
-
-  defp maybe_complete_or_chain(multi, _task, %Workflow{on_done_workflow_id: _id}) do
-    # Don't set completed_at — will chain to next workflow after transaction
-    multi
-  end
-
-  defp chain_to_workflow(task, %Workflow{on_done_workflow_id: wf_id})
-       when not is_nil(wf_id) do
-    case Repo.get(Workflow, wf_id) do
-      nil -> {:error, :on_done_workflow_not_found}
-      next_workflow -> assign_workflow(task, next_workflow)
     end
   end
 

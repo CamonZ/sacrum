@@ -17,8 +17,6 @@ defmodule Sacrum.Repo.Schemas.Workflow do
     field :kanban_column, :string
 
     belongs_to :project, Sacrum.Repo.Schemas.Project
-    belongs_to :on_done_workflow, Sacrum.Repo.Schemas.Workflow
-    belongs_to :on_reject_workflow, Sacrum.Repo.Schemas.Workflow
     belongs_to :user, Sacrum.Repo.Schemas.User
     has_many :workflow_steps, Sacrum.Repo.Schemas.WorkflowStep
     has_many :transitions, Sacrum.Repo.Schemas.WorkflowTransition, foreign_key: :from_workflow_id
@@ -27,7 +25,7 @@ defmodule Sacrum.Repo.Schemas.Workflow do
   end
 
   @create_fields ~w(name description metadata auto_advance display_order is_default kanban_column user_id)a
-  @update_fields ~w(name description metadata auto_advance display_order is_default initial_step_id on_done_workflow_id on_reject_workflow_id kanban_column)a
+  @update_fields ~w(name description metadata auto_advance display_order is_default initial_step_id kanban_column)a
 
   @spec create_changeset(t(), map()) :: Ecto.Changeset.t()
   def create_changeset(workflow, attrs) do
@@ -36,7 +34,7 @@ defmodule Sacrum.Repo.Schemas.Workflow do
     |> validate_required([:name])
     |> validate_length(:name, min: 1, max: 255)
     |> foreign_key_constraint(:project_id)
-    |> unique_constraint(:workflows_unique_default_per_project)
+    |> unique_constraint(:is_default, name: :workflows_unique_default_per_project)
   end
 
   @spec update_changeset(t(), map()) :: Ecto.Changeset.t()
@@ -45,8 +43,6 @@ defmodule Sacrum.Repo.Schemas.Workflow do
     |> cast(attrs, @update_fields)
     |> validate_length(:name, min: 1, max: 255)
     |> foreign_key_constraint(:initial_step_id)
-    |> foreign_key_constraint(:on_done_workflow_id)
-    |> foreign_key_constraint(:on_reject_workflow_id)
-    |> unique_constraint(:workflows_unique_default_per_project)
+    |> unique_constraint(:is_default, name: :workflows_unique_default_per_project)
   end
 end

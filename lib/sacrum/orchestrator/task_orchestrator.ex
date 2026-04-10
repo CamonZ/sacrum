@@ -8,7 +8,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   - :executing - Create StepExecution, subscribe to PubSub, wait for daemon completion
   - :evaluating - When step has eval_prompt and multiple transitions, run eval to determine which transition to take
   - :transitioning - Select next step, advance task, release pool slot
-  - :completing - Handle workflow chaining or mark task complete
+  - :completing - Mark task complete
   - :completed - Notify scheduler, stop
   - :failed - Release pool slot, stop
 
@@ -277,10 +277,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     Logger.info("[TaskOrchestrator:#{task_id}] :completing :run")
 
     case handle_completion(data) do
-      {:ok, :chaining, new_data} ->
-        Logger.info("[TaskOrchestrator:#{task_id}] Chaining to next workflow")
-        {:next_state, :initializing, new_data}
-
       {:ok, :completed, new_data} ->
         Logger.info("[TaskOrchestrator:#{task_id}] Workflow complete, -> :completed")
         {:next_state, :completed, new_data}
@@ -494,7 +490,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   defp load_workflow_and_graph(user_id, task) do
     case Accounts.Workflows.get_by(user_id,
            conditions: [id: task.workflow_id],
-           preloads: [:on_done_workflow, workflow_steps: :transitions]
+           preloads: [workflow_steps: :transitions]
          ) do
       {:ok, workflow} ->
         steps = Map.new(workflow.workflow_steps, &{&1.id, &1})
@@ -546,42 +542,15 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   end
 
   defp handle_completion(data) do
-    case data.workflow.on_done_workflow do
-      nil ->
-        changeset = Ecto.Changeset.change(data.task, %{completed_at: DateTime.utc_now()})
+    changeset = Ecto.Changeset.change(data.task, %{completed_at: DateTime.utc_now()})
 
-        case Repo.update(changeset) do
-          {:ok, updated_task} ->
-            Logger.info("[TaskOrchestrator:#{data.task.id}] Set completed_at")
-            {:ok, :completed, %{data | task: updated_task}}
+    case Repo.update(changeset) do
+      {:ok, updated_task} ->
+        Logger.info("[TaskOrchestrator:#{data.task.id}] Set completed_at")
+        {:ok, :completed, %{data | task: updated_task}}
 
-          {:error, reason} ->
-            {:error, reason}
-        end
-
-      next_workflow ->
-        case TaskWorkflows.assign_workflow(data.task, next_workflow) do
-          {:ok, updated_task} ->
-            Logger.info(
-              "[TaskOrchestrator:#{data.task.id}] Chained to workflow #{next_workflow.id}"
-            )
-
-            new_data = %{
-              data
-              | task: updated_task,
-                workflow: nil,
-                steps: %{},
-                transitions: %{},
-                current_execution_id: nil,
-                current_execution_output: nil,
-                eval_selected_step_id: nil
-            }
-
-            {:ok, :chaining, new_data}
-
-          {:error, reason} ->
-            {:error, reason}
-        end
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 end

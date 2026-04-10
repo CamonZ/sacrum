@@ -190,6 +190,7 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
 
       assert length(executions) == 2
       assert List.last(executions).step_name == "in_progress"
+      assert List.last(executions).status == "entered"
     end
 
     test "returns error when no transition exists between steps" do
@@ -341,35 +342,13 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
       {:ok, final} = TaskWorkflows.complete_current_step(started3)
 
       assert not is_nil(final.completed_at)
-    end
 
-    test "chains to on_done_workflow when present" do
-      user = create_user()
-      project = create_project(user)
+      executions =
+        StepExecutions.all(conditions: [task_id: task.id], order_by: [asc: :inserted_at])
 
-      # Create first workflow with a single final step
-      workflow1 = create_workflow(project)
-      step1 = create_step(workflow1, %{name: "only_step", step_order: 1, is_final: true})
-      {:ok, workflow1} = Sacrum.Repo.Workflows.update(workflow1, %{initial_step_id: step1.id})
-
-      # Create second workflow
-      workflow2 = create_workflow(project)
-      step2 = create_step(workflow2, %{name: "next_step", step_order: 1})
-      {:ok, workflow2} = Sacrum.Repo.Workflows.update(workflow2, %{initial_step_id: step2.id})
-
-      # Set on_done_workflow
-      {:ok, workflow1} =
-        Sacrum.Repo.Workflows.update(workflow1, %{on_done_workflow_id: workflow2.id})
-
-      task = create_task(project)
-      {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow1)
-      {:ok, started} = TaskWorkflows.start_current_step(assigned)
-
-      {:ok, chained} = TaskWorkflows.complete_current_step(started)
-
-      assert chained.workflow_id == workflow2.id
-      assert chained.current_step_id == step2.id
-      assert is_nil(chained.completed_at)
+      latest = List.last(executions)
+      assert latest.status == "completed"
+      assert latest.step_name == "done"
     end
 
     test "returns error when execution is not in started status" do
