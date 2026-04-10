@@ -81,7 +81,7 @@ defmodule Sacrum.Repo.WorkflowsTest do
         Map.merge(@valid_attrs, %{name: "Second Default", is_default: true})
 
       assert {:error, changeset} = Workflows.insert(project, attrs_second_default)
-      assert %{workflows_unique_default_per_project: [_error]} = errors_on(changeset)
+      assert %{is_default: [_error]} = errors_on(changeset)
     end
 
     test "allows creating multiple non-default workflows in same project" do
@@ -194,7 +194,7 @@ defmodule Sacrum.Repo.WorkflowsTest do
       assert {:error, changeset} =
                Workflows.update(second_workflow, %{is_default: true})
 
-      assert %{workflows_unique_default_per_project: [_error]} = errors_on(changeset)
+      assert %{is_default: [_error]} = errors_on(changeset)
     end
 
     test "allows setting workflow as default by unsetting other default first" do
