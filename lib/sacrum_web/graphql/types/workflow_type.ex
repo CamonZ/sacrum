@@ -36,12 +36,6 @@ defmodule SacrumWeb.Graphql.Types.WorkflowType do
       resolve(dataloader(Sacrum.Accounts.WorkflowTransitions))
     end
 
-    field :on_done_workflow_id, :id
-
-    field :on_done_workflow, :workflow do
-      resolve(dataloader(Sacrum.Accounts.Workflows))
-    end
-
     field :on_reject_workflow_id, :id
 
     field :on_reject_workflow, :workflow do
@@ -103,7 +97,6 @@ defmodule SacrumWeb.Graphql.Types.WorkflowType do
       arg(:display_order, :integer)
       arg(:is_default, :boolean)
       arg(:initial_step_id, :uuid4)
-      arg(:on_done_workflow_id, :uuid4)
       arg(:on_reject_workflow_id, :uuid4)
       arg(:kanban_column, :string)
 
