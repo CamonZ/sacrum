@@ -226,7 +226,7 @@ defmodule Sacrum.Repo.TaskWorkflows do
     with {:ok, execution, step} <- get_latest_step_execution(task),
          :ok <- validate_execution_status(execution, "started", :not_in_started_status) do
       if step.is_final do
-        complete_final_step(task, execution, step)
+        complete_final_step(task, execution)
       else
         complete_non_final_step(task, execution)
       end
@@ -357,7 +357,7 @@ defmodule Sacrum.Repo.TaskWorkflows do
 
   defp maybe_set_started_at(multi, _task), do: multi
 
-  defp complete_final_step(task, execution, _step) do
+  defp complete_final_step(task, execution) do
     Multi.new()
     |> Multi.update(:execution, StepExecution.update_changeset(execution, %{status: "completed"}))
     |> Multi.update(:task, Ecto.Changeset.change(task, %{completed_at: DateTime.utc_now()}))

@@ -8,7 +8,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   - :executing - Create StepExecution, subscribe to PubSub, wait for daemon completion
   - :evaluating - When step has eval_prompt and multiple transitions, run eval to determine which transition to take
   - :transitioning - Select next step, advance task, release pool slot
-  - :completing - Handle workflow chaining or mark task complete
+  - :completing - Mark task complete
   - :completed - Notify scheduler, stop
   - :failed - Release pool slot, stop
 

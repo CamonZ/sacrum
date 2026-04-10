@@ -93,7 +93,7 @@ The API is exposed via **GraphQL** at `/graphql` (GraphiQL playground available 
 | Mutation | Arguments | Returns |
 |----------|-----------|---------|
 | `createWorkflow` | `project_id!`, `name!`, `description`, `metadata`, `auto_advance`, `display_order`, `is_default` | `:workflow` |
-| `updateWorkflow` | `id!`, `name`, `description`, `metadata`, `auto_advance`, `display_order`, `is_default`, `initial_step_id`, `on_reject_workflow_id` | `:workflow` |
+| `updateWorkflow` | `id!`, `name`, `description`, `metadata`, `auto_advance`, `display_order`, `is_default`, `initial_step_id` | `:workflow` |
 | `deleteWorkflow` | `id!` | `:workflow` |
 | `syncWorkflowTransitions` | `id!`, `transitions!` (list of `WorkflowTransitionInput`) | `:workflow` |
 
