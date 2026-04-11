@@ -16,7 +16,6 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     field :step_order, :integer
     field :step_type, :string, default: "execute"
     field :prompt, :string
-    field :eval_prompt, :string
 
     belongs_to :workflow, Sacrum.Repo.Schemas.Workflow
     belongs_to :project, Sacrum.Repo.Schemas.Project
@@ -28,8 +27,8 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
   end
 
   @step_types ~w(execute evaluate route)
-  @create_fields ~w(name goal agents skills agent_config is_final step_order step_type prompt eval_prompt)a
-  @update_fields ~w(name goal agents skills agent_config is_final step_order step_type prompt eval_prompt)a
+  @create_fields ~w(name goal agents skills agent_config is_final step_order step_type prompt)a
+  @update_fields ~w(name goal agents skills agent_config is_final step_order step_type prompt)a
 
   @spec create_changeset(t(), map()) :: Ecto.Changeset.t()
   def create_changeset(step, attrs) do

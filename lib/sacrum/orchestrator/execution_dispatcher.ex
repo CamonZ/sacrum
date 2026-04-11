@@ -64,31 +64,6 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
     end
   end
 
-  @doc """
-  Creates and dispatches an eval execution to determine which transition to take.
-
-  Uses the step's eval_prompt instead of the normal prompt. The output from the
-  previous execution is included in the context map under output.* keys instead of
-  string replacement. The StepExecution is created with step_name "eval:{step_name}"
-  to distinguish it from normal executions.
-
-  Returns:
-    - {:ok, execution} on success
-    - {:error, reason} on failure
-  """
-  @spec create_and_dispatch_eval(String.t(), struct(), String.t(), String.t() | nil) ::
-          {:ok, StepExecution.t()} | {:error, term()}
-  def create_and_dispatch_eval(user_id, task, step_id, previous_output) do
-    with {:ok, step} <- fetch_step(user_id, step_id),
-         {:ok, execution} <- insert_eval_execution(user_id, task, step) do
-      execution_data = %{previous: %{output: previous_output}}
-      context = PromptRenderer.build_context(task, execution_data, step)
-      {:ok, rendered} = PromptRenderer.render(step.eval_prompt, context)
-
-      broadcast_and_return(execution, step, task, rendered)
-    end
-  end
-
   defp broadcast_and_return(execution, step, task, rendered_prompt) do
     payload = %{execution: execution, step: step, task: task, rendered_prompt: rendered_prompt}
 
@@ -122,17 +97,5 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
       nil -> {:error, :no_entered_execution}
       execution -> {:ok, execution}
     end
-  end
-
-  defp insert_eval_execution(user_id, task, step) do
-    attrs = %{
-      task_id: task.id,
-      workflow_id: step.workflow_id,
-      step_name: "eval:#{step.name}",
-      status: "pending",
-      project_id: task.project_id
-    }
-
-    Accounts.StepExecutions.insert(user_id, attrs)
   end
 end

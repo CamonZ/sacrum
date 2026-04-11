@@ -6,7 +6,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   - :initializing - Load workflow graph from DB, build steps/transitions maps
   - :awaiting_execution - Request pool slot, wait for grant
   - :executing - Create StepExecution, subscribe to PubSub, wait for daemon completion
-  - :evaluating - When step has eval_prompt and multiple transitions, run eval to determine which transition to take
   - :transitioning - Select next step, advance task, release pool slot
   - :completing - Mark task complete
   - :completed - Notify scheduler, stop
@@ -72,8 +71,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
           steps: %{},
           transitions: %{},
           current_execution_id: nil,
-          current_execution_output: nil,
-          eval_selected_step_id: nil,
           slot_id: nil,
           subscribed: false
         }
@@ -86,7 +83,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   # ===== ENTER CALLBACKS =====
   # Enter callbacks log the transition and schedule :state_timeout for states
   # that need to do work immediately. States that wait for external events
-  # (:executing, :evaluating) do setup in enter and then wait.
+  # (:executing) do setup in enter and then wait.
 
   @impl :gen_statem
   def handle_event(:enter, prev_state, state, data)
@@ -129,33 +126,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     end
   end
 
-  def handle_event(:enter, prev_state, :evaluating, data) do
-    task_id = data.task.id
-    Logger.info("[TaskOrchestrator:#{task_id}] enter #{prev_state} -> :evaluating")
-
-    with {:ok, current_step} <- get_current_step(data),
-         {:ok, evaluation_execution} <-
-           ExecutionDispatcher.create_and_dispatch_eval(
-             data.user_id,
-             data.task,
-             current_step.id,
-             data.current_execution_output
-           ) do
-      Logger.info(
-        "[TaskOrchestrator:#{task_id}] Created eval execution #{evaluation_execution.id}, waiting for daemon"
-      )
-
-      {:keep_state, %{data | current_execution_id: evaluation_execution.id}}
-    else
-      {:error, reason} ->
-        Logger.error(
-          "[TaskOrchestrator:#{task_id}] Failed to dispatch eval execution: #{inspect(reason)}"
-        )
-
-        {:keep_state, data, [{:state_timeout, 0, :fail}]}
-    end
-  end
-
   def handle_event(:enter, prev_state, :completed, data) do
     task_id = data.task.id
 
@@ -184,9 +154,9 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   # ===== STATE TIMEOUT HANDLERS =====
   # These do the actual work and can transition states.
 
-  # :fail timeout — used by :executing and :evaluating enter callbacks when setup fails
-  def handle_event(:state_timeout, :fail, state, data) when state in [:executing, :evaluating] do
-    Logger.error("[TaskOrchestrator:#{data.task.id}] Setup failed in #{state}, -> :failed")
+  # :fail timeout — used by :executing enter callbacks when setup fails
+  def handle_event(:state_timeout, :fail, :executing, data) do
+    Logger.error("[TaskOrchestrator:#{data.task.id}] Setup failed in :executing, -> :failed")
     {:next_state, :failed, data}
   end
 
@@ -240,35 +210,25 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   def handle_event(:state_timeout, :run, :transitioning, data) do
     task_id = data.task.id
 
-    Logger.info(
-      "[TaskOrchestrator:#{task_id}] :transitioning :run - eval_selected=#{inspect(data.eval_selected_step_id)}"
-    )
+    Logger.info("[TaskOrchestrator:#{task_id}] :transitioning :run")
 
-    next_step_id_result =
-      if data.eval_selected_step_id do
-        {:ok, data.eval_selected_step_id}
-      else
-        with {:ok, current_step} <- get_current_step(data),
-             next_transitions <- get_outgoing_transitions(data, current_step.id) do
-          select_single_transition(next_transitions)
-        end
-      end
-
-    with {:ok, next_step_id} <- next_step_id_result,
+    with {:ok, current_step} <- get_current_step(data),
+         next_transitions <- get_outgoing_transitions(data, current_step.id),
+         {:ok, next_step_id} <- select_single_transition(next_transitions),
          {:ok, updated_task} <- TaskWorkflows.advance_to_step(data.task, next_step_id) do
       ExecutionPool.release_slot(data.slot_id)
-      new_data = %{data | task: updated_task, slot_id: nil, eval_selected_step_id: nil}
+      new_data = %{data | task: updated_task, slot_id: nil}
       determine_next_state(next_step_id, new_data)
     else
       {:error, :no_outgoing_transitions} ->
         Logger.info("[TaskOrchestrator:#{task_id}] No outgoing transitions, treating as final")
         ExecutionPool.release_slot(data.slot_id)
-        {:next_state, :completing, %{data | slot_id: nil, eval_selected_step_id: nil}}
+        {:next_state, :completing, %{data | slot_id: nil}}
 
       {:error, reason} ->
         Logger.error("[TaskOrchestrator:#{task_id}] Error in transitioning: #{inspect(reason)}")
         ExecutionPool.release_slot(data.slot_id)
-        {:next_state, :failed, %{data | slot_id: nil, eval_selected_step_id: nil}}
+        {:next_state, :failed, %{data | slot_id: nil}}
     end
   end
 
@@ -296,13 +256,13 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     case message do
       %Phoenix.Socket.Broadcast{
         event: "step_execution_status_changed",
-        payload: %{id: execution_id, status: status, output: output}
+        payload: %{id: execution_id, status: status}
       } ->
         Logger.info(
           "[TaskOrchestrator:#{data.task.id}] PubSub step_execution_status_changed: exec=#{execution_id} status=#{status}"
         )
 
-        handle_execution_status_changed(execution_id, status, output, data)
+        handle_execution_status_changed(execution_id, status, data)
 
       %Phoenix.Socket.Broadcast{event: event} ->
         Logger.debug(
@@ -316,24 +276,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
           "[TaskOrchestrator:#{data.task.id}] Ignoring :info message in :executing: #{inspect(other)}"
         )
 
-        :keep_state_and_data
-    end
-  end
-
-  def handle_event(:info, message, :evaluating, data) do
-    case message do
-      %Phoenix.Socket.Broadcast{
-        event: "step_execution_status_changed",
-        payload: %{id: execution_id, status: status, transition_result: transition_result}
-      } ->
-        Logger.info(
-          "[TaskOrchestrator:#{data.task.id}] PubSub step_execution_status_changed in :evaluating: exec=#{execution_id} status=#{status}"
-        )
-
-        handle_eval_completion(execution_id, status, transition_result, data)
-
-      _ ->
-        Logger.debug("[TaskOrchestrator:#{data.task.id}] Ignoring message in :evaluating")
         :keep_state_and_data
     end
   end
@@ -368,7 +310,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     end
   end
 
-  defp handle_execution_status_changed(execution_id, status, output, data) do
+  defp handle_execution_status_changed(execution_id, status, data) do
     task_id = data.task.id
 
     if execution_id != data.current_execution_id do
@@ -381,8 +323,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
       case status do
         "completed" ->
           Logger.info("[TaskOrchestrator:#{task_id}] Execution #{execution_id} completed")
-          new_data = %{data | current_execution_output: output}
-          handle_execution_completion(new_data)
+          handle_execution_completion(data)
 
         "failed" ->
           Logger.error("[TaskOrchestrator:#{task_id}] Execution #{execution_id} failed")
@@ -398,93 +339,9 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   defp handle_execution_completion(data) do
     task_id = data.task.id
 
-    case get_current_step(data) do
-      {:ok, current_step} ->
-        if current_step.eval_prompt && has_multiple_transitions?(data, current_step.id) do
-          Logger.info(
-            "[TaskOrchestrator:#{task_id}] Step #{current_step.name} has eval_prompt, -> :evaluating"
-          )
+    Logger.info("[TaskOrchestrator:#{task_id}] Execution completed, -> :transitioning")
 
-          {:next_state, :evaluating, data}
-        else
-          Logger.info(
-            "[TaskOrchestrator:#{task_id}] Step #{current_step.name} completed, -> :transitioning"
-          )
-
-          {:next_state, :transitioning, data}
-        end
-
-      {:error, reason} ->
-        Logger.warning(
-          "[TaskOrchestrator:#{task_id}] Could not get current step (#{inspect(reason)}), -> :transitioning"
-        )
-
-        {:next_state, :transitioning, data}
-    end
-  end
-
-  defp has_multiple_transitions?(data, step_id) do
-    match?([_, _ | _], Map.get(data.transitions, step_id, []))
-  end
-
-  defp handle_eval_completion(execution_id, status, transition_result, data) do
-    task_id = data.task.id
-
-    if execution_id != data.current_execution_id do
-      Logger.debug(
-        "[TaskOrchestrator:#{task_id}] Ignoring eval status for exec=#{execution_id} (current=#{data.current_execution_id})"
-      )
-
-      :keep_state_and_data
-    else
-      case status do
-        "completed" ->
-          Logger.info(
-            "[TaskOrchestrator:#{task_id}] Eval execution #{execution_id} completed, transition_result=#{inspect(transition_result)}"
-          )
-
-          handle_eval_transition_selection(transition_result, data)
-
-        "failed" ->
-          Logger.error("[TaskOrchestrator:#{task_id}] Eval execution #{execution_id} failed")
-          {:next_state, :failed, data}
-
-        other ->
-          Logger.debug("[TaskOrchestrator:#{task_id}] Ignoring eval execution status: #{other}")
-          :keep_state_and_data
-      end
-    end
-  end
-
-  defp handle_eval_transition_selection(transition_label, data) do
-    with {:ok, current_step} <- get_current_step(data),
-         {:ok, next_step_id} <-
-           find_transition_by_label(current_step.transitions, transition_label) do
-      Logger.info(
-        "[TaskOrchestrator:#{data.task.id}] Eval selected transition: #{transition_label} -> #{next_step_id}"
-      )
-
-      new_data = %{data | current_execution_output: nil, eval_selected_step_id: next_step_id}
-      {:next_state, :transitioning, new_data}
-    else
-      {:error, reason} ->
-        Logger.error(
-          "[TaskOrchestrator:#{data.task.id}] Failed to select transition: #{inspect(reason)}"
-        )
-
-        {:next_state, :failed, data}
-    end
-  end
-
-  defp find_transition_by_label(transition_records, label) when is_list(transition_records) do
-    case Enum.find(transition_records, &(&1.label == label)) do
-      %{to_step_id: to_step_id} -> {:ok, to_step_id}
-      nil -> {:error, :transition_not_found}
-    end
-  end
-
-  defp find_transition_by_label(_transition_records, _label) do
-    {:error, :invalid_transition_records}
+    {:next_state, :transitioning, data}
   end
 
   defp load_workflow_and_graph(user_id, task) do
@@ -538,7 +395,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   defp select_single_transition([]), do: {:error, :no_outgoing_transitions}
 
   defp select_single_transition(_multiple) do
-    {:error, :multiple_transitions_require_eval}
+    {:error, :multiple_outgoing_transitions}
   end
 
   defp handle_completion(data) do

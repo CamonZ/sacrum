@@ -19,7 +19,6 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
     field :step_order, :integer
     field :step_type, :string
     field :prompt, :string
-    field :eval_prompt, :string
     field :inserted_at, :datetime
     field :updated_at, :datetime
 
@@ -77,7 +76,6 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
       arg(:step_order, :integer)
       arg(:step_type, :string)
       arg(:prompt, :string)
-      arg(:eval_prompt, :string)
 
       resolve(fn args, %{context: %{current_user: user}} ->
         workflow_id = Map.get(args, :workflow_id)
@@ -100,7 +98,6 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
       arg(:step_order, :integer)
       arg(:step_type, :string)
       arg(:prompt, :string)
-      arg(:eval_prompt, :string)
 
       resolve(fn %{id: id} = args, %{context: %{current_user: user}} ->
         with {:ok, step} <- Accounts.WorkflowSteps.get_by(user.id, conditions: [id: id]) do
