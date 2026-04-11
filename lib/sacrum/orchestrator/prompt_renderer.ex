@@ -148,7 +148,7 @@ defmodule Sacrum.Orchestrator.PromptRenderer do
   @doc """
   Builds the workflow context map.
 
-  Extracts workflow name, current step name/goal, and step count.
+  Extracts workflow name, current step name/goal, step count, and output schema.
   All keys are strings for Liquid compatibility.
   """
   @spec build_workflow_context(
@@ -163,12 +163,17 @@ defmodule Sacrum.Orchestrator.PromptRenderer do
         %{}
 
       workflow ->
-        %{
+        context = %{
           "name" => workflow.name || "",
           "current_step" => workflow_step.name || "",
           "current_step_goal" => workflow_step.goal || "",
           "step_count" => count_workflow_steps(workflow)
         }
+
+        case workflow_step.output_schema do
+          nil -> context
+          schema -> Map.put(context, "output_schema", schema)
+        end
     end
   end
 
