@@ -14,6 +14,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     field :agent_config, :map, default: %{}
     field :is_final, :boolean, default: false
     field :step_order, :integer
+    field :step_type, :string, default: "execute"
     field :prompt, :string
     field :eval_prompt, :string
 
@@ -26,8 +27,9 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     timestamps(type: :utc_datetime_usec)
   end
 
-  @create_fields ~w(name goal agents skills agent_config is_final step_order prompt eval_prompt)a
-  @update_fields ~w(name goal agents skills agent_config is_final step_order prompt eval_prompt)a
+  @step_types ~w(execute evaluate route)
+  @create_fields ~w(name goal agents skills agent_config is_final step_order step_type prompt eval_prompt)a
+  @update_fields ~w(name goal agents skills agent_config is_final step_order step_type prompt eval_prompt)a
 
   @spec create_changeset(t(), map()) :: Ecto.Changeset.t()
   def create_changeset(step, attrs) do
@@ -35,6 +37,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     |> cast(attrs, @create_fields)
     |> validate_required([:name])
     |> validate_length(:name, min: 1, max: 255)
+    |> validate_inclusion(:step_type, @step_types)
     |> foreign_key_constraint(:workflow_id)
     |> foreign_key_constraint(:project_id)
   end
@@ -44,5 +47,6 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     step
     |> cast(attrs, @update_fields)
     |> validate_length(:name, min: 1, max: 255)
+    |> validate_inclusion(:step_type, @step_types)
   end
 end

@@ -55,6 +55,29 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
                )
     end
 
+    test "defaults step_type to execute" do
+      workflow = create_workflow()
+      assert {:ok, %WorkflowStep{} = step} = WorkflowSteps.insert(workflow, @valid_attrs)
+      assert step.step_type == "execute"
+    end
+
+    test "creates step with explicit step_type" do
+      workflow = create_workflow()
+
+      for type <- ~w(execute evaluate route) do
+        attrs = Map.put(@valid_attrs, :step_type, type)
+        assert {:ok, %WorkflowStep{} = step} = WorkflowSteps.insert(workflow, attrs)
+        assert step.step_type == type
+      end
+    end
+
+    test "rejects invalid step_type" do
+      workflow = create_workflow()
+      attrs = Map.put(@valid_attrs, :step_type, "invalid")
+      assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
+      assert %{step_type: ["is invalid"]} = errors_on(changeset)
+    end
+
     test "rejects missing name" do
       workflow = create_workflow()
       assert {:error, changeset} = WorkflowSteps.insert(workflow, %{})
@@ -113,6 +136,23 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       assert updated.name == "Updated"
       assert updated.goal == "New goal"
       assert updated.is_final == true
+    end
+
+    test "updates step_type" do
+      workflow = create_workflow()
+      {:ok, step} = WorkflowSteps.insert(workflow, @valid_attrs)
+      assert step.step_type == "execute"
+
+      assert {:ok, updated} = WorkflowSteps.update(step, %{step_type: "evaluate"})
+      assert updated.step_type == "evaluate"
+    end
+
+    test "rejects invalid step_type on update" do
+      workflow = create_workflow()
+      {:ok, step} = WorkflowSteps.insert(workflow, @valid_attrs)
+
+      assert {:error, changeset} = WorkflowSteps.update(step, %{step_type: "bogus"})
+      assert %{step_type: ["is invalid"]} = errors_on(changeset)
     end
   end
 
