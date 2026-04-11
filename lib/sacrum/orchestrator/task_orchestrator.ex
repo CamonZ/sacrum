@@ -20,10 +20,22 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   @behaviour :gen_statem
 
   require Logger
+  import Ecto.Query
 
+  alias Ecto.{Changeset, Multi}
   alias Sacrum.Accounts
   alias Sacrum.Orchestrator.{ExecutionDispatcher, ExecutionPool, PromptRenderer, Scheduler}
   alias Sacrum.Repo
+
+  alias Sacrum.Repo.Schemas.{
+    StepExecution,
+    StepTransition,
+    Task,
+    Workflow,
+    WorkflowStep,
+    WorkflowTransition
+  }
+
   alias Sacrum.Repo.TaskWorkflows
 
   @spec start_link(keyword()) :: {:ok, pid()} | {:error, term()}
@@ -57,7 +69,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
 
   @impl :gen_statem
   def init({user_id, task_id}) do
-    case Repo.get(Sacrum.Repo.Schemas.Task, task_id) do
+    case Repo.get(Task, task_id) do
       nil ->
         Logger.error("[TaskOrchestrator:#{task_id}] Task not found")
         :stop
@@ -212,21 +224,26 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
 
     Logger.info("[TaskOrchestrator:#{task_id}] :transitioning :run")
 
-    with {:ok, current_step} <- get_current_step(data),
-         next_transitions <- get_outgoing_transitions(data, current_step.id),
-         {:ok, next_step_id} <- select_single_transition(next_transitions),
-         {:ok, updated_task} <- TaskWorkflows.advance_to_step(data.task, next_step_id) do
-      ExecutionPool.release_slot(data.slot_id)
-      new_data = %{data | task: updated_task, slot_id: nil}
-      determine_next_state(next_step_id, new_data)
-    else
-      {:error, :no_outgoing_transitions} ->
-        Logger.info("[TaskOrchestrator:#{task_id}] No outgoing transitions, treating as final")
-        ExecutionPool.release_slot(data.slot_id)
-        {:next_state, :completing, %{data | slot_id: nil}}
+    case get_current_step(data) do
+      {:ok, current_step} ->
+        case current_step.step_type do
+          "route" ->
+            handle_route_step_transition(data, current_step)
+
+          type when type in ["execute", "evaluate"] ->
+            handle_single_transition_step(data, current_step)
+
+          other ->
+            Logger.error("[TaskOrchestrator:#{task_id}] Unknown step type: #{other}")
+            ExecutionPool.release_slot(data.slot_id)
+            {:next_state, :failed, %{data | slot_id: nil}}
+        end
 
       {:error, reason} ->
-        Logger.error("[TaskOrchestrator:#{task_id}] Error in transitioning: #{inspect(reason)}")
+        Logger.error(
+          "[TaskOrchestrator:#{task_id}] Error getting current step: #{inspect(reason)}"
+        )
+
         ExecutionPool.release_slot(data.slot_id)
         {:next_state, :failed, %{data | slot_id: nil}}
     end
@@ -289,22 +306,338 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     :keep_state_and_data
   end
 
-  # ===== PRIVATE HELPERS =====
+  # ===== TRANSITION HANDLERS =====
 
-  defp determine_next_state(next_step_id, data) do
-    next_step = data.steps[next_step_id]
+  defp handle_single_transition_step(data, current_step) do
     task_id = data.task.id
 
-    cond do
-      next_step.is_final ->
+    next_transitions = get_outgoing_transitions(data, current_step.id)
+
+    with {:ok, next_step_id} <- select_single_transition(next_transitions),
+         {:ok, updated_task} <- TaskWorkflows.advance_to_step(data.task, next_step_id) do
+      ExecutionPool.release_slot(data.slot_id)
+      new_data = %{data | task: updated_task, slot_id: nil}
+      determine_next_state(next_step_id, new_data)
+    else
+      {:error, :no_outgoing_transitions} ->
+        Logger.info("[TaskOrchestrator:#{task_id}] No outgoing transitions, treating as final")
+        ExecutionPool.release_slot(data.slot_id)
+        {:next_state, :completing, %{data | slot_id: nil}}
+
+      {:error, reason} ->
+        Logger.error(
+          "[TaskOrchestrator:#{task_id}] Error in single transition: #{inspect(reason)}"
+        )
+
+        ExecutionPool.release_slot(data.slot_id)
+        {:next_state, :failed, %{data | slot_id: nil}}
+    end
+  end
+
+  defp handle_route_step_transition(data, _current_step) do
+    task_id = data.task.id
+
+    with {:ok, execution} <- get_latest_execution(task_id),
+         {:ok, %{"transition_to" => dest_id, "transition_type" => transition_type}} <-
+           parse_route_output(execution.output),
+         {:ok, updated_task} <-
+           route_task_to_destination(data, dest_id, transition_type) do
+      ExecutionPool.release_slot(data.slot_id)
+
+      case transition_type do
+        "intra_workflow" ->
+          handle_intra_route_continuation(data, updated_task)
+
+        "inter_workflow" ->
+          handle_inter_route_continuation(data, task_id, updated_task)
+      end
+    else
+      {:error, reason} ->
+        Logger.error(
+          "[TaskOrchestrator:#{task_id}] Error in route transition: #{inspect(reason)}"
+        )
+
+        ExecutionPool.release_slot(data.slot_id)
+        {:next_state, :failed, %{data | slot_id: nil}}
+    end
+  end
+
+  defp handle_intra_route_continuation(data, updated_task) do
+    # Same workflow - can use existing workflow/steps cache
+    new_data = %{data | task: updated_task, slot_id: nil}
+    determine_next_state(updated_task.current_step_id, new_data)
+  end
+
+  defp handle_inter_route_continuation(data, task_id, updated_task) do
+    # Different workflow - must reload workflow graph
+    case load_workflow_and_graph(data.user_id, updated_task) do
+      {:ok, workflow, steps, transitions} ->
+        new_data = %{
+          data
+          | task: updated_task,
+            workflow: workflow,
+            steps: steps,
+            transitions: transitions,
+            slot_id: nil
+        }
+
+        determine_next_state(updated_task.current_step_id, new_data)
+
+      {:error, reason} ->
+        Logger.error(
+          "[TaskOrchestrator:#{task_id}] Failed to reload workflow after inter-workflow routing: #{inspect(reason)}"
+        )
+
+        {:next_state, :failed, %{data | slot_id: nil}}
+    end
+  end
+
+  defp parse_route_output(nil) do
+    {:error, :missing_route_output}
+  end
+
+  defp parse_route_output(output) when is_binary(output) do
+    case Jason.decode(output) do
+      {:ok, decoded} -> validate_route_output(decoded)
+      {:error, _} -> {:error, :invalid_json_output}
+    end
+  end
+
+  defp validate_route_output(decoded) when is_map(decoded) do
+    case {Map.get(decoded, "transition_to"), Map.get(decoded, "transition_type")} do
+      {dest_id, type}
+      when is_binary(dest_id) and type in ["intra_workflow", "inter_workflow"] ->
+        {:ok, %{"transition_to" => dest_id, "transition_type" => type}}
+
+      _ ->
+        {:error, :invalid_route_output_format}
+    end
+  end
+
+  defp validate_route_output(_decoded) do
+    {:error, :route_output_not_map}
+  end
+
+  defp get_latest_execution(task_id) do
+    query =
+      from(e in StepExecution,
+        where: e.task_id == ^task_id and e.status == "completed",
+        order_by: [desc: e.inserted_at],
+        limit: 1
+      )
+
+    case Repo.one(query) do
+      nil -> {:error, :no_completed_execution}
+      execution -> {:ok, execution}
+    end
+  end
+
+  defp route_task_to_destination(data, dest_id, "intra_workflow") do
+    handle_intra_workflow_routing(data, dest_id)
+  end
+
+  defp route_task_to_destination(data, dest_id, "inter_workflow") do
+    handle_inter_workflow_routing(data, dest_id)
+  end
+
+  defp handle_intra_workflow_routing(data, dest_step_id) do
+    task_id = data.task.id
+
+    with {:ok, _dest_step} <- validate_destination_step(data, dest_step_id),
+         :ok <- validate_step_transition_exists(data.task.current_step_id, dest_step_id),
+         {:ok, updated_task} <- TaskWorkflows.advance_to_step(data.task, dest_step_id) do
+      Logger.info(
+        "[TaskOrchestrator:#{task_id}] Route step routed intra_workflow to step #{dest_step_id}"
+      )
+
+      {:ok, updated_task}
+    else
+      {:error, reason} ->
+        Logger.error(
+          "[TaskOrchestrator:#{task_id}] Intra-workflow routing failed: #{inspect(reason)}"
+        )
+
+        {:error, reason}
+    end
+  end
+
+  defp handle_inter_workflow_routing(data, dest_workflow_id) do
+    task_id = data.task.id
+
+    with {:ok, dest_workflow} <- validate_destination_workflow(data, dest_workflow_id),
+         :ok <- validate_workflow_transition_exists(data.task.workflow_id, dest_workflow_id),
+         target_step_id <- get_target_step_for_workflow_transition(data, dest_workflow_id),
+         {:ok, updated_task} <-
+           assign_destination_workflow(data.task, dest_workflow, target_step_id) do
+      Logger.info(
+        "[TaskOrchestrator:#{task_id}] Route step routed inter_workflow to workflow #{dest_workflow_id}"
+      )
+
+      {:ok, updated_task}
+    else
+      {:error, reason} ->
+        Logger.error(
+          "[TaskOrchestrator:#{task_id}] Inter-workflow routing failed: #{inspect(reason)}"
+        )
+
+        {:error, reason}
+    end
+  end
+
+  defp validate_destination_step(data, step_id) do
+    case Repo.get(WorkflowStep, step_id) do
+      nil ->
+        {:error, :destination_step_not_found}
+
+      step ->
+        if step.project_id == data.project_id and step.user_id == data.user_id do
+          {:ok, step}
+        else
+          {:error, :destination_step_cross_project_or_user}
+        end
+    end
+  end
+
+  defp validate_destination_workflow(data, workflow_id) do
+    case Repo.get(Workflow, workflow_id) do
+      nil ->
+        {:error, :destination_workflow_not_found}
+
+      workflow ->
+        if workflow.project_id == data.project_id and workflow.user_id == data.user_id do
+          {:ok, workflow}
+        else
+          {:error, :destination_workflow_cross_project_or_user}
+        end
+    end
+  end
+
+  defp validate_step_transition_exists(from_step_id, to_step_id) do
+    query =
+      from(t in StepTransition,
+        where: t.from_step_id == ^from_step_id and t.to_step_id == ^to_step_id
+      )
+
+    case Repo.one(query) do
+      nil -> {:error, :no_step_transition}
+      _transition -> :ok
+    end
+  end
+
+  defp validate_workflow_transition_exists(from_workflow_id, to_workflow_id) do
+    query =
+      from(t in WorkflowTransition,
+        where: t.from_workflow_id == ^from_workflow_id and t.to_workflow_id == ^to_workflow_id
+      )
+
+    case Repo.one(query) do
+      nil -> {:error, :no_workflow_transition}
+      _transition -> :ok
+    end
+  end
+
+  defp get_target_step_for_workflow_transition(data, to_workflow_id) do
+    query =
+      from(t in WorkflowTransition,
+        where:
+          t.from_workflow_id == ^data.task.workflow_id and
+            t.to_workflow_id == ^to_workflow_id,
+        select: t.target_step_id
+      )
+
+    Repo.one(query)
+  end
+
+  defp assign_destination_workflow(task, dest_workflow, target_step_id) do
+    dest_workflow = Repo.preload(dest_workflow, :workflow_steps)
+
+    with {:ok, target_step} <- resolve_target_step(dest_workflow, target_step_id) do
+      do_assign_destination_workflow(task, dest_workflow, target_step)
+    end
+  end
+
+  defp resolve_target_step(_workflow, step_id) when not is_nil(step_id) do
+    case Repo.get(WorkflowStep, step_id) do
+      nil -> {:error, :target_step_not_found}
+      step -> {:ok, step}
+    end
+  end
+
+  defp resolve_target_step(workflow, nil) do
+    case workflow.initial_step_id do
+      nil ->
+        case Enum.sort_by(workflow.workflow_steps, & &1.step_order) do
+          [first | _] -> {:ok, first}
+          [] -> {:error, :destination_workflow_has_no_steps}
+        end
+
+      step_id ->
+        case Repo.get(WorkflowStep, step_id) do
+          nil -> {:error, :initial_step_not_found}
+          step -> {:ok, step}
+        end
+    end
+  end
+
+  defp do_assign_destination_workflow(task, dest_workflow, target_step) do
+    multi =
+      Multi.new()
+      |> Multi.update(
+        :task,
+        Changeset.change(task, %{
+          workflow_id: dest_workflow.id,
+          current_step_id: target_step.id
+        })
+      )
+      |> Multi.insert(
+        :step_execution,
+        StepExecution.create_changeset(
+          %StepExecution{
+            user_id: task.user_id,
+            project_id: task.project_id
+          },
+          %{
+            task_id: task.id,
+            workflow_id: dest_workflow.id,
+            step_name: target_step.name,
+            status: "entered"
+          }
+        )
+      )
+
+    case Repo.transaction(multi) do
+      {:ok, %{task: updated_task}} ->
+        {:ok, updated_task}
+
+      {:error, _op, changeset, _changes} ->
+        {:error, changeset}
+    end
+  end
+
+  # ===== PRIVATE HELPERS =====
+
+  defp determine_next_state(nil, data) do
+    Logger.error("[TaskOrchestrator:#{data.task.id}] No current step after transition")
+    {:next_state, :failed, data}
+  end
+
+  defp determine_next_state(next_step_id, data) do
+    task_id = data.task.id
+
+    case data.steps[next_step_id] do
+      nil ->
+        Logger.error("[TaskOrchestrator:#{task_id}] Step #{next_step_id} not found in cache")
+        {:next_state, :failed, data}
+
+      %{is_final: true} ->
         Logger.info("[TaskOrchestrator:#{task_id}] Next step is final")
         {:next_state, :completing, data}
 
-      data.workflow.auto_advance ->
+      _step when data.workflow.auto_advance ->
         Logger.info("[TaskOrchestrator:#{task_id}] Auto-advancing")
         {:next_state, :awaiting_execution, data}
 
-      true ->
+      _step ->
         Logger.info("[TaskOrchestrator:#{task_id}] No auto-advance, stopping")
         {:stop, :normal, data}
     end
@@ -365,7 +698,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   end
 
   defp reload_task(task_id) do
-    case Repo.get(Sacrum.Repo.Schemas.Task, task_id) do
+    case Repo.get(Task, task_id) do
       nil ->
         {:error, :task_not_found}
 
