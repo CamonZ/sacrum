@@ -155,23 +155,21 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
     end
   end
 
-  describe "prompt and eval_prompt fields" do
-    test "inserts step with prompt and eval_prompt" do
+  describe "prompt field" do
+    test "inserts step with prompt" do
       user = create_user()
       {_project, workflow} = create_workflow(user)
 
       assert {:ok, %WorkflowStep{} = step} =
                WorkflowSteps.insert(workflow, %{
                  name: "Review",
-                 prompt: "Please review the following content",
-                 eval_prompt: "Is the content complete and accurate?"
+                 prompt: "Please review the following content"
                })
 
       assert step.prompt == "Please review the following content"
-      assert step.eval_prompt == "Is the content complete and accurate?"
     end
 
-    test "updates step with prompt and eval_prompt" do
+    test "updates step with prompt" do
       user = create_user()
       {_project, workflow} = create_workflow(user)
 
@@ -179,29 +177,25 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
 
       assert {:ok, updated_step} =
                WorkflowSteps.update(step, %{
-                 prompt: "Updated prompt",
-                 eval_prompt: "Updated eval prompt"
+                 prompt: "Updated prompt"
                })
 
       assert updated_step.prompt == "Updated prompt"
-      assert updated_step.eval_prompt == "Updated eval prompt"
     end
 
-    test "handles optional prompt and eval_prompt fields" do
+    test "handles optional prompt field" do
       user = create_user()
       {_project, workflow} = create_workflow(user)
 
-      # Create without prompt and eval_prompt
+      # Create without prompt
       assert {:ok, step} = WorkflowSteps.insert(workflow, %{name: "Review"})
       assert is_nil(step.prompt)
-      assert is_nil(step.eval_prompt)
 
-      # Update to add them
+      # Update to add it
       assert {:ok, updated_step} =
                WorkflowSteps.update(step, %{prompt: "New prompt"})
 
       assert updated_step.prompt == "New prompt"
-      assert is_nil(updated_step.eval_prompt)
     end
   end
 end

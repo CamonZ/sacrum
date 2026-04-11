@@ -363,7 +363,6 @@ defmodule SacrumWeb.ProjectChannelTest do
       refute Map.has_key?(payload, :status)
       refute Map.has_key?(payload, :goal)
       refute Map.has_key?(payload, :auto_advance)
-      refute Map.has_key?(payload, :eval_prompt)
       refute Map.has_key?(payload, :is_final)
       refute Map.has_key?(payload, :transitions)
     end
@@ -501,7 +500,6 @@ defmodule SacrumWeb.ProjectChannelTest do
       step_order: 1,
       workflow_id: Ecto.UUID.generate(),
       prompt: "Execute the test step",
-      eval_prompt: "Evaluate the test step result",
       inserted_at: now,
       updated_at: now
     }
