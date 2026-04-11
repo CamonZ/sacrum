@@ -16,6 +16,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     field :step_order, :integer
     field :step_type, :string, default: "execute"
     field :prompt, :string
+    field :output_schema, :map
 
     belongs_to :workflow, Sacrum.Repo.Schemas.Workflow
     belongs_to :project, Sacrum.Repo.Schemas.Project
@@ -27,8 +28,8 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
   end
 
   @step_types ~w(execute evaluate route)
-  @create_fields ~w(name goal agents skills agent_config is_final step_order step_type prompt)a
-  @update_fields ~w(name goal agents skills agent_config is_final step_order step_type prompt)a
+  @create_fields ~w(name goal agents skills agent_config is_final step_order step_type prompt output_schema)a
+  @update_fields ~w(name goal agents skills agent_config is_final step_order step_type prompt output_schema)a
 
   @spec create_changeset(t(), map()) :: Ecto.Changeset.t()
   def create_changeset(step, attrs) do
@@ -37,6 +38,8 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     |> validate_required([:name])
     |> validate_length(:name, min: 1, max: 255)
     |> validate_inclusion(:step_type, @step_types)
+    |> validate_output_schema()
+    |> validate_route_step_schema()
     |> foreign_key_constraint(:workflow_id)
     |> foreign_key_constraint(:project_id)
   end
@@ -47,5 +50,76 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     |> cast(attrs, @update_fields)
     |> validate_length(:name, min: 1, max: 255)
     |> validate_inclusion(:step_type, @step_types)
+    |> validate_output_schema()
+    |> validate_route_step_schema()
+  end
+
+  # Private validation functions
+
+  defp validate_output_schema(changeset) do
+    case get_field(changeset, :output_schema) do
+      nil ->
+        changeset
+
+      schema when is_map(schema) ->
+        try do
+          _resolved = ExJsonSchema.Schema.resolve(schema)
+          changeset
+        rescue
+          _ ->
+            add_error(changeset, :output_schema, "must be a valid JSON Schema")
+        end
+
+      _ ->
+        add_error(changeset, :output_schema, "must be a map or null")
+    end
+  end
+
+  defp validate_route_step_schema(changeset) do
+    step_type = get_field(changeset, :step_type)
+    output_schema = get_field(changeset, :output_schema)
+
+    case step_type do
+      "route" ->
+        if output_schema == nil do
+          put_change(changeset, :output_schema, routing_contract_schema())
+        else
+          validate_routing_contract_schema(changeset, output_schema)
+        end
+
+      _ ->
+        changeset
+    end
+  end
+
+  defp validate_routing_contract_schema(changeset, schema) when is_map(schema) do
+    expected = routing_contract_schema()
+
+    if schema == expected do
+      changeset
+    else
+      add_error(
+        changeset,
+        :output_schema,
+        "route steps must use the routing contract schema: transition_to (uuid) and transition_type (intra_workflow or inter_workflow)"
+      )
+    end
+  end
+
+  defp validate_routing_contract_schema(changeset, _schema) do
+    add_error(changeset, :output_schema, "must be a valid map for route steps")
+  end
+
+  @spec routing_contract_schema() :: map()
+  def routing_contract_schema do
+    %{
+      "type" => "object",
+      "properties" => %{
+        "transition_to" => %{"type" => "string", "format" => "uuid"},
+        "transition_type" => %{"type" => "string", "enum" => ["intra_workflow", "inter_workflow"]}
+      },
+      "required" => ["transition_to", "transition_type"],
+      "additionalProperties" => false
+    }
   end
 end

@@ -164,4 +164,148 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       assert {:error, :not_found} = WorkflowSteps.get(step.id)
     end
   end
+
+  describe "output_schema validation" do
+    test "accepts valid JSON Schema for evaluate steps" do
+      workflow = create_workflow()
+
+      schema = %{
+        "type" => "object",
+        "properties" => %{
+          "result" => %{"type" => "string"}
+        },
+        "required" => ["result"]
+      }
+
+      attrs = Map.merge(@valid_attrs, %{step_type: "evaluate", output_schema: schema})
+
+      assert {:ok, %WorkflowStep{output_schema: returned_schema}} =
+               WorkflowSteps.insert(workflow, attrs)
+
+      assert returned_schema == schema
+    end
+
+    test "rejects non-map output_schema" do
+      workflow = create_workflow()
+
+      attrs = Map.merge(@valid_attrs, %{output_schema: "not a map"})
+      assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
+      assert %{output_schema: ["is invalid"]} = errors_on(changeset)
+    end
+
+    test "route steps auto-set routing contract schema on create" do
+      workflow = create_workflow()
+
+      attrs = Map.merge(@valid_attrs, %{step_type: "route"})
+
+      assert {:ok, %WorkflowStep{step_type: "route"} = step} =
+               WorkflowSteps.insert(workflow, attrs)
+
+      expected_schema = %{
+        "type" => "object",
+        "properties" => %{
+          "transition_to" => %{"type" => "string", "format" => "uuid"},
+          "transition_type" => %{
+            "type" => "string",
+            "enum" => ["intra_workflow", "inter_workflow"]
+          }
+        },
+        "required" => ["transition_to", "transition_type"],
+        "additionalProperties" => false
+      }
+
+      assert step.output_schema == expected_schema
+    end
+
+    test "route steps reject custom output_schema that doesn't match routing contract" do
+      workflow = create_workflow()
+
+      custom_schema = %{
+        "type" => "object",
+        "properties" => %{
+          "custom_field" => %{"type" => "string"}
+        }
+      }
+
+      attrs = Map.merge(@valid_attrs, %{step_type: "route", output_schema: custom_schema})
+      assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
+
+      assert %{output_schema: [message]} = errors_on(changeset)
+      assert String.contains?(message, "routing contract schema")
+    end
+
+    test "route steps accept correct routing contract schema" do
+      workflow = create_workflow()
+
+      correct_schema = %{
+        "type" => "object",
+        "properties" => %{
+          "transition_to" => %{"type" => "string", "format" => "uuid"},
+          "transition_type" => %{
+            "type" => "string",
+            "enum" => ["intra_workflow", "inter_workflow"]
+          }
+        },
+        "required" => ["transition_to", "transition_type"],
+        "additionalProperties" => false
+      }
+
+      attrs = Map.merge(@valid_attrs, %{step_type: "route", output_schema: correct_schema})
+
+      assert {:ok, %WorkflowStep{output_schema: returned_schema}} =
+               WorkflowSteps.insert(workflow, attrs)
+
+      assert returned_schema == correct_schema
+    end
+
+    test "allows nil output_schema" do
+      workflow = create_workflow()
+
+      attrs = Map.merge(@valid_attrs, %{output_schema: nil})
+      assert {:ok, %WorkflowStep{output_schema: nil}} = WorkflowSteps.insert(workflow, attrs)
+    end
+
+    test "preserves output_schema on update for evaluate steps" do
+      workflow = create_workflow()
+
+      schema = %{
+        "type" => "object",
+        "properties" => %{
+          "data" => %{"type" => "string"}
+        }
+      }
+
+      {:ok, step} =
+        WorkflowSteps.insert(
+          workflow,
+          Map.merge(@valid_attrs, %{step_type: "evaluate", output_schema: schema})
+        )
+
+      updated_schema = %{
+        "type" => "object",
+        "properties" => %{
+          "new_data" => %{"type" => "integer"}
+        }
+      }
+
+      {:ok, updated} = WorkflowSteps.update(step, %{output_schema: updated_schema})
+      assert updated.output_schema == updated_schema
+    end
+
+    test "route steps enforce routing contract on update" do
+      workflow = create_workflow()
+
+      {:ok, step} = WorkflowSteps.insert(workflow, Map.merge(@valid_attrs, %{step_type: "route"}))
+
+      invalid_schema = %{
+        "type" => "object",
+        "properties" => %{
+          "invalid" => %{"type" => "string"}
+        }
+      }
+
+      assert {:error, changeset} = WorkflowSteps.update(step, %{output_schema: invalid_schema})
+      assert %{output_schema: _} = errors_on(changeset)
+    end
+  end
 end
