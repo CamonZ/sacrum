@@ -110,6 +110,51 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
     end
   end
 
+  describe "step_type field" do
+    test "defaults to execute when not specified" do
+      user = create_user()
+      {_project, workflow} = create_workflow(user)
+
+      assert {:ok, %WorkflowStep{} = step} =
+               WorkflowSteps.insert(workflow, %{name: "Draft"})
+
+      assert step.step_type == "execute"
+    end
+
+    test "creates step with each valid step_type" do
+      user = create_user()
+      {_project, workflow} = create_workflow(user)
+
+      for type <- ~w(execute evaluate route) do
+        assert {:ok, %WorkflowStep{} = step} =
+                 WorkflowSteps.insert(workflow, %{name: "Step #{type}", step_type: type})
+
+        assert step.step_type == type
+      end
+    end
+
+    test "rejects invalid step_type" do
+      user = create_user()
+      {_project, workflow} = create_workflow(user)
+
+      assert {:error, changeset} =
+               WorkflowSteps.insert(workflow, %{name: "Bad", step_type: "invalid"})
+
+      assert %{step_type: ["is invalid"]} = errors_on(changeset)
+    end
+
+    test "updates step_type" do
+      user = create_user()
+      {_project, workflow} = create_workflow(user)
+
+      {:ok, step} = WorkflowSteps.insert(workflow, %{name: "Draft"})
+      assert step.step_type == "execute"
+
+      assert {:ok, updated} = WorkflowSteps.update(step, %{step_type: "route"})
+      assert updated.step_type == "route"
+    end
+  end
+
   describe "prompt and eval_prompt fields" do
     test "inserts step with prompt and eval_prompt" do
       user = create_user()

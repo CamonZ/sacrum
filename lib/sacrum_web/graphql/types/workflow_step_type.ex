@@ -17,6 +17,7 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
     field :agent_config, :json
     field :is_final, :boolean
     field :step_order, :integer
+    field :step_type, :string
     field :prompt, :string
     field :eval_prompt, :string
     field :inserted_at, :datetime
@@ -74,6 +75,7 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
       arg(:agent_config, :json)
       arg(:is_final, :boolean)
       arg(:step_order, :integer)
+      arg(:step_type, :string)
       arg(:prompt, :string)
       arg(:eval_prompt, :string)
 
@@ -96,6 +98,7 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
       arg(:agent_config, :json)
       arg(:is_final, :boolean)
       arg(:step_order, :integer)
+      arg(:step_type, :string)
       arg(:prompt, :string)
       arg(:eval_prompt, :string)
 
