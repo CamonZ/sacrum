@@ -367,6 +367,58 @@ defmodule SacrumWeb.ProjectChannelTest do
       refute Map.has_key?(payload, :transitions)
     end
 
+    test "run_step payload includes output_schema when present" do
+      {_user, project, socket} = setup_socket()
+
+      {:ok, _reply, _socket} =
+        subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
+
+      output_schema = %{
+        "type" => "object",
+        "properties" => %{"result" => %{"type" => "string"}},
+        "required" => ["result"]
+      }
+
+      execution = build_step_execution(project)
+      step = build_workflow_step(project) |> Map.put(:output_schema, output_schema)
+      task = build_task(project)
+
+      data = %{
+        execution: execution,
+        step: step,
+        task: task,
+        rendered_prompt: "Test prompt"
+      }
+
+      SacrumWeb.ProjectChannel.broadcast_run_step(project.id, data)
+
+      assert_push "run_step", payload
+      assert payload.output_schema == output_schema
+    end
+
+    test "run_step payload omits output_schema when nil" do
+      {_user, project, socket} = setup_socket()
+
+      {:ok, _reply, _socket} =
+        subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
+
+      execution = build_step_execution(project)
+      step = build_workflow_step(project)
+      task = build_task(project)
+
+      data = %{
+        execution: execution,
+        step: step,
+        task: task,
+        rendered_prompt: "Test prompt"
+      }
+
+      SacrumWeb.ProjectChannel.broadcast_run_step(project.id, data)
+
+      assert_push "run_step", payload
+      refute Map.has_key?(payload, :output_schema)
+    end
+
     test "daemon client receives cancel_step event" do
       {_user, project, socket} = setup_socket()
 
@@ -498,8 +550,10 @@ defmodule SacrumWeb.ProjectChannelTest do
       agent_config: %{},
       is_final: false,
       step_order: 1,
+      step_type: "execute",
       workflow_id: Ecto.UUID.generate(),
       prompt: "Execute the test step",
+      output_schema: nil,
       inserted_at: now,
       updated_at: now
     }
