@@ -308,6 +308,7 @@ defmodule SacrumWeb.ProjectChannel do
       agent_config: step.agent_config,
       is_final: step.is_final,
       step_order: step.step_order,
+      step_type: step.step_type,
       workflow_id: step.workflow_id,
       inserted_at: step.inserted_at,
       updated_at: step.updated_at
@@ -372,18 +373,18 @@ defmodule SacrumWeb.ProjectChannel do
   end
 
   defp run_step_payload(data) do
-    %{
-      # Execution id
+    payload = %{
       id: data.execution.id,
-      # Task context reference
       task_id: data.execution.task_id,
-      # Rendered prompt with task_id interpolated
       prompt: data.rendered_prompt,
-      # Agent configuration
       agent_config: data.step.agent_config,
-      # Worktree path for execution
       worktree: data.task.worktree
     }
+
+    case data.step.output_schema do
+      nil -> payload
+      schema -> Map.put(payload, :output_schema, schema)
+    end
   end
 
   defp cancel_step_payload(data) do
