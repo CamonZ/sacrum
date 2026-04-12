@@ -707,6 +707,64 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       data = result["data"]["updateWorkflowStep"]
       assert data["prompt"] == "Updated prompt"
     end
+
+    test "createWorkflowStep returns formatted error message on invalid output_schema", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+      invalid_schema = ~S|{\"type\":\"invalid_type_value\"}|
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql(~s"""
+          mutation {
+            createWorkflowStep(
+              workflowId: "#{wf.id}"
+              name: "Invalid Schema Step"
+              outputSchema: "#{invalid_schema}"
+            ) { id }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] != nil
+
+      assert Enum.any?(result["errors"], fn error ->
+               error["message"] =~ "output_schema"
+             end)
+    end
+
+    test "updateWorkflowStep returns formatted error message on invalid output_schema", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+      {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "Step"})
+      invalid_schema = ~S|{\"type\":\"invalid_type_value\"}|
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql(~s"""
+          mutation {
+            updateWorkflowStep(
+              id: "#{step.id}"
+              outputSchema: "#{invalid_schema}"
+            ) { id }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] != nil
+
+      assert Enum.any?(result["errors"], fn error ->
+               error["message"] =~ "output_schema"
+             end)
+    end
   end
 
   describe "step execution queries" do

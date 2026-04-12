@@ -1,6 +1,7 @@
 defmodule Sacrum.Repo.Schemas.WorkflowStep do
   use Ecto.Schema
   import Ecto.Changeset
+  require Logger
 
   @type t :: %__MODULE__{}
   @primary_key {:id, :binary_id, autogenerate: true}
@@ -63,10 +64,14 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
 
       schema when is_map(schema) ->
         try do
-          _resolved = ExJsonSchema.Schema.resolve(schema)
+          ExJsonSchema.Schema.resolve(schema)
           changeset
         rescue
-          _ ->
+          exception ->
+            Logger.error(
+              "Failed to resolve output_schema: #{Exception.format(:error, exception, __STACKTRACE__)}"
+            )
+
             add_error(changeset, :output_schema, "must be a valid JSON Schema")
         end
 

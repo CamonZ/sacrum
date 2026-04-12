@@ -83,8 +83,10 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
         workflow_id = Map.get(args, :workflow_id)
 
         with {:ok, workflow} <- Accounts.Workflows.get_by(user.id, conditions: [id: workflow_id]) do
-          attrs = args
-          Accounts.WorkflowSteps.insert(workflow, attrs)
+          case Accounts.WorkflowSteps.insert(workflow, args) do
+            {:ok, step} -> {:ok, step}
+            {:error, changeset} -> {:error, format_changeset_errors(changeset)}
+          end
         end
       end)
     end
@@ -105,7 +107,11 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
       resolve(fn %{id: id} = args, %{context: %{current_user: user}} ->
         with {:ok, step} <- Accounts.WorkflowSteps.get_by(user.id, conditions: [id: id]) do
           attrs = Map.drop(args, [:id])
-          Accounts.WorkflowSteps.update(step, attrs)
+
+          case Accounts.WorkflowSteps.update(step, attrs) do
+            {:ok, step} -> {:ok, step}
+            {:error, changeset} -> {:error, format_changeset_errors(changeset)}
+          end
         end
       end)
     end
@@ -137,5 +143,18 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
     field :label, :string
     field :from_step_id, :uuid4
     field :to_step_id, :uuid4
+  end
+
+  defp format_changeset_errors(changeset) do
+    changeset
+    |> Ecto.Changeset.traverse_errors(fn {msg, opts} ->
+      Enum.reduce(opts, msg, fn {key, value}, acc ->
+        String.replace(acc, "%{#{key}}", to_string(value))
+      end)
+    end)
+    |> Enum.flat_map(fn {field, errors} ->
+      Enum.map(errors, &"#{field}: #{&1}")
+    end)
+    |> Enum.join(", ")
   end
 end
