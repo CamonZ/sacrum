@@ -765,6 +765,69 @@ defmodule SacrumWeb.Graphql.SchemaTest do
                error["message"] =~ "output_schema"
              end)
     end
+
+    test "createWorkflowStep returns formatted error on missing required name", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createWorkflowStep(
+              workflowId: "#{wf.id}"
+              name: ""
+            ) { id }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] != nil
+
+      assert Enum.any?(result["errors"], fn error ->
+               error["message"] =~ "name"
+             end)
+    end
+
+    test "updateWorkflowStep clears output_schema with clearOutputSchema flag", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+
+      {:ok, step} =
+        Accounts.WorkflowSteps.insert(wf, %{
+          name: "Step",
+          output_schema: %{
+            "type" => "object",
+            "properties" => %{"result" => %{"type" => "string"}}
+          }
+        })
+
+      assert step.output_schema != nil
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            updateWorkflowStep(
+              id: "#{step.id}"
+              clearOutputSchema: true
+            ) { id outputSchema }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] == nil
+      data = result["data"]["updateWorkflowStep"]
+      assert data["outputSchema"] == nil
+    end
   end
 
   describe "step execution queries" do

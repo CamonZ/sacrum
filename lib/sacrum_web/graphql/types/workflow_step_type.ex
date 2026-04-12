@@ -103,10 +103,18 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
       arg(:step_type, :string)
       arg(:prompt, :string)
       arg(:output_schema, :json)
+      arg(:clear_output_schema, :boolean)
 
       resolve(fn %{id: id} = args, %{context: %{current_user: user}} ->
         with {:ok, step} <- Accounts.WorkflowSteps.get_by(user.id, conditions: [id: id]) do
-          attrs = Map.drop(args, [:id])
+          attrs =
+            args
+            |> Map.drop([:id, :clear_output_schema])
+            |> then(fn attrs ->
+              if Map.get(args, :clear_output_schema, false),
+                do: Map.put(attrs, :output_schema, nil),
+                else: attrs
+            end)
 
           case Accounts.WorkflowSteps.update(step, attrs) do
             {:ok, step} -> {:ok, step}
