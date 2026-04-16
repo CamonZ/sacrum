@@ -98,9 +98,9 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
   end
 
   defp validate_routing_contract_schema(changeset, schema) when is_map(schema) do
-    expected = routing_contract_schema()
-
-    if schema == expected do
+    # The canonical schema includes handoff, but handoff is optional — so a schema
+    # without the handoff property is equally valid.
+    if schema == routing_contract_schema() or schema == routing_contract_schema_without_handoff() do
       changeset
     else
       add_error(
@@ -121,10 +121,17 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
       "type" => "object",
       "properties" => %{
         "transition_to" => %{"type" => "string", "format" => "uuid"},
-        "transition_type" => %{"type" => "string", "enum" => ["intra_workflow", "inter_workflow"]}
+        "transition_type" => %{"type" => "string", "enum" => ["intra_workflow", "inter_workflow"]},
+        "handoff" => %{"type" => "object"}
       },
       "required" => ["transition_to", "transition_type"],
       "additionalProperties" => false
     }
+  end
+
+  defp routing_contract_schema_without_handoff do
+    canonical = routing_contract_schema()
+    properties = Map.delete(canonical["properties"], "handoff")
+    %{canonical | "properties" => properties}
   end
 end

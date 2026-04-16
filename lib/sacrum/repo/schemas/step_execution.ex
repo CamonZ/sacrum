@@ -19,6 +19,7 @@ defmodule Sacrum.Repo.Schemas.StepExecution do
     field :output_tokens, :integer
     field :cost, :decimal
     field :duration_ms, :integer
+    field :handoff, :map
 
     belongs_to :task, Sacrum.Repo.Schemas.Task
     belongs_to :workflow, Sacrum.Repo.Schemas.Workflow
@@ -30,8 +31,8 @@ defmodule Sacrum.Repo.Schemas.StepExecution do
     timestamps(type: :utc_datetime_usec)
   end
 
-  @create_fields ~w(task_id step_name status context prompt output transition_result model model_provider input_tokens output_tokens cost duration_ms workflow_id)a
-  @update_fields ~w(step_name status context prompt output transition_result model model_provider input_tokens output_tokens cost duration_ms)a
+  @create_fields ~w(task_id step_name status context prompt output transition_result model model_provider input_tokens output_tokens cost duration_ms workflow_id handoff)a
+  @update_fields ~w(step_name status context prompt output transition_result model model_provider input_tokens output_tokens cost duration_ms handoff)a
 
   @spec create_changeset(t(), map()) :: Ecto.Changeset.t()
   def create_changeset(execution, attrs) do

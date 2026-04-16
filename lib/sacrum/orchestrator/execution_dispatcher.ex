@@ -49,7 +49,8 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
         "[ExecutionDispatcher] Found entered execution: #{execution.id} status=#{execution.status}"
       )
 
-      context = PromptRenderer.build_context(task, %{}, step)
+      execution_data = build_execution_data(task.id, execution)
+      context = PromptRenderer.build_context(task, execution_data, step)
       {:ok, rendered} = PromptRenderer.render(step.prompt, context)
 
       Logger.info(
@@ -77,6 +78,29 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
 
     {:ok, execution}
   end
+
+  defp build_execution_data(task_id, entered_execution) do
+    %{}
+    |> put_previous_output(task_id)
+    |> put_handoff(entered_execution.handoff)
+  end
+
+  defp put_previous_output(data, task_id) do
+    query =
+      from(e in StepExecution,
+        where: e.task_id == ^task_id and e.status == "completed",
+        order_by: [desc: e.inserted_at],
+        limit: 1
+      )
+
+    case Repo.one(query) do
+      nil -> data
+      prior -> Map.put(data, :previous, %{output: prior.output})
+    end
+  end
+
+  defp put_handoff(data, handoff) when is_map(handoff), do: Map.put(data, :handoff, handoff)
+  defp put_handoff(data, _), do: data
 
   defp fetch_step(user_id, step_id) do
     Accounts.WorkflowSteps.get_by(user_id,

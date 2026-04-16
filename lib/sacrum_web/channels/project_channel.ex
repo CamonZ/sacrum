@@ -343,6 +343,7 @@ defmodule SacrumWeb.ProjectChannel do
       output_tokens: execution.output_tokens,
       cost: if(execution.cost, do: Decimal.to_string(execution.cost)),
       duration_ms: execution.duration_ms,
+      handoff: execution.handoff,
       inserted_at: execution.inserted_at,
       updated_at: execution.updated_at
     }
