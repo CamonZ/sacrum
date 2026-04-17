@@ -19,6 +19,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   alias Sacrum.Repo
   alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.StepExecution
+  alias Sacrum.Repo.Schemas.WorkflowStep
 
   @doc """
   Dispatches a step execution to the daemon.
@@ -88,16 +89,38 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   defp put_previous_output(data, task_id) do
     query =
       from(e in StepExecution,
+        left_join: ws in WorkflowStep,
+        on: ws.workflow_id == e.workflow_id and ws.name == e.step_name,
         where: e.task_id == ^task_id and e.status == "completed",
         order_by: [desc: e.inserted_at],
-        limit: 1
+        limit: 1,
+        select: {e.output, ws.output_schema}
       )
 
     case Repo.one(query) do
-      nil -> data
-      prior -> Map.put(data, :previous, %{output: prior.output})
+      nil ->
+        data
+
+      {output, schema} ->
+        Map.put(data, :previous, %{output: decode_prior_output(output, schema)})
     end
   end
+
+  defp decode_prior_output(output, schema) when is_binary(output) and is_map(schema) do
+    case Jason.decode(output) do
+      {:ok, decoded} ->
+        decoded
+
+      {:error, reason} ->
+        Logger.warning(
+          "[ExecutionDispatcher] Failed to decode prior output as JSON: #{inspect(reason)}"
+        )
+
+        output
+    end
+  end
+
+  defp decode_prior_output(output, _schema), do: output
 
   defp put_handoff(data, handoff) when is_map(handoff), do: Map.put(data, :handoff, handoff)
   defp put_handoff(data, _), do: data
