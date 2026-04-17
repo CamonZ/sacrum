@@ -137,7 +137,7 @@ defmodule Sacrum.Orchestrator.PromptRenderer do
     handoff = execution_data[:handoff]
 
     reject_nil_values(%{
-      "previous_output" => to_string(previous_output),
+      "previous_output" => coerce_previous_output(previous_output),
       "retry_count" => retry_count,
       "duration_ms" => duration_ms,
       "history" => build_history_list(history),
@@ -146,6 +146,10 @@ defmodule Sacrum.Orchestrator.PromptRenderer do
   end
 
   def build_execution_context(_), do: %{}
+
+  defp coerce_previous_output(output) when is_binary(output), do: output
+  defp coerce_previous_output(output) when is_map(output) or is_list(output), do: output
+  defp coerce_previous_output(output), do: to_string(output)
 
   @doc """
   Builds the workflow context map.

@@ -375,4 +375,256 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       assert String.contains?(prompt, "routing_key")
     end
   end
+
+  describe "schema-aware prior output decoding" do
+    setup [:setup_dispatch_context]
+
+    test "when prior step has valid output_schema, prior.output is decoded to map", ctx do
+      prior_step =
+        create_step(ctx.user, ctx.workflow, %{
+          "name" => "eval_step",
+          "step_order" => 1,
+          "output_schema" => %{
+            "type" => "object",
+            "properties" => %{
+              "verdict" => %{"type" => "string"},
+              "should_retry" => %{"type" => "boolean"}
+            }
+          }
+        })
+
+      current_step =
+        create_step(ctx.user, ctx.workflow, %{
+          "name" => "route_step",
+          "step_order" => 2,
+          "prompt" => "Verdict: {{ execution.previous_output.verdict }}"
+        })
+
+      task = create_task(ctx.user, ctx.project)
+      task = assign_workflow(task, ctx.workflow)
+
+      {:ok, _prior_exec} =
+        Accounts.StepExecutions.insert(ctx.user.id, %{
+          "task_id" => task.id,
+          "project_id" => task.project_id,
+          "workflow_id" => ctx.workflow.id,
+          "step_name" => prior_step.name,
+          "status" => "completed",
+          "output" => "{\"verdict\": \"approved\", \"should_retry\": false}"
+        })
+
+      _current_exec = create_entered_execution(ctx.user, task, current_step)
+
+      task = PromptRenderer.preload_for_rendering(task)
+
+      subscribe_to_project(ctx.project)
+
+      {:ok, _exec} = ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, current_step.id)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "run_step",
+        payload: %{prompt: prompt}
+      }
+
+      assert prompt == "Verdict: approved"
+    end
+
+    test "when prior step has no output_schema, prior.output remains raw string (backwards-compatible)",
+         ctx do
+      prior_step = create_step(ctx.user, ctx.workflow, %{"name" => "step_1", "step_order" => 1})
+
+      current_step =
+        create_step(ctx.user, ctx.workflow, %{
+          "name" => "step_2",
+          "step_order" => 2,
+          "prompt" => "Previous: {{ execution.previous_output }}"
+        })
+
+      task = create_task(ctx.user, ctx.project)
+      task = assign_workflow(task, ctx.workflow)
+
+      {:ok, _prior_exec} =
+        Accounts.StepExecutions.insert(ctx.user.id, %{
+          "task_id" => task.id,
+          "project_id" => task.project_id,
+          "workflow_id" => ctx.workflow.id,
+          "step_name" => prior_step.name,
+          "status" => "completed",
+          "output" => "Just a plain string output"
+        })
+
+      _current_exec = create_entered_execution(ctx.user, task, current_step)
+
+      task = PromptRenderer.preload_for_rendering(task)
+
+      subscribe_to_project(ctx.project)
+
+      {:ok, _exec} = ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, current_step.id)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "run_step",
+        payload: %{prompt: prompt}
+      }
+
+      assert prompt == "Previous: Just a plain string output"
+    end
+
+    test "when prior step has output_schema but output is not valid JSON, falls back to raw string and logs warning",
+         ctx do
+      prior_step =
+        create_step(ctx.user, ctx.workflow, %{
+          "name" => "eval_step",
+          "step_order" => 1,
+          "output_schema" => %{
+            "type" => "object",
+            "properties" => %{"result" => %{"type" => "string"}}
+          }
+        })
+
+      current_step =
+        create_step(ctx.user, ctx.workflow, %{
+          "name" => "next_step",
+          "step_order" => 2,
+          "prompt" => "Got: {{ execution.previous_output }}"
+        })
+
+      task = create_task(ctx.user, ctx.project)
+      task = assign_workflow(task, ctx.workflow)
+
+      {:ok, _prior_exec} =
+        Accounts.StepExecutions.insert(ctx.user.id, %{
+          "task_id" => task.id,
+          "project_id" => task.project_id,
+          "workflow_id" => ctx.workflow.id,
+          "step_name" => prior_step.name,
+          "status" => "completed",
+          "output" => "{ broken json"
+        })
+
+      _current_exec = create_entered_execution(ctx.user, task, current_step)
+
+      task = PromptRenderer.preload_for_rendering(task)
+
+      subscribe_to_project(ctx.project)
+
+      {:ok, _exec} = ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, current_step.id)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "run_step",
+        payload: %{prompt: prompt}
+      }
+
+      assert prompt == "Got: { broken json"
+    end
+
+    test "build_execution_context converts map prior_output while preserving string prior_output" do
+      execution_data_with_map = %{
+        previous: %{
+          output: %{"verdict" => "approved", "should_retry" => false}
+        }
+      }
+
+      ctx = PromptRenderer.build_execution_context(execution_data_with_map)
+
+      assert ctx["previous_output"] == %{"verdict" => "approved", "should_retry" => false}
+
+      execution_data_with_string = %{
+        previous: %{
+          output: "just a string"
+        }
+      }
+
+      ctx2 = PromptRenderer.build_execution_context(execution_data_with_string)
+
+      assert ctx2["previous_output"] == "just a string"
+    end
+
+    test "rendering {{ execution.previous_output.result }} with decoded map returns field value",
+         ctx do
+      prior_step =
+        create_step(ctx.user, ctx.workflow, %{
+          "name" => "eval_step",
+          "step_order" => 1,
+          "output_schema" => %{
+            "type" => "object",
+            "properties" => %{"result" => %{"type" => "string"}}
+          }
+        })
+
+      current_step =
+        create_step(ctx.user, ctx.workflow, %{
+          "name" => "route_step",
+          "step_order" => 2,
+          "prompt" => "Result: {{ execution.previous_output.result }}"
+        })
+
+      task = create_task(ctx.user, ctx.project)
+      task = assign_workflow(task, ctx.workflow)
+
+      {:ok, _prior_exec} =
+        Accounts.StepExecutions.insert(ctx.user.id, %{
+          "task_id" => task.id,
+          "project_id" => task.project_id,
+          "workflow_id" => ctx.workflow.id,
+          "step_name" => prior_step.name,
+          "status" => "completed",
+          "output" => "{\"result\": \"success\"}"
+        })
+
+      _current_exec = create_entered_execution(ctx.user, task, current_step)
+
+      task = PromptRenderer.preload_for_rendering(task)
+
+      subscribe_to_project(ctx.project)
+
+      {:ok, _exec} = ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, current_step.id)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "run_step",
+        payload: %{prompt: prompt}
+      }
+
+      assert prompt == "Result: success"
+    end
+
+    test "rendering {{ execution.previous_output }} with string still renders unchanged", ctx do
+      prior_step =
+        create_step(ctx.user, ctx.workflow, %{"name" => "plain_step", "step_order" => 1})
+
+      current_step =
+        create_step(ctx.user, ctx.workflow, %{
+          "name" => "step_2",
+          "step_order" => 2,
+          "prompt" => "{{ execution.previous_output }}"
+        })
+
+      task = create_task(ctx.user, ctx.project)
+      task = assign_workflow(task, ctx.workflow)
+
+      {:ok, _prior_exec} =
+        Accounts.StepExecutions.insert(ctx.user.id, %{
+          "task_id" => task.id,
+          "project_id" => task.project_id,
+          "workflow_id" => ctx.workflow.id,
+          "step_name" => prior_step.name,
+          "status" => "completed",
+          "output" => "plain string output"
+        })
+
+      _current_exec = create_entered_execution(ctx.user, task, current_step)
+
+      task = PromptRenderer.preload_for_rendering(task)
+
+      subscribe_to_project(ctx.project)
+
+      {:ok, _exec} = ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, current_step.id)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "run_step",
+        payload: %{prompt: prompt}
+      }
+
+      assert prompt == "plain string output"
+    end
+  end
 end
