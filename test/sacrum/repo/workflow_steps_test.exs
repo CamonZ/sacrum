@@ -208,7 +208,8 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
           "transition_type" => %{
             "type" => "string",
             "enum" => ["intra_workflow", "inter_workflow"]
-          }
+          },
+          "handoff" => %{"type" => "object"}
         },
         "required" => ["transition_to", "transition_type"],
         "additionalProperties" => false
@@ -306,6 +307,106 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
 
       assert {:error, changeset} = WorkflowSteps.update(step, %{output_schema: invalid_schema})
       assert %{output_schema: _} = errors_on(changeset)
+    end
+
+    test "route steps accept routing contract schema with optional handoff property" do
+      workflow = create_workflow()
+
+      schema_with_handoff = %{
+        "type" => "object",
+        "properties" => %{
+          "transition_to" => %{"type" => "string", "format" => "uuid"},
+          "transition_type" => %{
+            "type" => "string",
+            "enum" => ["intra_workflow", "inter_workflow"]
+          },
+          "handoff" => %{"type" => "object"}
+        },
+        "required" => ["transition_to", "transition_type"],
+        "additionalProperties" => false
+      }
+
+      attrs = Map.merge(@valid_attrs, %{step_type: "route", output_schema: schema_with_handoff})
+
+      assert {:ok, %WorkflowStep{output_schema: returned_schema}} =
+               WorkflowSteps.insert(workflow, attrs)
+
+      assert returned_schema == schema_with_handoff
+    end
+
+    test "route steps reject handoff property with wrong type in output schema" do
+      workflow = create_workflow()
+
+      invalid_schema = %{
+        "type" => "object",
+        "properties" => %{
+          "transition_to" => %{"type" => "string", "format" => "uuid"},
+          "transition_type" => %{
+            "type" => "string",
+            "enum" => ["intra_workflow", "inter_workflow"]
+          },
+          "handoff" => %{"type" => "string"}
+        },
+        "required" => ["transition_to", "transition_type"],
+        "additionalProperties" => false
+      }
+
+      attrs = Map.merge(@valid_attrs, %{step_type: "route", output_schema: invalid_schema})
+      assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
+      assert %{output_schema: [message]} = errors_on(changeset)
+      assert String.contains?(message, "routing contract schema")
+    end
+
+    test "route steps reject unknown properties even with handoff present" do
+      workflow = create_workflow()
+
+      invalid_schema = %{
+        "type" => "object",
+        "properties" => %{
+          "transition_to" => %{"type" => "string", "format" => "uuid"},
+          "transition_type" => %{
+            "type" => "string",
+            "enum" => ["intra_workflow", "inter_workflow"]
+          },
+          "handoff" => %{"type" => "object"},
+          "unknown_field" => %{"type" => "string"}
+        },
+        "required" => ["transition_to", "transition_type"],
+        "additionalProperties" => false
+      }
+
+      attrs = Map.merge(@valid_attrs, %{step_type: "route", output_schema: invalid_schema})
+      assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
+      assert %{output_schema: [message]} = errors_on(changeset)
+      assert String.contains?(message, "routing contract schema")
+    end
+
+    test "route steps auto-set schema including handoff stays consistent on update" do
+      workflow = create_workflow()
+
+      attrs = Map.merge(@valid_attrs, %{step_type: "route"})
+      {:ok, step} = WorkflowSteps.insert(workflow, attrs)
+
+      # Route steps should have auto-set the correct schema with handoff
+      expected_schema = %{
+        "type" => "object",
+        "properties" => %{
+          "transition_to" => %{"type" => "string", "format" => "uuid"},
+          "transition_type" => %{
+            "type" => "string",
+            "enum" => ["intra_workflow", "inter_workflow"]
+          },
+          "handoff" => %{"type" => "object"}
+        },
+        "required" => ["transition_to", "transition_type"],
+        "additionalProperties" => false
+      }
+
+      assert step.output_schema == expected_schema
+
+      # Update other fields and verify schema remains intact
+      {:ok, updated} = WorkflowSteps.update(step, %{name: "Updated Route Step"})
+      assert updated.output_schema == expected_schema
     end
   end
 end

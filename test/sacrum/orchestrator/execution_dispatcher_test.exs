@@ -224,4 +224,155 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       assert prompt == "Hello {{ undefined_variable }}"
     end
   end
+
+  describe "prior output exposure via execution data" do
+    setup [:setup_dispatch_context]
+
+    test "renders {{ execution.previous_output }} when prior completion exists", ctx do
+      step =
+        create_step(ctx.user, ctx.workflow, %{
+          "prompt" => "Prior output was: {{ execution.previous_output }}"
+        })
+
+      task = create_task(ctx.user, ctx.project)
+      task = assign_workflow(task, ctx.workflow)
+
+      # Create a prior completed execution
+      {:ok, _prior_exec} =
+        Accounts.StepExecutions.insert(ctx.user.id, %{
+          "task_id" => task.id,
+          "project_id" => task.project_id,
+          "workflow_id" => ctx.workflow.id,
+          "step_name" => "previous_step",
+          "status" => "completed",
+          "output" => "Analysis complete"
+        })
+
+      # Create current entered execution
+      _current_exec = create_entered_execution(ctx.user, task, step)
+
+      task = PromptRenderer.preload_for_rendering(task)
+
+      subscribe_to_project(ctx.project)
+
+      {:ok, _exec} = ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, step.id)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "run_step",
+        payload: %{prompt: prompt}
+      }
+
+      assert prompt == "Prior output was: Analysis complete"
+    end
+
+    test "renders {{ execution.previous_output }} as empty when no prior completion exists",
+         ctx do
+      step =
+        create_step(ctx.user, ctx.workflow, %{
+          "prompt" => "Prior output: '{{ execution.previous_output }}' (empty if none)"
+        })
+
+      task = create_task(ctx.user, ctx.project)
+      task = assign_workflow(task, ctx.workflow)
+      task = PromptRenderer.preload_for_rendering(task)
+
+      _execution = create_entered_execution(ctx.user, task, step)
+
+      subscribe_to_project(ctx.project)
+
+      {:ok, _exec} = ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, step.id)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "run_step",
+        payload: %{prompt: prompt}
+      }
+
+      # previous_output renders as empty string when no prior execution
+      assert prompt == "Prior output: '' (empty if none)"
+    end
+
+    test "multiple prior executions renders the most recent one", ctx do
+      step =
+        create_step(ctx.user, ctx.workflow, %{
+          "prompt" => "Latest: {{ execution.previous_output }}"
+        })
+
+      task = create_task(ctx.user, ctx.project)
+      task = assign_workflow(task, ctx.workflow)
+
+      # Create multiple prior completed executions
+      {:ok, _older} =
+        Accounts.StepExecutions.insert(ctx.user.id, %{
+          "task_id" => task.id,
+          "project_id" => task.project_id,
+          "workflow_id" => ctx.workflow.id,
+          "step_name" => "eval_step_1",
+          "status" => "completed",
+          "output" => "First analysis"
+        })
+
+      {:ok, _newer} =
+        Accounts.StepExecutions.insert(ctx.user.id, %{
+          "task_id" => task.id,
+          "project_id" => task.project_id,
+          "workflow_id" => ctx.workflow.id,
+          "step_name" => "eval_step_2",
+          "status" => "completed",
+          "output" => "Second analysis"
+        })
+
+      # Current entered execution
+      _current = create_entered_execution(ctx.user, task, step)
+
+      task = PromptRenderer.preload_for_rendering(task)
+
+      subscribe_to_project(ctx.project)
+
+      {:ok, _exec} = ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, step.id)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "run_step",
+        payload: %{prompt: prompt}
+      }
+
+      # Should render the most recent prior execution
+      assert prompt == "Latest: Second analysis"
+    end
+
+    test "handoff from entered execution is available in context", ctx do
+      step =
+        create_step(ctx.user, ctx.workflow, %{
+          "prompt" => "Handoff context: {{ execution.handoff | json_encode }}"
+        })
+
+      task = create_task(ctx.user, ctx.project)
+      task = assign_workflow(task, ctx.workflow)
+
+      # Create entered execution with handoff
+      {:ok, _execution} =
+        Accounts.StepExecutions.insert(ctx.user.id, %{
+          "task_id" => task.id,
+          "project_id" => task.project_id,
+          "workflow_id" => ctx.workflow.id,
+          "step_name" => step.name,
+          "status" => "entered",
+          "handoff" => %{"routing_key" => "user_approved"}
+        })
+
+      task = PromptRenderer.preload_for_rendering(task)
+
+      subscribe_to_project(ctx.project)
+
+      {:ok, _exec} = ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, step.id)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "run_step",
+        payload: %{prompt: prompt}
+      }
+
+      # Handoff should be available to the template
+      # Note: exact JSON format may vary, but handoff context should be accessible
+      assert String.contains?(prompt, "routing_key")
+    end
+  end
 end

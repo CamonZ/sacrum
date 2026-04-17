@@ -833,5 +833,406 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       task = reload_task(task)
       assert task.current_step_id == route_step.id
     end
+
+    test "route output with valid handoff map passes validation" do
+      user = create_user()
+      project = create_project(user)
+
+      workflow = create_workflow(user, project, auto_advance: false)
+
+      route_step =
+        create_step(user, workflow, %{
+          name: "route_step",
+          step_order: 1,
+          is_final: false,
+          step_type: "route"
+        })
+
+      dest_step =
+        create_step(user, workflow, %{
+          name: "dest_step",
+          step_order: 2,
+          is_final: true,
+          step_type: "execute"
+        })
+
+      create_transition(user, route_step, dest_step)
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: route_step.id})
+
+      task = create_task(user, project)
+      task = assign_workflow_to_task(task, workflow)
+
+      pid = start_orchestrator(task, user)
+      wait_for_state(pid, :executing)
+
+      # Valid output with handoff
+      output_with_handoff =
+        Jason.encode!(%{
+          "transition_to" => dest_step.id,
+          "transition_type" => "intra_workflow",
+          "handoff" => %{"data" => "context for destination"}
+        })
+
+      simulate_daemon_completion(task.id, project.id, output_with_handoff)
+
+      wait_for_exit(pid)
+
+      # Task should advance to destination step
+      task = reload_task(task)
+      assert task.current_step_id == dest_step.id
+    end
+
+    test "route output without handoff passes validation" do
+      user = create_user()
+      project = create_project(user)
+
+      workflow = create_workflow(user, project, auto_advance: false)
+
+      route_step =
+        create_step(user, workflow, %{
+          name: "route_step",
+          step_order: 1,
+          is_final: false,
+          step_type: "route"
+        })
+
+      dest_step =
+        create_step(user, workflow, %{
+          name: "dest_step",
+          step_order: 2,
+          is_final: true,
+          step_type: "execute"
+        })
+
+      create_transition(user, route_step, dest_step)
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: route_step.id})
+
+      task = create_task(user, project)
+      task = assign_workflow_to_task(task, workflow)
+
+      pid = start_orchestrator(task, user)
+      wait_for_state(pid, :executing)
+
+      # Output without handoff - backwards compatible
+      output_without_handoff =
+        Jason.encode!(%{
+          "transition_to" => dest_step.id,
+          "transition_type" => "intra_workflow"
+        })
+
+      simulate_daemon_completion(task.id, project.id, output_without_handoff)
+
+      wait_for_exit(pid)
+
+      # Task should advance to destination step
+      task = reload_task(task)
+      assert task.current_step_id == dest_step.id
+    end
+  end
+
+  describe "prior output exposure in orchestrator (eval → route)" do
+    test "completed eval step output is available to destination steps" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project, auto_advance: false)
+
+      eval_step =
+        create_step(user, workflow, %{
+          name: "eval_step",
+          step_order: 1,
+          is_final: false,
+          step_type: "evaluate",
+          prompt: "Evaluate the task"
+        })
+
+      dest_step =
+        create_step(user, workflow, %{
+          name: "dest_step",
+          step_order: 2,
+          is_final: true,
+          step_type: "execute"
+        })
+
+      create_transition(user, eval_step, dest_step)
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: eval_step.id})
+
+      task = create_task(user, project)
+      task = assign_workflow_to_task(task, workflow)
+
+      pid = start_orchestrator(task, user)
+      wait_for_state(pid, :executing)
+
+      # Simulate eval completion with specific output
+      eval_output = "Task is complex and needs review"
+      simulate_daemon_completion(task.id, project.id, eval_output)
+
+      wait_for_exit(pid)
+
+      # Task should advance to destination step
+      task = reload_task(task)
+      assert task.current_step_id == dest_step.id
+
+      # Verify the eval step has the output persisted
+      executions = get_all_executions(task.id)
+      assert length(executions) >= 2
+      eval_exec = Enum.find(executions, &(&1.step_name == "eval_step"))
+      assert eval_exec.status == "completed"
+      assert eval_exec.output == eval_output
+    end
+  end
+
+  describe "handoff propagation in intra-workflow routing" do
+    test "route step handoff appears in destination step prompt" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project, auto_advance: false)
+
+      route_step =
+        create_step(user, workflow, %{
+          name: "route_step",
+          step_order: 1,
+          is_final: false,
+          step_type: "route",
+          prompt: "Route the task"
+        })
+
+      dest_step =
+        create_step(user, workflow, %{
+          name: "dest_step",
+          step_order: 2,
+          is_final: true,
+          step_type: "execute",
+          prompt: "Handoff context: {{ execution.handoff | json_encode }}"
+        })
+
+      create_transition(user, route_step, dest_step)
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: route_step.id})
+
+      task = create_task(user, project)
+      task = assign_workflow_to_task(task, workflow)
+
+      pid = start_orchestrator(task, user)
+      wait_for_state(pid, :executing)
+
+      # Route with handoff
+      route_output =
+        Jason.encode!(%{
+          "transition_to" => dest_step.id,
+          "transition_type" => "intra_workflow",
+          "handoff" => %{"approved_by" => "admin", "priority" => "high"}
+        })
+
+      simulate_daemon_completion(task.id, project.id, route_output)
+
+      wait_for_exit(pid)
+
+      # Task advanced to destination
+      task = reload_task(task)
+      assert task.current_step_id == dest_step.id
+
+      # Verify the destination step execution has handoff persisted
+      executions = get_all_executions(task.id)
+      dest_exec = Enum.find(executions, &(&1.step_name == "dest_step"))
+      assert dest_exec != nil
+      assert dest_exec.handoff == %{"approved_by" => "admin", "priority" => "high"}
+    end
+
+    test "route step without handoff still allows destination execution" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project, auto_advance: false)
+
+      route_step =
+        create_step(user, workflow, %{
+          name: "route_step",
+          step_order: 1,
+          is_final: false,
+          step_type: "route"
+        })
+
+      dest_step =
+        create_step(user, workflow, %{
+          name: "dest_step",
+          step_order: 2,
+          is_final: true,
+          step_type: "execute"
+        })
+
+      create_transition(user, route_step, dest_step)
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: route_step.id})
+
+      task = create_task(user, project)
+      task = assign_workflow_to_task(task, workflow)
+
+      pid = start_orchestrator(task, user)
+      wait_for_state(pid, :executing)
+
+      # Route without handoff (backwards compatibility)
+      route_output =
+        Jason.encode!(%{
+          "transition_to" => dest_step.id,
+          "transition_type" => "intra_workflow"
+        })
+
+      simulate_daemon_completion(task.id, project.id, route_output)
+
+      wait_for_exit(pid)
+
+      # Task advanced normally
+      task = reload_task(task)
+      assert task.current_step_id == dest_step.id
+
+      # Destination execution should have nil or no handoff
+      executions = get_all_executions(task.id)
+      dest_exec = Enum.find(executions, &(&1.step_name == "dest_step"))
+      assert dest_exec != nil
+      assert dest_exec.handoff == nil
+    end
+  end
+
+  describe "handoff propagation in inter-workflow routing" do
+    test "route step handoff survives inter-workflow transition" do
+      user = create_user()
+      project = create_project(user)
+
+      # Workflow 1: has route step
+      workflow1 = create_workflow(user, project, auto_advance: false, name: "Workflow 1")
+
+      route_step =
+        create_step(user, workflow1, %{
+          name: "route_step",
+          step_order: 1,
+          is_final: true,
+          step_type: "route",
+          prompt: "Route to workflow 2"
+        })
+
+      {:ok, _} = Accounts.Workflows.update(workflow1, %{initial_step_id: route_step.id})
+
+      # Workflow 2: destination workflow with initial step
+      workflow2 = create_workflow(user, project, auto_advance: false, name: "Workflow 2")
+
+      dest_step =
+        create_step(user, workflow2, %{
+          name: "dest_step",
+          step_order: 1,
+          is_final: true,
+          step_type: "execute",
+          prompt: "Received handoff: {{ execution.handoff | json_encode }}"
+        })
+
+      {:ok, _} = Accounts.Workflows.update(workflow2, %{initial_step_id: dest_step.id})
+
+      # Create inter-workflow transition
+      {:ok, _transition} =
+        Accounts.WorkflowTransitions.insert(user.id, %{
+          "from_workflow_id" => workflow1.id,
+          "to_workflow_id" => workflow2.id,
+          "project_id" => project.id
+        })
+
+      task = create_task(user, project)
+      task = assign_workflow_to_task(task, workflow1)
+
+      pid = start_orchestrator(task, user)
+      wait_for_state(pid, :executing)
+
+      # Route to different workflow with handoff
+      route_output =
+        Jason.encode!(%{
+          "transition_to" => workflow2.id,
+          "transition_type" => "inter_workflow",
+          "handoff" => %{"transferred_from" => "workflow1", "data" => "context"}
+        })
+
+      simulate_daemon_completion(task.id, project.id, route_output)
+
+      wait_for_exit(pid)
+
+      # Task should now be in workflow2 at dest_step
+      task = reload_task(task)
+      assert task.workflow_id == workflow2.id
+      assert task.current_step_id == dest_step.id
+
+      # Verify handoff persisted across workflow boundary
+      executions = get_all_executions(task.id)
+      dest_exec = Enum.find(executions, &(&1.step_name == "dest_step"))
+      assert dest_exec != nil
+      assert dest_exec.handoff == %{"transferred_from" => "workflow1", "data" => "context"}
+    end
+
+    test "inter-workflow handoff with transition target_step override" do
+      user = create_user()
+      project = create_project(user)
+
+      # Workflow 1: route step
+      workflow1 = create_workflow(user, project, auto_advance: false, name: "Workflow 1")
+
+      route_step =
+        create_step(user, workflow1, %{
+          name: "route_step",
+          step_order: 1,
+          is_final: true,
+          step_type: "route"
+        })
+
+      {:ok, _} = Accounts.Workflows.update(workflow1, %{initial_step_id: route_step.id})
+
+      # Workflow 2: has multiple steps
+      workflow2 = create_workflow(user, project, auto_advance: false, name: "Workflow 2")
+
+      step2_1 =
+        create_step(user, workflow2, %{
+          name: "dest_step_1",
+          step_order: 1,
+          is_final: false,
+          step_type: "execute"
+        })
+
+      step2_2 =
+        create_step(user, workflow2, %{
+          name: "dest_step_2",
+          step_order: 2,
+          is_final: true,
+          step_type: "execute"
+        })
+
+      {:ok, _} = Accounts.Workflows.update(workflow2, %{initial_step_id: step2_1.id})
+
+      # Create inter-workflow transition with target_step override
+      {:ok, _transition} =
+        Accounts.WorkflowTransitions.insert(user.id, %{
+          "from_workflow_id" => workflow1.id,
+          "to_workflow_id" => workflow2.id,
+          "target_step_id" => step2_2.id,
+          "project_id" => project.id
+        })
+
+      task = create_task(user, project)
+      task = assign_workflow_to_task(task, workflow1)
+
+      pid = start_orchestrator(task, user)
+      wait_for_state(pid, :executing)
+
+      route_output =
+        Jason.encode!(%{
+          "transition_to" => workflow2.id,
+          "transition_type" => "inter_workflow",
+          "handoff" => %{"cross_workflow" => "data"}
+        })
+
+      simulate_daemon_completion(task.id, project.id, route_output)
+
+      wait_for_exit(pid)
+
+      task = reload_task(task)
+      assert task.workflow_id == workflow2.id
+      # Should go to target_step (step2_2) not initial step
+      assert task.current_step_id == step2_2.id
+
+      executions = get_all_executions(task.id)
+      dest_exec = Enum.find(executions, &(&1.step_name == "dest_step_2"))
+      assert dest_exec.handoff == %{"cross_workflow" => "data"}
+    end
   end
 end

@@ -28,6 +28,7 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
     field :output_tokens, :integer
     field :cost, :decimal
     field :duration_ms, :integer
+    field :handoff, :json
     field :inserted_at, :datetime
     field :updated_at, :datetime
 

@@ -338,10 +338,10 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     task_id = data.task.id
 
     with {:ok, execution} <- get_latest_execution(task_id),
-         {:ok, %{"transition_to" => dest_id, "transition_type" => transition_type}} <-
+         {:ok, %{transition_to: dest_id, transition_type: transition_type, handoff: handoff}} <-
            parse_route_output(execution.output),
          {:ok, updated_task} <-
-           route_task_to_destination(data, dest_id, transition_type) do
+           route_task_to_destination(data, dest_id, transition_type, handoff) do
       ExecutionPool.release_slot(data.slot_id)
 
       case transition_type do
@@ -407,7 +407,12 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     case {Map.get(decoded, "transition_to"), Map.get(decoded, "transition_type")} do
       {dest_id, type}
       when is_binary(dest_id) and type in ["intra_workflow", "inter_workflow"] ->
-        {:ok, %{"transition_to" => dest_id, "transition_type" => type}}
+        {:ok,
+         %{
+           transition_to: dest_id,
+           transition_type: type,
+           handoff: Map.get(decoded, "handoff")
+         }}
 
       _ ->
         {:error, :invalid_route_output_format}
@@ -432,20 +437,21 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     end
   end
 
-  defp route_task_to_destination(data, dest_id, "intra_workflow") do
-    handle_intra_workflow_routing(data, dest_id)
+  defp route_task_to_destination(data, dest_id, "intra_workflow", handoff) do
+    handle_intra_workflow_routing(data, dest_id, handoff)
   end
 
-  defp route_task_to_destination(data, dest_id, "inter_workflow") do
-    handle_inter_workflow_routing(data, dest_id)
+  defp route_task_to_destination(data, dest_id, "inter_workflow", handoff) do
+    handle_inter_workflow_routing(data, dest_id, handoff)
   end
 
-  defp handle_intra_workflow_routing(data, dest_step_id) do
+  defp handle_intra_workflow_routing(data, dest_step_id, handoff) do
     task_id = data.task.id
 
     with {:ok, _dest_step} <- validate_destination_step(data, dest_step_id),
          :ok <- validate_step_transition_exists(data.task.current_step_id, dest_step_id),
-         {:ok, updated_task} <- TaskWorkflows.advance_to_step(data.task, dest_step_id) do
+         {:ok, updated_task} <- TaskWorkflows.advance_to_step(data.task, dest_step_id),
+         :ok <- persist_handoff_to_destination(updated_task, dest_step_id, handoff) do
       Logger.info(
         "[TaskOrchestrator:#{task_id}] Route step routed intra_workflow to step #{dest_step_id}"
       )
@@ -461,14 +467,14 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     end
   end
 
-  defp handle_inter_workflow_routing(data, dest_workflow_id) do
+  defp handle_inter_workflow_routing(data, dest_workflow_id, handoff) do
     task_id = data.task.id
 
     with {:ok, dest_workflow} <- validate_destination_workflow(data, dest_workflow_id),
          :ok <- validate_workflow_transition_exists(data.task.workflow_id, dest_workflow_id),
          target_step_id <- get_target_step_for_workflow_transition(data, dest_workflow_id),
          {:ok, updated_task} <-
-           assign_destination_workflow(data.task, dest_workflow, target_step_id) do
+           assign_destination_workflow(data.task, dest_workflow, target_step_id, handoff) do
       Logger.info(
         "[TaskOrchestrator:#{task_id}] Route step routed inter_workflow to workflow #{dest_workflow_id}"
       )
@@ -536,6 +542,32 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     end
   end
 
+  # Best-effort: locate the newly-entered execution for the destination step and
+  # store the handoff on it. If the step or execution isn't found we simply skip.
+  defp persist_handoff_to_destination(_task, _dest_step_id, nil), do: :ok
+
+  defp persist_handoff_to_destination(task, dest_step_id, handoff) do
+    with %WorkflowStep{name: step_name} <- Repo.get(WorkflowStep, dest_step_id),
+         %StepExecution{} = execution <- find_entered_execution_by_step(task.id, step_name),
+         {:ok, _} <- Repo.update(StepExecution.update_changeset(execution, %{handoff: handoff})) do
+      :ok
+    else
+      _ -> :ok
+    end
+  end
+
+  defp find_entered_execution_by_step(task_id, step_name) do
+    query =
+      from(e in StepExecution,
+        where:
+          e.task_id == ^task_id and e.status == "entered" and
+            e.step_name == ^step_name,
+        limit: 1
+      )
+
+    Repo.one(query)
+  end
+
   defp get_target_step_for_workflow_transition(data, to_workflow_id) do
     query =
       from(t in WorkflowTransition,
@@ -548,11 +580,11 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     Repo.one(query)
   end
 
-  defp assign_destination_workflow(task, dest_workflow, target_step_id) do
+  defp assign_destination_workflow(task, dest_workflow, target_step_id, handoff) do
     dest_workflow = Repo.preload(dest_workflow, :workflow_steps)
 
     with {:ok, target_step} <- resolve_target_step(dest_workflow, target_step_id) do
-      do_assign_destination_workflow(task, dest_workflow, target_step)
+      do_assign_destination_workflow(task, dest_workflow, target_step, handoff)
     end
   end
 
@@ -579,7 +611,15 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     end
   end
 
-  defp do_assign_destination_workflow(task, dest_workflow, target_step) do
+  defp do_assign_destination_workflow(task, dest_workflow, target_step, handoff) do
+    step_exec_attrs = %{
+      task_id: task.id,
+      workflow_id: dest_workflow.id,
+      step_name: target_step.name,
+      status: "entered",
+      handoff: handoff
+    }
+
     multi =
       Multi.new()
       |> Multi.update(
@@ -596,12 +636,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
             user_id: task.user_id,
             project_id: task.project_id
           },
-          %{
-            task_id: task.id,
-            workflow_id: dest_workflow.id,
-            step_name: target_step.name,
-            status: "entered"
-          }
+          step_exec_attrs
         )
       )
 

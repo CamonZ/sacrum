@@ -3175,6 +3175,163 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["transitionResult"] == "approved"
       assert data["durationMs"] == 1500
     end
+
+    test "createStepExecution rejects handoff argument (not exposed to mutations)", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+
+      # Attempt to set handoff in createStepExecution
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql(~s"""
+          mutation {
+            createStepExecution(
+              taskId: "#{task.id}"
+              workflowId: "#{wf.id}"
+              stepName: "analysis"
+              status: "running"
+              handoff: "{\\"key\\": \\"value\\"}"
+            ) { id stepName status }
+          }
+        """)
+        |> json_response(200)
+
+      # Should get a GraphQL validation error (invalid argument)
+      assert result["errors"] != nil
+      error_message = Enum.find(result["errors"], &String.contains?(&1["message"], "handoff"))
+      assert error_message != nil
+    end
+
+    test "updateStepExecution rejects handoff argument (not exposed to mutations)", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+
+      {:ok, exec} =
+        Accounts.StepExecutions.insert(user.id, %{
+          task_id: task.id,
+          workflow_id: wf.id,
+          project_id: project.id,
+          step_name: "step_1",
+          status: "running"
+        })
+
+      # Attempt to set handoff in updateStepExecution
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql(~s"""
+          mutation {
+            updateStepExecution(
+              id: "#{exec.id}"
+              status: "completed"
+              handoff: "{\\"key\\": \\"value\\"}"
+            ) { id status }
+          }
+        """)
+        |> json_response(200)
+
+      # Should get a GraphQL validation error (invalid argument)
+      assert result["errors"] != nil
+      error_message = Enum.find(result["errors"], &String.contains?(&1["message"], "handoff"))
+      assert error_message != nil
+    end
+
+    test "stepExecution field returns handoff when set by orchestrator", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+
+      # Create execution with handoff (simulating orchestrator setting it)
+      {:ok, exec} =
+        Accounts.StepExecutions.insert(user.id, %{
+          task_id: task.id,
+          workflow_id: wf.id,
+          project_id: project.id,
+          step_name: "step_1",
+          status: "completed",
+          handoff: %{"context" => "data", "nested" => %{"key" => "value"}}
+        })
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql(~s|{ stepExecution(id: "#{exec.id}") { id handoff } }|)
+        |> json_response(200)
+
+      data = result["data"]["stepExecution"]
+      assert data["id"] == exec.id
+      assert data["handoff"] == %{"context" => "data", "nested" => %{"key" => "value"}}
+    end
+
+    test "stepExecution field returns nil for handoff when not set", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+
+      {:ok, exec} =
+        Accounts.StepExecutions.insert(user.id, %{
+          task_id: task.id,
+          workflow_id: wf.id,
+          project_id: project.id,
+          step_name: "step_1",
+          status: "completed"
+        })
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql(~s|{ stepExecution(id: "#{exec.id}") { id handoff } }|)
+        |> json_response(200)
+
+      data = result["data"]["stepExecution"]
+      assert data["id"] == exec.id
+      # handoff should be null when not set
+      assert data["handoff"] == nil
+    end
+
+    test "stepExecutions query includes handoff field", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+
+      {:ok, exec} =
+        Accounts.StepExecutions.insert(user.id, %{
+          task_id: task.id,
+          workflow_id: wf.id,
+          project_id: project.id,
+          step_name: "step_1",
+          status: "completed",
+          handoff: %{"approved" => true}
+        })
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql(~s|{ stepExecutions(taskId: "#{task.id}") { id handoff } }|)
+        |> json_response(200)
+
+      found = Enum.find(result["data"]["stepExecutions"], &(&1["id"] == exec.id))
+      assert found != nil
+      assert found["handoff"] == %{"approved" => true}
+    end
   end
 
   describe "section field coverage" do

@@ -124,7 +124,7 @@ defmodule Sacrum.Orchestrator.PromptRenderer do
   @doc """
   Builds the execution context map.
 
-  Extracts previous execution output, retry count, duration, and execution history.
+  Extracts previous execution output, retry count, duration, execution history, and handoff.
   All keys are strings for Liquid compatibility.
   """
   @spec build_execution_context(map()) :: map()
@@ -134,12 +134,14 @@ defmodule Sacrum.Orchestrator.PromptRenderer do
     retry_count = execution_data[:retry_count] || 0
     duration_ms = execution_data[:duration_ms]
     history = execution_data[:history] || []
+    handoff = execution_data[:handoff]
 
     reject_nil_values(%{
       "previous_output" => to_string(previous_output),
       "retry_count" => retry_count,
       "duration_ms" => duration_ms,
-      "history" => build_history_list(history)
+      "history" => build_history_list(history),
+      "handoff" => handoff
     })
   end
 
