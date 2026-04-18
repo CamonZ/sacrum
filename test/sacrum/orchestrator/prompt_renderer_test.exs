@@ -66,12 +66,12 @@ defmodule Sacrum.Orchestrator.PromptRendererTest do
       assert result == "Charlie"
     end
 
-    test "nested access with missing key returns raw template in strict mode" do
-      template = "{{ task.missing }}"
+    test "nested access with missing key renders as empty" do
+      template = "before {{ task.missing }} after"
       context = %{"task" => %{"title" => "Fix"}}
 
       assert {:ok, result} = PromptRenderer.render(template, context)
-      assert result == template
+      assert result == "before  after"
     end
   end
 
@@ -169,23 +169,33 @@ defmodule Sacrum.Orchestrator.PromptRendererTest do
     end
   end
 
-  describe "render/2 - strict mode errors" do
-    test "undefined variable logs warning and returns raw template" do
-      template = "Hello {{ undefined_var }}"
+  describe "render/2 - undefined variables" do
+    test "undefined variable renders as empty" do
+      template = "Hello {{ undefined_var }}!"
       context = %{"other" => "value"}
 
-      assert capture_log(fn ->
-               assert {:ok, ^template} = PromptRenderer.render(template, context)
-             end) =~ "Solid render error"
+      assert {:ok, "Hello !"} = PromptRenderer.render(template, context)
     end
 
-    test "multiple undefined variables" do
+    test "multiple undefined variables render as empty" do
       template = "{{ a }} and {{ b }}"
       context = %{}
 
-      assert capture_log(fn ->
-               assert {:ok, ^template} = PromptRenderer.render(template, context)
-             end) =~ "Solid render error"
+      assert {:ok, " and "} = PromptRenderer.render(template, context)
+    end
+
+    test "for loop over undefined collection renders nothing" do
+      template = "before {% for item in missing %}- {{ item }}\n{% endfor %}after"
+      context = %{}
+
+      assert {:ok, "before after"} = PromptRenderer.render(template, context)
+    end
+
+    test "if guard on undefined variable suppresses branch" do
+      template = "{% if task.missing %}shown{% else %}hidden{% endif %}"
+      context = %{"task" => %{}}
+
+      assert {:ok, "hidden"} = PromptRenderer.render(template, context)
     end
   end
 
