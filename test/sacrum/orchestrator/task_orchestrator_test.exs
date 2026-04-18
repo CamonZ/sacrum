@@ -1284,4 +1284,306 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       assert dest_exec.handoff == %{"cross_workflow" => "data"}
     end
   end
+
+  describe "route decision persistence (Fix 3)" do
+    test "persists route decision to transition_result on successful intra-workflow routing" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project, auto_advance: false)
+
+      route_step =
+        create_step(user, workflow, %{
+          name: "route_step",
+          step_order: 1,
+          is_final: false,
+          step_type: "route"
+        })
+
+      dest_step =
+        create_step(user, workflow, %{
+          name: "dest_step",
+          step_order: 2,
+          is_final: true,
+          step_type: "execute"
+        })
+
+      create_transition(user, route_step, dest_step)
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: route_step.id})
+
+      task = create_task(user, project)
+      task = assign_workflow_to_task(task, workflow)
+
+      pid = start_orchestrator(task, user)
+      wait_for_state(pid, :executing)
+
+      route_output =
+        Jason.encode!(%{
+          "transition_to" => dest_step.id,
+          "transition_type" => "intra_workflow",
+          "handoff" => %{"data" => "value"}
+        })
+
+      simulate_daemon_completion(task.id, project.id, route_output)
+      wait_for_exit(pid)
+
+      # Verify route step execution has transition_result populated
+      executions =
+        from(e in StepExecution,
+          where: e.task_id == ^task.id and e.step_name == "route_step",
+          order_by: [desc: :inserted_at],
+          limit: 1
+        )
+        |> Repo.all()
+
+      assert length(executions) == 1
+      route_exec = List.first(executions)
+      assert route_exec.transition_result != nil
+
+      # Decode and verify the stored routing decision
+      {:ok, decoded} = Jason.decode(route_exec.transition_result)
+      assert decoded["dest_id"] == dest_step.id
+      assert decoded["transition_type"] == "intra_workflow"
+    end
+
+    test "persists route decision for inter-workflow routing" do
+      user = create_user()
+      project = create_project(user)
+
+      # Workflow 1: has route step
+      workflow1 = create_workflow(user, project, auto_advance: false)
+
+      route_step =
+        create_step(user, workflow1, %{
+          name: "route_step",
+          step_order: 1,
+          is_final: true,
+          step_type: "route"
+        })
+
+      {:ok, _} = Accounts.Workflows.update(workflow1, %{initial_step_id: route_step.id})
+
+      # Workflow 2: has a step
+      workflow2 = create_workflow(user, project, auto_advance: false)
+
+      dest_step =
+        create_step(user, workflow2, %{
+          name: "dest_step",
+          step_order: 1,
+          is_final: true,
+          step_type: "execute"
+        })
+
+      {:ok, _} = Accounts.Workflows.update(workflow2, %{initial_step_id: dest_step.id})
+
+      # Create workflow transition
+      {:ok, _transition} =
+        Accounts.WorkflowTransitions.insert(user.id, %{
+          "from_workflow_id" => workflow1.id,
+          "to_workflow_id" => workflow2.id,
+          "project_id" => project.id
+        })
+
+      task = create_task(user, project)
+      task = assign_workflow_to_task(task, workflow1)
+
+      pid = start_orchestrator(task, user)
+      wait_for_state(pid, :executing)
+
+      route_output =
+        Jason.encode!(%{
+          "transition_to" => workflow2.id,
+          "transition_type" => "inter_workflow"
+        })
+
+      simulate_daemon_completion(task.id, project.id, route_output)
+      wait_for_exit(pid)
+
+      # Verify route step execution has transition_result populated
+      executions =
+        from(e in StepExecution,
+          where: e.task_id == ^task.id and e.step_name == "route_step",
+          order_by: [desc: :inserted_at],
+          limit: 1
+        )
+        |> Repo.all()
+
+      assert length(executions) == 1
+      route_exec = List.first(executions)
+      assert route_exec.transition_result != nil
+
+      # Decode and verify the stored routing decision
+      {:ok, decoded} = Jason.decode(route_exec.transition_result)
+      assert decoded["dest_id"] == workflow2.id
+      assert decoded["transition_type"] == "inter_workflow"
+    end
+  end
+
+  describe "routing error handling and failure surfacing (Fix 2)" do
+    test "transitions to :failed and logs when routing validation fails" do
+      import ExUnit.CaptureLog
+
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project, auto_advance: false)
+
+      route_step =
+        create_step(user, workflow, %{
+          name: "route_step",
+          step_order: 1,
+          is_final: false,
+          step_type: "route"
+        })
+
+      dest_step =
+        create_step(user, workflow, %{
+          name: "dest_step",
+          step_order: 2,
+          is_final: true,
+          step_type: "execute"
+        })
+
+      # Intentionally omit the StepTransition so validate_step_transition_exists fails
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: route_step.id})
+
+      task = create_task(user, project)
+      task = assign_workflow_to_task(task, workflow)
+
+      pid = start_orchestrator(task, user)
+      wait_for_state(pid, :executing)
+
+      route_output =
+        Jason.encode!(%{
+          "transition_to" => dest_step.id,
+          "transition_type" => "intra_workflow"
+        })
+
+      logs =
+        capture_log(fn ->
+          simulate_daemon_completion(task.id, project.id, route_output)
+          wait_for_exit(pid)
+        end)
+
+      assert logs =~ "[TaskOrchestrator:#{task.id}]"
+      assert logs =~ "Error in route transition"
+      assert logs =~ "-> :failed"
+
+      task_reloaded = reload_task(task)
+      assert task_reloaded.current_step_id == route_step.id
+    end
+
+    test "transitions to :failed on malformed route output" do
+      import ExUnit.CaptureLog
+
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project, auto_advance: false)
+
+      route_step =
+        create_step(user, workflow, %{
+          name: "route_step",
+          step_order: 1,
+          is_final: true,
+          step_type: "route"
+        })
+
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: route_step.id})
+
+      task = create_task(user, project)
+      task = assign_workflow_to_task(task, workflow)
+
+      pid = start_orchestrator(task, user)
+      wait_for_state(pid, :executing)
+
+      route_output = Jason.encode!(%{"transition_to" => Ecto.UUID.generate()})
+
+      logs =
+        capture_log(fn ->
+          simulate_daemon_completion(task.id, project.id, route_output)
+          wait_for_exit(pid)
+        end)
+
+      assert logs =~ "[TaskOrchestrator:#{task.id}]"
+      assert logs =~ "-> :failed"
+
+      task_reloaded = reload_task(task)
+      assert task_reloaded.current_step_id == route_step.id
+    end
+  end
+
+  describe "terminate/3 trace logging" do
+    setup do
+      prev_level = Logger.level()
+      Logger.configure(level: :info)
+      on_exit(fn -> Logger.configure(level: prev_level) end)
+      :ok
+    end
+
+    test "emits terminate log on normal shutdown so exit path is traceable" do
+      import ExUnit.CaptureLog
+
+      %{user: user, project: project, task: task} =
+        setup_linear_workflow(step_count: 1)
+
+      logs =
+        capture_log(fn ->
+          pid = start_orchestrator(task, user)
+          wait_for_state(pid, :executing)
+          simulate_daemon_completion(task.id, project.id)
+          wait_for_exit(pid)
+        end)
+
+      assert logs =~ "[TaskOrchestrator:#{task.id}] terminate reason=:normal"
+    end
+
+    test "logs route decision before persisting so forensics survive downstream crashes" do
+      import ExUnit.CaptureLog
+
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project, auto_advance: false)
+
+      route_step =
+        create_step(user, workflow, %{
+          name: "route_step",
+          step_order: 1,
+          is_final: false,
+          step_type: "route"
+        })
+
+      dest_step =
+        create_step(user, workflow, %{
+          name: "dest_step",
+          step_order: 2,
+          is_final: true,
+          step_type: "execute"
+        })
+
+      create_transition(user, route_step, dest_step)
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: route_step.id})
+
+      task = create_task(user, project)
+      task = assign_workflow_to_task(task, workflow)
+
+      pid = start_orchestrator(task, user)
+      wait_for_state(pid, :executing)
+
+      route_output =
+        Jason.encode!(%{
+          "transition_to" => dest_step.id,
+          "transition_type" => "intra_workflow",
+          "handoff" => %{"feedback" => "needs_changes"}
+        })
+
+      logs =
+        capture_log(fn ->
+          simulate_daemon_completion(task.id, project.id, route_output)
+          wait_for_exit(pid)
+        end)
+
+      assert logs =~ "route decision"
+      assert logs =~ "dest_id=#{dest_step.id}"
+      assert logs =~ "transition_type=intra_workflow"
+      assert logs =~ ~s|handoff_keys=["feedback"]|
+    end
+  end
 end
