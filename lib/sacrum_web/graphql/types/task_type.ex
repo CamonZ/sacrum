@@ -6,7 +6,10 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
   use Absinthe.Schema.Notation
   import Absinthe.Resolution.Helpers
 
+  require Logger
+
   alias Sacrum.Accounts
+  alias Sacrum.Orchestrator.TaskRegistry
   alias Sacrum.Repo.TaskDependencies
   alias Sacrum.Repo.TaskWorkflows
 
@@ -263,8 +266,13 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
     field :unassign_workflow, :task do
       arg(:task_id, non_null(:uuid4))
 
-      resolve(fn %{task_id: task_id}, %{context: %{current_user: user}} ->
-        with {:ok, task} <- Accounts.Tasks.find(user.id, task_id) do
+      resolve(fn %{task_id: task_id}, resolution_context ->
+        current_user = resolution_context.context.current_user
+        api_token = resolution_context.context[:api_token]
+
+        with :ok <-
+               check_fsm_mutation_allowed(task_id, api_token, "unassignWorkflow", current_user),
+             {:ok, task} <- Accounts.Tasks.find(current_user.id, task_id) do
           TaskWorkflows.unassign_workflow(task)
         end
       end)
@@ -274,8 +282,12 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
       arg(:task_id, non_null(:uuid4))
       arg(:step_id, non_null(:uuid4))
 
-      resolve(fn %{task_id: task_id, step_id: step_id}, %{context: %{current_user: user}} ->
-        with {:ok, task} <- Accounts.Tasks.find(user.id, task_id) do
+      resolve(fn %{task_id: task_id, step_id: step_id}, resolution_context ->
+        current_user = resolution_context.context.current_user
+        api_token = resolution_context.context[:api_token]
+
+        with :ok <- check_fsm_mutation_allowed(task_id, api_token, "moveToStep", current_user),
+             {:ok, task} <- Accounts.Tasks.find(current_user.id, task_id) do
           TaskWorkflows.move_to_step(task, step_id)
         end
       end)
@@ -286,8 +298,12 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
       arg(:task_id, non_null(:uuid4))
       arg(:step_id, non_null(:uuid4))
 
-      resolve(fn %{task_id: task_id, step_id: step_id}, %{context: %{current_user: user}} ->
-        with {:ok, task} <- Accounts.Tasks.find(user.id, task_id) do
+      resolve(fn %{task_id: task_id, step_id: step_id}, resolution_context ->
+        current_user = resolution_context.context.current_user
+        api_token = resolution_context.context[:api_token]
+
+        with :ok <- check_fsm_mutation_allowed(task_id, api_token, "advanceToStep", current_user),
+             {:ok, task} <- Accounts.Tasks.find(current_user.id, task_id) do
           TaskWorkflows.advance_to_step(task, step_id)
         end
       end)
@@ -337,5 +353,39 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
     field :section_order, :integer
     field :done, :boolean
     field :done_at, :datetime
+  end
+
+  defp check_fsm_mutation_allowed(task_id, api_token, mutation_name, user) do
+    has_active_orchestrator = Registry.lookup(TaskRegistry, task_id) != []
+    is_daemon_token = daemon_scoped_token?(api_token)
+
+    if has_active_orchestrator or is_daemon_token do
+      caller_identity = get_caller_identity(api_token, user)
+
+      Logger.warning(
+        "[GraphQL.TaskType] FSM mutation rejected: task_id=#{task_id} mutation=#{mutation_name} has_active_orchestrator=#{has_active_orchestrator} is_daemon_token=#{is_daemon_token} caller=#{caller_identity}"
+      )
+
+      {:error,
+       message: "Cannot #{mutation_name} for task with active orchestrator or daemon-scoped token"}
+    else
+      :ok
+    end
+  end
+
+  defp daemon_scoped_token?(api_token) when is_map(api_token) do
+    scopes = Map.get(api_token, :scopes, [])
+    "daemon" in scopes
+  end
+
+  defp daemon_scoped_token?(_), do: false
+
+  defp get_caller_identity(api_token, user) when is_map(api_token) do
+    token_name = Map.get(api_token, :name, "unknown")
+    "#{user.email} via token:#{token_name}"
+  end
+
+  defp get_caller_identity(_, user) do
+    user.email
   end
 end

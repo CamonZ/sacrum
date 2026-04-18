@@ -2,6 +2,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
   use Sacrum.DataCase, async: false
 
   import Ecto.Query
+  import ExUnit.CaptureLog
 
   alias Sacrum.Accounts
   alias Sacrum.Orchestrator.TaskOrchestrator
@@ -751,7 +752,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
   end
 
   describe "route step output validation" do
-    test "fails when route step output is not valid JSON" do
+    test "retries on invalid JSON and succeeds when second attempt is valid" do
       user = create_user()
       project = create_project(user)
 
@@ -782,8 +783,277 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       pid = start_orchestrator(task, user)
       wait_for_state(pid, :executing)
 
-      # Invalid JSON output
+      # First attempt: invalid JSON output
       simulate_daemon_completion(task.id, project.id, "not valid json{")
+
+      # FSM should still be in :executing (retrying)
+      Process.sleep(50)
+      assert {:executing, _} = :sys.get_state(pid)
+
+      # Verify a new "entered" execution was created for the retry
+      executions = get_all_executions(task.id)
+      assert length(executions) == 2, "Should have 2 executions (initial + retry)"
+      assert Enum.all?(executions, &(&1.step_name == "route_step"))
+
+      assert Enum.count(executions, &(&1.status == "entered")) == 1,
+             "Should have exactly 1 entered execution for the retry"
+
+      # Second attempt: valid JSON output
+      valid_output =
+        Jason.encode!(%{
+          "transition_to" => dest_step.id,
+          "transition_type" => "intra_workflow"
+        })
+
+      simulate_daemon_completion(task.id, project.id, valid_output)
+
+      wait_for_exit(pid)
+
+      # Task should have routed to destination step
+      task = reload_task(task)
+      assert task.current_step_id == dest_step.id
+    end
+
+    test "logs each retry attempt with attempt count and decode error reason" do
+      user = create_user()
+      project = create_project(user)
+
+      workflow = create_workflow(user, project, auto_advance: false)
+
+      route_step =
+        create_step(user, workflow, %{
+          name: "route_step",
+          step_order: 1,
+          is_final: false,
+          step_type: "route"
+        })
+
+      dest_step =
+        create_step(user, workflow, %{
+          name: "dest_step",
+          step_order: 2,
+          is_final: true,
+          step_type: "execute"
+        })
+
+      create_transition(user, route_step, dest_step)
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: route_step.id})
+
+      task = create_task(user, project)
+      task = assign_workflow_to_task(task, workflow)
+
+      pid = start_orchestrator(task, user)
+      wait_for_state(pid, :executing)
+
+      original_level = Logger.level()
+      Logger.configure(level: :info)
+      on_exit(fn -> Logger.configure(level: original_level) end)
+
+      log =
+        capture_log(fn ->
+          simulate_daemon_completion(task.id, project.id, "not valid json{")
+          Process.sleep(100)
+        end)
+
+      assert log =~ "Route step output decode failed"
+      assert log =~ "reason: :invalid_json_output"
+      assert log =~ "attempt 1/2"
+    end
+
+    test "creates new entered execution on retry" do
+      user = create_user()
+      project = create_project(user)
+
+      workflow = create_workflow(user, project, auto_advance: false)
+
+      route_step =
+        create_step(user, workflow, %{
+          name: "route_step",
+          step_order: 1,
+          is_final: false,
+          step_type: "route"
+        })
+
+      dest_step =
+        create_step(user, workflow, %{
+          name: "dest_step",
+          step_order: 2,
+          is_final: true,
+          step_type: "execute"
+        })
+
+      create_transition(user, route_step, dest_step)
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: route_step.id})
+
+      task = create_task(user, project)
+      task = assign_workflow_to_task(task, workflow)
+
+      pid = start_orchestrator(task, user)
+      wait_for_state(pid, :executing)
+
+      # Invalid JSON output triggers retry
+      simulate_daemon_completion(task.id, project.id, "not valid json{")
+
+      # Let it process the retry
+      Process.sleep(100)
+
+      # Verify a new "entered" execution was created for the retry
+      executions = get_all_executions(task.id)
+      entered_count = Enum.count(executions, &(&1.status == "entered"))
+      assert entered_count == 1, "Should have exactly 1 entered execution for the retry"
+    end
+
+    test "exhausts retries after 2 failed attempts and transitions to failed" do
+      user = create_user()
+      project = create_project(user)
+
+      workflow = create_workflow(user, project, auto_advance: false)
+
+      route_step =
+        create_step(user, workflow, %{
+          name: "route_step",
+          step_order: 1,
+          is_final: false,
+          step_type: "route"
+        })
+
+      dest_step =
+        create_step(user, workflow, %{
+          name: "dest_step",
+          step_order: 2,
+          is_final: true,
+          step_type: "execute"
+        })
+
+      create_transition(user, route_step, dest_step)
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: route_step.id})
+
+      task = create_task(user, project)
+      task = assign_workflow_to_task(task, workflow)
+
+      pid = start_orchestrator(task, user)
+      wait_for_state(pid, :executing)
+
+      # First attempt: invalid JSON
+      simulate_daemon_completion(task.id, project.id, "not valid json{")
+      Process.sleep(50)
+
+      # Still in executing (retry)
+      assert {:executing, _} = :sys.get_state(pid)
+
+      # Second attempt (first retry): still invalid JSON
+      simulate_daemon_completion(task.id, project.id, "still invalid{")
+      Process.sleep(50)
+
+      # Still in executing (second retry)
+      assert {:executing, _} = :sys.get_state(pid)
+
+      # Third attempt (second retry): still invalid JSON - this should exhaust retries
+      simulate_daemon_completion(task.id, project.id, "nope invalid{")
+
+      wait_for_exit(pid)
+
+      # Task should remain at route step (failed to transition)
+      task = reload_task(task)
+      assert task.current_step_id == route_step.id
+
+      # Should have 3 executions (initial + 2 retries)
+      executions = get_all_executions(task.id)
+      assert length(executions) == 3
+    end
+
+    test "does not create extra execution when output is valid JSON" do
+      user = create_user()
+      project = create_project(user)
+
+      workflow = create_workflow(user, project, auto_advance: false)
+
+      route_step =
+        create_step(user, workflow, %{
+          name: "route_step",
+          step_order: 1,
+          is_final: false,
+          step_type: "route"
+        })
+
+      dest_step =
+        create_step(user, workflow, %{
+          name: "dest_step",
+          step_order: 2,
+          is_final: true,
+          step_type: "execute"
+        })
+
+      create_transition(user, route_step, dest_step)
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: route_step.id})
+
+      task = create_task(user, project)
+      task = assign_workflow_to_task(task, workflow)
+
+      pid = start_orchestrator(task, user)
+      wait_for_state(pid, :executing)
+
+      # First (and only) attempt: valid JSON output
+      valid_output =
+        Jason.encode!(%{
+          "transition_to" => dest_step.id,
+          "transition_type" => "intra_workflow"
+        })
+
+      simulate_daemon_completion(task.id, project.id, valid_output)
+
+      wait_for_exit(pid)
+
+      # Task should have routed to destination step
+      task = reload_task(task)
+      assert task.current_step_id == dest_step.id
+
+      # Should have 2 executions: route_step (completed) and dest_step (entered but not yet executed)
+      executions = get_all_executions(task.id)
+      assert length(executions) == 2
+      route_exec = Enum.find(executions, &(&1.step_name == "route_step"))
+      assert route_exec.status == "completed"
+    end
+
+    test "fails when route step output is not valid JSON (exhausts retries)" do
+      user = create_user()
+      project = create_project(user)
+
+      workflow = create_workflow(user, project, auto_advance: false)
+
+      route_step =
+        create_step(user, workflow, %{
+          name: "route_step",
+          step_order: 1,
+          is_final: false,
+          step_type: "route"
+        })
+
+      dest_step =
+        create_step(user, workflow, %{
+          name: "dest_step",
+          step_order: 2,
+          is_final: true,
+          step_type: "execute"
+        })
+
+      create_transition(user, route_step, dest_step)
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: route_step.id})
+
+      task = create_task(user, project)
+      task = assign_workflow_to_task(task, workflow)
+
+      pid = start_orchestrator(task, user)
+      wait_for_state(pid, :executing)
+
+      # All three attempts: invalid JSON
+      simulate_daemon_completion(task.id, project.id, "not valid json{")
+      Process.sleep(50)
+
+      simulate_daemon_completion(task.id, project.id, "still not valid{")
+      Process.sleep(50)
+
+      simulate_daemon_completion(task.id, project.id, "nope{")
 
       wait_for_exit(pid)
 

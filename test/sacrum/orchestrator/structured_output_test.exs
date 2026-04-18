@@ -115,4 +115,42 @@ defmodule Sacrum.Orchestrator.StructuredOutputTest do
       assert decoded == %{"key" => "value"}
     end
   end
+
+  describe "decode/1 — preamble and trailing text" do
+    test "handles preamble text before the fence" do
+      input = "Analysis:\n```json\n{\"key\": \"value\"}\n```"
+      assert {:ok, decoded} = StructuredOutput.decode(input)
+      assert decoded == %{"key" => "value"}
+    end
+
+    test "handles multiline preamble before the fence" do
+      input =
+        "Now I have all the data. Let me analyze systematically.\n\n```json\n{\"key\": \"value\"}\n```"
+
+      assert {:ok, decoded} = StructuredOutput.decode(input)
+      assert decoded == %{"key" => "value"}
+    end
+
+    test "handles trailing text after the fence" do
+      input = "```json\n{\"key\": \"value\"}\n```\n\nThat's the result."
+      assert {:ok, decoded} = StructuredOutput.decode(input)
+      assert decoded == %{"key" => "value"}
+    end
+
+    test "handles both preamble and trailing text" do
+      input =
+        "Let me think about this.\n\n```json\n{\"transition_to\": \"step_2\", \"transition_type\": \"intra_workflow\"}\n```\n\nI've decided on step 2."
+
+      assert {:ok, decoded} = StructuredOutput.decode(input)
+      assert decoded == %{"transition_to" => "step_2", "transition_type" => "intra_workflow"}
+    end
+
+    test "handles complex nested structure with preamble" do
+      input =
+        "Here's the analysis:\n```json\n{\"data\": {\"nested\": [1, 2, 3]}, \"status\": \"ok\"}\n```"
+
+      assert {:ok, decoded} = StructuredOutput.decode(input)
+      assert decoded == %{"data" => %{"nested" => [1, 2, 3]}, "status" => "ok"}
+    end
+  end
 end

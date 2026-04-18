@@ -4643,4 +4643,200 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["archived"] == false
     end
   end
+
+  describe "FSM mutations — gating when task has active orchestrator" do
+    setup do
+      # Each test creates its own task, ensure registry is clean
+      user = create_user()
+      {:ok, project} = Accounts.Projects.insert(user.id, %{name: "Test Project"})
+      {:ok, workflow} = Accounts.Workflows.insert(user.id, project.id, %{name: "Test Workflow"})
+
+      {:ok, step1} =
+        Accounts.WorkflowSteps.insert(user.id, %{
+          "name" => "step_1",
+          "workflow_id" => workflow.id,
+          "project_id" => project.id,
+          "step_order" => 1,
+          "is_final" => false,
+          "agents" => ["test"],
+          "skills" => ["test_skill"],
+          "agent_config" => %{"model" => "test-model"},
+          "prompt" => "Test prompt"
+        })
+
+      {:ok, step2} =
+        Accounts.WorkflowSteps.insert(user.id, %{
+          "name" => "step_2",
+          "workflow_id" => workflow.id,
+          "project_id" => project.id,
+          "step_order" => 2,
+          "is_final" => true,
+          "agents" => ["test"],
+          "skills" => ["test_skill"],
+          "agent_config" => %{"model" => "test-model"},
+          "prompt" => "Test prompt"
+        })
+
+      # Create transition from step1 to step2
+      {:ok, _transition} =
+        Accounts.StepTransitions.insert(user.id, %{
+          from_step_id: step1.id,
+          to_step_id: step2.id,
+          project_id: project.id
+        })
+
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Test Task"})
+      {:ok, task} = Sacrum.Repo.TaskWorkflows.assign_workflow(task, workflow)
+
+      %{user: user, project: project, workflow: workflow, task: task, step1: step1, step2: step2}
+    end
+
+    test "moveToStep is allowed when no active orchestrator", %{
+      conn: conn,
+      user: user,
+      task: task,
+      step2: step2
+    } do
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            moveToStep(taskId: "#{task.id}", stepId: "#{step2.id}") {
+              id currentStepId
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["moveToStep"]["currentStepId"] == step2.id
+    end
+
+    test "advanceToStep is allowed when no active orchestrator", %{
+      conn: conn,
+      user: user,
+      task: task,
+      step2: step2
+    } do
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            advanceToStep(taskId: "#{task.id}", stepId: "#{step2.id}") {
+              id currentStepId
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["advanceToStep"]["currentStepId"] == step2.id
+    end
+
+    test "unassignWorkflow is allowed when no active orchestrator", %{
+      conn: conn,
+      user: user,
+      task: task
+    } do
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            unassignWorkflow(taskId: "#{task.id}") {
+              id workflowId
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["unassignWorkflow"]["workflowId"] == nil
+    end
+
+    test "moveToStep is rejected when task has active orchestrator", %{
+      conn: conn,
+      user: user,
+      task: task,
+      step2: step2
+    } do
+      # Start a TaskOrchestrator for the task (simulated by registering in the registry)
+      {:ok, _pid} =
+        Sacrum.Orchestrator.TaskOrchestrator.start_link(
+          task_id: task.id,
+          user_id: user.id
+        )
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            moveToStep(taskId: "#{task.id}", stepId: "#{step2.id}") {
+              id currentStepId
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] != nil
+      assert Enum.any?(result["errors"], &String.contains?(&1["message"], "active orchestrator"))
+    end
+
+    test "advanceToStep is rejected when task has active orchestrator", %{
+      conn: conn,
+      user: user,
+      task: task,
+      step2: step2
+    } do
+      # Start a TaskOrchestrator for the task
+      {:ok, _pid} =
+        Sacrum.Orchestrator.TaskOrchestrator.start_link(
+          task_id: task.id,
+          user_id: user.id
+        )
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            advanceToStep(taskId: "#{task.id}", stepId: "#{step2.id}") {
+              id currentStepId
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] != nil
+      assert Enum.any?(result["errors"], &String.contains?(&1["message"], "active orchestrator"))
+    end
+
+    test "unassignWorkflow is rejected when task has active orchestrator", %{
+      conn: conn,
+      user: user,
+      task: task
+    } do
+      # Start a TaskOrchestrator for the task
+      {:ok, _pid} =
+        Sacrum.Orchestrator.TaskOrchestrator.start_link(
+          task_id: task.id,
+          user_id: user.id
+        )
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            unassignWorkflow(taskId: "#{task.id}") {
+              id workflowId
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] != nil
+      assert Enum.any?(result["errors"], &String.contains?(&1["message"], "active orchestrator"))
+    end
+  end
 end
