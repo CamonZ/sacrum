@@ -15,7 +15,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   import Ecto.Query
 
   alias Sacrum.Accounts
-  alias Sacrum.Orchestrator.PromptRenderer
+  alias Sacrum.Orchestrator.{PromptRenderer, StructuredOutput}
   alias Sacrum.Repo
   alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.StepExecution
@@ -107,13 +107,13 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   end
 
   defp decode_prior_output(output, schema) when is_binary(output) and is_map(schema) do
-    case Jason.decode(output) do
+    case StructuredOutput.decode(output) do
       {:ok, decoded} ->
         decoded
 
       {:error, reason} ->
-        Logger.warning(
-          "[ExecutionDispatcher] Failed to decode prior output as JSON: #{inspect(reason)}"
+        Logger.error(
+          "[ExecutionDispatcher] Failed to decode prior output as JSON: #{inspect(reason)}. Returning raw string."
         )
 
         output

@@ -24,7 +24,16 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
 
   alias Ecto.{Changeset, Multi}
   alias Sacrum.Accounts
-  alias Sacrum.Orchestrator.{ExecutionDispatcher, ExecutionPool, PromptRenderer, Scheduler}
+
+  alias Sacrum.Orchestrator.{
+    ExecutionDispatcher,
+    ExecutionPool,
+    OutputValidator,
+    PromptRenderer,
+    Scheduler,
+    StructuredOutput
+  }
+
   alias Sacrum.Repo
 
   alias Sacrum.Repo.Schemas.{
@@ -338,8 +347,10 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     task_id = data.task.id
 
     with {:ok, execution} <- get_latest_execution(task_id),
-         {:ok, %{transition_to: dest_id, transition_type: transition_type, handoff: handoff}} <-
-           parse_route_output(execution.output),
+         {:ok, decoded} <- parse_route_output(execution.output),
+         :ok <- OutputValidator.validate_routing_contract(decoded),
+         {:ok, %{dest_id: dest_id, transition_type: transition_type, handoff: handoff}} <-
+           extract_routing_data(decoded),
          {:ok, updated_task} <-
            route_task_to_destination(data, dest_id, transition_type, handoff) do
       ExecutionPool.release_slot(data.slot_id)
@@ -360,6 +371,26 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
         ExecutionPool.release_slot(data.slot_id)
         {:next_state, :failed, %{data | slot_id: nil}}
     end
+  end
+
+  defp extract_routing_data(decoded) when is_map(decoded) do
+    case {Map.get(decoded, "transition_to"), Map.get(decoded, "transition_type")} do
+      {dest_id, type}
+      when is_binary(dest_id) and type in ["intra_workflow", "inter_workflow"] ->
+        {:ok,
+         %{
+           dest_id: dest_id,
+           transition_type: type,
+           handoff: Map.get(decoded, "handoff")
+         }}
+
+      _ ->
+        {:error, :invalid_route_output_format}
+    end
+  end
+
+  defp extract_routing_data(_decoded) do
+    {:error, :route_output_not_map}
   end
 
   defp handle_intra_route_continuation(data, updated_task) do
@@ -397,30 +428,10 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   end
 
   defp parse_route_output(output) when is_binary(output) do
-    case Jason.decode(output) do
-      {:ok, decoded} -> validate_route_output(decoded)
+    case StructuredOutput.decode(output) do
+      {:ok, decoded} -> {:ok, decoded}
       {:error, _} -> {:error, :invalid_json_output}
     end
-  end
-
-  defp validate_route_output(decoded) when is_map(decoded) do
-    case {Map.get(decoded, "transition_to"), Map.get(decoded, "transition_type")} do
-      {dest_id, type}
-      when is_binary(dest_id) and type in ["intra_workflow", "inter_workflow"] ->
-        {:ok,
-         %{
-           transition_to: dest_id,
-           transition_type: type,
-           handoff: Map.get(decoded, "handoff")
-         }}
-
-      _ ->
-        {:error, :invalid_route_output_format}
-    end
-  end
-
-  defp validate_route_output(_decoded) do
-    {:error, :route_output_not_map}
   end
 
   defp get_latest_execution(task_id) do
