@@ -928,6 +928,55 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       task = reload_task(task)
       assert task.current_step_id == dest_step.id
     end
+
+    test "fenced JSON route output is properly decoded and routed" do
+      user = create_user()
+      project = create_project(user)
+
+      workflow = create_workflow(user, project, auto_advance: false)
+
+      route_step =
+        create_step(user, workflow, %{
+          name: "route_step",
+          step_order: 1,
+          is_final: false,
+          step_type: "route"
+        })
+
+      dest_step =
+        create_step(user, workflow, %{
+          name: "dest_step",
+          step_order: 2,
+          is_final: true,
+          step_type: "execute"
+        })
+
+      create_transition(user, route_step, dest_step)
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: route_step.id})
+
+      task = create_task(user, project)
+      task = assign_workflow_to_task(task, workflow)
+
+      pid = start_orchestrator(task, user)
+      wait_for_state(pid, :executing)
+
+      # Simulate CLI wrapping output in markdown code fences
+      json_output = %{
+        "transition_to" => dest_step.id,
+        "transition_type" => "intra_workflow",
+        "handoff" => %{"data" => "context"}
+      }
+
+      fenced_output = "```json\n#{Jason.encode!(json_output)}\n```"
+
+      simulate_daemon_completion(task.id, project.id, fenced_output)
+
+      wait_for_exit(pid)
+
+      # Task should advance to destination step even with fenced output
+      task = reload_task(task)
+      assert task.current_step_id == dest_step.id
+    end
   end
 
   describe "prior output exposure in orchestrator (eval → route)" do

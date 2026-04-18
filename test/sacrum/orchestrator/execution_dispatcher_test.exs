@@ -517,6 +517,61 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       assert prompt == "Got: { broken json"
     end
 
+    test "when prior output is wrapped in markdown code fences, strips them and decodes JSON",
+         ctx do
+      prior_step =
+        create_step(ctx.user, ctx.workflow, %{
+          "name" => "eval_step",
+          "step_order" => 1,
+          "output_schema" => %{
+            "type" => "object",
+            "properties" => %{
+              "verdict" => %{"type" => "string"},
+              "confidence" => %{"type" => "number"}
+            }
+          }
+        })
+
+      current_step =
+        create_step(ctx.user, ctx.workflow, %{
+          "name" => "route_step",
+          "step_order" => 2,
+          "prompt" =>
+            "Verdict: {{ execution.previous_output.verdict }}, Confidence: {{ execution.previous_output.confidence }}"
+        })
+
+      task = create_task(ctx.user, ctx.project)
+      task = assign_workflow(task, ctx.workflow)
+
+      # Simulate CLI wrapping output in markdown code fences
+      fenced_output = "```json\n{\"verdict\": \"approved\", \"confidence\": 0.95}\n```"
+
+      {:ok, _prior_exec} =
+        Accounts.StepExecutions.insert(ctx.user.id, %{
+          "task_id" => task.id,
+          "project_id" => task.project_id,
+          "workflow_id" => ctx.workflow.id,
+          "step_name" => prior_step.name,
+          "status" => "completed",
+          "output" => fenced_output
+        })
+
+      _current_exec = create_entered_execution(ctx.user, task, current_step)
+
+      task = PromptRenderer.preload_for_rendering(task)
+
+      subscribe_to_project(ctx.project)
+
+      {:ok, _exec} = ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, current_step.id)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "run_step",
+        payload: %{prompt: prompt}
+      }
+
+      assert prompt == "Verdict: approved, Confidence: 0.95"
+    end
+
     test "build_execution_context converts map prior_output while preserving string prior_output" do
       execution_data_with_map = %{
         previous: %{
