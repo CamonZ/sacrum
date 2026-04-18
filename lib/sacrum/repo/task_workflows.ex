@@ -59,7 +59,7 @@ defmodule Sacrum.Repo.TaskWorkflows do
       |> Multi.update(:task, task_workflow_changeset(task, workflow.id, initial_step.id))
       |> Multi.insert(
         :step_execution,
-        step_execution_attrs(task.id, task.user_id, task.project_id, workflow.id, initial_step)
+        step_execution_attrs(task, workflow.id, initial_step)
       )
       |> Repo.transaction()
       |> case do
@@ -88,8 +88,8 @@ defmodule Sacrum.Repo.TaskWorkflows do
 
   Validates that the target step belongs to the task's current workflow, then
   updates the task's current_step_id and creates an "entered" StepExecution
-  audit record. Transition validity is assumed since transitions are validated
-  on creation.
+  audit record. Optionally stores handoff data on the new execution record.
+  Transition validity is assumed since transitions are validated on creation.
 
   Returns:
     - {:ok, task} with updated current_step_id on success
@@ -99,24 +99,21 @@ defmodule Sacrum.Repo.TaskWorkflows do
     - {:error, :step_not_in_workflow} if target step belongs to a different workflow
     - {:error, changeset} on database errors
   """
-  @spec advance_to_step(Task.t(), String.t()) ::
+  @spec advance_to_step(Task.t(), String.t(), map() | nil) ::
           {:ok, Task.t()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
-  def advance_to_step(%Task{workflow_id: nil}, _step_id), do: {:error, :no_workflow}
-  def advance_to_step(%Task{current_step_id: nil}, _step_id), do: {:error, :no_current_step}
+  def advance_to_step(task, step_id, handoff \\ nil)
+  def advance_to_step(%Task{workflow_id: nil}, _step_id, _handoff), do: {:error, :no_workflow}
 
-  def advance_to_step(%Task{} = task, step_id) do
+  def advance_to_step(%Task{current_step_id: nil}, _step_id, _handoff),
+    do: {:error, :no_current_step}
+
+  def advance_to_step(%Task{} = task, step_id, handoff) do
     with {:ok, target_step} <- get_workflow_step(task.workflow_id, step_id) do
       Multi.new()
       |> Multi.update(:task, task_workflow_changeset(task, task.workflow_id, target_step.id))
       |> Multi.insert(
         :step_execution,
-        step_execution_attrs(
-          task.id,
-          task.user_id,
-          task.project_id,
-          task.workflow_id,
-          target_step
-        )
+        step_execution_attrs(task, task.workflow_id, target_step, handoff)
       )
       |> Repo.transaction()
       |> case do
@@ -136,27 +133,25 @@ defmodule Sacrum.Repo.TaskWorkflows do
   that a StepTransition exists between the current step and the target step
   (in either direction).
 
+  Optionally stores handoff data on the new execution record.
   Creates a StepExecution audit record for the new step.
   """
-  @spec move_to_step(Task.t(), String.t()) ::
+  @spec move_to_step(Task.t(), String.t(), map() | nil) ::
           {:ok, Task.t()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
-  def move_to_step(%Task{workflow_id: nil}, _step_id), do: {:error, :no_workflow}
-  def move_to_step(%Task{current_step_id: nil}, _step_id), do: {:error, :no_current_step}
+  def move_to_step(task, step_id, handoff \\ nil)
+  def move_to_step(%Task{workflow_id: nil}, _step_id, _handoff), do: {:error, :no_workflow}
 
-  def move_to_step(%Task{} = task, step_id) do
+  def move_to_step(%Task{current_step_id: nil}, _step_id, _handoff),
+    do: {:error, :no_current_step}
+
+  def move_to_step(%Task{} = task, step_id, handoff) do
     with {:ok, target_step} <- get_workflow_step(task.workflow_id, step_id),
          :ok <- validate_transition_exists(task.current_step_id, target_step.id) do
       Multi.new()
       |> Multi.update(:task, task_workflow_changeset(task, task.workflow_id, target_step.id))
       |> Multi.insert(
         :step_execution,
-        step_execution_attrs(
-          task.id,
-          task.user_id,
-          task.project_id,
-          task.workflow_id,
-          target_step
-        )
+        step_execution_attrs(task, task.workflow_id, target_step, handoff)
       )
       |> Repo.transaction()
       |> case do
@@ -288,13 +283,20 @@ defmodule Sacrum.Repo.TaskWorkflows do
     |> Ecto.Changeset.foreign_key_constraint(:current_step_id)
   end
 
-  defp step_execution_attrs(task_id, user_id, project_id, workflow_id, step) do
-    StepExecution.create_changeset(%StepExecution{user_id: user_id, project_id: project_id}, %{
-      task_id: task_id,
+  defp step_execution_attrs(%Task{} = task, workflow_id, step, handoff \\ nil) do
+    attrs = %{
+      task_id: task.id,
       workflow_id: workflow_id,
       step_name: step.name,
       status: "entered"
-    })
+    }
+
+    attrs = if is_map(handoff), do: Map.put(attrs, :handoff, handoff), else: attrs
+
+    StepExecution.create_changeset(
+      %StepExecution{user_id: task.user_id, project_id: task.project_id},
+      attrs
+    )
   end
 
   defp get_workflow_step(workflow_id, step_id) do

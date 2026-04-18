@@ -96,9 +96,63 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
           subscribed: false
         }
 
-        Logger.info("[TaskOrchestrator:#{task_id}] Starting in :initializing state")
+        Logger.info(
+          "[TaskOrchestrator:#{task_id}] Starting in :initializing state user=#{user_id} project=#{task.project_id} workflow=#{inspect(task.workflow_id)} current_step=#{inspect(task.current_step_id)}"
+        )
+
         {:ok, :initializing, data}
     end
+  end
+
+  @impl :gen_statem
+  # Catches every exit path — normal stops, crashes, and shutdowns — so a
+  # supervisor-killed or exception-terminated process still leaves a trace.
+  # Without this, 6304d1b9-style "process gone, no observable error" incidents
+  # are impossible to diagnose from logs alone.
+  def terminate(reason, state, %{task: task} = data) do
+    task_id = task.id
+
+    case reason do
+      :normal ->
+        Logger.info(
+          "[TaskOrchestrator:#{task_id}] terminate reason=:normal state=#{inspect(state)} " <>
+            "current_step=#{inspect(task.current_step_id)} slot_id=#{inspect(data.slot_id)}"
+        )
+
+      :shutdown ->
+        Logger.warning(
+          "[TaskOrchestrator:#{task_id}] terminate reason=:shutdown state=#{inspect(state)} " <>
+            "current_step=#{inspect(task.current_step_id)} slot_id=#{inspect(data.slot_id)}"
+        )
+
+      {:shutdown, _} ->
+        Logger.warning(
+          "[TaskOrchestrator:#{task_id}] terminate reason=#{inspect(reason)} state=#{inspect(state)} " <>
+            "current_step=#{inspect(task.current_step_id)} slot_id=#{inspect(data.slot_id)}"
+        )
+
+      _ ->
+        Logger.error(
+          "[TaskOrchestrator:#{task_id}] ABNORMAL terminate reason=#{inspect(reason)} " <>
+            "state=#{inspect(state)} current_step=#{inspect(task.current_step_id)} " <>
+            "slot_id=#{inspect(data.slot_id)} current_execution=#{inspect(data.current_execution_id)}"
+        )
+    end
+
+    if data.slot_id do
+      Logger.info("[TaskOrchestrator:#{task_id}] terminate releasing leaked slot #{data.slot_id}")
+      ExecutionPool.release_slot(data.slot_id)
+    end
+
+    :ok
+  end
+
+  def terminate(reason, state, _data) do
+    Logger.error(
+      "[TaskOrchestrator] terminate without data reason=#{inspect(reason)} state=#{inspect(state)}"
+    )
+
+    :ok
   end
 
   # ===== ENTER CALLBACKS =====
@@ -128,12 +182,16 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
 
       unless data.subscribed do
         :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{data.project_id}")
+
+        Logger.info(
+          "[TaskOrchestrator:#{task_id}] Subscribed to project:#{data.project_id} PubSub"
+        )
       end
 
       new_data = %{data | current_execution_id: execution.id, subscribed: true}
 
       Logger.info(
-        "[TaskOrchestrator:#{task_id}] Created execution #{execution.id}, waiting for daemon"
+        "[TaskOrchestrator:#{task_id}] Created execution #{execution.id} step=#{current_step.id} (#{current_step.name}), waiting for daemon"
       )
 
       {:keep_state, new_data}
@@ -351,6 +409,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
          :ok <- OutputValidator.validate_routing_contract(decoded),
          {:ok, %{dest_id: dest_id, transition_type: transition_type, handoff: handoff}} <-
            extract_routing_data(decoded),
+         _ <- log_route_decision(task_id, execution.id, dest_id, transition_type, handoff),
+         :ok <- persist_route_decision(execution, dest_id, transition_type),
          {:ok, updated_task} <-
            route_task_to_destination(data, dest_id, transition_type, handoff) do
       ExecutionPool.release_slot(data.slot_id)
@@ -393,6 +453,38 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     {:error, :route_output_not_map}
   end
 
+  # Persisted before routing so the decision survives downstream failures for forensics.
+  defp persist_route_decision(execution, dest_id, transition_type) do
+    transition_result =
+      Jason.encode!(%{"dest_id" => dest_id, "transition_type" => transition_type})
+
+    case Accounts.StepExecutions.update(execution, %{transition_result: transition_result}) do
+      {:ok, _} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error(
+          "[TaskOrchestrator] persist_route_decision failed execution=#{execution.id} " <>
+            "dest_id=#{dest_id} transition_type=#{transition_type} reason=#{inspect(reason)}"
+        )
+
+        {:error, {:route_decision_persist_failed, reason}}
+    end
+  end
+
+  defp log_route_decision(task_id, execution_id, dest_id, transition_type, handoff) do
+    handoff_keys =
+      case handoff do
+        m when is_map(m) -> Map.keys(m)
+        _ -> nil
+      end
+
+    Logger.info(
+      "[TaskOrchestrator:#{task_id}] route decision execution=#{execution_id} " <>
+        "dest_id=#{dest_id} transition_type=#{transition_type} handoff_keys=#{inspect(handoff_keys)}"
+    )
+  end
+
   defp handle_intra_route_continuation(data, updated_task) do
     # Same workflow - can use existing workflow/steps cache
     new_data = %{data | task: updated_task, slot_id: nil}
@@ -424,13 +516,22 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   end
 
   defp parse_route_output(nil) do
+    Logger.warning("[TaskOrchestrator] parse_route_output got nil output on route step")
     {:error, :missing_route_output}
   end
 
   defp parse_route_output(output) when is_binary(output) do
     case StructuredOutput.decode(output) do
-      {:ok, decoded} -> {:ok, decoded}
-      {:error, _} -> {:error, :invalid_json_output}
+      {:ok, decoded} ->
+        {:ok, decoded}
+
+      {:error, reason} ->
+        Logger.warning(
+          "[TaskOrchestrator] parse_route_output decode failed reason=#{inspect(reason)} " <>
+            "output_preview=#{inspect(String.slice(output, 0, 200))}"
+        )
+
+        {:error, :invalid_json_output}
     end
   end
 
@@ -461,17 +562,17 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
 
     with {:ok, _dest_step} <- validate_destination_step(data, dest_step_id),
          :ok <- validate_step_transition_exists(data.task.current_step_id, dest_step_id),
-         {:ok, updated_task} <- TaskWorkflows.advance_to_step(data.task, dest_step_id),
-         :ok <- persist_handoff_to_destination(updated_task, dest_step_id, handoff) do
+         {:ok, updated_task} <- TaskWorkflows.advance_to_step(data.task, dest_step_id, handoff) do
       Logger.info(
-        "[TaskOrchestrator:#{task_id}] Route step routed intra_workflow to step #{dest_step_id}"
+        "[TaskOrchestrator:#{task_id}] Route step routed intra_workflow from #{data.task.current_step_id} to #{dest_step_id} handoff=#{inspect(handoff != nil)}"
       )
 
       {:ok, updated_task}
     else
       {:error, reason} ->
         Logger.error(
-          "[TaskOrchestrator:#{task_id}] Intra-workflow routing failed: #{inspect(reason)}"
+          "[TaskOrchestrator:#{task_id}] Intra-workflow routing failed: #{inspect(reason)} " <>
+            "from=#{data.task.current_step_id} to=#{dest_step_id}"
         )
 
         {:error, reason}
@@ -553,32 +654,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     end
   end
 
-  # Best-effort: locate the newly-entered execution for the destination step and
-  # store the handoff on it. If the step or execution isn't found we simply skip.
-  defp persist_handoff_to_destination(_task, _dest_step_id, nil), do: :ok
-
-  defp persist_handoff_to_destination(task, dest_step_id, handoff) do
-    with %WorkflowStep{name: step_name} <- Repo.get(WorkflowStep, dest_step_id),
-         %StepExecution{} = execution <- find_entered_execution_by_step(task.id, step_name),
-         {:ok, _} <- Repo.update(StepExecution.update_changeset(execution, %{handoff: handoff})) do
-      :ok
-    else
-      _ -> :ok
-    end
-  end
-
-  defp find_entered_execution_by_step(task_id, step_name) do
-    query =
-      from(e in StepExecution,
-        where:
-          e.task_id == ^task_id and e.status == "entered" and
-            e.step_name == ^step_name,
-        limit: 1
-      )
-
-    Repo.one(query)
-  end
-
   defp get_target_step_for_workflow_transition(data, to_workflow_id) do
     query =
       from(t in WorkflowTransition,
@@ -652,10 +727,21 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
       )
 
     case Repo.transaction(multi) do
-      {:ok, %{task: updated_task}} ->
+      {:ok, %{task: updated_task, step_execution: execution}} ->
+        Logger.info(
+          "[TaskOrchestrator:#{task.id}] Assigned destination workflow=#{dest_workflow.id} " <>
+            "target_step=#{target_step.id} (#{target_step.name}) execution=#{execution.id} " <>
+            "handoff=#{inspect(handoff != nil)}"
+        )
+
         {:ok, updated_task}
 
-      {:error, _op, changeset, _changes} ->
+      {:error, op, changeset, _changes} ->
+        Logger.error(
+          "[TaskOrchestrator:#{task.id}] Assign destination workflow failed op=#{inspect(op)} " <>
+            "dest_workflow=#{dest_workflow.id} errors=#{inspect(changeset.errors)}"
+        )
+
         {:error, changeset}
     end
   end

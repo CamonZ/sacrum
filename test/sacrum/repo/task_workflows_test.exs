@@ -491,4 +491,109 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
                TaskWorkflows.advance_to_step(assigned, Ecto.UUID.generate())
     end
   end
+
+  describe "advance_to_step/3 with handoff" do
+    test "persists handoff on new execution atomically" do
+      %{workflow: workflow, task: task, steps: steps} = setup_workflow_with_steps()
+      {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
+
+      handoff_data = %{"feedback" => "needs_review", "reviewer" => "john@example.com"}
+
+      {:ok, updated} = TaskWorkflows.advance_to_step(assigned, steps.in_progress.id, handoff_data)
+
+      assert updated.current_step_id == steps.in_progress.id
+
+      # Verify the new execution has handoff persisted
+      executions =
+        StepExecutions.all(
+          conditions: [task_id: task.id, step_name: "in_progress"],
+          order_by: [desc: :inserted_at]
+        )
+
+      latest = List.first(executions)
+      assert latest.status == "entered"
+      assert latest.handoff == handoff_data
+    end
+
+    test "handles nil handoff gracefully" do
+      %{workflow: workflow, task: task, steps: steps} = setup_workflow_with_steps()
+      {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
+
+      {:ok, updated} = TaskWorkflows.advance_to_step(assigned, steps.in_progress.id, nil)
+
+      assert updated.current_step_id == steps.in_progress.id
+
+      executions =
+        StepExecutions.all(
+          conditions: [task_id: task.id, step_name: "in_progress"],
+          order_by: [desc: :inserted_at]
+        )
+
+      latest = List.first(executions)
+      assert latest.status == "entered"
+      assert is_nil(latest.handoff)
+    end
+
+    test "uses default nil when handoff is not provided" do
+      %{workflow: workflow, task: task, steps: steps} = setup_workflow_with_steps()
+      {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
+
+      {:ok, updated} = TaskWorkflows.advance_to_step(assigned, steps.in_progress.id)
+
+      assert updated.current_step_id == steps.in_progress.id
+
+      executions =
+        StepExecutions.all(
+          conditions: [task_id: task.id, step_name: "in_progress"],
+          order_by: [desc: :inserted_at]
+        )
+
+      latest = List.first(executions)
+      assert is_nil(latest.handoff)
+    end
+  end
+
+  describe "move_to_step/3 with handoff" do
+    test "persists handoff on new execution atomically" do
+      %{workflow: workflow, task: task, steps: steps} = setup_workflow_with_steps()
+      {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
+      {:ok, in_progress} = TaskWorkflows.move_to_step(assigned, steps.in_progress.id)
+
+      handoff_data = %{"status" => "approved", "timestamp" => "2025-04-18T10:00:00Z"}
+
+      {:ok, updated} = TaskWorkflows.move_to_step(in_progress, steps.done.id, handoff_data)
+
+      assert updated.current_step_id == steps.done.id
+
+      # Verify the new execution has handoff persisted
+      executions =
+        StepExecutions.all(
+          conditions: [task_id: task.id, step_name: "done"],
+          order_by: [desc: :inserted_at]
+        )
+
+      latest = List.first(executions)
+      assert latest.status == "entered"
+      assert latest.handoff == handoff_data
+    end
+
+    test "handles nil handoff on move_to_step" do
+      %{workflow: workflow, task: task, steps: steps} = setup_workflow_with_steps()
+      {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
+      {:ok, in_progress} = TaskWorkflows.move_to_step(assigned, steps.in_progress.id)
+
+      {:ok, updated} = TaskWorkflows.move_to_step(in_progress, steps.done.id, nil)
+
+      assert updated.current_step_id == steps.done.id
+
+      executions =
+        StepExecutions.all(
+          conditions: [task_id: task.id, step_name: "done"],
+          order_by: [desc: :inserted_at]
+        )
+
+      latest = List.first(executions)
+      assert is_nil(latest.handoff)
+    end
+  end
 end
