@@ -201,10 +201,10 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       assert prompt == "Workflow: Test Workflow, Step: Test Step"
     end
 
-    test "render failure falls back to raw template", ctx do
+    test "undefined variables render as empty", ctx do
       step =
         create_step(ctx.user, ctx.workflow, %{
-          "prompt" => "Hello {{ undefined_variable }}"
+          "prompt" => "Hello {{ undefined_variable }}!"
         })
 
       task = create_task(ctx.user, ctx.project)
@@ -221,7 +221,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
         payload: %{prompt: prompt}
       }
 
-      assert prompt == "Hello {{ undefined_variable }}"
+      assert prompt == "Hello !"
     end
   end
 

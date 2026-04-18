@@ -2,8 +2,11 @@ defmodule Sacrum.Orchestrator.PromptRenderer do
   @moduledoc """
   Pure template rendering module using Solid/Liquid syntax.
 
-  Renders Liquid templates with strict variable mode (undefined variables produce errors).
-  Handles parse and render errors gracefully by logging warnings and returning the raw template.
+  Undefined variables render as empty values (empty string for interpolation,
+  zero-iteration for `{% for %}`, falsy for `{% if %}`). Templates are
+  responsible for guarding optional data with conditionals if they want to
+  suppress surrounding markup. Parse errors are logged and fall back to the raw
+  template so the issue is visible downstream.
 
   All context map keys must be strings as per Liquid/Solid requirement.
 
@@ -21,7 +24,8 @@ defmodule Sacrum.Orchestrator.PromptRenderer do
   def render(template_string, context) when is_binary(template_string) and is_map(context) do
     case Solid.parse(template_string) do
       {:ok, template} ->
-        render_template(template, context, template_string)
+        {:ok, iolist, _} = Solid.render(template, context)
+        {:ok, IO.iodata_to_binary(iolist)}
 
       {:error, error} ->
         Logger.warning("Solid parse error: #{inspect(error)}")
@@ -244,20 +248,5 @@ defmodule Sacrum.Orchestrator.PromptRenderer do
 
   defp reject_nil_values(map) do
     Map.reject(map, fn {_k, v} -> v == nil end)
-  end
-
-  defp render_template(template, context, fallback_template) do
-    case Solid.render(template, context, strict_variables: true) do
-      {:ok, iolist, []} ->
-        {:ok, IO.iodata_to_binary(iolist)}
-
-      {:ok, _iolist, [_ | _] = errors} ->
-        Logger.warning("Solid render error: #{inspect(errors)}")
-        {:ok, fallback_template}
-
-      {:error, errors, _partial_result} ->
-        Logger.warning("Solid render error: #{inspect(errors)}")
-        {:ok, fallback_template}
-    end
   end
 end
