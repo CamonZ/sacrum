@@ -339,7 +339,7 @@ defmodule Sacrum.Orchestrator.PromptContextTest do
       project = create_project(user)
       workflow = create_workflow(user, project)
       step1 = create_step(user, workflow, %{"name" => "step1", "step_order" => 1})
-      step2 = create_step(user, workflow, %{"name" => "step2", "step_order" => 2})
+      _step2 = create_step(user, workflow, %{"name" => "step2", "step_order" => 2})
 
       task = create_task(user, project, workflow)
       task_with_workflow = Repo.preload(task, :workflow)

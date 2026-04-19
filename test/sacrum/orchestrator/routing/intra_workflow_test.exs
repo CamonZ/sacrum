@@ -114,7 +114,7 @@ defmodule Sacrum.Orchestrator.Routing.IntraWorkflowTest do
       user = create_user()
       project1 = create_project(user)
       project2 = create_project(user)
-      workflow1 = create_workflow(user, project1)
+      _workflow1 = create_workflow(user, project1)
       workflow2 = create_workflow(user, project2)
       step_in_project2 = create_step(user, workflow2, %{})
 
@@ -130,7 +130,7 @@ defmodule Sacrum.Orchestrator.Routing.IntraWorkflowTest do
       user2 = create_user()
       project1 = create_project(user1)
       project2 = create_project(user2)
-      workflow1 = create_workflow(user1, project1)
+      _workflow1 = create_workflow(user1, project1)
       workflow2 = create_workflow(user2, project2)
       step_in_user2 = create_step(user2, workflow2, %{})
 

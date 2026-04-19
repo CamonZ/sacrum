@@ -50,6 +50,10 @@ defmodule Sacrum.Repo.TaskWorkflows do
   Creates a StepExecution audit record for the initial step entry.
 
   Returns an error if an orchestrator process is registered for this task.
+
+  Idempotent: if the task is already assigned to this workflow at the initial step
+  with an existing "entered" StepExecution, returns {:ok, task} without inserting
+  a duplicate row.
   """
   @spec assign_workflow(Task.t(), Workflow.t()) ::
           {:ok, Task.t()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
@@ -57,16 +61,10 @@ defmodule Sacrum.Repo.TaskWorkflows do
     with :ok <- check_orchestrator_not_active(task.id),
          workflow = Repo.preload(workflow, :workflow_steps),
          {:ok, initial_step} <- resolve_initial_step(workflow) do
-      task
-      |> build_assign_workflow_multi(workflow, initial_step)
-      |> Repo.transaction()
-      |> case do
-        {:ok, %{task: task}} ->
-          broadcast_task_changed(task)
-          {:ok, task}
-
-        {:error, _op, changeset, _changes} ->
-          {:error, changeset}
+      if already_assigned?(task, workflow, initial_step) do
+        {:ok, task}
+      else
+        execute_assign_workflow_multi(task, workflow, initial_step)
       end
     end
   end
@@ -497,5 +495,33 @@ defmodule Sacrum.Repo.TaskWorkflows do
         Logger.warning("[Broadcast] task_updated failed to extract project_id")
         :ok
     end
+  end
+
+  defp execute_assign_workflow_multi(task, workflow, initial_step) do
+    task
+    |> build_assign_workflow_multi(workflow, initial_step)
+    |> Repo.transaction()
+    |> case do
+      {:ok, %{task: task}} ->
+        broadcast_task_changed(task)
+        {:ok, task}
+
+      {:error, _op, changeset, _changes} ->
+        {:error, changeset}
+    end
+  end
+
+  defp already_assigned?(task, workflow, initial_step) do
+    task.workflow_id == workflow.id and
+      task.current_step_id == initial_step.id and
+      Repo.exists?(
+        from(e in StepExecution,
+          where:
+            e.task_id == ^task.id and
+              e.step_id == ^initial_step.id and
+              e.workflow_id == ^workflow.id and
+              e.status == "entered"
+        )
+      )
   end
 end

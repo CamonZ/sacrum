@@ -1,13 +1,10 @@
 defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
   use Sacrum.DataCase, async: false
 
-  import Ecto.Query
-
   alias Sacrum.Accounts
   alias Sacrum.Orchestrator.ExecutionPool
   alias Sacrum.Orchestrator.Routing.RouteStep
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.StepExecution
 
   # ===== Setup helpers =====
 
@@ -79,7 +76,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
     task
   end
 
-  defp create_step_execution(user, task, workflow, step_name, attrs \\ %{}) do
+  defp create_step_execution(user, task, workflow, step_name, attrs) do
     default_attrs = %{
       "task_id" => task.id,
       "project_id" => task.project_id,
@@ -92,15 +89,6 @@ defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
       Accounts.StepExecutions.insert(user.id, Map.merge(default_attrs, attrs))
 
     execution
-  end
-
-  defp get_latest_completed_execution(task_id) do
-    from(e in StepExecution,
-      where: e.task_id == ^task_id and e.status == "completed",
-      order_by: [desc: e.inserted_at],
-      limit: 1
-    )
-    |> Repo.one!()
   end
 
   # ===== Tests =====

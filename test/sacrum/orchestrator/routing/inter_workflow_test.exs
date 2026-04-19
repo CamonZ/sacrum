@@ -4,7 +4,6 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflowTest do
   alias Sacrum.Accounts
   alias Sacrum.Orchestrator.Routing.InterWorkflow
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.{Workflow, WorkflowStep, WorkflowTransition}
 
   # ===== Setup helpers =====
 
@@ -253,7 +252,7 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflowTest do
       project = create_project(user)
       workflow = create_workflow(user, project)
       step1 = create_step(user, workflow, %{"name" => "step1", "step_order" => 1})
-      step2 = create_step(user, workflow, %{"name" => "step2", "step_order" => 2})
+      _step2 = create_step(user, workflow, %{"name" => "step2", "step_order" => 2})
 
       workflow_with_steps = Repo.preload(workflow, :workflow_steps)
 
@@ -337,15 +336,16 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflowTest do
       {:ok, _updated_task} =
         InterWorkflow.assign_destination_workflow(task, to_workflow, to_step.id, handoff)
 
-      # Verify entered execution was created
-      executions =
+      execution =
         from(e in Sacrum.Repo.Schemas.StepExecution,
-          where: e.task_id == ^task.id and e.status == "entered"
+          where:
+            e.task_id == ^task.id and
+              e.workflow_id == ^to_workflow.id and
+              e.step_id == ^to_step.id and
+              e.status == "entered"
         )
-        |> Repo.all()
+        |> Repo.one!()
 
-      assert length(executions) >= 1
-      execution = List.last(executions)
       assert execution.handoff == handoff
     end
 

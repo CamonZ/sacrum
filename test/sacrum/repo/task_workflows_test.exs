@@ -740,4 +740,131 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
       assert entered.status == "entered"
     end
   end
+
+  describe "assign_workflow idempotency" do
+    test "calling assign_workflow twice produces exactly one entered StepExecution" do
+      %{workflow: workflow, task: task} = setup_workflow_with_steps()
+
+      {:ok, assigned1} = TaskWorkflows.assign_workflow(task, workflow)
+      {:ok, assigned2} = TaskWorkflows.assign_workflow(assigned1, workflow)
+
+      assert assigned2.workflow_id == workflow.id
+      assert assigned2.current_step_id == assigned1.current_step_id
+
+      executions =
+        StepExecutions.all(
+          conditions: [
+            task_id: task.id,
+            workflow_id: workflow.id,
+            status: "entered"
+          ],
+          order_by: [asc: :inserted_at]
+        )
+
+      assert length(executions) == 1
+      assert hd(executions).step_name == "backlog"
+    end
+
+    test "simulates full vtb add -w default shape: Accounts.Tasks.insert + explicit assign_workflow" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(project)
+      step1 = create_step(workflow, %{name: "backlog", step_order: 1})
+      step2 = create_step(workflow, %{name: "in_progress", step_order: 2})
+      step3 = create_step(workflow, %{name: "done", step_order: 3, is_final: true})
+
+      {:ok, workflow} = Workflows.update(workflow, %{initial_step_id: step1.id, is_default: true})
+
+      create_transition(step1, step2)
+      create_transition(step2, step3)
+
+      {:ok, task} = Accounts.Tasks.insert(project, %{title: "Test Task"})
+
+      task = Sacrum.Repo.get!(Sacrum.Repo.Schemas.Task, task.id)
+      assert task.workflow_id == workflow.id
+      assert task.current_step_id == step1.id
+
+      {:ok, task_after_explicit} = TaskWorkflows.assign_workflow(task, workflow)
+
+      assert task_after_explicit.workflow_id == workflow.id
+      assert task_after_explicit.current_step_id == step1.id
+
+      executions =
+        StepExecutions.all(
+          conditions: [
+            task_id: task.id,
+            workflow_id: workflow.id,
+            status: "entered"
+          ],
+          order_by: [asc: :inserted_at]
+        )
+
+      assert length(executions) == 1
+      assert hd(executions).step_name == "backlog"
+    end
+
+    test "re-assigning to a different workflow still invalidates the prior entered row" do
+      user = create_user()
+      project = create_project(user)
+
+      workflow1 = create_workflow(project)
+      step1_w1 = create_step(workflow1, %{name: "step1", step_order: 1})
+      {:ok, workflow1} = Workflows.update(workflow1, %{initial_step_id: step1_w1.id})
+
+      workflow2 = create_workflow(project)
+      step1_w2 = create_step(workflow2, %{name: "step_a", step_order: 1})
+      {:ok, workflow2} = Workflows.update(workflow2, %{initial_step_id: step1_w2.id})
+
+      task = create_task(project)
+
+      {:ok, task} = TaskWorkflows.assign_workflow(task, workflow1)
+
+      executions_w1 =
+        StepExecutions.all(
+          conditions: [task_id: task.id, workflow_id: workflow1.id],
+          order_by: [asc: :inserted_at]
+        )
+
+      assert length(executions_w1) == 1
+      assert hd(executions_w1).status == "entered"
+
+      {:ok, task} = TaskWorkflows.assign_workflow(task, workflow2)
+
+      executions_w1_after =
+        StepExecutions.all(
+          conditions: [task_id: task.id, workflow_id: workflow1.id],
+          order_by: [asc: :inserted_at]
+        )
+
+      assert length(executions_w1_after) == 1
+      assert hd(executions_w1_after).status == "invalidated"
+
+      executions_w2 =
+        StepExecutions.all(
+          conditions: [task_id: task.id, workflow_id: workflow2.id],
+          order_by: [asc: :inserted_at]
+        )
+
+      assert length(executions_w2) == 1
+      assert hd(executions_w2).status == "entered"
+      assert hd(executions_w2).step_name == "step_a"
+    end
+
+    test "assign_workflow still rejects when orchestrator is active even if workflow matches" do
+      %{workflow: workflow, task: task} = setup_workflow_with_steps()
+
+      {:ok, task} = TaskWorkflows.assign_workflow(task, workflow)
+
+      {:ok, _pid} =
+        Registry.register(
+          Sacrum.Orchestrator.TaskRegistry,
+          task.id,
+          "fake_orchestrator_pid"
+        )
+
+      assert {:error, :orchestrator_active} = TaskWorkflows.assign_workflow(task, workflow)
+
+      Registry.unregister(Sacrum.Orchestrator.TaskRegistry, task.id)
+    end
+  end
 end
