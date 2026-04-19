@@ -2,8 +2,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
   use Sacrum.DataCase, async: false
 
   alias Sacrum.Accounts
-  alias Sacrum.Orchestrator.ExecutionDispatcher
-  alias Sacrum.Orchestrator.PromptRenderer
+  alias Sacrum.Orchestrator.{ExecutionDispatcher, PromptContext, PromptRenderer}
 
   defp create_user do
     {:ok, user} =
@@ -579,7 +578,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
         }
       }
 
-      ctx = PromptRenderer.build_execution_context(execution_data_with_map)
+      ctx = PromptContext.build_execution_context(execution_data_with_map)
 
       assert ctx["previous_output"] == %{"verdict" => "approved", "should_retry" => false}
 
@@ -589,7 +588,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
         }
       }
 
-      ctx2 = PromptRenderer.build_execution_context(execution_data_with_string)
+      ctx2 = PromptContext.build_execution_context(execution_data_with_string)
 
       assert ctx2["previous_output"] == "just a string"
     end
