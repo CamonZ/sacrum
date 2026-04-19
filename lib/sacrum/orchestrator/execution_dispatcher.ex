@@ -84,6 +84,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
     %{}
     |> put_previous_output(task_id)
     |> put_handoff(entered_execution.handoff)
+    |> put_run_counts(task_id, entered_execution.step_name)
   end
 
   defp put_previous_output(data, task_id) do
@@ -124,6 +125,26 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
 
   defp put_handoff(data, handoff) when is_map(handoff), do: Map.put(data, :handoff, handoff)
   defp put_handoff(data, _), do: data
+
+  defp put_run_counts(data, task_id, step_name) do
+    query =
+      from(e in StepExecution,
+        where:
+          e.task_id == ^task_id and e.step_name == ^step_name and
+            e.status in ["completed", "failed"],
+        group_by: e.status,
+        select: {e.status, count(e.id)}
+      )
+
+    counts = query |> Repo.all() |> Map.new()
+    completed = Map.get(counts, "completed", 0)
+    failed = Map.get(counts, "failed", 0)
+
+    data
+    |> Map.put(:completed_count, completed)
+    |> Map.put(:failed_count, failed)
+    |> Map.put(:run_count, completed + failed)
+  end
 
   defp fetch_step(user_id, step_id) do
     Accounts.WorkflowSteps.get_by(user_id,

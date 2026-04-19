@@ -682,4 +682,117 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       assert prompt == "plain string output"
     end
   end
+
+  describe "run count exposure via execution data" do
+    setup [:setup_dispatch_context]
+
+    test "renders {{ execution.run_count }} with count of prior completed and failed executions",
+         ctx do
+      step =
+        create_step(ctx.user, ctx.workflow, %{
+          "prompt" => "This is run number {{ execution.run_count }}"
+        })
+
+      task = create_task(ctx.user, ctx.project) |> assign_workflow(ctx.workflow)
+
+      insert_execution(ctx, task, step.name, "completed")
+      insert_execution(ctx, task, step.name, "completed")
+      insert_execution(ctx, task, step.name, "failed")
+      create_entered_execution(ctx.user, task, step)
+
+      assert dispatch_prompt(ctx, task, step) == "This is run number 3"
+    end
+
+    test "run_count is 0 when no prior executions exist for the step", ctx do
+      step =
+        create_step(ctx.user, ctx.workflow, %{
+          "prompt" => "Run count: {{ execution.run_count }}"
+        })
+
+      task = create_task(ctx.user, ctx.project) |> assign_workflow(ctx.workflow)
+
+      create_entered_execution(ctx.user, task, step)
+
+      assert dispatch_prompt(ctx, task, step) == "Run count: 0"
+    end
+
+    test "run_count excludes 'entered' status executions", ctx do
+      step =
+        create_step(ctx.user, ctx.workflow, %{
+          "prompt" => "Run count is {{ execution.run_count }}"
+        })
+
+      task = create_task(ctx.user, ctx.project) |> assign_workflow(ctx.workflow)
+
+      insert_execution(ctx, task, step.name, "completed")
+      insert_execution(ctx, task, step.name, "entered")
+      create_entered_execution(ctx.user, task, step)
+
+      assert dispatch_prompt(ctx, task, step) == "Run count is 1"
+    end
+
+    test "splits run count into completed_count and failed_count", ctx do
+      step =
+        create_step(ctx.user, ctx.workflow, %{
+          "prompt" =>
+            "total={{ execution.run_count }} ok={{ execution.completed_count }} ko={{ execution.failed_count }}"
+        })
+
+      task = create_task(ctx.user, ctx.project) |> assign_workflow(ctx.workflow)
+
+      insert_execution(ctx, task, step.name, "completed")
+      insert_execution(ctx, task, step.name, "completed")
+      insert_execution(ctx, task, step.name, "failed")
+      create_entered_execution(ctx.user, task, step)
+
+      assert dispatch_prompt(ctx, task, step) == "total=3 ok=2 ko=1"
+    end
+
+    test "run_count is specific to the current step", ctx do
+      step_a = create_step(ctx.user, ctx.workflow, %{"name" => "step_a", "step_order" => 1})
+
+      step_b =
+        create_step(ctx.user, ctx.workflow, %{
+          "name" => "step_b",
+          "step_order" => 2,
+          "prompt" => "Step B run count: {{ execution.run_count }}"
+        })
+
+      task = create_task(ctx.user, ctx.project) |> assign_workflow(ctx.workflow)
+
+      insert_execution(ctx, task, step_a.name, "completed")
+      insert_execution(ctx, task, step_a.name, "completed")
+      insert_execution(ctx, task, step_b.name, "completed")
+      create_entered_execution(ctx.user, task, step_b)
+
+      assert dispatch_prompt(ctx, task, step_b) == "Step B run count: 1"
+    end
+  end
+
+  defp insert_execution(ctx, task, step_name, status) do
+    {:ok, exec} =
+      Accounts.StepExecutions.insert(ctx.user.id, %{
+        "task_id" => task.id,
+        "project_id" => task.project_id,
+        "workflow_id" => ctx.workflow.id,
+        "step_name" => step_name,
+        "status" => status
+      })
+
+    exec
+  end
+
+  defp dispatch_prompt(ctx, task, step) do
+    task = PromptRenderer.preload_for_rendering(task)
+    subscribe_to_project(ctx.project)
+
+    {:ok, _exec} = ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, step.id)
+
+    assert_receive %Phoenix.Socket.Broadcast{
+      event: "run_step",
+      payload: %{prompt: prompt}
+    }
+
+    prompt
+  end
 end
