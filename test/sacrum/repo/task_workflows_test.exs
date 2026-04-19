@@ -1,6 +1,7 @@
 defmodule Sacrum.Repo.TaskWorkflowsTest do
   use Sacrum.DataCase, async: true
 
+  alias Sacrum.Accounts
   alias Sacrum.Repo.Users
   alias Sacrum.Repo.Projects
   alias Sacrum.Repo.Tasks
@@ -594,6 +595,149 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
 
       latest = List.first(executions)
       assert is_nil(latest.handoff)
+    end
+  end
+
+  describe "orchestrator-priority gate" do
+    test "assign_workflow rejects when orchestrator is registered for task" do
+      %{workflow: workflow, task: task} = setup_workflow_with_steps()
+
+      # Register the task in the orchestrator registry
+      Registry.register(Sacrum.Orchestrator.TaskRegistry, task.id, nil)
+
+      assert {:error, :orchestrator_active} = TaskWorkflows.assign_workflow(task, workflow)
+    end
+
+    test "assign_workflow succeeds when no orchestrator is registered" do
+      %{workflow: workflow, task: task} = setup_workflow_with_steps()
+
+      # Ensure no registration
+      Registry.unregister(Sacrum.Orchestrator.TaskRegistry, task.id)
+
+      {:ok, updated} = TaskWorkflows.assign_workflow(task, workflow)
+      assert updated.workflow_id == workflow.id
+    end
+
+    test "advance_to_step rejects when orchestrator is registered for task" do
+      %{workflow: workflow, steps: steps, task: task} = setup_workflow_with_steps()
+
+      {:ok, task} = TaskWorkflows.assign_workflow(task, workflow)
+
+      # Register the task in the orchestrator registry
+      Registry.register(Sacrum.Orchestrator.TaskRegistry, task.id, nil)
+
+      assert {:error, :orchestrator_active} =
+               TaskWorkflows.advance_to_step(task, steps.in_progress.id)
+    end
+
+    test "advance_to_step succeeds when no orchestrator is registered" do
+      %{workflow: workflow, steps: steps, task: task} = setup_workflow_with_steps()
+
+      {:ok, task} = TaskWorkflows.assign_workflow(task, workflow)
+
+      # Ensure no registration
+      Registry.unregister(Sacrum.Orchestrator.TaskRegistry, task.id)
+
+      {:ok, updated} = TaskWorkflows.advance_to_step(task, steps.in_progress.id)
+      assert updated.current_step_id == steps.in_progress.id
+    end
+
+    test "move_to_step rejects when orchestrator is registered for task" do
+      %{workflow: workflow, steps: steps, task: task} = setup_workflow_with_steps()
+
+      {:ok, task} = TaskWorkflows.assign_workflow(task, workflow)
+
+      # Register the task in the orchestrator registry
+      Registry.register(Sacrum.Orchestrator.TaskRegistry, task.id, nil)
+
+      assert {:error, :orchestrator_active} =
+               TaskWorkflows.move_to_step(task, steps.in_progress.id)
+    end
+
+    test "move_to_step succeeds when no orchestrator is registered" do
+      %{workflow: workflow, steps: steps, task: task} = setup_workflow_with_steps()
+
+      {:ok, task} = TaskWorkflows.assign_workflow(task, workflow)
+
+      # Ensure no registration
+      Registry.unregister(Sacrum.Orchestrator.TaskRegistry, task.id)
+
+      {:ok, updated} = TaskWorkflows.move_to_step(task, steps.in_progress.id)
+      assert updated.current_step_id == steps.in_progress.id
+    end
+  end
+
+  describe "invalidate-on-leave" do
+    test "advance_to_step invalidates prior entered row for target step" do
+      %{workflow: workflow, steps: steps, task: task} = setup_workflow_with_steps()
+
+      {:ok, task} = TaskWorkflows.assign_workflow(task, workflow)
+
+      # Create a pre-existing "entered" row for the target step (simulating CLI handoff)
+      {:ok, _pre_existing} =
+        Accounts.StepExecutions.insert(task.user_id, %{
+          "task_id" => task.id,
+          "project_id" => task.project_id,
+          "workflow_id" => workflow.id,
+          "step_id" => steps.in_progress.id,
+          "step_name" => steps.in_progress.name,
+          "status" => "entered"
+        })
+
+      # Advance to the same step via skip_orchestrator_check (simulating orchestrator call)
+      {:ok, _updated_task} =
+        TaskWorkflows.advance_to_step(task, steps.in_progress.id, nil,
+          skip_orchestrator_check: true
+        )
+
+      # Verify the pre-existing row is invalidated
+      all_executions =
+        StepExecutions.all(
+          conditions: [task_id: task.id, step_id: steps.in_progress.id],
+          order_by: [asc: :inserted_at]
+        )
+
+      assert length(all_executions) == 2
+      invalidated = List.first(all_executions)
+      assert invalidated.status == "invalidated"
+
+      entered = List.last(all_executions)
+      assert entered.status == "entered"
+    end
+
+    test "move_to_step invalidates prior entered row for target step" do
+      %{workflow: workflow, steps: steps, task: task} = setup_workflow_with_steps()
+
+      {:ok, task} = TaskWorkflows.assign_workflow(task, workflow)
+
+      # Create a pre-existing "entered" row for the target step
+      {:ok, _pre_existing} =
+        Accounts.StepExecutions.insert(task.user_id, %{
+          "task_id" => task.id,
+          "project_id" => task.project_id,
+          "workflow_id" => workflow.id,
+          "step_id" => steps.in_progress.id,
+          "step_name" => steps.in_progress.name,
+          "status" => "entered"
+        })
+
+      # Move to the same step via skip_orchestrator_check (simulating orchestrator call)
+      {:ok, _updated_task} =
+        TaskWorkflows.move_to_step(task, steps.in_progress.id, nil, skip_orchestrator_check: true)
+
+      # Verify the pre-existing row is invalidated
+      all_executions =
+        StepExecutions.all(
+          conditions: [task_id: task.id, step_id: steps.in_progress.id],
+          order_by: [asc: :inserted_at]
+        )
+
+      assert length(all_executions) == 2
+      invalidated = List.first(all_executions)
+      assert invalidated.status == "invalidated"
+
+      entered = List.last(all_executions)
+      assert entered.status == "entered"
     end
   end
 end

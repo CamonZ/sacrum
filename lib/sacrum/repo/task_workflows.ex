@@ -48,19 +48,17 @@ defmodule Sacrum.Repo.TaskWorkflows do
   @doc """
   Assigns a workflow to a task, setting current_step_id to the workflow's initial step.
   Creates a StepExecution audit record for the initial step entry.
+
+  Returns an error if an orchestrator process is registered for this task.
   """
   @spec assign_workflow(Task.t(), Workflow.t()) ::
           {:ok, Task.t()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
   def assign_workflow(%Task{} = task, %Workflow{} = workflow) do
-    workflow = Repo.preload(workflow, :workflow_steps)
-
-    with {:ok, initial_step} <- resolve_initial_step(workflow) do
-      Multi.new()
-      |> Multi.update(:task, task_workflow_changeset(task, workflow.id, initial_step.id))
-      |> Multi.insert(
-        :step_execution,
-        step_execution_attrs(task, workflow.id, initial_step)
-      )
+    with :ok <- check_orchestrator_not_active(task.id),
+         workflow = Repo.preload(workflow, :workflow_steps),
+         {:ok, initial_step} <- resolve_initial_step(workflow) do
+      task
+      |> build_assign_workflow_multi(workflow, initial_step)
       |> Repo.transaction()
       |> case do
         {:ok, %{task: task}} ->
@@ -91,24 +89,38 @@ defmodule Sacrum.Repo.TaskWorkflows do
   audit record. Optionally stores handoff data on the new execution record.
   Transition validity is assumed since transitions are validated on creation.
 
+  By default, returns an error if an orchestrator process is registered for this task
+  (CLI-only call). Pass `skip_orchestrator_check: true` for internal/orchestrator calls.
+
   Returns:
     - {:ok, task} with updated current_step_id on success
     - {:error, :no_workflow} if task has no workflow
     - {:error, :no_current_step} if task has no current step
     - {:error, :step_not_found} if target step doesn't exist
     - {:error, :step_not_in_workflow} if target step belongs to a different workflow
+    - {:error, :orchestrator_active} if an orchestrator process is registered (CLI-only)
     - {:error, changeset} on database errors
   """
-  @spec advance_to_step(Task.t(), String.t(), map() | nil) ::
+  @spec advance_to_step(Task.t(), String.t(), map() | nil, keyword()) ::
           {:ok, Task.t()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
-  def advance_to_step(task, step_id, handoff \\ nil)
-  def advance_to_step(%Task{workflow_id: nil}, _step_id, _handoff), do: {:error, :no_workflow}
+  def advance_to_step(task, step_id, handoff \\ nil, opts \\ [])
 
-  def advance_to_step(%Task{current_step_id: nil}, _step_id, _handoff),
+  def advance_to_step(%Task{workflow_id: nil}, _step_id, _handoff, _opts),
+    do: {:error, :no_workflow}
+
+  def advance_to_step(%Task{current_step_id: nil}, _step_id, _handoff, _opts),
     do: {:error, :no_current_step}
 
-  def advance_to_step(%Task{} = task, step_id, handoff) do
-    with {:ok, target_step} <- get_workflow_step(task.workflow_id, step_id) do
+  def advance_to_step(%Task{} = task, step_id, handoff, opts) do
+    check_result =
+      if Keyword.get(opts, :skip_orchestrator_check, false) do
+        :ok
+      else
+        check_orchestrator_not_active(task.id)
+      end
+
+    with :ok <- check_result,
+         {:ok, target_step} <- get_workflow_step(task.workflow_id, step_id) do
       Multi.new()
       |> Multi.update_all(
         :invalidate,
@@ -148,17 +160,28 @@ defmodule Sacrum.Repo.TaskWorkflows do
 
   Optionally stores handoff data on the new execution record.
   Creates a StepExecution audit record for the new step.
-  """
-  @spec move_to_step(Task.t(), String.t(), map() | nil) ::
-          {:ok, Task.t()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
-  def move_to_step(task, step_id, handoff \\ nil)
-  def move_to_step(%Task{workflow_id: nil}, _step_id, _handoff), do: {:error, :no_workflow}
 
-  def move_to_step(%Task{current_step_id: nil}, _step_id, _handoff),
+  By default, returns an error if an orchestrator process is registered for this task
+  (CLI-only call). Pass `skip_orchestrator_check: true` for internal/orchestrator calls.
+  """
+  @spec move_to_step(Task.t(), String.t(), map() | nil, keyword()) ::
+          {:ok, Task.t()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
+  def move_to_step(task, step_id, handoff \\ nil, opts \\ [])
+  def move_to_step(%Task{workflow_id: nil}, _step_id, _handoff, _opts), do: {:error, :no_workflow}
+
+  def move_to_step(%Task{current_step_id: nil}, _step_id, _handoff, _opts),
     do: {:error, :no_current_step}
 
-  def move_to_step(%Task{} = task, step_id, handoff) do
-    with {:ok, target_step} <- get_workflow_step(task.workflow_id, step_id),
+  def move_to_step(%Task{} = task, step_id, handoff, opts) do
+    check_result =
+      if Keyword.get(opts, :skip_orchestrator_check, false) do
+        :ok
+      else
+        check_orchestrator_not_active(task.id)
+      end
+
+    with :ok <- check_result,
+         {:ok, target_step} <- get_workflow_step(task.workflow_id, step_id),
          :ok <- validate_transition_exists(task.current_step_id, target_step.id) do
       Multi.new()
       |> Multi.update_all(
@@ -287,6 +310,13 @@ defmodule Sacrum.Repo.TaskWorkflows do
 
   # Private helpers
 
+  defp check_orchestrator_not_active(task_id) do
+    case Registry.lookup(Sacrum.Orchestrator.TaskRegistry, task_id) do
+      [] -> :ok
+      _pids -> {:error, :orchestrator_active}
+    end
+  end
+
   defp resolve_initial_step(%Workflow{initial_step_id: step_id})
        when not is_nil(step_id) do
     case Repo.get(WorkflowStep, step_id) do
@@ -300,6 +330,37 @@ defmodule Sacrum.Repo.TaskWorkflows do
       [first | _] -> {:ok, first}
       [] -> {:error, :workflow_has_no_steps}
     end
+  end
+
+  defp build_assign_workflow_multi(task, workflow, initial_step) do
+    multi = Multi.new()
+
+    # Invalidate any "entered" execution from the previous workflow if changing workflows
+    multi =
+      if not is_nil(task.current_step_id) and task.workflow_id != workflow.id do
+        Multi.update_all(
+          multi,
+          :invalidate,
+          fn _changes ->
+            from(e in StepExecution,
+              where:
+                e.task_id == ^task.id and
+                  e.workflow_id == ^task.workflow_id and
+                  e.status == "entered"
+            )
+          end,
+          set: [status: "invalidated"]
+        )
+      else
+        multi
+      end
+
+    multi
+    |> Multi.update(:task, task_workflow_changeset(task, workflow.id, initial_step.id))
+    |> Multi.insert(
+      :step_execution,
+      step_execution_attrs(task, workflow.id, initial_step)
+    )
   end
 
   defp task_workflow_changeset(task, workflow_id, step_id) do

@@ -26,7 +26,10 @@ defmodule Sacrum.Orchestrator.Routing.IntraWorkflow do
 
     with {:ok, _dest_step} <- validate_destination_step(data, dest_step_id),
          :ok <- validate_step_transition_exists(data.task.current_step_id, dest_step_id),
-         {:ok, updated_task} <- TaskWorkflows.advance_to_step(data.task, dest_step_id, handoff) do
+         {:ok, updated_task} <-
+           TaskWorkflows.advance_to_step(data.task, dest_step_id, handoff,
+             skip_orchestrator_check: true
+           ) do
       Logger.info(
         "[TaskOrchestrator:#{task_id}] Route step routed intra_workflow from #{data.task.current_step_id} to #{dest_step_id} handoff=#{inspect(handoff != nil)}"
       )

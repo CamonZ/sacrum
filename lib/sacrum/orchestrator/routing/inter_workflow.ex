@@ -15,7 +15,7 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflow do
   alias Ecto.{Changeset, Multi}
   alias Sacrum.Orchestrator.{FSMData, Retry, TaskCompletion, WorkflowGraph}
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.{Workflow, WorkflowStep, WorkflowTransition}
+  alias Sacrum.Repo.Schemas.{StepExecution, Workflow, WorkflowStep, WorkflowTransition}
 
   @doc """
   Routes to a destination workflow.
@@ -159,13 +159,25 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflow do
 
   @doc """
   Runs the transaction that updates the task's workflow/current_step and
-  inserts the `"entered"` StepExecution.
+  inserts the `"entered"` StepExecution. Invalidates any prior "entered" row
+  for the target step in the destination workflow.
   """
   @spec do_assign_destination_workflow(struct(), struct(), struct(), map() | nil) ::
           {:ok, struct()} | {:error, term()}
   def do_assign_destination_workflow(task, dest_workflow, target_step, handoff) do
     multi =
       Multi.new()
+      |> Multi.update_all(
+        :invalidate,
+        from(e in StepExecution,
+          where:
+            e.task_id == ^task.id and
+              e.step_id == ^target_step.id and
+              e.workflow_id == ^dest_workflow.id and
+              e.status == "entered"
+        ),
+        set: [status: "invalidated"]
+      )
       |> Multi.update(
         :task,
         Changeset.change(task, %{
