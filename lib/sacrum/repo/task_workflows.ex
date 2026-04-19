@@ -112,29 +112,10 @@ defmodule Sacrum.Repo.TaskWorkflows do
     do: {:error, :no_current_step}
 
   def advance_to_step(%Task{} = task, step_id, handoff, opts) do
-    check_result =
-      if Keyword.get(opts, :skip_orchestrator_check, false) do
-        :ok
-      else
-        check_orchestrator_not_active(task.id)
-      end
-
-    with :ok <- check_result,
+    with :ok <- maybe_check_orchestrator(task.id, opts),
          {:ok, target_step} <- get_workflow_step(task.workflow_id, step_id) do
       Multi.new()
-      |> Multi.update_all(
-        :invalidate,
-        fn _changes ->
-          from(e in StepExecution,
-            where:
-              e.task_id == ^task.id and
-                e.step_id == ^target_step.id and
-                e.workflow_id == ^task.workflow_id and
-                e.status == "entered"
-          )
-        end,
-        set: [status: "invalidated"]
-      )
+      |> invalidate_entered_executions(task.id, task.workflow_id, target_step.id)
       |> Multi.update(:task, task_workflow_changeset(task, task.workflow_id, target_step.id))
       |> Multi.insert(
         :step_execution,
@@ -173,30 +154,11 @@ defmodule Sacrum.Repo.TaskWorkflows do
     do: {:error, :no_current_step}
 
   def move_to_step(%Task{} = task, step_id, handoff, opts) do
-    check_result =
-      if Keyword.get(opts, :skip_orchestrator_check, false) do
-        :ok
-      else
-        check_orchestrator_not_active(task.id)
-      end
-
-    with :ok <- check_result,
+    with :ok <- maybe_check_orchestrator(task.id, opts),
          {:ok, target_step} <- get_workflow_step(task.workflow_id, step_id),
          :ok <- validate_transition_exists(task.current_step_id, target_step.id) do
       Multi.new()
-      |> Multi.update_all(
-        :invalidate,
-        fn _changes ->
-          from(e in StepExecution,
-            where:
-              e.task_id == ^task.id and
-                e.step_id == ^target_step.id and
-                e.workflow_id == ^task.workflow_id and
-                e.status == "entered"
-          )
-        end,
-        set: [status: "invalidated"]
-      )
+      |> invalidate_entered_executions(task.id, task.workflow_id, target_step.id)
       |> Multi.update(:task, task_workflow_changeset(task, task.workflow_id, target_step.id))
       |> Multi.insert(
         :step_execution,
@@ -310,11 +272,34 @@ defmodule Sacrum.Repo.TaskWorkflows do
 
   # Private helpers
 
+  defp maybe_check_orchestrator(task_id, opts) do
+    if Keyword.get(opts, :skip_orchestrator_check, false) do
+      :ok
+    else
+      check_orchestrator_not_active(task_id)
+    end
+  end
+
   defp check_orchestrator_not_active(task_id) do
     case Registry.lookup(Sacrum.Orchestrator.TaskRegistry, task_id) do
       [] -> :ok
       _pids -> {:error, :orchestrator_active}
     end
+  end
+
+  defp invalidate_entered_executions(multi, task_id, workflow_id, step_id) do
+    Multi.update_all(
+      multi,
+      :invalidate,
+      from(e in StepExecution,
+        where:
+          e.task_id == ^task_id and
+            e.step_id == ^step_id and
+            e.workflow_id == ^workflow_id and
+            e.status == "entered"
+      ),
+      set: [status: "invalidated"]
+    )
   end
 
   defp resolve_initial_step(%Workflow{initial_step_id: step_id})
@@ -333,33 +318,31 @@ defmodule Sacrum.Repo.TaskWorkflows do
   end
 
   defp build_assign_workflow_multi(task, workflow, initial_step) do
-    multi = Multi.new()
-
-    # Invalidate any "entered" execution from the previous workflow if changing workflows
-    multi =
-      if not is_nil(task.current_step_id) and task.workflow_id != workflow.id do
-        Multi.update_all(
-          multi,
-          :invalidate,
-          fn _changes ->
-            from(e in StepExecution,
-              where:
-                e.task_id == ^task.id and
-                  e.workflow_id == ^task.workflow_id and
-                  e.status == "entered"
-            )
-          end,
-          set: [status: "invalidated"]
-        )
-      else
-        multi
-      end
-
-    multi
+    Multi.new()
+    |> maybe_invalidate_previous_workflow(task, workflow.id)
     |> Multi.update(:task, task_workflow_changeset(task, workflow.id, initial_step.id))
     |> Multi.insert(
       :step_execution,
       step_execution_attrs(task, workflow.id, initial_step)
+    )
+  end
+
+  defp maybe_invalidate_previous_workflow(multi, %Task{current_step_id: nil}, _new_workflow_id),
+    do: multi
+
+  defp maybe_invalidate_previous_workflow(multi, %Task{workflow_id: same}, same), do: multi
+
+  defp maybe_invalidate_previous_workflow(multi, task, _new_workflow_id) do
+    Multi.update_all(
+      multi,
+      :invalidate,
+      from(e in StepExecution,
+        where:
+          e.task_id == ^task.id and
+            e.workflow_id == ^task.workflow_id and
+            e.status == "entered"
+      ),
+      set: [status: "invalidated"]
     )
   end
 

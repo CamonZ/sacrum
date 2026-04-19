@@ -65,17 +65,15 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
   end
 
   defp create_entered_execution(user, task, step) do
-    # Check if an "entered" execution already exists for this step
     import Ecto.Query
 
-    existing =
+    query =
       from(e in Sacrum.Repo.Schemas.StepExecution,
         where: e.task_id == ^task.id and e.step_id == ^step.id and e.status == "entered",
         limit: 1
       )
-      |> Sacrum.Repo.one()
 
-    case existing do
+    case Sacrum.Repo.one(query) do
       nil ->
         {:ok, execution} =
           Accounts.StepExecutions.insert(user.id, %{

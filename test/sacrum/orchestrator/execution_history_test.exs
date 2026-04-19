@@ -1,9 +1,12 @@
 defmodule Sacrum.Orchestrator.ExecutionHistoryTest do
   use Sacrum.DataCase
 
+  import Ecto.Query
+
   alias Sacrum.Accounts
   alias Sacrum.Orchestrator.ExecutionHistory
   alias Sacrum.Repo
+  alias Sacrum.Repo.Schemas.StepExecution
 
   # ===== Setup helpers =====
 
@@ -64,27 +67,13 @@ defmodule Sacrum.Orchestrator.ExecutionHistoryTest do
     task
   end
 
-  defp create_step_execution(user, task, workflow, step_name_or_step, attrs \\ %{}) do
-    # Handle both step name (string) and step struct
-    {step_name, step_id} =
-      if is_map(step_name_or_step) do
-        {step_name_or_step.name, step_name_or_step.id}
-      else
-        # If it's a string, look it up from the workflow
-        step =
-          Enum.find(Repo.preload(workflow, :workflow_steps).workflow_steps, fn s ->
-            s.name == step_name_or_step
-          end)
-
-        {step_name_or_step, step.id}
-      end
-
+  defp create_step_execution(user, task, workflow, step, attrs) do
     default_attrs = %{
       "task_id" => task.id,
       "project_id" => task.project_id,
       "workflow_id" => workflow.id,
-      "step_name" => step_name,
-      "step_id" => step_id,
+      "step_name" => step.name,
+      "step_id" => step.id,
       "status" => "completed"
     }
 
@@ -92,6 +81,15 @@ defmodule Sacrum.Orchestrator.ExecutionHistoryTest do
       Accounts.StepExecutions.insert(user.id, Map.merge(default_attrs, attrs))
 
     execution
+  end
+
+  defp get_entered_execution(task, step) do
+    Repo.one!(
+      from(e in StepExecution,
+        where: e.task_id == ^task.id and e.status == "entered" and e.step_id == ^step.id,
+        limit: 1
+      )
+    )
   end
 
   # ===== Tests =====
@@ -104,21 +102,11 @@ defmodule Sacrum.Orchestrator.ExecutionHistoryTest do
       step = create_step(user, workflow, %{})
       task = create_task(user, project, workflow)
 
-      # Get the entered execution created by assign_workflow
-      import Ecto.Query
+      entered = get_entered_execution(task, step)
 
-      entered =
-        from(e in Sacrum.Repo.Schemas.StepExecution,
-          where: e.task_id == ^task.id and e.status == "entered" and e.step_id == ^step.id,
-          limit: 1
-        )
-        |> Repo.one!()
-
-      # Update it with handoff data
       {:ok, entered} =
         Accounts.StepExecutions.update(entered, %{"handoff" => %{"key" => "value"}})
 
-      # Create a previous completed execution
       _previous =
         create_step_execution(user, task, workflow, step, %{
           "status" => "completed",
@@ -142,17 +130,8 @@ defmodule Sacrum.Orchestrator.ExecutionHistoryTest do
       step = create_step(user, workflow, %{})
       task = create_task(user, project, workflow)
 
-      # assign_workflow creates an "entered" execution. Get it.
-      import Ecto.Query
+      entered = get_entered_execution(task, step)
 
-      entered =
-        from(e in Sacrum.Repo.Schemas.StepExecution,
-          where: e.task_id == ^task.id and e.status == "entered" and e.step_id == ^step.id,
-          limit: 1
-        )
-        |> Repo.one!()
-
-      # Create completed and failed executions
       _completed1 =
         create_step_execution(user, task, workflow, step, %{
           "status" => "completed"
@@ -205,7 +184,7 @@ defmodule Sacrum.Orchestrator.ExecutionHistoryTest do
       user = create_user()
       project = create_project(user)
       workflow = create_workflow(user, project)
-      step = create_step(user, workflow, %{})
+      _step = create_step(user, workflow, %{})
       task = create_task(user, project, workflow)
 
       data = ExecutionHistory.put_previous_output(%{}, task.id)
@@ -295,7 +274,6 @@ defmodule Sacrum.Orchestrator.ExecutionHistoryTest do
       _step = create_step(user, workflow, %{})
       task = create_task(user, project, workflow)
 
-      # Use a nonexistent UUID
       nonexistent_step_id = "00000000-0000-0000-0000-000000000000"
       data = ExecutionHistory.put_run_counts(%{}, task.id, nonexistent_step_id)
 
@@ -311,19 +289,9 @@ defmodule Sacrum.Orchestrator.ExecutionHistoryTest do
       step = create_step(user, workflow, %{})
       task = create_task(user, project, workflow)
 
-      # Get the entered execution from assign_workflow and update it to "started"
-      import Ecto.Query
-
-      entered =
-        from(e in Sacrum.Repo.Schemas.StepExecution,
-          where: e.task_id == ^task.id and e.status == "entered" and e.step_id == ^step.id,
-          limit: 1
-        )
-        |> Repo.one!()
-
+      entered = get_entered_execution(task, step)
       {:ok, _} = Accounts.StepExecutions.update(entered, %{"status" => "started"})
 
-      # Create another execution with a non-terminal status
       create_step_execution(user, task, workflow, step, %{"status" => "dispatched"})
 
       data = ExecutionHistory.put_run_counts(%{}, task.id, step.id)
