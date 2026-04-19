@@ -3,7 +3,7 @@ defmodule Sacrum.Orchestrator.PromptRendererTest do
 
   import ExUnit.CaptureLog
 
-  alias Sacrum.Orchestrator.PromptRenderer
+  alias Sacrum.Orchestrator.{PromptContext, PromptRenderer}
 
   describe "render/2 - plain text" do
     test "plain text without Liquid syntax renders unchanged" do
@@ -310,7 +310,7 @@ defmodule Sacrum.Orchestrator.PromptRendererTest do
         code_refs: []
       }
 
-      context = PromptRenderer.build_task_context(task)
+      context = PromptContext.build_task_context(task)
 
       assert context["id"] == "550e8400-e29b-41d4-a716-446655440000"
       assert context["title"] == "Fix login bug"
@@ -333,7 +333,7 @@ defmodule Sacrum.Orchestrator.PromptRendererTest do
         code_refs: []
       }
 
-      context = PromptRenderer.build_task_context(task)
+      context = PromptContext.build_task_context(task)
 
       assert context["title"] == "Task"
       assert context["description"] == ""
@@ -365,7 +365,7 @@ defmodule Sacrum.Orchestrator.PromptRendererTest do
         code_refs: []
       }
 
-      context = PromptRenderer.build_task_context(task)
+      context = PromptContext.build_task_context(task)
 
       assert context["constraints"] == ["Must work offline", "Must support iOS 14+"]
       assert context["goals"] == ["Improve performance"]
@@ -399,7 +399,7 @@ defmodule Sacrum.Orchestrator.PromptRendererTest do
         ]
       }
 
-      context = PromptRenderer.build_task_context(task)
+      context = PromptContext.build_task_context(task)
 
       assert length(context["code_refs"]) == 2
       ref1 = Enum.at(context["code_refs"], 0)
@@ -436,7 +436,7 @@ defmodule Sacrum.Orchestrator.PromptRendererTest do
         code_refs: []
       }
 
-      context = PromptRenderer.build_task_context(task)
+      context = PromptContext.build_task_context(task)
 
       assert context["testing_criteria"] == ["Must handle nulls"]
       assert context["anti_patterns"] == ["Avoid loops"]
@@ -453,7 +453,7 @@ defmodule Sacrum.Orchestrator.PromptRendererTest do
         duration_ms: 1500
       }
 
-      context = PromptRenderer.build_execution_context(execution_data)
+      context = PromptContext.build_execution_context(execution_data)
 
       assert context["previous_output"] == "Some output text"
       assert context["run_count"] == 2
@@ -468,7 +468,7 @@ defmodule Sacrum.Orchestrator.PromptRendererTest do
         run_count: 0
       }
 
-      context = PromptRenderer.build_execution_context(execution_data)
+      context = PromptContext.build_execution_context(execution_data)
 
       assert context["previous_output"] == ""
       assert context["run_count"] == 0
@@ -486,7 +486,7 @@ defmodule Sacrum.Orchestrator.PromptRendererTest do
         ]
       }
 
-      context = PromptRenderer.build_execution_context(execution_data)
+      context = PromptContext.build_execution_context(execution_data)
 
       assert length(context["history"]) == 2
       history_1 = Enum.at(context["history"], 0)
@@ -501,7 +501,7 @@ defmodule Sacrum.Orchestrator.PromptRendererTest do
     end
 
     test "handles nil execution_data gracefully" do
-      context = PromptRenderer.build_execution_context(nil)
+      context = PromptContext.build_execution_context(nil)
       assert context == %{}
     end
 
@@ -511,7 +511,7 @@ defmodule Sacrum.Orchestrator.PromptRendererTest do
         retry_count: 0
       }
 
-      context = PromptRenderer.build_execution_context(execution_data)
+      context = PromptContext.build_execution_context(execution_data)
 
       # duration_ms should not be present if nil
       assert !Map.has_key?(context, "duration_ms")
@@ -540,7 +540,7 @@ defmodule Sacrum.Orchestrator.PromptRendererTest do
 
       task = %Sacrum.Repo.Schemas.Task{}
 
-      context = PromptRenderer.build_workflow_context(workflow_step, task)
+      context = PromptContext.build_workflow_context(workflow_step, task)
 
       assert context["name"] == "Task Workflow"
       assert context["current_step"] == "review"
@@ -569,7 +569,7 @@ defmodule Sacrum.Orchestrator.PromptRendererTest do
         workflow: nil
       }
 
-      context = PromptRenderer.build_workflow_context(workflow_step, task)
+      context = PromptContext.build_workflow_context(workflow_step, task)
 
       assert context["name"] == "Task Workflow"
       assert context["step_count"] == 2
@@ -577,7 +577,7 @@ defmodule Sacrum.Orchestrator.PromptRendererTest do
 
     test "returns empty map when workflow_step is nil" do
       task = %Sacrum.Repo.Schemas.Task{workflow: nil}
-      context = PromptRenderer.build_workflow_context(nil, task)
+      context = PromptContext.build_workflow_context(nil, task)
 
       assert context == %{}
     end
@@ -592,7 +592,7 @@ defmodule Sacrum.Orchestrator.PromptRendererTest do
 
       task = %Sacrum.Repo.Schemas.Task{workflow: nil}
 
-      context = PromptRenderer.build_workflow_context(workflow_step, task)
+      context = PromptContext.build_workflow_context(workflow_step, task)
 
       assert context == %{}
     end
@@ -613,7 +613,7 @@ defmodule Sacrum.Orchestrator.PromptRendererTest do
 
       task = %Sacrum.Repo.Schemas.Task{}
 
-      context = PromptRenderer.build_workflow_context(workflow_step, task)
+      context = PromptContext.build_workflow_context(workflow_step, task)
 
       assert context["current_step"] == ""
       assert context["current_step_goal"] == ""
@@ -648,7 +648,7 @@ defmodule Sacrum.Orchestrator.PromptRendererTest do
         workflow: nil
       }
 
-      context = PromptRenderer.build_context(task, execution_data, workflow_step)
+      context = PromptContext.build_context(task, execution_data, workflow_step)
 
       # Verify top-level keys
       assert Map.has_key?(context, "task")
@@ -687,7 +687,7 @@ defmodule Sacrum.Orchestrator.PromptRendererTest do
 
       execution_data = %{run_count: 0}
 
-      context = PromptRenderer.build_context(task, execution_data, nil)
+      context = PromptContext.build_context(task, execution_data, nil)
 
       assert context["task"]["title"] == "Task"
       assert context["execution"]["run_count"] == 0
@@ -729,7 +729,7 @@ defmodule Sacrum.Orchestrator.PromptRendererTest do
         }
       }
 
-      context = PromptRenderer.build_context(task, execution_data, workflow_step)
+      context = PromptContext.build_context(task, execution_data, workflow_step)
 
       # Recursively check all keys are strings
       assert all_keys_are_strings(context)
