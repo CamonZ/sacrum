@@ -24,7 +24,7 @@ defmodule Sacrum.Orchestrator.ExecutionHistory do
     %{}
     |> put_previous_output(task_id)
     |> put_handoff(entered_execution.handoff)
-    |> put_run_counts(task_id, entered_execution.step_name)
+    |> put_run_counts(task_id, entered_execution.step_id)
   end
 
   @doc """
@@ -36,7 +36,7 @@ defmodule Sacrum.Orchestrator.ExecutionHistory do
     query =
       from(e in StepExecution,
         left_join: ws in WorkflowStep,
-        on: ws.workflow_id == e.workflow_id and ws.name == e.step_name,
+        on: ws.id == e.step_id or (is_nil(e.step_id) and ws.name == e.step_name),
         where: e.task_id == ^task_id and e.status == "completed",
         order_by: [desc: e.inserted_at],
         limit: 1,
@@ -82,15 +82,39 @@ defmodule Sacrum.Orchestrator.ExecutionHistory do
   the step's terminal executions.
   """
   @spec put_run_counts(map(), String.t(), String.t()) :: map()
-  def put_run_counts(data, task_id, step_name) do
-    query =
-      from(e in StepExecution,
-        where:
-          e.task_id == ^task_id and e.step_name == ^step_name and
-            e.status in ["completed", "failed"],
-        group_by: e.status,
-        select: {e.status, count(e.id)}
+  def put_run_counts(data, task_id, step_id) do
+    # Get the step name for backward compatibility with executions that don't have step_id
+    step_name_query =
+      from(ws in WorkflowStep,
+        where: ws.id == ^step_id,
+        select: ws.name,
+        limit: 1
       )
+
+    step_name = Repo.one(step_name_query)
+
+    # Build query that handles both new (step_id-based) and old (step_name-based) executions
+    query =
+      if step_name do
+        from(e in StepExecution,
+          where:
+            e.task_id == ^task_id and
+              (e.step_id == ^step_id or (is_nil(e.step_id) and e.step_name == ^step_name)) and
+              e.status in ["completed", "failed"],
+          group_by: e.status,
+          select: {e.status, count(e.id)}
+        )
+      else
+        # If step doesn't exist, only look for executions with matching step_id
+        from(e in StepExecution,
+          where:
+            e.task_id == ^task_id and
+              e.step_id == ^step_id and
+              e.status in ["completed", "failed"],
+          group_by: e.status,
+          select: {e.status, count(e.id)}
+        )
+      end
 
     counts = query |> Repo.all() |> Map.new()
     completed = Map.get(counts, "completed", 0)

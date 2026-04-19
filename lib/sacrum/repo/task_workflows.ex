@@ -110,6 +110,19 @@ defmodule Sacrum.Repo.TaskWorkflows do
   def advance_to_step(%Task{} = task, step_id, handoff) do
     with {:ok, target_step} <- get_workflow_step(task.workflow_id, step_id) do
       Multi.new()
+      |> Multi.update_all(
+        :invalidate,
+        fn _changes ->
+          from(e in StepExecution,
+            where:
+              e.task_id == ^task.id and
+                e.step_id == ^target_step.id and
+                e.workflow_id == ^task.workflow_id and
+                e.status == "entered"
+          )
+        end,
+        set: [status: "invalidated"]
+      )
       |> Multi.update(:task, task_workflow_changeset(task, task.workflow_id, target_step.id))
       |> Multi.insert(
         :step_execution,
@@ -148,6 +161,19 @@ defmodule Sacrum.Repo.TaskWorkflows do
     with {:ok, target_step} <- get_workflow_step(task.workflow_id, step_id),
          :ok <- validate_transition_exists(task.current_step_id, target_step.id) do
       Multi.new()
+      |> Multi.update_all(
+        :invalidate,
+        fn _changes ->
+          from(e in StepExecution,
+            where:
+              e.task_id == ^task.id and
+                e.step_id == ^target_step.id and
+                e.workflow_id == ^task.workflow_id and
+                e.status == "entered"
+          )
+        end,
+        set: [status: "invalidated"]
+      )
       |> Multi.update(:task, task_workflow_changeset(task, task.workflow_id, target_step.id))
       |> Multi.insert(
         :step_execution,
@@ -287,6 +313,7 @@ defmodule Sacrum.Repo.TaskWorkflows do
     attrs = %{
       task_id: task.id,
       workflow_id: workflow_id,
+      step_id: step.id,
       step_name: step.name,
       status: "entered"
     }
@@ -334,7 +361,7 @@ defmodule Sacrum.Repo.TaskWorkflows do
         from(se in StepExecution,
           where:
             se.task_id == ^task.id and
-              se.step_name == ^step.name and
+              se.step_id == ^step.id and
               se.workflow_id == ^task.workflow_id,
           order_by: [desc: se.inserted_at],
           limit: 1
