@@ -53,7 +53,9 @@ defmodule Sacrum.Orchestrator.PromptRenderer do
   - `task` - A Task schema with preloaded associations (use `preload_for_rendering/1`)
   - `execution_data` - A map containing execution history. Can include:
     - `:previous` - Map with `:output` string and other execution details
-    - `:retry_count` - Integer count of retries
+    - `:run_count` - Integer count of prior terminal executions (completed or failed)
+    - `:completed_count` - Integer count of prior completed executions
+    - `:failed_count` - Integer count of prior failed executions
     - `:duration_ms` - Integer milliseconds for current execution duration
     - `:history` - List of previous executions (maps with :step_name, :status, etc.)
   - `workflow_step` - A WorkflowStep schema with workflow association, or nil
@@ -128,21 +130,25 @@ defmodule Sacrum.Orchestrator.PromptRenderer do
   @doc """
   Builds the execution context map.
 
-  Extracts previous execution output, retry count, duration, execution history, and handoff.
+  Extracts previous execution output, run count, duration, execution history, and handoff.
   All keys are strings for Liquid compatibility.
   """
   @spec build_execution_context(map()) :: map()
   def build_execution_context(execution_data) when is_map(execution_data) do
     previous = execution_data[:previous] || %{}
     previous_output = previous[:output] || ""
-    retry_count = execution_data[:retry_count] || 0
+    run_count = execution_data[:run_count] || 0
+    completed_count = execution_data[:completed_count] || 0
+    failed_count = execution_data[:failed_count] || 0
     duration_ms = execution_data[:duration_ms]
     history = execution_data[:history] || []
     handoff = execution_data[:handoff]
 
     reject_nil_values(%{
       "previous_output" => coerce_previous_output(previous_output),
-      "retry_count" => retry_count,
+      "run_count" => run_count,
+      "completed_count" => completed_count,
+      "failed_count" => failed_count,
       "duration_ms" => duration_ms,
       "history" => build_history_list(history),
       "handoff" => handoff

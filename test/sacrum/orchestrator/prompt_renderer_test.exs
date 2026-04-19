@@ -444,37 +444,42 @@ defmodule Sacrum.Orchestrator.PromptRendererTest do
   end
 
   describe "build_execution_context/1" do
-    test "extracts previous output and retry count" do
+    test "extracts previous output and run count" do
       execution_data = %{
         previous: %{output: "Some output text"},
-        retry_count: 2,
+        run_count: 2,
+        completed_count: 1,
+        failed_count: 1,
         duration_ms: 1500
       }
 
       context = PromptRenderer.build_execution_context(execution_data)
 
       assert context["previous_output"] == "Some output text"
-      assert context["retry_count"] == 2
+      assert context["run_count"] == 2
+      assert context["completed_count"] == 1
+      assert context["failed_count"] == 1
       assert context["duration_ms"] == 1500
-      # Verify all keys are strings
       assert Enum.all?(Map.keys(context), &is_binary/1)
     end
 
     test "handles missing previous output" do
       execution_data = %{
-        retry_count: 0
+        run_count: 0
       }
 
       context = PromptRenderer.build_execution_context(execution_data)
 
       assert context["previous_output"] == ""
-      assert context["retry_count"] == 0
+      assert context["run_count"] == 0
+      assert context["completed_count"] == 0
+      assert context["failed_count"] == 0
     end
 
     test "builds history list from executions" do
       execution_data = %{
         previous: %{output: "Output"},
-        retry_count: 1,
+        run_count: 1,
         history: [
           %{step_name: "draft", status: "completed", output: "First output"},
           %{step_name: "review", status: "pending", duration_ms: 2000}
@@ -633,7 +638,7 @@ defmodule Sacrum.Orchestrator.PromptRendererTest do
 
       execution_data = %{
         previous: %{output: "Previous output"},
-        retry_count: 1,
+        run_count: 1,
         duration_ms: 500
       }
 
@@ -656,7 +661,7 @@ defmodule Sacrum.Orchestrator.PromptRendererTest do
 
       # Verify execution context
       assert context["execution"]["previous_output"] == "Previous output"
-      assert context["execution"]["retry_count"] == 1
+      assert context["execution"]["run_count"] == 1
 
       # Verify workflow context
       assert context["workflow"]["name"] == "Default"
@@ -680,12 +685,12 @@ defmodule Sacrum.Orchestrator.PromptRendererTest do
         code_refs: []
       }
 
-      execution_data = %{retry_count: 0}
+      execution_data = %{run_count: 0}
 
       context = PromptRenderer.build_context(task, execution_data, nil)
 
       assert context["task"]["title"] == "Task"
-      assert context["execution"]["retry_count"] == 0
+      assert context["execution"]["run_count"] == 0
       assert context["workflow"] == %{}
     end
 
