@@ -19,6 +19,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
 
   @behaviour :gen_statem
 
+  @max_retries 5
+
   require Logger
   import Ecto.Query
 
@@ -94,8 +96,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
           current_execution_id: nil,
           slot_id: nil,
           subscribed: false,
-          route_retry_attempt: 0,
-          route_retry_max: 2
+          run_retry_attempt: 0
         }
 
         Logger.info(
@@ -416,14 +417,13 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
          {:ok, updated_task} <-
            route_task_to_destination(data, dest_id, transition_type, handoff) do
       ExecutionPool.release_slot(data.slot_id)
-      new_data = %{data | route_retry_attempt: 0}
 
       case transition_type do
         "intra_workflow" ->
-          handle_intra_route_continuation(new_data, updated_task)
+          handle_intra_route_continuation(data, updated_task)
 
         "inter_workflow" ->
-          handle_inter_route_continuation(new_data, task_id, updated_task)
+          handle_inter_route_continuation(data, task_id, updated_task)
       end
     else
       {:error, reason} ->
@@ -433,42 +433,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
 
         ExecutionPool.release_slot(data.slot_id)
         {:next_state, :failed, %{data | slot_id: nil}}
-    end
-  end
-
-  defp handle_route_decode_error(reason, data) do
-    task_id = data.task.id
-    current_attempt = data.route_retry_attempt
-    max_attempts = data.route_retry_max
-
-    if current_attempt < max_attempts do
-      Logger.info(
-        "[TaskOrchestrator:#{task_id}] Route step output decode failed (reason: #{inspect(reason)}), retrying (attempt #{current_attempt + 1}/#{max_attempts})"
-      )
-
-      new_data = %{data | route_retry_attempt: current_attempt + 1}
-
-      case create_retry_execution_and_dispatch(new_data) do
-        {:ok, new_execution_id, final_data} ->
-          Logger.info(
-            "[TaskOrchestrator:#{task_id}] Created retry execution #{new_execution_id}, waiting for daemon"
-          )
-
-          {:keep_state, final_data}
-
-        {:error, dispatch_reason} ->
-          Logger.error(
-            "[TaskOrchestrator:#{task_id}] Failed to create retry execution: #{inspect(dispatch_reason)}"
-          )
-
-          {:next_state, :failed, data}
-      end
-    else
-      Logger.error(
-        "[TaskOrchestrator:#{task_id}] Route step output decode failed after #{max_attempts} attempts (reason: #{inspect(reason)}), -> :failed"
-      )
-
-      {:next_state, :failed, data}
     end
   end
 
@@ -693,44 +657,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     end
   end
 
-  defp find_entered_execution_by_step(task_id, step_name) do
-    query =
-      from(e in StepExecution,
-        where:
-          e.task_id == ^task_id and e.status == "entered" and
-            e.step_name == ^step_name,
-        limit: 1
-      )
-
-    Repo.one(query)
-  end
-
-  defp create_retry_execution_and_dispatch(data) do
-    current_step_id = data.task.current_step_id
-
-    with {:ok, current_step} <- get_current_step(data),
-         {:ok, _entered} <- insert_retry_entered_execution(data, current_step),
-         {:ok, execution} <-
-           ExecutionDispatcher.create_and_dispatch(data.user_id, data.task, current_step_id) do
-      {:ok, execution.id, %{data | current_execution_id: execution.id}}
-    end
-  end
-
-  defp insert_retry_entered_execution(data, current_step) do
-    prior = find_entered_execution_by_step(data.task.id, current_step.name)
-    handoff = if prior, do: prior.handoff, else: nil
-
-    %StepExecution{user_id: data.user_id, project_id: data.project_id}
-    |> StepExecution.create_changeset(%{
-      task_id: data.task.id,
-      workflow_id: data.task.workflow_id,
-      step_name: current_step.name,
-      status: "entered",
-      handoff: handoff
-    })
-    |> Repo.insert()
-  end
-
   defp get_target_step_for_workflow_transition(data, to_workflow_id) do
     query =
       from(t in WorkflowTransition,
@@ -775,14 +701,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   end
 
   defp do_assign_destination_workflow(task, dest_workflow, target_step, handoff) do
-    step_exec_attrs = %{
-      task_id: task.id,
-      workflow_id: dest_workflow.id,
-      step_name: target_step.name,
-      status: "entered",
-      handoff: handoff
-    }
-
     multi =
       Multi.new()
       |> Multi.update(
@@ -794,13 +712,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
       )
       |> Multi.insert(
         :step_execution,
-        StepExecution.create_changeset(
-          %StepExecution{
-            user_id: task.user_id,
-            project_id: task.project_id
-          },
-          step_exec_attrs
-        )
+        entered_step_execution_changeset(task, target_step, dest_workflow.id, handoff: handoff)
       )
 
     case Repo.transaction(multi) do
@@ -824,6 +736,60 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   end
 
   # ===== PRIVATE HELPERS =====
+
+  defp create_retry_execution_and_dispatch(data) do
+    task_id = data.task.id
+    attempt = data.run_retry_attempt + 1
+
+    with {:ok, current_step} <- get_current_step(data),
+         handoff = prior_step_handoff(data.task.id, current_step.name),
+         {:ok, _new_execution} <-
+           Repo.insert(
+             entered_step_execution_changeset(data.task, current_step, nil, handoff: handoff)
+           ),
+         {:ok, execution} <-
+           ExecutionDispatcher.create_and_dispatch(data.user_id, data.task, current_step.id) do
+      new_data = %{data | current_execution_id: execution.id, run_retry_attempt: attempt}
+
+      Logger.info(
+        "[TaskOrchestrator:#{task_id}] Retry execution #{execution.id} step=#{current_step.id} (#{current_step.name}) attempt=#{attempt}/#{@max_retries}"
+      )
+
+      {:keep_state, new_data}
+    else
+      {:error, reason} ->
+        Logger.error(
+          "[TaskOrchestrator:#{task_id}] Failed to create retry execution: #{inspect(reason)}"
+        )
+
+        {:next_state, :failed, data}
+    end
+  end
+
+  defp prior_step_handoff(task_id, step_name) do
+    query =
+      from(e in StepExecution,
+        where: e.task_id == ^task_id and e.step_name == ^step_name,
+        order_by: [desc: e.inserted_at],
+        limit: 1,
+        select: e.handoff
+      )
+
+    Repo.one(query)
+  end
+
+  defp entered_step_execution_changeset(task, step, workflow_id, opts) do
+    StepExecution.create_changeset(
+      %StepExecution{user_id: task.user_id, project_id: task.project_id},
+      %{
+        task_id: task.id,
+        workflow_id: workflow_id || task.workflow_id,
+        step_name: step.name,
+        status: "entered",
+        handoff: Keyword.get(opts, :handoff)
+      }
+    )
+  end
 
   defp determine_next_state(nil, data) do
     Logger.error("[TaskOrchestrator:#{data.task.id}] No current step after transition")
@@ -865,11 +831,10 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
       case status do
         "completed" ->
           Logger.info("[TaskOrchestrator:#{task_id}] Execution #{execution_id} completed")
-          handle_execution_completion(data)
+          handle_execution_completion(%{data | run_retry_attempt: 0})
 
         "failed" ->
-          Logger.error("[TaskOrchestrator:#{task_id}] Execution #{execution_id} failed")
-          {:next_state, :failed, data}
+          handle_execution_failure(execution_id, data)
 
         other ->
           Logger.debug("[TaskOrchestrator:#{task_id}] Ignoring execution status: #{other}")
@@ -878,38 +843,29 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     end
   end
 
-  defp handle_execution_completion(data) do
-    task_id = data.task.id
+  defp handle_execution_failure(execution_id, data) do
+    attempt = data.run_retry_attempt + 1
 
-    case get_current_step(data) do
-      {:ok, %{step_type: "route"}} ->
-        check_route_execution_output(task_id, data)
+    Logger.error(
+      "[TaskOrchestrator:#{data.task.id}] Execution #{execution_id} failed attempt=#{attempt}/#{@max_retries}"
+    )
 
-      _ ->
-        Logger.info("[TaskOrchestrator:#{task_id}] Execution completed, -> :transitioning")
-        {:next_state, :transitioning, data}
+    if attempt < @max_retries do
+      create_retry_execution_and_dispatch(data)
+    else
+      {:next_state, :failed, data}
     end
   end
 
-  defp check_route_execution_output(task_id, data) do
-    case get_latest_execution(task_id) do
-      {:ok, execution} ->
-        case parse_route_output(execution.output) do
-          {:ok, _decoded} ->
-            Logger.info("[TaskOrchestrator:#{task_id}] Execution completed, -> :transitioning")
-            {:next_state, :transitioning, data}
+  defp handle_execution_completion(data) do
+    task_id = data.task.id
+    {:ok, step} = get_current_step(data)
 
-          {:error, reason} ->
-            handle_route_decode_error(reason, data)
-        end
+    Logger.info(
+      "[TaskOrchestrator:#{task_id}] Execution completed step_type=#{step.step_type}, -> :transitioning"
+    )
 
-      {:error, reason} ->
-        Logger.error(
-          "[TaskOrchestrator:#{task_id}] Failed to get execution for route retry check: #{inspect(reason)}"
-        )
-
-        {:next_state, :transitioning, data}
-    end
+    {:next_state, :transitioning, data}
   end
 
   defp load_workflow_and_graph(user_id, task) do
