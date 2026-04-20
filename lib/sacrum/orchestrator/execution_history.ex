@@ -24,7 +24,7 @@ defmodule Sacrum.Orchestrator.ExecutionHistory do
     %{}
     |> put_previous_output(task_id)
     |> put_handoff(entered_execution.handoff)
-    |> put_run_counts(task_id, entered_execution.step_name)
+    |> put_run_counts(task_id, entered_execution.step_id)
   end
 
   @doc """
@@ -36,7 +36,7 @@ defmodule Sacrum.Orchestrator.ExecutionHistory do
     query =
       from(e in StepExecution,
         left_join: ws in WorkflowStep,
-        on: ws.workflow_id == e.workflow_id and ws.name == e.step_name,
+        on: ws.id == e.step_id or (is_nil(e.step_id) and ws.name == e.step_name),
         where: e.task_id == ^task_id and e.status == "completed",
         order_by: [desc: e.inserted_at],
         limit: 1,
@@ -82,15 +82,11 @@ defmodule Sacrum.Orchestrator.ExecutionHistory do
   the step's terminal executions.
   """
   @spec put_run_counts(map(), String.t(), String.t()) :: map()
-  def put_run_counts(data, task_id, step_name) do
-    query =
-      from(e in StepExecution,
-        where:
-          e.task_id == ^task_id and e.step_name == ^step_name and
-            e.status in ["completed", "failed"],
-        group_by: e.status,
-        select: {e.status, count(e.id)}
-      )
+  def put_run_counts(data, task_id, step_id) do
+    step_name =
+      Repo.one(from(ws in WorkflowStep, where: ws.id == ^step_id, select: ws.name, limit: 1))
+
+    query = run_counts_query(task_id, step_id, step_name)
 
     counts = query |> Repo.all() |> Map.new()
     completed = Map.get(counts, "completed", 0)
@@ -100,5 +96,26 @@ defmodule Sacrum.Orchestrator.ExecutionHistory do
     |> Map.put(:completed_count, completed)
     |> Map.put(:failed_count, failed)
     |> Map.put(:run_count, completed + failed)
+  end
+
+  defp run_counts_query(task_id, step_id, nil) do
+    from(e in StepExecution,
+      where:
+        e.task_id == ^task_id and e.step_id == ^step_id and
+          e.status in ["completed", "failed"],
+      group_by: e.status,
+      select: {e.status, count(e.id)}
+    )
+  end
+
+  defp run_counts_query(task_id, step_id, step_name) do
+    from(e in StepExecution,
+      where:
+        e.task_id == ^task_id and
+          (e.step_id == ^step_id or (is_nil(e.step_id) and e.step_name == ^step_name)) and
+          e.status in ["completed", "failed"],
+      group_by: e.status,
+      select: {e.status, count(e.id)}
+    )
   end
 end

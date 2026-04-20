@@ -285,7 +285,10 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     next_transitions = WorkflowGraph.get_outgoing_transitions(data, current_step.id)
 
     with {:ok, next_step_id} <- WorkflowGraph.select_single_transition(next_transitions),
-         {:ok, updated_task} <- TaskWorkflows.advance_to_step(data.task, next_step_id) do
+         {:ok, updated_task} <-
+           TaskWorkflows.advance_to_step(data.task, next_step_id, nil,
+             skip_orchestrator_check: true
+           ) do
       ExecutionPool.release_slot(data.slot_id)
 
       TaskCompletion.determine_next_state(next_step_id, %{

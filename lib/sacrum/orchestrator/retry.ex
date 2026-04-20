@@ -12,6 +12,7 @@ defmodule Sacrum.Orchestrator.Retry do
 
   import Ecto.Query
 
+  alias Ecto.Multi
   alias Sacrum.Orchestrator.{ExecutionDispatcher, FSMData, WorkflowGraph}
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.StepExecution
@@ -53,6 +54,7 @@ defmodule Sacrum.Orchestrator.Retry do
       %{
         task_id: task.id,
         workflow_id: workflow_id || task.workflow_id,
+        step_id: step.id,
         step_name: step.name,
         status: "entered",
         handoff: Keyword.get(opts, :handoff)
@@ -65,10 +67,13 @@ defmodule Sacrum.Orchestrator.Retry do
     attempt = data.run_retry_attempt + 1
 
     with {:ok, current_step} <- WorkflowGraph.get_current_step(data),
-         handoff = prior_step_handoff(data.task.id, current_step.name),
-         {:ok, _new_execution} <-
-           Repo.insert(
-             entered_step_execution_changeset(data.task, current_step, nil, handoff: handoff)
+         handoff = prior_step_handoff(data.task.id, current_step.id),
+         {:ok, _execution_ops} <-
+           invalidate_and_insert_entered_execution(
+             data.task,
+             current_step,
+             data.task.workflow_id,
+             handoff
            ),
          {:ok, execution} <-
            ExecutionDispatcher.create_and_dispatch(data.user_id, data.task, current_step.id) do
@@ -89,15 +94,38 @@ defmodule Sacrum.Orchestrator.Retry do
     end
   end
 
-  defp prior_step_handoff(task_id, step_name) do
+  defp prior_step_handoff(task_id, step_id) do
     query =
       from(e in StepExecution,
-        where: e.task_id == ^task_id and e.step_name == ^step_name,
+        where: e.task_id == ^task_id and e.step_id == ^step_id,
         order_by: [desc: e.inserted_at],
         limit: 1,
         select: e.handoff
       )
 
     Repo.one(query)
+  end
+
+  defp invalidate_and_insert_entered_execution(task, step, workflow_id, handoff) do
+    task_id = task.id
+    step_id = step.id
+
+    Multi.new()
+    |> Multi.update_all(
+      :invalidate,
+      from(e in StepExecution,
+        where:
+          e.task_id == ^task_id and
+            e.step_id == ^step_id and
+            e.workflow_id == ^workflow_id and
+            e.status == "entered"
+      ),
+      set: [status: "invalidated"]
+    )
+    |> Multi.insert(
+      :new_execution,
+      entered_step_execution_changeset(task, step, workflow_id, handoff: handoff)
+    )
+    |> Repo.transaction()
   end
 end

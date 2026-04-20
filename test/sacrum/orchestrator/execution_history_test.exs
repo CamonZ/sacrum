@@ -1,9 +1,12 @@
 defmodule Sacrum.Orchestrator.ExecutionHistoryTest do
   use Sacrum.DataCase
 
+  import Ecto.Query
+
   alias Sacrum.Accounts
   alias Sacrum.Orchestrator.ExecutionHistory
   alias Sacrum.Repo
+  alias Sacrum.Repo.Schemas.StepExecution
 
   # ===== Setup helpers =====
 
@@ -64,12 +67,13 @@ defmodule Sacrum.Orchestrator.ExecutionHistoryTest do
     task
   end
 
-  defp create_step_execution(user, task, workflow, step_name, attrs \\ %{}) do
+  defp create_step_execution(user, task, workflow, step, attrs) do
     default_attrs = %{
       "task_id" => task.id,
       "project_id" => task.project_id,
       "workflow_id" => workflow.id,
-      "step_name" => step_name,
+      "step_name" => step.name,
+      "step_id" => step.id,
       "status" => "completed"
     }
 
@@ -77,6 +81,15 @@ defmodule Sacrum.Orchestrator.ExecutionHistoryTest do
       Accounts.StepExecutions.insert(user.id, Map.merge(default_attrs, attrs))
 
     execution
+  end
+
+  defp get_entered_execution(task, step) do
+    Repo.one!(
+      from(e in StepExecution,
+        where: e.task_id == ^task.id and e.status == "entered" and e.step_id == ^step.id,
+        limit: 1
+      )
+    )
   end
 
   # ===== Tests =====
@@ -89,22 +102,15 @@ defmodule Sacrum.Orchestrator.ExecutionHistoryTest do
       step = create_step(user, workflow, %{})
       task = create_task(user, project, workflow)
 
-      # Create a previous completed execution
+      entered = get_entered_execution(task, step)
+
+      {:ok, entered} =
+        Accounts.StepExecutions.update(entered, %{"handoff" => %{"key" => "value"}})
+
       _previous =
-        create_step_execution(user, task, workflow, step.name, %{
+        create_step_execution(user, task, workflow, step, %{
           "status" => "completed",
           "output" => "previous result"
-        })
-
-      # Create the current entered execution
-      {:ok, entered} =
-        Accounts.StepExecutions.insert(user.id, %{
-          "task_id" => task.id,
-          "project_id" => task.project_id,
-          "workflow_id" => workflow.id,
-          "step_name" => step.name,
-          "status" => "entered",
-          "handoff" => %{"key" => "value"}
         })
 
       data = ExecutionHistory.build_execution_data(task.id, entered)
@@ -124,29 +130,21 @@ defmodule Sacrum.Orchestrator.ExecutionHistoryTest do
       step = create_step(user, workflow, %{})
       task = create_task(user, project, workflow)
 
-      # Create completed and failed executions
+      entered = get_entered_execution(task, step)
+
       _completed1 =
-        create_step_execution(user, task, workflow, step.name, %{
+        create_step_execution(user, task, workflow, step, %{
           "status" => "completed"
         })
 
       _completed2 =
-        create_step_execution(user, task, workflow, step.name, %{
+        create_step_execution(user, task, workflow, step, %{
           "status" => "completed"
         })
 
       _failed =
-        create_step_execution(user, task, workflow, step.name, %{
+        create_step_execution(user, task, workflow, step, %{
           "status" => "failed"
-        })
-
-      {:ok, entered} =
-        Accounts.StepExecutions.insert(user.id, %{
-          "task_id" => task.id,
-          "project_id" => task.project_id,
-          "workflow_id" => workflow.id,
-          "step_name" => step.name,
-          "status" => "entered"
         })
 
       data = ExecutionHistory.build_execution_data(task.id, entered)
@@ -166,13 +164,13 @@ defmodule Sacrum.Orchestrator.ExecutionHistoryTest do
       task = create_task(user, project, workflow)
 
       _older =
-        create_step_execution(user, task, workflow, step.name, %{
+        create_step_execution(user, task, workflow, step, %{
           "status" => "completed",
           "output" => "old output"
         })
 
       _newer =
-        create_step_execution(user, task, workflow, step.name, %{
+        create_step_execution(user, task, workflow, step, %{
           "status" => "completed",
           "output" => "new output"
         })
@@ -186,7 +184,7 @@ defmodule Sacrum.Orchestrator.ExecutionHistoryTest do
       user = create_user()
       project = create_project(user)
       workflow = create_workflow(user, project)
-      step = create_step(user, workflow, %{})
+      _step = create_step(user, workflow, %{})
       task = create_task(user, project, workflow)
 
       data = ExecutionHistory.put_previous_output(%{}, task.id)
@@ -258,11 +256,11 @@ defmodule Sacrum.Orchestrator.ExecutionHistoryTest do
       step = create_step(user, workflow, %{})
       task = create_task(user, project, workflow)
 
-      create_step_execution(user, task, workflow, step.name, %{"status" => "completed"})
-      create_step_execution(user, task, workflow, step.name, %{"status" => "completed"})
-      create_step_execution(user, task, workflow, step.name, %{"status" => "failed"})
+      create_step_execution(user, task, workflow, step, %{"status" => "completed"})
+      create_step_execution(user, task, workflow, step, %{"status" => "completed"})
+      create_step_execution(user, task, workflow, step, %{"status" => "failed"})
 
-      data = ExecutionHistory.put_run_counts(%{}, task.id, step.name)
+      data = ExecutionHistory.put_run_counts(%{}, task.id, step.id)
 
       assert data[:completed_count] == 2
       assert data[:failed_count] == 1
@@ -276,7 +274,8 @@ defmodule Sacrum.Orchestrator.ExecutionHistoryTest do
       _step = create_step(user, workflow, %{})
       task = create_task(user, project, workflow)
 
-      data = ExecutionHistory.put_run_counts(%{}, task.id, "nonexistent_step")
+      nonexistent_step_id = "00000000-0000-0000-0000-000000000000"
+      data = ExecutionHistory.put_run_counts(%{}, task.id, nonexistent_step_id)
 
       assert data[:completed_count] == 0
       assert data[:failed_count] == 0
@@ -290,10 +289,12 @@ defmodule Sacrum.Orchestrator.ExecutionHistoryTest do
       step = create_step(user, workflow, %{})
       task = create_task(user, project, workflow)
 
-      create_step_execution(user, task, workflow, step.name, %{"status" => "entered"})
-      create_step_execution(user, task, workflow, step.name, %{"status" => "dispatched"})
+      entered = get_entered_execution(task, step)
+      {:ok, _} = Accounts.StepExecutions.update(entered, %{"status" => "started"})
 
-      data = ExecutionHistory.put_run_counts(%{}, task.id, step.name)
+      create_step_execution(user, task, workflow, step, %{"status" => "dispatched"})
+
+      data = ExecutionHistory.put_run_counts(%{}, task.id, step.id)
 
       assert data[:run_count] == 0
     end

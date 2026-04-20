@@ -23,9 +23,10 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   @doc """
   Dispatches a step execution to the daemon.
 
-  Fetches the step, finds the existing "entered" StepExecution, renders
-  the prompt using PromptRenderer with Liquid template syntax, broadcasts
-  the run_step event, and returns the execution.
+  Fetches the step, finds the existing "entered" StepExecution scoped to
+  the current step and workflow, renders the prompt using PromptRenderer
+  with Liquid template syntax, broadcasts the run_step event, and returns
+  the execution.
 
   Returns:
     - {:ok, execution} on success
@@ -36,7 +37,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
           {:ok, StepExecution.t()} | {:error, term()}
   def create_and_dispatch(user_id, task, step_id) do
     with {:ok, step} <- fetch_step(user_id, step_id),
-         {:ok, execution} <- find_entered_execution(task) do
+         {:ok, execution} <- find_entered_execution(task, step_id, task.workflow_id) do
       execution_data = ExecutionHistory.build_execution_data(task.id, execution)
       context = PromptContext.build_context(task, execution_data, step)
       {:ok, rendered} = PromptRenderer.render(step.prompt, context)
@@ -66,10 +67,16 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
     )
   end
 
-  defp find_entered_execution(task) do
+  defp find_entered_execution(_task, _step_id, nil), do: {:error, :no_workflow}
+
+  defp find_entered_execution(task, step_id, workflow_id) do
     query =
       from(e in StepExecution,
-        where: e.task_id == ^task.id and e.status == "entered",
+        where:
+          e.task_id == ^task.id and
+            e.step_id == ^step_id and
+            e.workflow_id == ^workflow_id and
+            e.status == "entered",
         order_by: [desc: e.inserted_at],
         limit: 1
       )

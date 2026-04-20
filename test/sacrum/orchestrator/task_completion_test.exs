@@ -70,7 +70,7 @@ defmodule Sacrum.Orchestrator.TaskCompletionTest do
       user = create_user()
       project = create_project(user)
       workflow = create_workflow(user, project)
-      step = create_step(user, workflow, %{})
+      _step = create_step(user, workflow, %{})
       task = create_task(user, project, workflow)
 
       assert task.completed_at == nil
@@ -107,7 +107,7 @@ defmodule Sacrum.Orchestrator.TaskCompletionTest do
       user = create_user()
       project = create_project(user)
       workflow = create_workflow(user, project)
-      step = create_step(user, workflow, %{})
+      _step = create_step(user, workflow, %{})
       task = create_task(user, project, workflow)
 
       data = %{

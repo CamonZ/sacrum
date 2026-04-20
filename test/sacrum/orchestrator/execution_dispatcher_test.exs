@@ -65,16 +65,31 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
   end
 
   defp create_entered_execution(user, task, step) do
-    {:ok, execution} =
-      Accounts.StepExecutions.insert(user.id, %{
-        "task_id" => task.id,
-        "project_id" => task.project_id,
-        "workflow_id" => step.workflow_id,
-        "step_name" => step.name,
-        "status" => "entered"
-      })
+    import Ecto.Query
 
-    execution
+    query =
+      from(e in Sacrum.Repo.Schemas.StepExecution,
+        where: e.task_id == ^task.id and e.step_id == ^step.id and e.status == "entered",
+        limit: 1
+      )
+
+    case Sacrum.Repo.one(query) do
+      nil ->
+        {:ok, execution} =
+          Accounts.StepExecutions.insert(user.id, %{
+            "task_id" => task.id,
+            "project_id" => task.project_id,
+            "workflow_id" => step.workflow_id,
+            "step_id" => step.id,
+            "step_name" => step.name,
+            "status" => "entered"
+          })
+
+        execution
+
+      execution ->
+        execution
+    end
   end
 
   defp subscribe_to_project(project) do
@@ -347,14 +362,11 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       task = create_task(ctx.user, ctx.project)
       task = assign_workflow(task, ctx.workflow)
 
-      # Create entered execution with handoff
-      {:ok, _execution} =
-        Accounts.StepExecutions.insert(ctx.user.id, %{
-          "task_id" => task.id,
-          "project_id" => task.project_id,
-          "workflow_id" => ctx.workflow.id,
-          "step_name" => step.name,
-          "status" => "entered",
+      # Get or create entered execution with handoff
+      entered = create_entered_execution(ctx.user, task, step)
+
+      {:ok, _updated} =
+        Accounts.StepExecutions.update(entered, %{
           "handoff" => %{"routing_key" => "user_approved"}
         })
 
