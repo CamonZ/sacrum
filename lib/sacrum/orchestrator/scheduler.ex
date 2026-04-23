@@ -9,10 +9,12 @@ defmodule Sacrum.Orchestrator.Scheduler do
   use GenServer
 
   require Logger
+
+  alias Sacrum.Orchestrator.Routing.WaitChildren
   alias Sacrum.Orchestrator.{TaskOrchestrator, TaskRegistry}
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.Task
-  alias Sacrum.Repo.TaskDependencies
+  alias Sacrum.Repo.{TaskDependencies, TaskHierarchy}
 
   @spec start_link(keyword()) :: {:ok, pid()} | {:error, term()}
   def start_link(opts) do
@@ -99,9 +101,34 @@ defmodule Sacrum.Orchestrator.Scheduler do
 
   defp notify_dependents(task_id) do
     with {:ok, task} <- fetch_task(task_id) do
-      dependent_tasks = TaskDependencies.get_blocking(task)
-      Enum.each(dependent_tasks, &try_start_orchestrator_for_task/1)
+      task
+      |> TaskDependencies.get_blocking()
+      |> Enum.each(&try_start_orchestrator_for_task/1)
+
+      try_wake_parent(task)
       :ok
+    end
+  end
+
+  defp try_wake_parent(task) do
+    case TaskHierarchy.get_parent(task) do
+      {:ok, parent} -> wake_parent_if_ready(parent)
+      {:error, :not_found} -> :ok
+    end
+  end
+
+  defp wake_parent_if_ready(parent) do
+    case WaitChildren.should_wake_parent(parent) do
+      :wake ->
+        Logger.info("[Scheduler] Parent task #{parent.id} all children done, waking")
+        start_orchestrator_if_not_running(parent.id, parent.user_id)
+
+      :no_wake ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error("[Scheduler] Error checking parent wake status: #{inspect(reason)}")
+        :ok
     end
   end
 

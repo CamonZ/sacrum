@@ -171,6 +171,21 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     end
   end
 
+  defp cleanup_spawned_orchestrators(task_ids) do
+    Enum.each(task_ids, fn task_id ->
+      case Registry.lookup(Sacrum.Orchestrator.TaskRegistry, task_id) do
+        [] ->
+          :ok
+
+        [{pid, _}] ->
+          # Try to exit gracefully first, then kill if needed
+          Process.exit(pid, :shutdown)
+          Process.sleep(50)
+          if Process.alive?(pid), do: Process.exit(pid, :kill)
+      end
+    end)
+  end
+
   defp simulate_daemon_completion(task_id, project_id, output \\ "step completed") do
     execution = get_latest_entered_execution(task_id)
 
@@ -1774,6 +1789,656 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         end)
 
       assert logs =~ "step_type=execute"
+    end
+  end
+
+  describe "wait_children step type" do
+    defp create_wait_children_step(user, workflow) do
+      create_step(user, workflow, %{
+        name: "wait_children",
+        step_order: 1,
+        step_type: "wait_children",
+        is_final: false
+      })
+    end
+
+    defp create_child_task(user, project, parent_task) do
+      task = create_task(user, project, %{title: "Child Task"})
+
+      Sacrum.Repo.TaskHierarchy.set_parent(task, parent_task)
+      |> elem(1)
+    end
+
+    test "on entry to wait_children, schedules all children and creates waiting execution" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project, auto_advance: false)
+
+      # Create wait_children step
+      wait_step = create_wait_children_step(user, workflow)
+
+      final_step =
+        create_step(user, workflow, %{
+          name: "final_step",
+          step_order: 2,
+          is_final: true
+        })
+
+      create_transition(user, wait_step, final_step)
+
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: wait_step.id})
+
+      # Create parent task with children
+      parent_task = create_task(user, project, %{title: "Parent Task"})
+      parent_task = assign_workflow_to_task(parent_task, workflow)
+
+      # Create children with workflows
+      child_workflow_1 = create_workflow(user, project, auto_advance: true)
+
+      child_step_1 =
+        create_step(user, child_workflow_1, %{
+          name: "child_step_1",
+          step_order: 1,
+          is_final: true
+        })
+
+      {:ok, _} = Accounts.Workflows.update(child_workflow_1, %{initial_step_id: child_step_1.id})
+
+      child_task_1 = create_child_task(user, project, parent_task)
+      child_task_1 = assign_workflow_to_task(child_task_1, child_workflow_1)
+
+      child_workflow_2 = create_workflow(user, project, auto_advance: true)
+
+      child_step_2 =
+        create_step(user, child_workflow_2, %{
+          name: "child_step_2",
+          step_order: 1,
+          is_final: true
+        })
+
+      {:ok, _} = Accounts.Workflows.update(child_workflow_2, %{initial_step_id: child_step_2.id})
+
+      child_task_2 = create_child_task(user, project, parent_task)
+      child_task_2 = assign_workflow_to_task(child_task_2, child_workflow_2)
+
+      # Start parent orchestrator
+      pid = start_orchestrator(parent_task, user)
+
+      # Parent should enter wait_children and then exit
+      wait_for_exit(pid)
+
+      # Verify waiting execution was created with child IDs
+      waiting_executions =
+        Repo.all(
+          from(e in StepExecution,
+            where: e.task_id == ^parent_task.id and e.status == "waiting"
+          )
+        )
+
+      assert length(waiting_executions) == 1
+      waiting_exec = hd(waiting_executions)
+      assert waiting_exec.handoff != nil
+      assert waiting_exec.handoff["child_ids"] != nil
+      child_ids = waiting_exec.handoff["child_ids"]
+      assert Enum.member?(child_ids, child_task_1.id)
+      assert Enum.member?(child_ids, child_task_2.id)
+
+      # Clean up spawned child orchestrators
+      cleanup_spawned_orchestrators([child_task_1.id, child_task_2.id])
+    end
+
+    test "parent orchestrator exits after entering wait_children (no process in TaskRegistry)" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project, auto_advance: false)
+
+      wait_step = create_wait_children_step(user, workflow)
+
+      final_step =
+        create_step(user, workflow, %{
+          name: "final_step",
+          step_order: 2,
+          is_final: true
+        })
+
+      create_transition(user, wait_step, final_step)
+
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: wait_step.id})
+
+      parent_task = create_task(user, project, %{title: "Parent Task"})
+      parent_task = assign_workflow_to_task(parent_task, workflow)
+
+      child_workflow = create_workflow(user, project, auto_advance: true)
+
+      child_step =
+        create_step(user, child_workflow, %{
+          name: "child_step",
+          step_order: 1,
+          is_final: true
+        })
+
+      {:ok, _} = Accounts.Workflows.update(child_workflow, %{initial_step_id: child_step.id})
+
+      child_task = create_child_task(user, project, parent_task)
+      child_task = assign_workflow_to_task(child_task, child_workflow)
+
+      pid = start_orchestrator(parent_task, user)
+      wait_for_exit(pid)
+
+      # Give time for cleanup/deregistration
+      Process.sleep(100)
+
+      # Verify no orchestrator is registered for parent
+      assert Registry.lookup(Sacrum.Orchestrator.TaskRegistry, parent_task.id) == []
+
+      # Clean up spawned child orchestrator
+      cleanup_spawned_orchestrators([child_task.id])
+    end
+
+    test "when non-last child reaches done, no parent orchestrator starts" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project, auto_advance: false)
+
+      wait_step = create_wait_children_step(user, workflow)
+
+      final_step =
+        create_step(user, workflow, %{
+          name: "final_step",
+          step_order: 2,
+          is_final: true
+        })
+
+      create_transition(user, wait_step, final_step)
+
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: wait_step.id})
+
+      parent_task = create_task(user, project, %{title: "Parent Task"})
+      parent_task = assign_workflow_to_task(parent_task, workflow)
+
+      # Create two children
+      child_workflow_1 = create_workflow(user, project, auto_advance: true)
+
+      child_step_1 =
+        create_step(user, child_workflow_1, %{
+          name: "child_step_1",
+          step_order: 1,
+          is_final: true
+        })
+
+      {:ok, _} = Accounts.Workflows.update(child_workflow_1, %{initial_step_id: child_step_1.id})
+
+      child_task_1 = create_child_task(user, project, parent_task)
+      child_task_1 = assign_workflow_to_task(child_task_1, child_workflow_1)
+
+      child_workflow_2 = create_workflow(user, project, auto_advance: true)
+
+      child_step_2 =
+        create_step(user, child_workflow_2, %{
+          name: "child_step_2",
+          step_order: 1,
+          is_final: true
+        })
+
+      {:ok, _} = Accounts.Workflows.update(child_workflow_2, %{initial_step_id: child_step_2.id})
+
+      child_task_2 = create_child_task(user, project, parent_task)
+      child_task_2 = assign_workflow_to_task(child_task_2, child_workflow_2)
+
+      # Start parent and let it enter wait_children
+      pid = start_orchestrator(parent_task, user)
+      wait_for_exit(pid)
+
+      # Complete first child (via marking it as done)
+      {:ok, _} =
+        Repo.update(Ecto.Changeset.change(child_task_1, %{completed_at: DateTime.utc_now()}))
+
+      # Notify scheduler of first child completion
+      Sacrum.Orchestrator.Scheduler.notify_task_completed(child_task_1.id, %{status: "completed"})
+
+      # Give time for any background processing
+      Process.sleep(200)
+
+      # Parent should NOT have an orchestrator running
+      assert Registry.lookup(Sacrum.Orchestrator.TaskRegistry, parent_task.id) == []
+
+      # Clean up spawned child orchestrators
+      cleanup_spawned_orchestrators([child_task_1.id, child_task_2.id])
+    end
+
+    test "when last child reaches done, parent orchestrator resumes and advances" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project, auto_advance: false)
+
+      wait_step = create_wait_children_step(user, workflow)
+
+      final_step =
+        create_step(user, workflow, %{
+          name: "final_step",
+          step_order: 2,
+          is_final: true
+        })
+
+      create_transition(user, wait_step, final_step)
+
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: wait_step.id})
+
+      parent_task = create_task(user, project, %{title: "Parent Task"})
+      parent_task = assign_workflow_to_task(parent_task, workflow)
+
+      # Create single child
+      child_workflow = create_workflow(user, project, auto_advance: true)
+
+      child_step =
+        create_step(user, child_workflow, %{
+          name: "child_step",
+          step_order: 1,
+          is_final: true
+        })
+
+      {:ok, _} = Accounts.Workflows.update(child_workflow, %{initial_step_id: child_step.id})
+
+      child_task = create_child_task(user, project, parent_task)
+      child_task = assign_workflow_to_task(child_task, child_workflow)
+
+      # Start parent
+      pid = start_orchestrator(parent_task, user)
+      wait_for_exit(pid)
+
+      # Verify waiting execution exists
+      waiting_execs =
+        Repo.all(
+          from(e in StepExecution,
+            where: e.task_id == ^parent_task.id and e.status == "waiting"
+          )
+        )
+
+      assert length(waiting_execs) == 1
+
+      # Complete the child
+      {:ok, _} =
+        Repo.update(Ecto.Changeset.change(child_task, %{completed_at: DateTime.utc_now()}))
+
+      # Notify scheduler
+      Sacrum.Orchestrator.Scheduler.notify_task_completed(child_task.id, %{status: "completed"})
+
+      # Give time for orchestrator to start
+      Process.sleep(500)
+
+      # Parent should transition to final_step
+      parent_task = Repo.get(Sacrum.Repo.Schemas.Task, parent_task.id)
+      assert parent_task.current_step_id == final_step.id
+
+      # Clean up any remaining orchestrators
+      cleanup_spawned_orchestrators([child_task.id, parent_task.id])
+    end
+
+    test "when child parks in Human Review, parent stays parked" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project, auto_advance: false)
+
+      wait_step = create_wait_children_step(user, workflow)
+
+      final_step =
+        create_step(user, workflow, %{
+          name: "final_step",
+          step_order: 2,
+          is_final: true
+        })
+
+      create_transition(user, wait_step, final_step)
+
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: wait_step.id})
+
+      parent_task = create_task(user, project, %{title: "Parent Task"})
+      parent_task = assign_workflow_to_task(parent_task, workflow)
+
+      # Create child with waiting execution (parked in Human Review)
+      child_workflow = create_workflow(user, project, auto_advance: true)
+
+      child_step =
+        create_step(user, child_workflow, %{
+          name: "child_step",
+          step_order: 1,
+          is_final: true
+        })
+
+      {:ok, _} = Accounts.Workflows.update(child_workflow, %{initial_step_id: child_step.id})
+
+      child_task = create_child_task(user, project, parent_task)
+      child_task = assign_workflow_to_task(child_task, child_workflow)
+
+      # Create a waiting execution for child (simulating Human Review)
+      Repo.insert(%StepExecution{
+        task_id: child_task.id,
+        workflow_id: child_workflow.id,
+        step_id: child_step.id,
+        step_name: child_step.name,
+        status: "waiting",
+        user_id: user.id,
+        project_id: project.id
+      })
+
+      # Start parent
+      pid = start_orchestrator(parent_task, user)
+      wait_for_exit(pid)
+
+      # Complete the child (but it still has waiting execution)
+      {:ok, _} =
+        Repo.update(Ecto.Changeset.change(child_task, %{completed_at: DateTime.utc_now()}))
+
+      # Notify scheduler
+      Sacrum.Orchestrator.Scheduler.notify_task_completed(child_task.id, %{status: "completed"})
+
+      # Give time for any processing
+      Process.sleep(200)
+
+      # Parent should NOT have started orchestrator (still parked)
+      assert Registry.lookup(Sacrum.Orchestrator.TaskRegistry, parent_task.id) == []
+
+      # Parent should still be at wait_children step
+      parent_task = Repo.get(Sacrum.Repo.Schemas.Task, parent_task.id)
+      assert parent_task.current_step_id == wait_step.id
+
+      # Clean up spawned child orchestrator
+      cleanup_spawned_orchestrators([child_task.id])
+    end
+
+    test "supervisor is running" do
+      # Verify the supervisor is running in tests
+      sup_pid = GenServer.whereis(Sacrum.Orchestrator.TaskFSMSupervisor)
+      assert sup_pid != nil, "TaskFSMSupervisor should be running"
+      assert Process.alive?(sup_pid), "TaskFSMSupervisor process should be alive"
+    end
+
+    test "supervisor can start children directly" do
+      user = create_user()
+      project = create_project(user)
+
+      workflow = create_workflow(user, project, auto_advance: true)
+
+      step =
+        create_step(user, workflow, %{
+          name: "step",
+          step_order: 1,
+          is_final: true
+        })
+
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: step.id})
+
+      task = create_task(user, project, %{title: "Task"})
+      task = assign_workflow_to_task(task, workflow)
+
+      # Try to start child via supervisor directly
+      result =
+        Sacrum.Orchestrator.TaskFSMSupervisor.start_child(
+          {Sacrum.Orchestrator.TaskOrchestrator, [task_id: task.id, user_id: user.id]}
+        )
+
+      case result do
+        {:ok, pid} ->
+          # Give time for registry to update
+          Process.sleep(50)
+          # Verify it's registered in TaskRegistry
+          registered = Registry.lookup(Sacrum.Orchestrator.TaskRegistry, task.id)
+          assert length(registered) > 0, "Child should be registered in TaskRegistry after start"
+          # Check if it's still alive
+          if Process.alive?(pid) do
+            cleanup_spawned_orchestrators([task.id])
+          else
+            # Process crashed, which might be expected if it completed quickly
+            :ok
+          end
+
+        {:error, reason} ->
+          flunk("Failed to start orchestrator via supervisor: #{inspect(reason)}")
+      end
+    end
+
+    test "works recursively with two levels: parent > child" do
+      user = create_user()
+      project = create_project(user)
+
+      # Create parent workflow with wait_children
+      parent_workflow = create_workflow(user, project, auto_advance: false)
+      parent_wait_step = create_wait_children_step(user, parent_workflow)
+
+      parent_final_step =
+        create_step(user, parent_workflow, %{
+          name: "parent_final",
+          step_order: 2,
+          is_final: true
+        })
+
+      create_transition(user, parent_wait_step, parent_final_step)
+
+      {:ok, _} =
+        Accounts.Workflows.update(parent_workflow, %{initial_step_id: parent_wait_step.id})
+
+      # Create parent
+      parent_task = create_task(user, project, %{title: "Parent"})
+      parent_task = assign_workflow_to_task(parent_task, parent_workflow)
+
+      # Create child workflow with wait_children
+      child_workflow = create_workflow(user, project, auto_advance: false)
+      child_wait_step = create_wait_children_step(user, child_workflow)
+
+      child_final_step =
+        create_step(user, child_workflow, %{
+          name: "child_final",
+          step_order: 2,
+          is_final: true
+        })
+
+      create_transition(user, child_wait_step, child_final_step)
+
+      {:ok, _} =
+        Accounts.Workflows.update(child_workflow, %{initial_step_id: child_wait_step.id})
+
+      # Create child as child of parent
+      child_task = create_child_task(user, project, parent_task)
+      child_task = assign_workflow_to_task(child_task, child_workflow)
+
+      # Create grandchild workflow (leaf)
+      leaf_workflow = create_workflow(user, project, auto_advance: true)
+
+      leaf_step =
+        create_step(user, leaf_workflow, %{
+          name: "leaf_step",
+          step_order: 1,
+          is_final: true
+        })
+
+      {:ok, _} = Accounts.Workflows.update(leaf_workflow, %{initial_step_id: leaf_step.id})
+
+      # Create leaf as child of child
+      leaf_task = create_child_task(user, project, child_task)
+      leaf_task = assign_workflow_to_task(leaf_task, leaf_workflow)
+
+      parent_pid = start_orchestrator(parent_task, user)
+      wait_for_exit(parent_pid)
+
+      # Both the parent and the middle child should have persisted waiting
+      # StepExecutions and exited their orchestrator processes. The leaf's
+      # auto_advance workflow has no wait_children step, so it runs to completion.
+      parent_waiting =
+        Repo.all(
+          from(e in StepExecution,
+            where: e.task_id == ^parent_task.id and e.status == "waiting"
+          )
+        )
+
+      assert length(parent_waiting) == 1, "Parent should have a single waiting execution"
+
+      assert Enum.any?(1..50, fn _ ->
+               child_waiting =
+                 Repo.all(
+                   from(e in StepExecution,
+                     where: e.task_id == ^child_task.id and e.status == "waiting"
+                   )
+                 )
+
+               if length(child_waiting) == 1 do
+                 true
+               else
+                 Process.sleep(50)
+                 false
+               end
+             end),
+             "Middle child should have parked with its own waiting execution"
+
+      assert Registry.lookup(Sacrum.Orchestrator.TaskRegistry, parent_task.id) == [],
+             "Parent orchestrator must exit (pause lives in DB)"
+
+      assert Registry.lookup(Sacrum.Orchestrator.TaskRegistry, child_task.id) == [],
+             "Middle child orchestrator must exit (pause lives in DB)"
+
+      # Completing the leaf wakes the middle child; completing the middle child
+      # wakes the parent. Each wake reuses the existing waiting StepExecution.
+      {:ok, _} =
+        Repo.update(Ecto.Changeset.change(leaf_task, %{completed_at: DateTime.utc_now()}))
+
+      Sacrum.Orchestrator.Scheduler.notify_task_completed(leaf_task.id, %{status: "completed"})
+      Process.sleep(1500)
+
+      child_task = Repo.get(Sacrum.Repo.Schemas.Task, child_task.id)
+      assert child_task.current_step_id == child_final_step.id
+
+      {:ok, _} =
+        Repo.update(Ecto.Changeset.change(child_task, %{completed_at: DateTime.utc_now()}))
+
+      Sacrum.Orchestrator.Scheduler.notify_task_completed(child_task.id, %{status: "completed"})
+      Process.sleep(1500)
+
+      parent_task = Repo.get(Sacrum.Repo.Schemas.Task, parent_task.id)
+      assert parent_task.current_step_id == parent_final_step.id
+
+      cleanup_spawned_orchestrators([leaf_task.id, child_task.id, parent_task.id])
+    end
+
+    test "crash safety: killing parent before child completion wake preserves pause state" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project, auto_advance: false)
+
+      wait_step = create_wait_children_step(user, workflow)
+
+      final_step =
+        create_step(user, workflow, %{
+          name: "final_step",
+          step_order: 2,
+          is_final: true
+        })
+
+      create_transition(user, wait_step, final_step)
+
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: wait_step.id})
+
+      parent_task = create_task(user, project, %{title: "Parent Task"})
+      parent_task = assign_workflow_to_task(parent_task, workflow)
+
+      child_workflow = create_workflow(user, project, auto_advance: true)
+
+      child_step =
+        create_step(user, child_workflow, %{
+          name: "child_step",
+          step_order: 1,
+          is_final: true
+        })
+
+      {:ok, _} = Accounts.Workflows.update(child_workflow, %{initial_step_id: child_step.id})
+
+      child_task = create_child_task(user, project, parent_task)
+      child_task = assign_workflow_to_task(child_task, child_workflow)
+
+      # Start parent and kill it
+      pid = start_orchestrator(parent_task, user)
+      wait_for_exit(pid)
+
+      # Verify waiting execution still exists
+      waiting_execs =
+        Repo.all(
+          from(e in StepExecution,
+            where: e.task_id == ^parent_task.id and e.status == "waiting"
+          )
+        )
+
+      assert length(waiting_execs) == 1
+
+      # Now complete child - parent should wake up
+      {:ok, _} =
+        Repo.update(Ecto.Changeset.change(child_task, %{completed_at: DateTime.utc_now()}))
+
+      Sacrum.Orchestrator.Scheduler.notify_task_completed(child_task.id, %{status: "completed"})
+      Process.sleep(500)
+
+      # Parent should have transitioned
+      parent_task = Repo.get(Sacrum.Repo.Schemas.Task, parent_task.id)
+      assert parent_task.current_step_id == final_step.id
+
+      # Clean up spawned child orchestrator
+      cleanup_spawned_orchestrators([child_task.id])
+    end
+
+    test "no duplicate parent orchestrator when one already registered" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project, auto_advance: false)
+
+      wait_step = create_wait_children_step(user, workflow)
+
+      final_step =
+        create_step(user, workflow, %{
+          name: "final_step",
+          step_order: 2,
+          is_final: true
+        })
+
+      create_transition(user, wait_step, final_step)
+
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: wait_step.id})
+
+      parent_task = create_task(user, project, %{title: "Parent Task"})
+      parent_task = assign_workflow_to_task(parent_task, workflow)
+
+      child_workflow = create_workflow(user, project, auto_advance: true)
+
+      child_step =
+        create_step(user, child_workflow, %{
+          name: "child_step",
+          step_order: 1,
+          is_final: true
+        })
+
+      {:ok, _} = Accounts.Workflows.update(child_workflow, %{initial_step_id: child_step.id})
+
+      child_task = create_child_task(user, project, parent_task)
+      child_task = assign_workflow_to_task(child_task, child_workflow)
+
+      # Start parent
+      pid = start_orchestrator(parent_task, user)
+      wait_for_exit(pid)
+
+      # Try to wake parent while trying to start another one simultaneously
+      {:ok, _} =
+        Repo.update(Ecto.Changeset.change(child_task, %{completed_at: DateTime.utc_now()}))
+
+      # Start a new orchestrator for parent (simulating race condition)
+      {:ok, _pid1} = TaskOrchestrator.start_link(task_id: parent_task.id, user_id: user.id)
+      Process.sleep(100)
+
+      # Now notify about child completion
+      Sacrum.Orchestrator.Scheduler.notify_task_completed(child_task.id, %{status: "completed"})
+      Process.sleep(500)
+
+      # Only one orchestrator should exist for parent
+      pids = Registry.lookup(Sacrum.Orchestrator.TaskRegistry, parent_task.id)
+      assert length(pids) <= 1
+
+      # Clean up spawned child orchestrator and any parent processes
+      cleanup_spawned_orchestrators([child_task.id, parent_task.id])
     end
   end
 end

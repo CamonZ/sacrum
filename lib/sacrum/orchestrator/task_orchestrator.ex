@@ -20,6 +20,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
 
   require Logger
 
+  import Ecto.Query
+
   alias Sacrum.Orchestrator.{
     ExecutionDispatcher,
     ExecutionPool,
@@ -31,9 +33,9 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     WorkflowGraph
   }
 
-  alias Sacrum.Orchestrator.Routing.RouteStep
+  alias Sacrum.Orchestrator.Routing.{RouteStep, WaitChildren}
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.Task
+  alias Sacrum.Repo.Schemas.{StepExecution, Task}
   alias Sacrum.Repo.TaskWorkflows
 
   @spec start_link(keyword()) :: {:ok, pid()} | {:error, term()}
@@ -138,20 +140,14 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     )
 
     with {:ok, task} <- reload_task(data.task.id),
-         {:ok, current_step} <- WorkflowGraph.get_current_step(data),
-         {:ok, execution} <-
-           ExecutionDispatcher.create_and_dispatch(data.user_id, task, current_step.id) do
+         {:ok, current_step} <- WorkflowGraph.get_current_step(data) do
       data = %{data | task: task}
 
-      unless data.subscribed do
-        :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{data.project_id}")
+      if current_step.step_type == "wait_children" do
+        {:keep_state_and_data, [{:state_timeout, 0, :wait_children}]}
+      else
+        dispatch_execution(data, task, current_step)
       end
-
-      Logger.info(
-        "[TaskOrchestrator:#{task_id}] Dispatched execution #{execution.id} step=#{current_step.name}"
-      )
-
-      {:keep_state, %{data | current_execution_id: execution.id, subscribed: true}}
     else
       {:error, reason} ->
         Logger.error(
@@ -183,6 +179,13 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     {:next_state, :failed, data}
   end
 
+  def handle_event(:state_timeout, :wait_children, :executing, data) do
+    case WaitChildren.handle_wait_children_entry(data) do
+      {:stop_parent, new_data} -> {:stop, :normal, new_data}
+      {:error_parent, new_data} -> {:next_state, :failed, new_data}
+    end
+  end
+
   def handle_event(:state_timeout, :run, :initializing, data) do
     task_id = data.task.id
 
@@ -204,17 +207,14 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   def handle_event(:state_timeout, :run, :awaiting_execution, data) do
     task_id = data.task.id
 
-    case ExecutionPool.request_slot(self()) do
-      {:ok, slot_id} ->
-        Logger.info("[TaskOrchestrator:#{task_id}] Got pool slot #{slot_id}")
-        {:next_state, :executing, %{data | slot_id: slot_id}}
+    if resuming_from_wait_children?(data) do
+      Logger.info(
+        "[TaskOrchestrator:#{task_id}] Resuming from wait_children, transitioning directly"
+      )
 
-      {:error, reason} ->
-        Logger.error(
-          "[TaskOrchestrator:#{task_id}] Failed to request pool slot: #{inspect(reason)}"
-        )
-
-        {:next_state, :failed, data}
+      {:next_state, :transitioning, data}
+    else
+      request_execution_slot(task_id, data)
     end
   end
 
@@ -227,6 +227,9 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
 
       {:ok, %{step_type: type} = current_step} when type in ["execute", "evaluate"] ->
         handle_single_transition_step(data, current_step)
+
+      {:ok, %{step_type: "wait_children"} = current_step} ->
+        handle_wait_children_transition(data, current_step)
 
       {:ok, %{step_type: other}} ->
         Logger.error("[TaskOrchestrator:#{task_id}] Unknown step type: #{other}")
@@ -279,6 +282,56 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   end
 
   # ===== TRANSITION HANDLERS =====
+
+  defp handle_wait_children_transition(data, current_step) do
+    task_id = data.task.id
+    next_transitions = WorkflowGraph.get_outgoing_transitions(data, current_step.id)
+
+    with {:ok, next_step_id} <- WorkflowGraph.select_single_transition(next_transitions),
+         :ok <- invalidate_waiting_execution(task_id),
+         {:ok, updated_task} <-
+           TaskWorkflows.advance_to_step(data.task, next_step_id, nil,
+             skip_orchestrator_check: true
+           ) do
+      ExecutionPool.release_slot(data.slot_id)
+
+      TaskCompletion.determine_next_state(next_step_id, %{
+        data
+        | task: updated_task,
+          slot_id: nil
+      })
+    else
+      {:error, :no_outgoing_transitions} ->
+        Logger.info(
+          "[TaskOrchestrator:#{task_id}] No outgoing transitions from wait_children, treating as final"
+        )
+
+        ExecutionPool.release_slot(data.slot_id)
+        {:next_state, :completing, %{data | slot_id: nil}}
+
+      {:error, reason} ->
+        Logger.error(
+          "[TaskOrchestrator:#{task_id}] Error in wait_children transition: #{inspect(reason)}"
+        )
+
+        ExecutionPool.release_slot(data.slot_id)
+        {:next_state, :failed, %{data | slot_id: nil}}
+    end
+  end
+
+  defp invalidate_waiting_execution(task_id) do
+    case latest_waiting_execution(task_id) do
+      nil ->
+        :ok
+
+      execution ->
+        execution
+        |> StepExecution.update_changeset(%{status: "invalidated"})
+        |> Repo.update()
+
+        :ok
+    end
+  end
 
   defp handle_single_transition_step(data, current_step) do
     task_id = data.task.id
@@ -339,5 +392,61 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
       nil -> {:error, :task_not_found}
       task -> {:ok, PromptRenderer.preload_for_rendering(task)}
     end
+  end
+
+  defp dispatch_execution(data, task, current_step) do
+    task_id = data.task.id
+
+    case ExecutionDispatcher.create_and_dispatch(data.user_id, task, current_step.id) do
+      {:ok, execution} ->
+        unless data.subscribed do
+          :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{data.project_id}")
+        end
+
+        Logger.info(
+          "[TaskOrchestrator:#{task_id}] Dispatched execution #{execution.id} step=#{current_step.name}"
+        )
+
+        {:keep_state, %{data | current_execution_id: execution.id, subscribed: true}}
+
+      {:error, reason} ->
+        Logger.error(
+          "[TaskOrchestrator:#{task_id}] Failed to dispatch execution: #{inspect(reason)}"
+        )
+
+        {:keep_state, data, [{:state_timeout, 0, :fail}]}
+    end
+  end
+
+  defp request_execution_slot(task_id, data) do
+    case ExecutionPool.request_slot(self()) do
+      {:ok, slot_id} ->
+        Logger.info("[TaskOrchestrator:#{task_id}] Got pool slot #{slot_id}")
+        {:next_state, :executing, %{data | slot_id: slot_id}}
+
+      {:error, reason} ->
+        Logger.error(
+          "[TaskOrchestrator:#{task_id}] Failed to request pool slot: #{inspect(reason)}"
+        )
+
+        {:next_state, :failed, data}
+    end
+  end
+
+  defp resuming_from_wait_children?(data) do
+    case WorkflowGraph.get_current_step(data) do
+      {:ok, %{step_type: "wait_children"}} -> latest_waiting_execution(data.task.id) != nil
+      _ -> false
+    end
+  end
+
+  defp latest_waiting_execution(task_id) do
+    Repo.one(
+      from(e in StepExecution,
+        where: e.task_id == ^task_id and e.status == "waiting",
+        order_by: [desc: e.inserted_at],
+        limit: 1
+      )
+    )
   end
 end

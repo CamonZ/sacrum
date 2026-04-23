@@ -28,7 +28,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     timestamps(type: :utc_datetime_usec)
   end
 
-  @step_types ~w(execute evaluate route)
+  @step_types ~w(execute evaluate route wait_children)
   @create_fields ~w(name goal agents skills agent_config is_final step_order step_type prompt output_schema)a
   @update_fields ~w(name goal agents skills agent_config is_final step_order step_type prompt output_schema)a
 
