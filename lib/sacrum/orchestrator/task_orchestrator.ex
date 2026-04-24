@@ -288,7 +288,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     next_transitions = WorkflowGraph.get_outgoing_transitions(data, current_step.id)
 
     with {:ok, next_step_id} <- WorkflowGraph.select_single_transition(next_transitions),
-         :ok <- invalidate_waiting_execution(task_id),
+         :ok <- mark_satisfied_wait_completed(task_id),
          {:ok, updated_task} <-
            TaskWorkflows.advance_to_step(data.task, next_step_id, nil,
              skip_orchestrator_check: true
@@ -319,14 +319,14 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     end
   end
 
-  defp invalidate_waiting_execution(task_id) do
+  defp mark_satisfied_wait_completed(task_id) do
     case latest_waiting_execution(task_id) do
       nil ->
         :ok
 
       execution ->
         execution
-        |> StepExecution.update_changeset(%{status: "invalidated"})
+        |> StepExecution.update_changeset(%{status: "completed"})
         |> Repo.update()
 
         :ok

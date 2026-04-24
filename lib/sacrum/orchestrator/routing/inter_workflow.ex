@@ -178,6 +178,8 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflow do
         ),
         set: [status: "invalidated"]
       )
+      # Invalidated is correct here: inter-workflow routing is a genuine supersession,
+      # not a natural progression from a satisfied wait condition.
       |> Multi.update(
         :task,
         Changeset.change(task, %{

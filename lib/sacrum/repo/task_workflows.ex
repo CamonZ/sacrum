@@ -90,6 +90,9 @@ defmodule Sacrum.Repo.TaskWorkflows do
   By default, returns an error if an orchestrator process is registered for this task
   (CLI-only call). Pass `skip_orchestrator_check: true` for internal/orchestrator calls.
 
+  Options:
+    - `skip_orchestrator_check` (boolean): Skip orchestrator registration check
+
   Returns:
     - {:ok, task} with updated current_step_id on success
     - {:error, :no_workflow} if task has no workflow

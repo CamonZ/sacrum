@@ -5,6 +5,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
   import ExUnit.CaptureLog
 
   alias Sacrum.Accounts
+  alias Sacrum.Orchestrator.FSMData
   alias Sacrum.Orchestrator.TaskOrchestrator
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.StepExecution
@@ -2439,6 +2440,276 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
       # Clean up spawned child orchestrator and any parent processes
       cleanup_spawned_orchestrators([child_task.id, parent_task.id])
+    end
+
+    test "satisfied wait_children transition marks waiting execution as completed" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project, auto_advance: false)
+
+      wait_step = create_wait_children_step(user, workflow)
+
+      final_step =
+        create_step(user, workflow, %{
+          name: "final_step",
+          step_order: 2,
+          is_final: true
+        })
+
+      create_transition(user, wait_step, final_step)
+
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: wait_step.id})
+
+      parent_task = create_task(user, project, %{title: "Parent Task"})
+      parent_task = assign_workflow_to_task(parent_task, workflow)
+
+      child_workflow_1 = create_workflow(user, project, auto_advance: true)
+
+      child_step_1 =
+        create_step(user, child_workflow_1, %{
+          name: "child_step_1",
+          step_order: 1,
+          is_final: true
+        })
+
+      {:ok, _} = Accounts.Workflows.update(child_workflow_1, %{initial_step_id: child_step_1.id})
+
+      child_task_1 = create_child_task(user, project, parent_task)
+      child_task_1 = assign_workflow_to_task(child_task_1, child_workflow_1)
+
+      pid = start_orchestrator(parent_task, user)
+      wait_for_exit(pid)
+
+      waiting_executions =
+        Repo.all(
+          from(e in StepExecution,
+            where: e.task_id == ^parent_task.id and e.status == "waiting"
+          )
+        )
+
+      assert length(waiting_executions) == 1
+      waiting_exec_id = hd(waiting_executions).id
+
+      {:ok, _} =
+        Repo.update(Ecto.Changeset.change(child_task_1, %{completed_at: DateTime.utc_now()}))
+
+      Sacrum.Orchestrator.Scheduler.notify_task_completed(child_task_1.id, %{status: "completed"})
+      Process.sleep(500)
+
+      waiting_exec = Repo.get!(StepExecution, waiting_exec_id)
+      assert waiting_exec.status == "completed"
+
+      parent_task = Repo.get!(Sacrum.Repo.Schemas.Task, parent_task.id)
+      assert parent_task.current_step_id == final_step.id
+
+      final_executions =
+        Repo.all(
+          from(e in StepExecution,
+            where:
+              e.task_id == ^parent_task.id and
+                e.step_id == ^final_step.id and
+                e.status == "entered"
+          )
+        )
+
+      assert length(final_executions) == 1
+
+      cleanup_spawned_orchestrators([child_task_1.id])
+    end
+
+    test "wait_children still advances parent even if child completed_at is set (all_done_and_not_parked check)" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project, auto_advance: false)
+
+      wait_step = create_wait_children_step(user, workflow)
+
+      final_step =
+        create_step(user, workflow, %{
+          name: "final_step",
+          step_order: 2,
+          is_final: true
+        })
+
+      create_transition(user, wait_step, final_step)
+
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: wait_step.id})
+
+      parent_task = create_task(user, project, %{title: "Parent Task"})
+      parent_task = assign_workflow_to_task(parent_task, workflow)
+
+      child_workflow_1 = create_workflow(user, project, auto_advance: true)
+
+      child_step_1 =
+        create_step(user, child_workflow_1, %{
+          name: "child_step_1",
+          step_order: 1,
+          is_final: true
+        })
+
+      {:ok, _} = Accounts.Workflows.update(child_workflow_1, %{initial_step_id: child_step_1.id})
+
+      child_task_1 = create_child_task(user, project, parent_task)
+      child_task_1 = assign_workflow_to_task(child_task_1, child_workflow_1)
+
+      pid = start_orchestrator(parent_task, user)
+      wait_for_exit(pid)
+
+      {:ok, _} =
+        Repo.update(
+          Ecto.Changeset.change(child_task_1, %{
+            completed_at: DateTime.utc_now()
+          })
+        )
+
+      Sacrum.Orchestrator.Scheduler.notify_task_completed(child_task_1.id, %{status: "completed"})
+      Process.sleep(500)
+
+      waiting_executions =
+        Repo.all(
+          from(e in StepExecution,
+            where: e.task_id == ^parent_task.id and e.status == "completed"
+          )
+        )
+
+      assert length(waiting_executions) == 1
+
+      parent_task = Repo.get!(Sacrum.Repo.Schemas.Task, parent_task.id)
+      assert parent_task.current_step_id == final_step.id
+
+      cleanup_spawned_orchestrators([child_task_1.id])
+    end
+
+    test "inter-workflow routing marks prior entered execution as invalidated" do
+      user = create_user()
+      project = create_project(user)
+
+      source_workflow = create_workflow(user, project, auto_advance: false)
+
+      source_step =
+        create_step(user, source_workflow, %{
+          name: "source_step",
+          step_order: 1,
+          is_final: false
+        })
+
+      {:ok, _} = Accounts.Workflows.update(source_workflow, %{initial_step_id: source_step.id})
+
+      dest_workflow = create_workflow(user, project, auto_advance: false)
+
+      dest_step =
+        create_step(user, dest_workflow, %{
+          name: "dest_step",
+          step_order: 1,
+          is_final: true
+        })
+
+      {:ok, _} = Accounts.Workflows.update(dest_workflow, %{initial_step_id: dest_step.id})
+
+      {:ok, _} =
+        Accounts.WorkflowTransitions.insert(user.id, %{
+          from_workflow_id: source_workflow.id,
+          to_workflow_id: dest_workflow.id,
+          project_id: project.id
+        })
+
+      route_step =
+        create_step(user, source_workflow, %{
+          name: "route_step",
+          step_order: 2,
+          step_type: "route",
+          is_final: false
+        })
+
+      create_transition(user, source_step, route_step)
+
+      task = create_task(user, project, %{title: "Test Task"})
+      task = assign_workflow_to_task(task, source_workflow)
+
+      {:ok, _prior_exec} =
+        %StepExecution{user_id: user.id, project_id: project.id}
+        |> StepExecution.create_changeset(%{
+          task_id: task.id,
+          workflow_id: dest_workflow.id,
+          step_id: dest_step.id,
+          step_name: dest_step.name,
+          status: "entered"
+        })
+        |> Repo.insert()
+
+      {:ok, _updated_task} =
+        Sacrum.Orchestrator.Routing.InterWorkflow.handle_inter_workflow_routing(
+          %FSMData{
+            task: task,
+            user_id: user.id,
+            project_id: project.id
+          },
+          dest_workflow.id,
+          nil
+        )
+
+      prior_executions =
+        Repo.all(
+          from(e in StepExecution,
+            where:
+              e.task_id == ^task.id and
+                e.workflow_id == ^dest_workflow.id and
+                e.step_id == ^dest_step.id and
+                e.status == "invalidated"
+          )
+        )
+
+      assert length(prior_executions) >= 1
+    end
+
+    test "advance_to_step invalidates prior entered executions at the target step" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project, auto_advance: false)
+
+      step1 = create_step(user, workflow, %{name: "step1", step_order: 1})
+      step2 = create_step(user, workflow, %{name: "step2", step_order: 2})
+
+      create_transition(user, step1, step2)
+
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: step1.id})
+
+      task = create_task(user, project)
+      task = assign_workflow_to_task(task, workflow)
+
+      {:ok, _} = Sacrum.Repo.TaskWorkflows.move_to_step(task, step2.id)
+      task = Repo.get!(Sacrum.Repo.Schemas.Task, task.id)
+
+      prior_executions =
+        Repo.all(
+          from(e in StepExecution,
+            where: e.task_id == ^task.id and e.step_id == ^step2.id and e.status == "entered"
+          )
+        )
+
+      assert length(prior_executions) == 1
+      prior_exec_id = hd(prior_executions).id
+
+      {:ok, _updated_task} =
+        Sacrum.Repo.TaskWorkflows.advance_to_step(task, step2.id, nil,
+          skip_orchestrator_check: true
+        )
+
+      prior_exec = Repo.get!(StepExecution, prior_exec_id)
+      assert prior_exec.status == "invalidated"
+
+      new_executions =
+        Repo.all(
+          from(e in StepExecution,
+            where:
+              e.task_id == ^task.id and
+                e.step_id == ^step2.id and
+                e.status == "entered"
+          )
+        )
+
+      assert length(new_executions) == 1
+      assert hd(new_executions).id != prior_exec_id
     end
   end
 end
