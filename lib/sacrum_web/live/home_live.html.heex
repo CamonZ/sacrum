@@ -1,0 +1,121 @@
+<Layouts.flash_group flash={@flash} />
+
+<%!-- Background Effects --%>
+<div class="aurora-bg"></div>
+<div class="glow-orb glow-orb-1"></div>
+<div class="glow-orb glow-orb-2"></div>
+<div class="glow-orb glow-orb-3"></div>
+
+<%!-- Neural Grid Background Pattern --%>
+<div
+  class="fixed inset-0 z-0 opacity-20"
+  style="background-image: radial-gradient(circle at center, rgba(168, 162, 158, 0.12) 1px, transparent 1px); background-size: 24px 24px;"
+>
+</div>
+
+<%!-- Glowing Accent Lines --%>
+<div class="fixed top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-primary/30 to-transparent z-10">
+</div>
+<div class="fixed bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-primary/30 to-transparent z-10">
+</div>
+
+<div class="relative z-10 min-h-screen flex flex-col">
+  <%!-- Header --%>
+  <header class="flex h-14 items-center justify-between border-b border-border bg-bg-primary/80 px-6 backdrop-blur-sm animate-in">
+    <div class="flex items-center gap-3">
+      <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-accent flex items-center justify-center shadow-glow-sm">
+        <svg
+          viewBox="0 0 24 24"
+          class="w-5 h-5 text-bg-primary"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M12 2v20M12 6c-2 0-3.5 1-3.5 2s1.5 2 3.5 2 3.5-1 3.5-2-1.5-2-3.5-2z" />
+          <path d="M12 10c-2 0-3.5 1-3.5 2s1.5 2 3.5 2 3.5-1 3.5-2-1.5-2-3.5-2z" />
+          <path d="M12 14c-2 0-3.5 1-3.5 2s1.5 2 3.5 2 3.5-1 3.5-2-1.5-2-3.5-2z" />
+        </svg>
+      </div>
+      <h1 class="text-sm font-medium text-text-primary">Vertebrae</h1>
+    </div>
+    <div class="flex items-center gap-4">
+      <Layouts.theme_toggle />
+    </div>
+  </header>
+
+  <%!-- Main Content --%>
+  <main class="flex-1 flex flex-col items-center justify-center px-4 py-16 sm:px-6 lg:px-8">
+    <div class="mx-auto max-w-5xl">
+      <%!-- Hero Section --%>
+      <div class="text-center mb-16">
+        <h1 class="text-5xl sm:text-6xl lg:text-7xl font-bold tracking-tight text-text-primary mb-10 animate-in delay-200">
+          Orchestrate Agents. <br />
+          <span class="gradient-text">Ship Faster.</span>
+        </h1>
+
+        <%!-- Waitlist Form --%>
+        <%= if @submitted do %>
+          <div class="mx-auto max-w-md animate-in delay-400 mb-16">
+            <div class="p-6 rounded-lg bg-success/10 border border-success/30 backdrop-blur-sm">
+              <div class="flex items-center justify-center mb-3">
+                <svg
+                  class="w-6 h-6 text-success"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M5 13l4 4L19 7"
+                  />
+                </svg>
+              </div>
+              <h3 class="text-lg font-semibold text-success mb-2">Welcome to the waitlist!</h3>
+              <p class="text-sm text-success/80">
+                We'll notify you when early access is available.
+              </p>
+            </div>
+          </div>
+        <% else %>
+          <div class="mx-auto max-w-md animate-in delay-400">
+            <form phx-submit="submit_waitlist" class="space-y-4">
+              <div>
+                <input
+                  type="email"
+                  name="email"
+                  value={@form[:email].value}
+                  placeholder="you@example.com"
+                  class="w-full px-4 py-3 rounded-lg bg-bg-secondary border border-border text-text-primary placeholder-text-muted focus:outline-none focus:ring-2 focus:ring-primary transition-all"
+                  required
+                />
+                <%= if @submission_error do %>
+                  <p class="text-sm text-error mt-2">{@submission_error}</p>
+                <% end %>
+              </div>
+              <button
+                type="submit"
+                class="w-full px-4 py-3 rounded-lg bg-gradient-to-r from-primary to-accent text-bg-primary font-semibold transition-all hover:shadow-glow disabled:opacity-50"
+              >
+                Join Waitlist
+              </button>
+            </form>
+            <p class="text-xs text-text-muted mt-4">
+              We respect your privacy. No spam, ever.
+            </p>
+          </div>
+        <% end %>
+      </div>
+    </div>
+  </main>
+
+  <%!-- Footer --%>
+  <footer class="border-t border-border bg-bg-secondary/50 backdrop-blur-sm px-6 py-8">
+    <div class="max-w-5xl mx-auto text-center text-sm text-text-muted">
+      <p>&copy; 2026. All rights reserved.</p>
+    </div>
+  </footer>
+</div>
