@@ -18,12 +18,11 @@ defmodule SacrumWeb.HomeLiveTest do
       assert html =~ "you@example.com"
     end
 
-    test "displays design system properly" do
+    test "displays Articulated design system properly" do
       {:ok, _view, html} = live(build_conn(), "/")
 
-      assert html =~ "aurora-bg"
-      assert html =~ "gradient-text"
-      assert html =~ "glow-orb"
+      # Articulated system uses structural components - spine_rule renders as segments with border styling
+      assert html =~ "bg-border"
     end
   end
 
@@ -121,6 +120,45 @@ defmodule SacrumWeb.HomeLiveTest do
       {:ok, _view, html} = live(build_conn(), "/")
 
       assert html =~ "data-phx-theme"
+    end
+  end
+
+  describe "Articulated design system components" do
+    test "renders spine_rule component" do
+      {:ok, _view, html} = live(build_conn(), "/")
+
+      # spine_rule renders as a flex row with segment spans
+      assert html =~ ~r/flex.*gap.*bg-border/
+    end
+
+    test "no decorative classes present" do
+      {:ok, _view, html} = live(build_conn(), "/")
+
+      # Ensure removed decorative classes are not in the template
+      refute html =~ "aurora-bg"
+      refute html =~ "glow-orb"
+      refute html =~ "gradient-text"
+      refute html =~ "shadow-glow"
+      refute html =~ "magnetic-btn"
+      refute html =~ "tilt-card"
+    end
+
+    test "uses Articulated color tokens not Neural Pathways palette" do
+      {:ok, _view, html} = live(build_conn(), "/")
+
+      # Ensure old gradient gradient references are gone
+      refute html =~ "gradient-to-r"
+      refute html =~ "via-primary/30"
+      refute html =~ "from-primary to-accent"
+    end
+
+    test "minimal borders only, no shadows in structure" do
+      {:ok, _view, html} = live(build_conn(), "/")
+
+      # Should have border classes but not shadow classes
+      assert html =~ "border-b"
+      assert html =~ "border-border"
+      refute html =~ "shadow-"
     end
   end
 

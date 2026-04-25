@@ -1,0 +1,283 @@
+<Layouts.flash_group flash={@flash} />
+
+<div class="min-h-screen bg-bg text-text-primary font-sans">
+  <header class="flex h-14 items-center justify-between border-b border-border bg-bg px-6 sticky top-0 z-10">
+    <div class="flex items-center gap-3">
+      <div class="w-8 h-8 rounded-lg bg-accent flex items-center justify-center">
+        <svg
+          viewBox="0 0 24 24"
+          class="w-5 h-5 text-accent-fg"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M12 2v20M12 6c-2 0-3.5 1-3.5 2s1.5 2 3.5 2 3.5-1 3.5-2-1.5-2-3.5-2z" />
+          <path d="M12 10c-2 0-3.5 1-3.5 2s1.5 2 3.5 2 3.5-1 3.5-2-1.5-2-3.5-2z" />
+          <path d="M12 14c-2 0-3.5 1-3.5 2s1.5 2 3.5 2 3.5-1 3.5-2-1.5-2-3.5-2z" />
+        </svg>
+      </div>
+      <h1 class="text-sm font-medium">Articulated · Design System</h1>
+      <span class="font-mono text-xs text-text-muted">DEV</span>
+    </div>
+    <Layouts.theme_toggle />
+  </header>
+
+  <main class="max-w-5xl mx-auto px-6 py-12 space-y-16">
+    <section>
+      <h2 class="text-3xl font-bold tracking-tight mb-2">Articulated</h2>
+      <p class="text-text-secondary max-w-2xl">
+        Vertebrae's design system. Monochrome surfaces, a single persimmon accent, Geist typography, and structural rhythm that suggests a spine without ever drawing one.
+      </p>
+    </section>
+
+    <.spine_rule />
+
+    <section>
+      <h3 class="text-xl font-semibold mb-1">Colors</h3>
+      <p class="text-sm text-text-muted mb-6">
+        Toggle the theme above to see light/dark token values resolve. Persimmon accent is identical in both themes.
+      </p>
+
+      <h4 class="text-sm font-mono text-text-muted uppercase tracking-wider mb-3">Surfaces</h4>
+      <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-8">
+        <.swatch name="bg" class="bg-bg border border-border" />
+        <.swatch name="surface" class="bg-surface border border-border" />
+        <.swatch name="surface-raised" class="bg-surface-raised border border-border" />
+      </div>
+
+      <h4 class="text-sm font-mono text-text-muted uppercase tracking-wider mb-3">Borders</h4>
+      <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-8">
+        <.swatch name="border" class="bg-border" />
+        <.swatch name="border-strong" class="bg-border-strong" />
+      </div>
+
+      <h4 class="text-sm font-mono text-text-muted uppercase tracking-wider mb-3">Text</h4>
+      <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-8">
+        <.swatch name="text-primary" class="bg-text-primary" />
+        <.swatch name="text-secondary" class="bg-text-secondary" />
+        <.swatch name="text-muted" class="bg-text-muted" />
+      </div>
+
+      <h4 class="text-sm font-mono text-text-muted uppercase tracking-wider mb-3">
+        Accent (shared)
+      </h4>
+      <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-8">
+        <.swatch name="accent" class="bg-accent" hex="#ff5c2e" />
+        <.swatch name="accent-hover" class="bg-accent-hover" hex="#e84a1e" />
+        <.swatch name="accent-fg" class="bg-accent-fg" hex="#0a0a0a" />
+      </div>
+
+      <h4 class="text-sm font-mono text-text-muted uppercase tracking-wider mb-3">Status</h4>
+      <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+        <.swatch name="success" class="bg-success" hex="#22c55e" />
+        <.swatch name="warning" class="bg-warning" hex="#eab308" />
+        <.swatch name="error" class="bg-error" hex="#ef4444" />
+      </div>
+    </section>
+
+    <.spine_rule />
+
+    <section>
+      <h3 class="text-xl font-semibold mb-1">Typography</h3>
+      <p class="text-sm text-text-muted mb-6">
+        Geist Sans for everything; Geist Mono for IDs, timestamps, numerics, and code. Two families, no third.
+      </p>
+
+      <div class="space-y-6">
+        <.type_sample token="display-lg" weight="700" size="5rem">
+          <span class="text-5xl lg:text-7xl font-bold tracking-tight">Ship faster</span>
+        </.type_sample>
+        <.type_sample token="display" weight="700" size="4.5rem">
+          <span class="text-5xl lg:text-6xl font-bold tracking-tight">Section hero</span>
+        </.type_sample>
+        <.type_sample token="heading" weight="600" size="1.125rem">
+          <span class="text-lg font-semibold">Card or section title</span>
+        </.type_sample>
+        <.type_sample token="label" weight="500" size="0.875rem">
+          <span class="text-sm font-medium">Button / form label</span>
+        </.type_sample>
+        <.type_sample token="body" weight="400" size="1rem">
+          <span class="text-base">
+            The quick brown fox jumps over the lazy dog. Body copy renders in Geist Sans regular at 1rem with 1.5 line-height.
+          </span>
+        </.type_sample>
+        <.type_sample token="body-sm" weight="400" size="0.875rem">
+          <span class="text-sm">Secondary body copy at 0.875rem.</span>
+        </.type_sample>
+        <.type_sample token="caption" weight="400" size="0.75rem">
+          <span class="text-xs">Captions, footnotes, helper text.</span>
+        </.type_sample>
+        <.type_sample token="mono" weight="400" size="0.875rem">
+          <span class="text-sm font-mono">task_a3f7c1b · 2026-04-25T14:32:18Z · v0.4.2</span>
+        </.type_sample>
+      </div>
+    </section>
+
+    <.spine_rule />
+
+    <section>
+      <h3 class="text-xl font-semibold mb-1">Spacing</h3>
+      <p class="text-sm text-text-muted mb-6">4px base unit. Scale: 1, 2, 3, 4, 6, 8, 12, 16.</p>
+
+      <div class="space-y-3">
+        <.scale_row :for={{label, px, cls} <- spacing_scale()} label={label} value={px} bar={cls} />
+      </div>
+    </section>
+
+    <.spine_rule />
+
+    <section>
+      <h3 class="text-xl font-semibold mb-1">Rounded</h3>
+      <p class="text-sm text-text-muted mb-6">
+        Five radii. <code class="font-mono text-xs">md</code>
+        for inputs/buttons, <code class="font-mono text-xs">lg</code>
+        for cards, <code class="font-mono text-xs">pill</code>
+        for toggles.
+      </p>
+
+      <div class="grid grid-cols-2 sm:grid-cols-5 gap-4">
+        <div :for={{name, cls} <- rounded_scale()} class="flex flex-col items-center gap-2">
+          <div class={["w-20 h-20 bg-surface-raised border border-border-strong", cls]} />
+          <div class="text-xs font-mono text-text-muted">{name}</div>
+        </div>
+      </div>
+    </section>
+
+    <.spine_rule />
+
+    <section>
+      <h3 class="text-xl font-semibold mb-1">Elevation</h3>
+      <p class="text-sm text-text-muted mb-6">
+        Flat system. Hierarchy through 1px borders and tonal background shifts only. No box-shadows.
+      </p>
+
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div class="bg-bg border border-border rounded-lg p-6 text-center">
+          <div class="text-sm font-medium mb-1">bg</div>
+          <div class="text-xs font-mono text-text-muted">page background</div>
+        </div>
+        <div class="bg-surface border border-border rounded-lg p-6 text-center">
+          <div class="text-sm font-medium mb-1">surface</div>
+          <div class="text-xs font-mono text-text-muted">card on bg</div>
+        </div>
+        <div class="bg-surface-raised border border-border-strong rounded-lg p-6 text-center">
+          <div class="text-sm font-medium mb-1">surface-raised</div>
+          <div class="text-xs font-mono text-text-muted">surface on surface</div>
+        </div>
+      </div>
+    </section>
+
+    <.spine_rule />
+
+    <section>
+      <h3 class="text-xl font-semibold mb-1">Components</h3>
+      <p class="text-sm text-text-muted mb-6">Primitives shipped by the system.</p>
+
+      <div class="space-y-10">
+        <div>
+          <h4 class="text-sm font-mono text-text-muted uppercase tracking-wider mb-3">
+            spine_rule
+          </h4>
+          <div class="bg-surface border border-border rounded-lg">
+            <.spine_rule />
+          </div>
+          <code class="block mt-2 text-xs font-mono text-text-muted">&lt;.spine_rule /&gt;</code>
+        </div>
+
+        <div>
+          <h4 class="text-sm font-mono text-text-muted uppercase tracking-wider mb-3">
+            spine_chain
+          </h4>
+          <div class="bg-surface border border-border rounded-lg p-6">
+            <.spine_chain steps={[
+              %{label: "design", state: :completed},
+              %{label: "build", state: :active},
+              %{label: "deploy", state: :pending}
+            ]} />
+          </div>
+          <code class="block mt-2 text-xs font-mono text-text-muted">
+            &lt;.spine_chain steps={"{[%{label: ..., state: :active | :completed | :pending}]}"} /&gt;
+          </code>
+        </div>
+
+        <div>
+          <h4 class="text-sm font-mono text-text-muted uppercase tracking-wider mb-3">
+            Button — primary
+          </h4>
+          <div class="bg-surface border border-border rounded-lg p-6 flex items-center gap-3">
+            <button class="px-4 py-3 rounded-lg bg-accent text-accent-fg font-semibold transition-colors hover:bg-accent-hover">
+              Join Waitlist
+            </button>
+            <button
+              class="px-4 py-3 rounded-lg bg-accent-hover text-accent-fg font-semibold"
+              disabled
+            >
+              :hover
+            </button>
+            <button
+              class="px-4 py-3 rounded-lg bg-accent text-accent-fg font-semibold opacity-50"
+              disabled
+            >
+              :disabled
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <h4 class="text-sm font-mono text-text-muted uppercase tracking-wider mb-3">Input</h4>
+          <div class="bg-surface border border-border rounded-lg p-6 space-y-3">
+            <input
+              type="email"
+              placeholder="you@example.com"
+              class="w-full px-4 py-3 rounded-lg bg-surface border border-border text-text-primary placeholder-text-muted focus:outline-none focus:border-accent transition-all"
+            />
+            <input
+              type="email"
+              value="focused@example.com"
+              class="w-full px-4 py-3 rounded-lg bg-surface border border-accent text-text-primary"
+              readonly
+            />
+          </div>
+        </div>
+
+        <div>
+          <h4 class="text-sm font-mono text-text-muted uppercase tracking-wider mb-3">
+            Card / surface
+          </h4>
+          <div class="bg-surface border border-border rounded-lg p-6">
+            <h5 class="text-lg font-semibold mb-2">Workflow run</h5>
+            <p class="text-sm text-text-secondary mb-4">
+              A surface composed of border + tonal shift. No shadow.
+            </p>
+            <div class="flex items-center gap-2 text-xs font-mono text-text-muted">
+              <span>run_8b88b2e7</span>
+              <span>·</span>
+              <span>2026-04-25 14:32</span>
+              <span>·</span>
+              <span class="text-success">success</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <.spine_rule />
+
+    <section>
+      <h3 class="text-xl font-semibold mb-1">Don'ts</h3>
+      <p class="text-sm text-text-muted mb-6">Anti-patterns that violate the system.</p>
+
+      <ul class="space-y-2 text-sm text-text-secondary list-disc list-inside">
+        <li>No box-shadows for elevation. Use borders + tonal shifts.</li>
+        <li>No glow effects, gradient text, aurora backgrounds, or particle effects.</li>
+        <li>No literal vertebra anatomy or spine glyphs in the wordmark.</li>
+        <li>No third type family. No serif accent. No script.</li>
+        <li>No new accent colors. Persimmon at the same hex in both themes.</li>
+        <li>No pure white or pure black for body text or backgrounds — warm neutrals only.</li>
+        <li>No scale-on-hover, bounce, spring, or glow-on-hover.</li>
+      </ul>
+    </section>
+  </main>
+</div>

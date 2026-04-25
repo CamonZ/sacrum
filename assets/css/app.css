@@ -1,8 +1,7 @@
 /* See the Tailwind configuration guide for advanced usage
    https://tailwindcss.com/docs/configuration */
 
-/* Google Fonts - Geist family for Swiss precision */
-@import url("https://fonts.googleapis.com/css2?family=Geist:wght@100;200;300;400;500;600;700;800;900&family=Geist+Mono:wght@100;200;300;400;500;600;700;800;900&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap");
 
 @import "tailwindcss" source(none);
 @source "../css";
@@ -20,80 +19,64 @@
   themes: false;
 }
 
-/* SACRUM - Neural Pathways Design System
-   A dark, technical aesthetic inspired by neural signal transmission
-   Based on Vertebrae GUI design system */
-
 @theme {
-  /* Color System - Warm Neural Palette */
-  --color-primary: #f59e0b;
-  --color-primary-hover: #fbbf24;
-  --color-primary-dim: rgba(245, 158, 11, 0.12);
-  --color-primary-glow: rgba(245, 158, 11, 0.35);
-
-  --color-accent: #ea580c;
-  --color-accent-hover: #f97316;
-  --color-accent-dim: rgba(234, 88, 12, 0.12);
-  --color-accent-glow: rgba(234, 88, 12, 0.35);
-
-  --color-secondary: #78716c;
-
+  --color-bg: #0a0a0a;
+  --color-surface: #111111;
+  --color-surface-raised: #161616;
+  --color-border: #1f1f1f;
+  --color-border-strong: #2a2a2a;
+  --color-text-primary: #f4f1ec;
+  --color-text-secondary: #b8b5af;
+  --color-text-muted: #6f6c66;
+  --color-accent: #ff5c2e;
+  --color-accent-hover: #e84a1e;
+  --color-accent-fg: #0a0a0a;
   --color-success: #22c55e;
-  --color-success-dim: rgba(34, 197, 94, 0.12);
   --color-warning: #eab308;
-  --color-warning-dim: rgba(234, 179, 8, 0.12);
   --color-error: #ef4444;
-  --color-error-dim: rgba(239, 68, 68, 0.12);
-  --color-info: #a78bfa;
-  --color-info-dim: rgba(167, 139, 250, 0.12);
 
-  /* Background colors - True dark neutrals */
-  --color-bg-primary: #09090b;
-  --color-bg-secondary: #0c0c0e;
-  --color-bg-tertiary: #18181b;
-  --color-bg-elevated: #1f1f23;
-  --color-bg-hover: rgba(245, 158, 11, 0.06);
-
-  /* Text colors - Warm neutrals */
-  --color-text-primary: #fafaf9;
-  --color-text-secondary: #a8a29e;
-  --color-text-muted: #57534e;
-  --color-text-accent: #f59e0b;
-
-  /* Border colors - Warm tints */
-  --color-border: rgba(168, 162, 158, 0.12);
-  --color-border-subtle: rgba(168, 162, 158, 0.06);
-  --color-border-focus: #f59e0b;
-  --color-border-glow: rgba(245, 158, 11, 0.4);
-
-  /* Typography - Geist family */
   --font-sans: "Geist", system-ui, -apple-system, sans-serif;
   --font-mono: "Geist Mono", "SF Mono", "Monaco", monospace;
-
-  /* Shadows - Glowing edges */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
-  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.6);
-  --shadow-glow: 0 0 20px rgba(245, 158, 11, 0.3);
-  --shadow-glow-sm: 0 0 10px rgba(245, 158, 11, 0.2);
-  --shadow-inner-glow: inset 0 0 20px rgba(245, 158, 11, 0.1);
 }
 
-/* daisyUI theme plugin - Sacrum Dark Theme */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --color-bg: #f7f4ee;
+    --color-surface: #ffffff;
+    --color-surface-raised: #ffffff;
+    --color-border: #e6e1d7;
+    --color-border-strong: #c9c3b5;
+    --color-text-primary: #0a0a0a;
+    --color-text-secondary: #4a4742;
+    --color-text-muted: #807c75;
+  }
+}
+
+[data-theme="light"] {
+  --color-bg: #f7f4ee;
+  --color-surface: #ffffff;
+  --color-surface-raised: #ffffff;
+  --color-border: #e6e1d7;
+  --color-border-strong: #c9c3b5;
+  --color-text-primary: #0a0a0a;
+  --color-text-secondary: #4a4742;
+  --color-text-muted: #807c75;
+}
+
 @plugin "../vendor/daisyui-theme" {
-  name: "sacrum-dark";
-  default: true;
+  name: "dark";
+  default: false;
   prefersdark: true;
   color-scheme: "dark";
   --color-base-100: #09090b;
   --color-base-200: #0c0c0e;
   --color-base-300: #18181b;
   --color-base-content: #fafaf9;
-  --color-primary: #f59e0b;
+  --color-primary: #ff5c2e;
   --color-primary-content: #09090b;
   --color-secondary: #78716c;
   --color-secondary-content: #fafaf9;
-  --color-accent: #ea580c;
+  --color-accent: #ff5c2e;
   --color-accent-content: #fafaf9;
   --color-neutral: #27272a;
   --color-neutral-content: #fafaf9;
@@ -115,21 +98,20 @@
   --noise: 0;
 }
 
-/* Light theme for Sacrum */
 @plugin "../vendor/daisyui-theme" {
-  name: "sacrum-light";
-  default: false;
+  name: "light";
+  default: true;
   prefersdark: false;
   color-scheme: "light";
-  --color-base-100: #fafaf9;
-  --color-base-200: #f5f5f4;
-  --color-base-300: #e7e5e4;
+  --color-base-100: #f7f4ee;
+  --color-base-200: #ede9e3;
+  --color-base-300: #e0dbd3;
   --color-base-content: #1c1917;
-  --color-primary: #f59e0b;
+  --color-primary: #ff5c2e;
   --color-primary-content: #09090b;
   --color-secondary: #78716c;
   --color-secondary-content: #1c1917;
-  --color-accent: #ea580c;
+  --color-accent: #ff5c2e;
   --color-accent-content: #1c1917;
   --color-neutral: #d6d3d1;
   --color-neutral-content: #1c1917;
@@ -162,241 +144,9 @@
 /* Make LiveView wrapper divs transparent for layout */
 [data-phx-session], [data-phx-teleported-src] { display: contents }
 
-/* =============================================================================
-   LANDING PAGE ENHANCEMENTS
-   ============================================================================= */
-
-/* Aurora Gradient Background */
-@keyframes aurora {
-  0% {
-    background-position: 0% 50%;
-  }
-  50% {
-    background-position: 100% 50%;
-  }
-  100% {
-    background-position: 0% 50%;
-  }
-}
-
-.aurora-bg {
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  background: 
-    radial-gradient(ellipse at 20% 80%, rgba(245, 158, 11, 0.15) 0%, transparent 50%),
-    radial-gradient(ellipse at 80% 20%, rgba(234, 88, 12, 0.1) 0%, transparent 50%),
-    radial-gradient(ellipse at 50% 50%, rgba(245, 158, 11, 0.05) 0%, transparent 70%);
-  background-size: 200% 200%;
-  animation: aurora 20s ease-in-out infinite;
-  pointer-events: none;
-}
-
-/* Floating Glow Orbs */
-@keyframes float {
-  0%, 100% {
-    transform: translate(0, 0) scale(1);
-    opacity: 0.3;
-  }
-  25% {
-    transform: translate(30px, -30px) scale(1.1);
-    opacity: 0.4;
-  }
-  50% {
-    transform: translate(20px, 20px) scale(0.9);
-    opacity: 0.2;
-  }
-  75% {
-    transform: translate(-20px, 10px) scale(1.05);
-    opacity: 0.35;
-  }
-}
-
-.glow-orb {
-  position: fixed;
-  border-radius: 50%;
-  filter: blur(80px);
-  pointer-events: none;
-  z-index: -1;
-}
-
-.glow-orb-1 {
-  width: 400px;
-  height: 400px;
-  background: rgba(245, 158, 11, 0.2);
-  top: -100px;
-  right: -100px;
-  animation: float 15s ease-in-out infinite;
-}
-
-.glow-orb-2 {
-  width: 300px;
-  height: 300px;
-  background: rgba(234, 88, 12, 0.15);
-  bottom: 10%;
-  left: -50px;
-  animation: float 18s ease-in-out infinite 2s;
-}
-
-.glow-orb-3 {
-  width: 250px;
-  height: 250px;
-  background: rgba(245, 158, 11, 0.1);
-  top: 40%;
-  right: 10%;
-  animation: float 12s ease-in-out infinite 4s;
-}
-
-/* Staggered Entrance Animations */
-@keyframes fade-in-up {
-  from {
-    opacity: 0;
-    transform: translateY(30px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.animate-in {
-  animation: fade-in-up 0.8s ease-out forwards;
-  opacity: 0;
-}
-
-.delay-100 { animation-delay: 100ms; }
-.delay-200 { animation-delay: 200ms; }
-.delay-300 { animation-delay: 300ms; }
-.delay-400 { animation-delay: 400ms; }
-.delay-500 { animation-delay: 500ms; }
-.delay-600 { animation-delay: 600ms; }
-.delay-700 { animation-delay: 700ms; }
-.delay-800 { animation-delay: 800ms; }
-
-/* Gradient Text */
-.gradient-text {
-  background: linear-gradient(135deg, #f59e0b 0%, #fbbf24 50%, #ea580c 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
-
-/* Terminal Window Styles */
-.terminal-window {
-  background: #0c0c0e;
-  border: 1px solid rgba(168, 162, 158, 0.15);
-  border-radius: 12px;
-  overflow: hidden;
-  box-shadow: 
-    0 25px 50px -12px rgba(0, 0, 0, 0.8),
-    0 0 0 1px rgba(245, 158, 11, 0.1);
-}
-
-.terminal-header {
-  background: rgba(24, 24, 27, 0.8);
-  border-bottom: 1px solid rgba(168, 162, 158, 0.1);
-  padding: 12px 16px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.terminal-dot {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-}
-
-.terminal-dot-red { background: #ef4444; }
-.terminal-dot-yellow { background: #eab308; }
-.terminal-dot-green { background: #22c55e; }
-
-.terminal-body {
-  padding: 20px 24px;
-  font-family: "Geist Mono", "SF Mono", monospace;
-  font-size: 13px;
-  line-height: 1.8;
-}
-
-.terminal-line {
-  display: flex;
-  gap: 12px;
-  margin-bottom: 4px;
-}
-
-.terminal-prompt {
-  color: #f59e0b;
-  font-weight: 500;
-}
-
-.terminal-command {
-  color: #fafaf9;
-}
-
-.terminal-output {
-  color: #a8a29e;
-  margin-left: 24px;
-  margin-bottom: 12px;
-}
-
-/* Typing Cursor Animation */
-@keyframes blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0; }
-}
-
-.typing-cursor {
-  display: inline-block;
-  width: 8px;
-  height: 18px;
-  background: #f59e0b;
-  margin-left: 4px;
-  animation: blink 1s step-end infinite;
-  vertical-align: middle;
-}
-
-/* Magnetic Button Effect */
-.magnetic-btn {
-  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
-}
-
-.magnetic-btn:hover {
-  transform: translateY(-2px);
-}
-
-/* Card 3D Tilt */
-.tilt-card {
-  transition: transform 0.3s ease, box-shadow 0.3s ease;
-  transform-style: preserve-3d;
-}
-
-.tilt-card:hover {
-  transform: perspective(1000px) rotateX(2deg) rotateY(-2deg) translateY(-4px);
-  box-shadow: 
-    0 20px 40px -15px rgba(0, 0, 0, 0.6),
-    0 0 30px rgba(245, 158, 11, 0.15);
-}
-
-/* Code Block Styling */
-.code-block {
-  background: rgba(12, 12, 14, 0.8);
-  border: 1px solid rgba(168, 162, 158, 0.1);
-  border-radius: 8px;
-  padding: 16px 20px;
-  font-family: "Geist Mono", "SF Mono", monospace;
-  font-size: 13px;
-  overflow-x: auto;
-}
-
-.code-keyword { color: #f59e0b; }
-.code-string { color: #22c55e; }
-.code-number { color: #a78bfa; }
-.code-comment { color: #57534e; font-style: italic; }
-
-/* Selection styling */
 ::selection {
-  background-color: rgba(245, 158, 11, 0.3);
-  color: #fafaf9;
+  background-color: rgba(255, 92, 46, 0.3);
+  color: #0a0a0a;
 }
 
 /* Scrollbar styling - Thin, subtle */

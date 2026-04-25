@@ -511,4 +511,54 @@ defmodule SacrumWeb.CoreComponents do
   def translate_errors(errors, field) when is_list(errors) do
     for {^field, {msg, opts}} <- errors, do: translate_error({msg, opts})
   end
+
+  @doc """
+  Renders a segmented horizontal divider for the Articulated design system.
+  """
+  attr :class, :any, default: nil
+  attr :segments, :integer, default: 7
+  attr :rest, :global
+
+  @spec spine_rule(map()) :: Phoenix.LiveView.Rendered.t()
+  def spine_rule(assigns) do
+    ~H"""
+    <div class={["flex items-center justify-center gap-1.5 py-4 px-6", @class]} {@rest}>
+      <span :for={_ <- 1..@segments} class="block h-px w-6 bg-border" />
+    </div>
+    """
+  end
+
+  @doc """
+  Renders a horizontal chain of steps separated by joint markers.
+
+  Each step is `%{label: String.t(), state: :active | :completed | :pending}`.
+  """
+  attr :steps, :list, required: true
+  attr :class, :any, default: nil
+  attr :rest, :global
+
+  @spec spine_chain(map()) :: Phoenix.LiveView.Rendered.t()
+  def spine_chain(assigns) do
+    ~H"""
+    <div class={["flex items-center gap-3", @class]} {@rest}>
+      <%= for {step, idx} <- Enum.with_index(@steps) do %>
+        <div :if={idx > 0} class="flex items-center gap-3">
+          <div class="h-px w-4 bg-border-strong" />
+          <div class={["w-1.5 h-1.5 rounded-full flex-shrink-0", step_dot_class(step.state)]} />
+        </div>
+        <div class={["text-sm font-mono whitespace-nowrap", step_label_class(step.state)]}>
+          {step.label}
+        </div>
+      <% end %>
+    </div>
+    """
+  end
+
+  defp step_dot_class(:active), do: "bg-accent"
+  defp step_dot_class(:completed), do: "bg-text-secondary"
+  defp step_dot_class(:pending), do: "bg-text-muted"
+
+  defp step_label_class(:active), do: "text-accent font-medium"
+  defp step_label_class(:completed), do: "text-text-secondary"
+  defp step_label_class(:pending), do: "text-text-muted"
 end
