@@ -37,7 +37,33 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
     end
 
     field :transitions, list_of(:step_transition) do
-      resolve(dataloader(Sacrum.Accounts.StepTransitions))
+      resolve(fn step, args, resolution ->
+        case step do
+          %{transitions: transitions} when is_list(transitions) ->
+            {:ok, transitions}
+
+          _ ->
+            dataloader(Sacrum.Accounts.StepTransitions).(step, args, resolution)
+        end
+      end)
+    end
+
+    field :task_counts, :pipeline_task_counts do
+      resolve(fn step, _args, _resolution ->
+        counts =
+          step
+          |> Map.get(:__pipeline_aggregates, %{})
+          |> Map.get(:task_counts, %{})
+
+        {:ok, Map.merge(%{epic: 0, ticket: 0, task: 0}, counts)}
+      end)
+    end
+
+    field :running_count, :integer do
+      resolve(fn step, _args, _resolution ->
+        aggregates = Map.get(step, :__pipeline_aggregates, %{})
+        {:ok, Map.get(aggregates, :running_count, 0)}
+      end)
     end
   end
 

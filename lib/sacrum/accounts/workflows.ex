@@ -59,4 +59,13 @@ defmodule Sacrum.Accounts.Workflows do
   def sync_transitions(%Workflow{} = workflow, transition_maps) when is_list(transition_maps) do
     WorkflowsRepo.sync_transitions(workflow, transition_maps)
   end
+
+  @doc """
+  Returns workflows in a project plus batched aggregates for the pipeline view.
+  """
+  @spec pipeline_summary(String.t(), String.t()) ::
+          {:ok, list(Workflow.t()), %{required(atom()) => map()}}
+  def pipeline_summary(user_id, project_id) when is_binary(user_id) and is_binary(project_id) do
+    WorkflowsRepo.pipeline_summary(user_id, project_id)
+  end
 end
