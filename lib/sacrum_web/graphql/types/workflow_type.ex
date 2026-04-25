@@ -29,12 +29,26 @@ defmodule SacrumWeb.Graphql.Types.WorkflowType do
     end
 
     field :workflow_steps, list_of(:workflow_step) do
-      resolve(dataloader(Sacrum.Accounts.WorkflowSteps))
+      resolve(fn workflow, args, resolution ->
+        case workflow do
+          %{workflow_steps: steps} when is_list(steps) ->
+            {:ok, steps}
+
+          _ ->
+            dataloader(Sacrum.Accounts.WorkflowSteps).(workflow, args, resolution)
+        end
+      end)
     end
 
     field :transitions, list_of(:workflow_transition) do
       resolve(dataloader(Sacrum.Accounts.WorkflowTransitions))
     end
+  end
+
+  object :pipeline_task_counts do
+    field :epic, non_null(:integer)
+    field :ticket, non_null(:integer)
+    field :task, non_null(:integer)
   end
 
   object :workflow_queries do
@@ -57,6 +71,21 @@ defmodule SacrumWeb.Graphql.Types.WorkflowType do
           {:ok, workflow} -> {:ok, workflow}
           error -> error
         end
+      end)
+    end
+
+    field :pipeline_summary, list_of(:workflow) do
+      description("""
+      All workflows in the project with steps, intra-workflow transitions, inter-workflow
+      transitions, per-step task counts grouped by level, and per-step running counts.
+      Aggregates are batched across the full result set — no N+1 over steps.
+      """)
+
+      arg(:project_id, non_null(:uuid4))
+
+      resolve(fn %{project_id: project_id}, %{context: %{current_user: user}} ->
+        {:ok, workflows, aggregates} = Accounts.Workflows.pipeline_summary(user.id, project_id)
+        {:ok, Enum.map(workflows, &attach_pipeline_aggregates(&1, aggregates))}
       end)
     end
   end
@@ -129,5 +158,22 @@ defmodule SacrumWeb.Graphql.Types.WorkflowType do
     field :from_workflow_id, :uuid4
     field :to_workflow_id, :uuid4
     field :target_step_id, :uuid4
+  end
+
+  @empty_task_counts %{epic: 0, ticket: 0, task: 0}
+
+  defp attach_pipeline_aggregates(workflow, %{
+         task_counts_by_step_id: task_counts,
+         running_counts_by_step_id: running_counts
+       }) do
+    enriched_steps =
+      Enum.map(workflow.workflow_steps || [], fn step ->
+        Map.put(step, :__pipeline_aggregates, %{
+          task_counts: Map.get(task_counts, step.id, @empty_task_counts),
+          running_count: Map.get(running_counts, step.id, 0)
+        })
+      end)
+
+    Map.put(workflow, :workflow_steps, enriched_steps)
   end
 end

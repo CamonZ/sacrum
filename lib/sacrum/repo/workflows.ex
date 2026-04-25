@@ -26,6 +26,8 @@ defmodule Sacrum.Repo.Workflows do
   alias Sacrum.Repo
   alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.Project
+  alias Sacrum.Repo.Schemas.StepExecution
+  alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.Schemas.Workflow
   alias Sacrum.Repo.Schemas.WorkflowTransition
   alias Sacrum.Repo.SyncHelper
@@ -151,5 +153,69 @@ defmodule Sacrum.Repo.Workflows do
       error ->
         error
     end
+  end
+
+  @doc """
+  Returns all workflows in a project along with batched aggregates needed by the
+  pipeline view.
+
+  Returns `{:ok, workflows, %{task_counts_by_step_id: ..., running_counts_by_step_id: ...}}`.
+  Aggregates are computed in two grouped queries (task counts by step and level,
+  running step-execution counts by step) regardless of how many workflows or steps
+  are returned.
+  """
+  @spec pipeline_summary(String.t(), String.t()) ::
+          {:ok, list(Workflow.t()), %{required(atom()) => map()}}
+  def pipeline_summary(user_id, project_id) when is_binary(user_id) and is_binary(project_id) do
+    workflows =
+      Workflow
+      |> where([w], w.user_id == ^user_id and w.project_id == ^project_id)
+      |> preload([:transitions, workflow_steps: :transitions])
+      |> order_by([w], asc: :display_order, asc: :inserted_at)
+      |> Repo.all()
+
+    all_step_ids = workflows |> Enum.flat_map(& &1.workflow_steps) |> Enum.map(& &1.id)
+
+    if all_step_ids == [] do
+      {:ok, workflows, %{task_counts_by_step_id: %{}, running_counts_by_step_id: %{}}}
+    else
+      {:ok, workflows,
+       %{
+         task_counts_by_step_id: task_counts_by_step(project_id, all_step_ids),
+         running_counts_by_step_id: running_counts_by_step(project_id, all_step_ids)
+       }}
+    end
+  end
+
+  @level_atoms %{"epic" => :epic, "ticket" => :ticket, "task" => :task}
+
+  defp task_counts_by_step(project_id, step_ids) do
+    Task
+    |> where([t], t.project_id == ^project_id)
+    |> where([t], t.current_step_id in ^step_ids)
+    |> where([t], t.archived == false)
+    |> group_by([t], [t.current_step_id, t.level])
+    |> select([t], {t.current_step_id, t.level, count(t.id)})
+    |> Repo.all()
+    |> Enum.reduce(%{}, fn {step_id, level, count}, acc ->
+      case Map.get(@level_atoms, level) do
+        nil ->
+          acc
+
+        level_atom ->
+          Map.update(acc, step_id, %{level_atom => count}, &Map.put(&1, level_atom, count))
+      end
+    end)
+  end
+
+  defp running_counts_by_step(project_id, step_ids) do
+    StepExecution
+    |> where([se], se.project_id == ^project_id)
+    |> where([se], se.step_id in ^step_ids)
+    |> where([se], se.status == "started")
+    |> group_by([se], se.step_id)
+    |> select([se], {se.step_id, count(se.id)})
+    |> Repo.all()
+    |> Map.new()
   end
 end
