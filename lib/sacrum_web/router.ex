@@ -55,6 +55,12 @@ defmodule SacrumWeb.Router do
     # as long as you are also using SSL (which you should anyway).
     import Phoenix.LiveDashboard.Router
 
+    scope "/dev", SacrumWeb do
+      pipe_through :browser
+
+      live "/design", DesignSystemLive
+    end
+
     scope "/dev" do
       pipe_through :browser
 
