@@ -25,7 +25,7 @@ defmodule SacrumWeb.Router do
   scope "/", SacrumWeb do
     pipe_through :browser
 
-    get "/", PageController, :home
+    live "/", HomeLive
   end
 
   scope "/graphql" do
