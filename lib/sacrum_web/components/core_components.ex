@@ -561,4 +561,56 @@ defmodule SacrumWeb.CoreComponents do
   defp step_label_class(:active), do: "text-accent font-medium"
   defp step_label_class(:completed), do: "text-text-secondary"
   defp step_label_class(:pending), do: "text-text-muted"
+
+  @doc """
+  Renders the standard chrome for unauthenticated auth pages
+  (sign-in, not-invited, auth-error): branded header, spine rule,
+  centered content slot, and footer.
+  """
+  slot :inner_block, required: true
+
+  @spec auth_page(map()) :: Phoenix.LiveView.Rendered.t()
+  def auth_page(assigns) do
+    ~H"""
+    <div class="relative z-10 min-h-screen flex flex-col bg-bg">
+      <header class="flex h-14 items-center justify-between border-b border-border bg-bg px-6">
+        <div class="flex items-center gap-3">
+          <div class="w-8 h-8 rounded-lg bg-accent flex items-center justify-center">
+            <svg
+              viewBox="0 0 24 24"
+              class="w-5 h-5 text-accent-fg"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M12 2v20M12 6c-2 0-3.5 1-3.5 2s1.5 2 3.5 2 3.5-1 3.5-2-1.5-2-3.5-2z" />
+              <path d="M12 10c-2 0-3.5 1-3.5 2s1.5 2 3.5 2 3.5-1 3.5-2-1.5-2-3.5-2z" />
+              <path d="M12 14c-2 0-3.5 1-3.5 2s1.5 2 3.5 2 3.5-1 3.5-2-1.5-2-3.5-2z" />
+            </svg>
+          </div>
+          <h1 class="text-sm font-medium text-text-primary">Vertebrae</h1>
+        </div>
+        <div class="flex items-center gap-4">
+          <SacrumWeb.Layouts.theme_toggle />
+        </div>
+      </header>
+
+      <.spine_rule />
+
+      <main class="flex-1 flex flex-col items-center justify-center px-4 py-16 sm:px-6 lg:px-8">
+        <div class="w-full max-w-md mx-auto">
+          {render_slot(@inner_block)}
+        </div>
+      </main>
+
+      <footer class="border-t border-border bg-surface px-6 py-8">
+        <div class="max-w-5xl mx-auto text-center text-sm text-text-muted">
+          <p>&copy; 2026. All rights reserved.</p>
+        </div>
+      </footer>
+    </div>
+    """
+  end
 end

@@ -85,8 +85,7 @@ defmodule SacrumWeb.AuthControllerTest do
       conn =
         get(conn, "/auth/google/callback", %{"state" => "wrong_state", "code" => "auth_code"})
 
-      # Should redirect back to home and show error
-      assert redirected_to(conn) == "/"
+      assert redirected_to(conn) == "/auth-error"
     end
 
     test "OAuth callback with mismatched audience is rejected" do
@@ -147,10 +146,8 @@ defmodule SacrumWeb.AuthControllerTest do
         conn
         |> Plug.Test.init_test_session(%{"user_id" => user.id})
 
-      # Sign out via the signout action
-      result_conn = delete(signed_in_conn, "/auth/session")
+      result_conn = post(signed_in_conn, "/auth/session")
 
-      # Should redirect to home
       assert redirected_to(result_conn) == "/"
     end
 

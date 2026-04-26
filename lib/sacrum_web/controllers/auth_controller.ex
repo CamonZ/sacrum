@@ -49,7 +49,7 @@ defmodule SacrumWeb.AuthController do
 
     conn
     |> put_flash(:error, "Invalid OAuth state parameter")
-    |> redirect(to: "/")
+    |> redirect(to: "/auth-error")
   end
 
   defp handle_token_exchange(conn, params, config) do
@@ -62,7 +62,7 @@ defmodule SacrumWeb.AuthController do
 
         conn
         |> put_flash(:error, "OAuth authentication failed")
-        |> redirect(to: "/")
+        |> redirect(to: "/auth-error")
     end
   end
 
@@ -76,7 +76,7 @@ defmodule SacrumWeb.AuthController do
 
         conn
         |> put_flash(:error, "Invalid ID token")
-        |> redirect(to: "/")
+        |> redirect(to: "/auth-error")
     end
   end
 
@@ -87,6 +87,7 @@ defmodule SacrumWeb.AuthController do
   def signout(conn, _params) do
     conn
     |> configure_session(drop: true)
+    |> put_flash(:info, "You have been signed out.")
     |> redirect(to: "/")
   end
 
@@ -153,22 +154,17 @@ defmodule SacrumWeb.AuthController do
         conn
         |> put_session(:user_id, user.id)
         |> configure_session(max_age: 30 * 24 * 60 * 60)
-        |> redirect(to: "/")
+        |> redirect(to: "/command-center")
 
       {:error, :not_invited} ->
-        conn
-        |> put_flash(
-          :error,
-          "You have not been invited to join. Please contact the administrator."
-        )
-        |> redirect(to: "/")
+        redirect(conn, to: "/not-invited")
 
       {:error, reason} ->
         Logger.error("Sign-in failed: #{inspect(reason)}")
 
         conn
         |> put_flash(:error, "Sign-in failed. Please try again.")
-        |> redirect(to: "/")
+        |> redirect(to: "/auth-error")
     end
   end
 end
