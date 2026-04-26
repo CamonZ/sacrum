@@ -20,8 +20,12 @@ defmodule Sacrum.Repo.Users do
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.User
 
-  @spec insert(map()) :: {:ok, User.t()} | {:error, Ecto.Changeset.t()}
-  def insert(attrs) do
+  @spec insert(map() | Ecto.Changeset.t()) :: {:ok, User.t()} | {:error, Ecto.Changeset.t()}
+  def insert(%Ecto.Changeset{} = changeset) do
+    Repo.insert(changeset)
+  end
+
+  def insert(attrs) when is_map(attrs) do
     %User{}
     |> User.create_changeset(attrs)
     |> Repo.insert()

@@ -23,6 +23,12 @@ end
 config :sacrum, SacrumWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
+config :sacrum, :google_oauth,
+  client_id: System.get_env("GOOGLE_CLIENT_ID", ""),
+  client_secret: System.get_env("GOOGLE_CLIENT_SECRET", ""),
+  redirect_uri:
+    System.get_env("GOOGLE_REDIRECT_URI", "http://localhost:4000/auth/google/callback")
+
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||

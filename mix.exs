@@ -76,7 +76,8 @@ defmodule Sacrum.MixProject do
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:muex, "~> 0.2.0", only: [:dev, :test], runtime: false},
       {:tidewave, "~> 0.5", only: :dev},
-      {:ex_json_schema, "~> 0.10"}
+      {:ex_json_schema, "~> 0.10"},
+      {:assent, "~> 0.2"}
     ]
   end
 

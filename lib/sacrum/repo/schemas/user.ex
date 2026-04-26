@@ -11,11 +11,15 @@ defmodule Sacrum.Repo.Schemas.User do
     field :username, :string
     field :name, :string
     field :password_hash, :string
+    field :google_sub, :string
+    field :avatar_url, :string
+    field :onboarded_at, :utc_datetime_usec
 
     field :password, :string, virtual: true, redact: true
 
     has_many :api_tokens, Sacrum.Repo.Schemas.ApiToken
     has_many :projects, Sacrum.Repo.Schemas.Project
+    has_many :invites_created, Sacrum.Repo.Schemas.Invite, foreign_key: :invited_by_id
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -65,6 +69,19 @@ defmodule Sacrum.Repo.Schemas.User do
     |> validate_required([:password])
     |> validate_length(:password, min: 8)
     |> hash_password()
+  end
+
+  @doc """
+  Changeset for creating a user via Google OAuth.
+  """
+  @spec oauth_changeset(t(), map()) :: Ecto.Changeset.t()
+  def oauth_changeset(user, attrs) do
+    user
+    |> cast(attrs, [:email, :name, :google_sub, :avatar_url])
+    |> validate_required([:email, :google_sub])
+    |> validate_format(:email, ~r/^[^\s]+@[^\s]+$/, message: "must be a valid email")
+    |> unique_constraint(:email)
+    |> unique_constraint(:google_sub)
   end
 
   defp hash_password(changeset) do
