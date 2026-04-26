@@ -1,0 +1,39 @@
+<Layouts.flash_group flash={@flash} />
+
+<.auth_page>
+  <div class="text-center">
+    <div class="flex justify-center mb-4">
+      <svg class="w-12 h-12 text-error" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          d="M12 8v4m0 4v.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+        />
+      </svg>
+    </div>
+    <h1 class="text-4xl font-bold tracking-tight font-sans text-text-primary mb-2">
+      Authentication failed
+    </h1>
+    <p class="text-text-secondary mb-8">
+      Something went wrong during sign-in. Please try again.
+    </p>
+
+    <div class="space-y-3">
+      <a
+        href="/sign-in"
+        class="inline-block w-full px-4 py-3 rounded-lg bg-accent text-accent-fg font-semibold transition-colors hover:bg-accent-hover"
+        id="retry-sign-in"
+      >
+        Try again
+      </a>
+      <a
+        href="/"
+        class="inline-block w-full px-4 py-3 rounded-lg bg-surface border border-border text-text-primary font-semibold transition-colors hover:bg-surface-raised"
+        id="back-home"
+      >
+        Back to Vertebrae
+      </a>
+    </div>
+  </div>
+</.auth_page>

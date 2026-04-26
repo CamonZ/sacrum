@@ -31,6 +31,10 @@ defmodule SacrumWeb.Layouts do
     default: nil,
     doc: "the current [scope](https://hexdocs.pm/phoenix/scopes.html)"
 
+  attr :current_user, :map,
+    default: nil,
+    doc: "the current authenticated user"
+
   slot :inner_block, required: true
 
   @spec app(map()) :: Phoenix.LiveView.Rendered.t()
@@ -54,11 +58,22 @@ defmodule SacrumWeb.Layouts do
           <li>
             <.theme_toggle />
           </li>
-          <li>
-            <a href="https://hexdocs.pm/phoenix/overview.html" class="btn btn-primary">
-              Get Started <span aria-hidden="true">&rarr;</span>
-            </a>
-          </li>
+          <%= if @current_user do %>
+            <li>
+              <form action="/auth/session" method="post" class="inline">
+                <input type="hidden" name="_csrf_token" value={get_csrf_token()} />
+                <button type="submit" class="btn btn-sm btn-ghost">
+                  Sign out
+                </button>
+              </form>
+            </li>
+          <% else %>
+            <li>
+              <a href="https://hexdocs.pm/phoenix/overview.html" class="btn btn-primary">
+                Get Started <span aria-hidden="true">&rarr;</span>
+              </a>
+            </li>
+          <% end %>
         </ul>
       </div>
     </header>

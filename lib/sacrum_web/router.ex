@@ -11,6 +11,10 @@ defmodule SacrumWeb.Router do
     plug SacrumWeb.Plugs.FetchCurrentUser
   end
 
+  pipeline :require_authenticated_user do
+    plug SacrumWeb.Plugs.RequireAuth
+  end
+
   pipeline :api do
     plug :accepts, ["json"]
   end
@@ -26,11 +30,25 @@ defmodule SacrumWeb.Router do
   scope "/", SacrumWeb do
     pipe_through :browser
 
-    live "/", HomeLive
+    live_session :public, on_mount: {SacrumWeb.Live.Hooks.AssignCurrentUser, :default} do
+      live "/", HomeLive
+      live "/sign-in", SignInLive
+      live "/not-invited", NotInvitedLive
+      live "/auth-error", AuthErrorLive
+    end
 
     get "/auth/google", AuthController, :request
     get "/auth/google/callback", AuthController, :callback
-    delete "/auth/session", AuthController, :signout
+    post "/auth/session", AuthController, :signout
+  end
+
+  scope "/", SacrumWeb do
+    pipe_through [:browser, :require_authenticated_user]
+
+    live_session :authenticated,
+      on_mount: {SacrumWeb.Live.Hooks.AssignCurrentUser, :require_authenticated} do
+      live "/command-center", CommandCenterLive
+    end
   end
 
   scope "/graphql" do

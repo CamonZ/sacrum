@@ -15,7 +15,7 @@ defmodule SacrumWeb.Plugs.RequireAuth do
     if is_nil(conn.assigns[:current_user]) do
       conn
       |> Phoenix.Controller.put_flash(:error, "You must be logged in to access this page.")
-      |> Phoenix.Controller.redirect(to: "/auth/google")
+      |> Phoenix.Controller.redirect(to: "/sign-in")
       |> halt()
     else
       conn
