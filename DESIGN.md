@@ -233,6 +233,9 @@ A horizontal step indicator. Each step is `%{label, state}` where `state ∈ {:a
 ### Buttons
 Primary buttons are solid `accent` with `accent-fg` text. Hover swaps to `accent-hover` (a darker tone — never lighter, never glow). No icon-only variant unless space genuinely requires it.
 
+### Interactive cursor
+All clickable elements — buttons, links, icon buttons, toggles, nav entries, and any element with a click handler — must use `cursor-pointer`. Disabled elements use `cursor-not-allowed`. Non-interactive text and surfaces keep the default cursor.
+
 ### Inputs
 Inputs sit on `surface` with a 1px `border`. Focus changes the border to `accent`; no ring, no shadow, no glow. Placeholder text is `text-muted`. Caret color matches `accent`.
 
