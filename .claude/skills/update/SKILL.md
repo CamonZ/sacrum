@@ -31,8 +31,12 @@ vtb update <task-id> --parent <parent-id>
 # Remove parent (orphan the task)
 vtb update <task-id> --parent ""
 
-# Edit a section inline
-vtb update <task-id> --edit-section checklist_item 0 "Updated item content"
+# Set or clear the worktree path
+vtb update <task-id> --worktree /path/to/worktree
+vtb update <task-id> --worktree ""
+
+# Edit a section inline (ordinal is 0-based)
+vtb update <task-id> --edit-section checklist_item 0 "Updated content"
 
 # Remove a section inline
 vtb update <task-id> --remove-section checklist_item 0
@@ -48,9 +52,10 @@ vtb update <task-id> --remove-section checklist_item 0
 | `--add-tag` | Add a tag (repeatable) |
 | `--remove-tag` | Remove a tag (repeatable) |
 | `--parent` | Set parent task (use "" to remove) |
+| `--worktree` | Set worktree path (use "" to clear) |
 | `--edit-section` | Edit section: `<type> <ordinal> <content>` |
 | `--remove-section` | Remove section: `<type> <ordinal>` |
 
 ## Note
 
-For workflow transitions, use `vtb transition-to <task-id> <step-uuid>` or `vtb workflow assign`.
+For workflow/step changes, never use `vtb update`. Use `vtb transition-to <task-id> <step>` (intra-workflow) or `vtb workflow assign <task-id> <workflow-id>` (cross-workflow).

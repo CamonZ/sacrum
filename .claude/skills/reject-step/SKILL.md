@@ -70,5 +70,5 @@ Rejected step for task 'abc12345-...' and transitioned to step 'def67890-...'. F
 
 - `vtb start-step <task>` - Start the current step
 - `vtb complete-step <task>` - Complete the current step
-- `vtb workflow retreat <task>` - Retreat to previous workflow step
+- `vtb transition-to <task> <step>` - Move to a specific step
 - `vtb show <task>` - View task details and current step

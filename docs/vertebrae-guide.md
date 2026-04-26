@@ -7,7 +7,7 @@ vtb is a CLI client for the Sacrum REST API. Hierarchy: `epic → ticket → tas
 | Document | Read when... |
 |----------|-------------|
 | [Creating Tasks](vtb/creating-tasks.md) | Adding new epics/tickets/tasks, planning a feature breakdown |
-| [Sections & Triage](vtb/sections-and-triage.md) | Documenting a ticket (goal, steps, constraints, tests) or triaging it for work |
+| [Sections & Triage](vtb/sections-and-triage.md) | Documenting a ticket (goal, checklist items, constraints, tests) or triaging it for work |
 | [Workflows & Steps](vtb/workflows-and-steps.md) | Creating or configuring workflows, adding steps, setting up agents/prompts |
 | [Navigation](vtb/navigation.md) | Moving tasks through steps, completing work, handling rejections |
 | [Dependencies & Refs](vtb/dependencies-and-refs.md) | Linking tasks as blockers, attaching code references |

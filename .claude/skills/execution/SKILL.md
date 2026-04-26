@@ -82,6 +82,7 @@ Update execution output and transition result.
 ```bash
 vtb execution update <execution-id> --output "Review complete"
 vtb execution update <execution-id> --transition_result advance
+vtb execution update <execution-id> --status completed
 ```
 
 ### Options
@@ -90,6 +91,7 @@ vtb execution update <execution-id> --transition_result advance
 |------|-------------|
 | `--output` | Output text from the execution |
 | `--transition_result` | Transition result (e.g., advance, reject, retry) |
+| `--status` | Execution status (e.g., completed, failed, in_progress) |
 
 ---
 
@@ -99,9 +101,14 @@ Add a log entry to an execution.
 
 ```bash
 vtb execution log <execution-id> "Processing file auth.rs"
+vtb execution log <execution-id> "Hit rate limit" --level warn
 ```
 
-Takes a required content string as a positional argument.
+### Options
+
+| Flag | Description |
+|------|-------------|
+| `--level` | Log level (e.g., info, warn, error) |
 
 ---
 

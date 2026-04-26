@@ -1,15 +1,15 @@
 ---
 name: ready
-description: Show unblocked backlog items ready for triage
+description: Show actionable items ready for work or triage
 ---
 
 # /ready
 
-Show unblocked items in the backlog that are ready to be triaged.
+Show the highest-level unblocked items that are ready for work or triage.
 
 ## When to use
-- Finding what to triage next from backlog
-- Starting a work session — seeing what needs attention
+- Starting a work session — seeing what's actionable
+- Finding the next thing to triage or pick up
 
 ## Command
 
@@ -20,14 +20,14 @@ vtb ready
 ## Output
 
 ```
-Ready to start (backlog):
+Ready:
   a1b2c3  epic    New Feature Epic
   d4e5f6  ticket  Standalone Improvement
 ```
 
 ## How it works
 
-Returns all unblocked tasks (no pending dependency blockers) that are in the backlog. Items are displayed with their ID, level, and title.
+Returns unblocked tasks (no pending dependency blockers) that are actionable — either ready for triage or ready to be picked up. Items are displayed with their ID, level, and title.
 
 ## See Also
 

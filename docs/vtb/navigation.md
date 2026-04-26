@@ -70,11 +70,11 @@ vtb complete-step <ticket-id>
 
 Done workflow ID: `d3863c56-997b-486a-a663-fd8d4ed8d9bc`
 
-## Marking Implementation Steps Done
+## Marking Checklist Items Done
 
 ```bash
-vtb step-done <task-id> 1     # Mark step 1 as done
-vtb show <task-id>            # View step completion status
+vtb check-item <task-id> 1    # Mark checklist item 1 as done
+vtb show <task-id>            # View completion status
 ```
 
 ## Key Rules

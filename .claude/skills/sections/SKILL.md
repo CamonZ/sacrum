@@ -5,7 +5,7 @@ description: List all sections for a task
 
 # /sections
 
-List all sections for a task, optionally filtered by type. Sections are grouped into desired behavior (positive space) and undesired behavior (negative space).
+List all sections for a task, optionally filtered by type.
 
 ## Usage
 
@@ -21,14 +21,16 @@ vtb sections <task-id> --type constraint
 
 ## Section types
 
-**Positive space (desired behavior):** goal, context, current_behavior, desired_behavior, checklist_item, testing_criterion
+**Single-instance:** `goal`, `context`, `current_behavior`, `desired_behavior`
 
-**Negative space (undesired behavior):** anti_pattern, failure_test, constraint
+**Multi-instance:** `checklist_item`, `constraint`, `testing_criterion`, `anti_pattern`, `failure_test`
+
+See `/section` for the full type reference and triage requirements.
 
 ## Related commands
 
 ```bash
 vtb section <task-id> checklist_item "Do this"     # Add a section
-vtb unsection <task-id> goal                      # Remove single-instance
-vtb unsection <task-id> checklist_item --index 2   # Remove by ordinal
+vtb unsection <task-id> goal                       # Remove single-instance
+vtb unsection <task-id> checklist_item --index 2   # Remove multi-instance by ordinal
 ```

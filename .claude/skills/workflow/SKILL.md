@@ -44,6 +44,12 @@ vtb workflow add "CI Pipeline" \
   --step build:haiku \
   --step test:sonnet \
   --auto-advance
+
+# Mark as default for new tasks
+vtb workflow add "Standard" --step Backlog:sonnet --step Done:haiku --default
+
+# With kanban column
+vtb workflow add "Code Review" --step Review:sonnet --step Approved:haiku --kanban-column "In Review"
 ```
 
 ### Options
@@ -54,6 +60,8 @@ vtb workflow add "CI Pipeline" \
 | `--step` | `-s` | Step in `name:model` format (repeatable) |
 | `--auto-advance` | | Auto-advance on completion |
 | `--order` | `-o` | Display order (default: 0) |
+| `--default` | | Mark as the default workflow for new tasks |
+| `--kanban-column` | | Kanban column label for the workflow |
 
 ---
 
@@ -87,6 +95,8 @@ vtb workflow update <id> --description "New description"
 vtb workflow update <id> --clear-description
 vtb workflow update <id> --auto-advance
 vtb workflow update <id> --no-auto-advance
+vtb workflow update <id> --default
+vtb workflow update <id> --kanban-column "Active"
 ```
 
 ### Options
@@ -98,6 +108,8 @@ vtb workflow update <id> --no-auto-advance
 | `--clear-description` | | Remove description |
 | `--auto-advance` | | Enable auto-advance |
 | `--no-auto-advance` | | Disable auto-advance |
+| `--default` | | Mark as the default workflow for new tasks |
+| `--kanban-column` | | Update kanban column label |
 
 ---
 
@@ -162,11 +174,7 @@ vtb workflow transition delete <from-workflow> <to-workflow>
 
 ---
 
-## Moving tasks between workflows
+## Moving tasks between steps / workflows
 
-Use `vtb transition-to` (separate command) to move tasks:
-
-```bash
-vtb transition-to <task-id> <workflow>            # Move to workflow
-vtb transition-to <task-id> <workflow>:<step>      # Move to specific step
-```
+- `vtb transition-to <task-id> <step-name-or-uuid>` — move within the current workflow
+- `vtb workflow assign <task-id> <workflow-id>` — change the task's workflow (starts at first step)

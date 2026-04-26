@@ -10,10 +10,10 @@ List and filter tasks. Displays tasks in a tree view by default.
 ## Basic listing
 
 ```bash
-vtb list                          # All tasks (tree view)
+vtb list                          # All tasks (tree view, excludes done/archived)
 vtb list --flat                   # Flat table view
-vtb list --status backlog         # By workflow step name
-vtb list --status in_progress     # Currently active
+vtb list --step backlog           # By workflow step name
+vtb list --step in_progress       # Currently active
 vtb list --level epic             # By level
 vtb list --priority high          # By priority
 vtb list --tag backend            # By tag
@@ -23,7 +23,8 @@ vtb list --tag backend            # By tag
 
 ```bash
 vtb list --workflow <workflow-id>   # Tasks in specific workflow
-vtb list --step review             # Tasks at specific step
+vtb list --step review              # Tasks at specific step
+vtb list -w <wf-id> --step review   # Combine workflow + step
 ```
 
 ## Filtering by parent
@@ -47,11 +48,10 @@ vtb list --search "auth"          # Search in title and description
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--level` | `-l` | Filter by level (repeatable) |
-| `--status` | `-s` | Filter by workflow step name (repeatable) |
+| `--step` | | Filter by current workflow step name (repeatable) |
 | `--priority` | `-p` | Filter by priority (repeatable) |
 | `--tag` | `-t` | Filter by tag (repeatable) |
 | `--workflow` | `-w` | Filter by workflow ID |
-| `--step` | | Filter by current step name |
 | `--root` | | Show only root items |
 | `--parent` | | Show children of task |
 | `--all` | | Include done items |
@@ -59,9 +59,9 @@ vtb list --search "auth"          # Search in title and description
 | `--search` | | Search in title/description |
 | `--flat` | | Table view instead of tree |
 
-## Note on `--status`
+## Note on workflow steps
 
-The `--status` flag filters by **workflow step names** (e.g., backlog, todo, in_progress, done), not by a separate global status field. The values depend on which workflow steps are configured in your project.
+Tasks don't have a standalone status — their position is defined by the workflow's current step. Filter by step name (e.g., `backlog`, `todo`, `in_progress`, `done`); valid values depend on the workflow steps configured in your project.
 
 ## Display modes
 - **Tree (default)** - Hierarchical view showing parent-child relationships

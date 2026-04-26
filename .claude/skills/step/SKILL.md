@@ -39,6 +39,15 @@ vtb step add "Testing" -w <workflow-id> \
 # With transitions and final flag
 vtb step add "Approved" -w <workflow-id> --final
 vtb step add "Needs Work" -w <workflow-id> --transition-to <step-id>
+
+# With a Liquid prompt template (rendered by the daemon)
+vtb step add "Coding" -w <workflow-id> \
+  --prompt "Implement {{ task.id }}: {{ task.title }}" \
+  --agent-config '{"model":"opus","max_budget_usd":5.0}'
+
+# Evaluate / route step types with structured output
+vtb step add "Evaluate" -w <workflow-id> --step-type evaluate \
+  --output-schema '{"type":"object","required":["passed"],"properties":{"passed":{"type":"boolean"}}}'
 ```
 
 ### Options
@@ -47,12 +56,16 @@ vtb step add "Needs Work" -w <workflow-id> --transition-to <step-id>
 |------|-------|-------------|
 | `--workflow` | `-w` | Workflow ID (required) |
 | `--goal` | `-g` | Goal describing what this step accomplishes |
+| `--prompt` | | Liquid template rendered before invoking the agent |
 | `--agent` | `-a` | Path to agent file (repeatable) |
+| `--agent-config` | | Full LLM config as JSON (model, budget, etc.) |
 | `--skill` | `-s` | Skill name (repeatable) |
-| `--model` | `-m` | Model to use |
+| `--model` | `-m` | Model shortcut (sonnet, haiku, opus) |
 | `--order` | `-o` | Step order (default: 0) |
 | `--final` | | Mark as a final step |
 | `--transition-to` | `-t` | Steps this can transition to (repeatable) |
+| `--step-type` | | `execute` (default), `evaluate`, or `route` |
+| `--output-schema` | | JSON Schema for structured output (used by evaluate/route) |
 
 ---
 
@@ -144,3 +157,15 @@ Steps can have associated agent files that provide prompts and configuration for
 
 ### Skills
 Steps can reference skills (slash commands) available during that step.
+
+### Step Types
+
+| Type | Description |
+|------|-------------|
+| `execute` | Default. Runs the step's prompt and produces output. |
+| `evaluate` | Assesses output of a previous step. Emits structured JSON matching `output_schema`. |
+| `route` | Terminal-of-workflow decision step. Emits `{ transition_to, transition_type, handoff }` to direct to the next workflow/step. |
+
+### Prompt Templates
+
+The `--prompt` field is a **Liquid template** rendered by the daemon. Available context includes `task.*` (id, title, description, level, tags, code_refs, plus section lists like `task.goals`, `task.checklist_items`, `task.testing_criteria`, etc.), `execution.*` (previous_output, handoff, retry_count, history), and `workflow.*` (name, current_step, output_schema). See `docs/vtb/workflows-and-steps.md` for the full context reference and nil-safety patterns.

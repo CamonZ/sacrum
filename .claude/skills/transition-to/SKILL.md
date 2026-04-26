@@ -5,12 +5,16 @@ description: Transition a task to a specific workflow step
 
 # /transition-to
 
-Transition a task to a specific step within its current workflow. Both arguments must be UUIDs (full or 8-char short ID for the task).
+Transition a task to a specific step within its current workflow. The target can be a step **name** (e.g., `backlog`, `coding`) or a step UUID.
 
 ## Usage
 
 ```bash
-# Transition to a step by UUID
+# By step name (most common)
+vtb transition-to <task-id> backlog
+vtb transition-to <task-id> coding
+
+# By step UUID
 vtb transition-to <task-id> <step-uuid>
 ```
 
@@ -19,7 +23,7 @@ vtb transition-to <task-id> <step-uuid>
 | Argument | Description |
 |----------|-------------|
 | `task-id` | Task UUID or 8-char short ID |
-| `step-uuid` | Target step UUID (must be full UUID) |
+| `target` | Step name (within the task's current workflow) or step UUID |
 
 ## Options
 
@@ -28,13 +32,11 @@ vtb transition-to <task-id> <step-uuid>
 | `--force` | `-f` | Override warnings (but not errors) |
 | `--skip-validation` | | Bypass workflow transition validation |
 
-## Finding Step UUIDs
-
-Before using `transition-to`, look up the step UUIDs:
+## Finding Step Names / UUIDs
 
 ```bash
-vtb workflow list                    # List all workflows
-vtb workflow show <workflow-id>      # See steps with their UUIDs
+vtb show <task-id>                   # Shows current workflow + step
+vtb workflow show <workflow-id>      # See steps with their names and UUIDs
 vtb step list <workflow-id>          # List steps with IDs
 ```
 

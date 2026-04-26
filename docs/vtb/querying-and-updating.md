@@ -43,8 +43,8 @@ vtb update <id> --parent <parent-id>
 vtb update <id> --parent ""                      # Remove parent
 vtb update <id> --worktree /path/to/worktree
 vtb update <id> --worktree ""                    # Clear worktree
-vtb update <id> --edit-section step 0 "New content"
-vtb update <id> --remove-section step 0
+vtb update <id> --edit-section checklist_item 0 "New content"
+vtb update <id> --remove-section checklist_item 0
 ```
 
 **Never use `vtb update` for workflow/step changes** — use `vtb transition-to`.

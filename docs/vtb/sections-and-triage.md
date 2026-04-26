@@ -8,8 +8,7 @@
 | `context` | Background information | Single |
 | `current_behavior` | How it works now (for bugs) | Single |
 | `desired_behavior` | How it should work | Single |
-| `step` | Ordered implementation steps | Multiple |
-| `checklist_item` | Trackable checklist with done/undone | Multiple |
+| `checklist_item` | Ordered implementation steps / trackable checklist with done/undone | Multiple |
 | `constraint` | Requirements/limitations | Multiple |
 | `testing_criterion` | How to verify success | Multiple |
 | `anti_pattern` | What to avoid | Multiple |
@@ -34,11 +33,11 @@ vtb section <id> failure_test <ASSERTIONS_THAT_SHOULD_BE_REFUTED_TO_PASS>
 
 ```bash
 vtb sections <id>                              # List all sections
-vtb sections <id> --type step                  # Filter by type
-vtb update <id> --edit-section step 0 "Updated content"
-vtb update <id> --remove-section step 0
-vtb unsection <id> goal                        # Remove single-instance type
-vtb unsection <id> step --index 2              # Remove multi-instance type
+vtb sections <id> --type checklist_item                  # Filter by type
+vtb update <id> --edit-section checklist_item 0 "Updated content"
+vtb update <id> --remove-section checklist_item 0
+vtb unsection <id> goal                                  # Remove single-instance type
+vtb unsection <id> checklist_item --index 2              # Remove multi-instance type
 ```
 
 ## Checklist Items
@@ -58,7 +57,7 @@ Triage validates that a ticket is properly documented before it can be transitio
 | Section | Minimum | Details |
 |---------|---------|---------|
 | `testing_criterion` | **2** | At least 1 unit + 1 integration |
-| `step` | **1** | Implementation steps |
+| `checklist_item` | **1** | Implementation items |
 | `constraint` | **2** | Architectural/quality guidelines |
 | `goal` or `desired_behavior` | **1** | Clear objective |
 

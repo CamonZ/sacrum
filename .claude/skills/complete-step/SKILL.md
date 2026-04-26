@@ -49,5 +49,5 @@ Completed step for task 'abc12345-0000-4000-8000-000000000001'
 
 - `vtb start-step <task>` - Start the current step
 - `vtb reject-step <task> <target-step>` - Reject the current step
-- `vtb workflow advance <task>` - Advance to next workflow step
+- `vtb transition-to <task> <step>` - Move to a specific step
 - `vtb show <task>` - View task details and current step

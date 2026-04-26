@@ -59,3 +59,22 @@ epic       → tickets → tasks
 
 ## Priorities
 - `low`, `medium`, `high`, `critical`
+
+## Next steps: add sections before triage
+
+`vtb add` only creates the task shell. The `-d/--description` field is a free-form summary — **do not** stuff goals, checklist items, constraints, or testing criteria into it. Add those as sections with `/section` so they can be queried, indexed, and validated at triage.
+
+**Required sections (block triage):**
+- `goal` or `desired_behavior` — at least 1
+- `checklist_item` — at least 1 implementation item
+- `constraint` — at least 2
+- `testing_criterion` — at least 2 (mix of unit + integration)
+
+**Encouraged (warns, allows with `--force`):**
+- `anti_pattern` — what to avoid
+- `failure_test` — expected error/edge cases
+
+**Optional context:**
+- `context`, `current_behavior`
+
+See `/section` and `docs/vtb/sections-and-triage.md` for the full list and triage rules.

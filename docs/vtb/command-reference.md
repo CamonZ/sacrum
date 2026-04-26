@@ -30,7 +30,6 @@
 | `vtb start-step <id>` | Mark current step as in progress |
 | `vtb complete-step <id>` | Mark current step as done |
 | `vtb reject-step <id> <target> [-f "..."]` | Reject step with feedback |
-| `vtb step-done <id> <n>` | Mark implementation step n as done |
 
 ## Workflow Management
 

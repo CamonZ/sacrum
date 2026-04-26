@@ -1,0 +1,43 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(vtb list:*)",
+      "Bash(vtb show:*)",
+      "Bash(vtb workflow advance:*)",
+      "Bash(mix ecto.gen.migration:*)",
+      "Bash(mix ecto.migrate:*)",
+      "Bash(mix ecto.rollback:*)",
+      "Bash(vtb step-done:*)",
+      "Bash(mix compile:*)",
+      "Bash(mix test:*)",
+      "Bash(for i in 1 2 3 4 5 6)",
+      "Bash(do vtb step-done x8aa7d9 $i)",
+      "Bash(done)",
+      "Bash(for i in 1 2 3 4 5 6 7 8)",
+      "Bash(do vtb step-done:*)",
+      "Bash(for i in 1 2 3 4 5)",
+      "Read(//Users/camonz/Code/**)",
+      "Read(//Users/camonz/Code/code_intelligence/**)",
+      "Bash(gh pr *)",
+      "Bash(vtb)",
+      "Bash(vtb *)",
+      "Bash(ssh home-lab *)",
+      "Bash(mix phx.gen.secret)",
+      "Bash(chmod 600 /tmp/skb.txt)",
+      "Read(//tmp/**)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mix format"
+          }
+        ]
+      }
+    ]
+  }
+}
