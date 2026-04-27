@@ -38,6 +38,7 @@ defmodule Sacrum.Repo.Tasks do
     - `:blocked` - when false, exclude tasks with incomplete dependencies
     - `:search` - text search on title/description
     - `:status` - filter by workflow step name
+    - `:step_id` - filter by workflow step ID
     - `:tags` - filter by tags (any match)
     - `:root_only` - when true, exclude tasks that have a parent
     - `:workflow_id` - filter by assigned workflow
@@ -165,6 +166,12 @@ defmodule Sacrum.Repo.Tasks do
       on: ws.id == t.current_step_id,
       where: ws.name == ^step_name
     )
+  end
+
+  defp apply_filter(query, :step_id, nil), do: query
+
+  defp apply_filter(query, :step_id, step_id) do
+    where(query, [t], t.current_step_id == ^step_id)
   end
 
   defp apply_filter(query, :tags, nil), do: query

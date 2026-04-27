@@ -4,6 +4,10 @@ defmodule Sacrum.Repo.TasksTest do
   alias Sacrum.Repo.Users
   alias Sacrum.Repo.Projects
   alias Sacrum.Repo.Tasks
+  alias Sacrum.Repo.Workflows
+  alias Sacrum.Repo.WorkflowSteps
+  alias Sacrum.Repo.StepTransitions
+  alias Sacrum.Repo.TaskWorkflows
   alias Sacrum.Repo.Schemas.Task
 
   @valid_user_attrs %{
@@ -263,6 +267,57 @@ defmodule Sacrum.Repo.TasksTest do
 
       tasks = Tasks.list_tasks(conditions: [project_id: project.id])
       assert length(tasks) == 2
+    end
+
+    test "filters by step_id" do
+      user = create_user()
+      project = create_project(user)
+
+      {:ok, wf} = Workflows.insert(project, %{name: "Test Workflow"})
+      {:ok, step1} = WorkflowSteps.insert(wf, %{name: "step1", step_order: 1})
+      {:ok, step2} = WorkflowSteps.insert(wf, %{name: "step2", step_order: 2})
+
+      {:ok, wf} = Workflows.update(wf, %{initial_step_id: step1.id})
+
+      {:ok, _} =
+        StepTransitions.insert(wf.user_id, %{
+          project_id: wf.project_id,
+          from_step_id: step1.id,
+          to_step_id: step2.id
+        })
+
+      {:ok, task1} = Tasks.insert(project, %{title: "Task on Step 1"})
+      {:ok, task2} = Tasks.insert(project, %{title: "Task on Step 2"})
+      {:ok, _task3} = Tasks.insert(project, %{title: "Task with no step"})
+
+      {:ok, task1} = TaskWorkflows.assign_workflow(task1, wf)
+      {:ok, task2_assigned} = TaskWorkflows.assign_workflow(task2, wf)
+      {:ok, _} = TaskWorkflows.move_to_step(task2_assigned, step2.id)
+
+      tasks = Tasks.list_tasks(conditions: [project_id: project.id, step_id: step1.id])
+      assert length(tasks) == 1
+      assert hd(tasks).id == task1.id
+      assert hd(tasks).current_step_id == step1.id
+    end
+
+    test "list_tasks with no step_id condition returns tasks regardless of current_step_id" do
+      user = create_user()
+      project = create_project(user)
+
+      {:ok, wf} = Workflows.insert(project, %{name: "Test Workflow"})
+      {:ok, step} = WorkflowSteps.insert(wf, %{name: "test_step", step_order: 1})
+
+      {:ok, task1} = Tasks.insert(project, %{title: "Task 1"})
+      {:ok, task2} = Tasks.insert(project, %{title: "Task 2"})
+
+      TaskWorkflows.assign_workflow(task1, wf)
+      TaskWorkflows.move_to_step(task1, step.id)
+
+      tasks = Tasks.list_tasks(conditions: [project_id: project.id])
+      assert length(tasks) == 2
+      task_ids = Enum.map(tasks, & &1.id)
+      assert task1.id in task_ids
+      assert task2.id in task_ids
     end
   end
 end

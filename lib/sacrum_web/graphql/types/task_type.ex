@@ -85,6 +85,7 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
       arg(:priority, :string)
       arg(:parent_id, :uuid4)
       arg(:status, :string)
+      arg(:step_id, :uuid4)
       arg(:tags, list_of(:string))
       arg(:search, :string)
       arg(:workflow_id, :uuid4)
@@ -105,6 +106,7 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
                 priority: Map.get(args, :priority),
                 parent_id: Map.get(args, :parent_id),
                 status: Map.get(args, :status),
+                step_id: Map.get(args, :step_id),
                 tags: Map.get(args, :tags),
                 search: Map.get(args, :search),
                 workflow_id: Map.get(args, :workflow_id),
