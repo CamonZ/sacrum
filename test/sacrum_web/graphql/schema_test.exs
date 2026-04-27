@@ -3291,6 +3291,70 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert "Blocker" in titles
       refute "Blocked" in titles
     end
+
+    test "filters by step_id", %{conn: conn, user: user, project: project} do
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+      {:ok, step1} = Accounts.WorkflowSteps.insert(wf, %{name: "step1", step_order: 1})
+      {:ok, step2} = Accounts.WorkflowSteps.insert(wf, %{name: "step2", step_order: 2})
+      {:ok, _} = Accounts.Workflows.update(wf, %{initial_step_id: step1.id})
+
+      {:ok, _} =
+        Sacrum.Repo.StepTransitions.insert(user.id, %{
+          project_id: project.id,
+          from_step_id: step1.id,
+          to_step_id: step2.id
+        })
+
+      {:ok, task1} = Accounts.Tasks.insert(user.id, project.id, %{title: "On Step 1"})
+      {:ok, task2} = Accounts.Tasks.insert(user.id, project.id, %{title: "On Step 2"})
+      {:ok, _task3} = Accounts.Tasks.insert(user.id, project.id, %{title: "No Workflow"})
+
+      {:ok, _task1_assigned} = Sacrum.Repo.TaskWorkflows.assign_workflow(task1, wf)
+      {:ok, task2_assigned} = Sacrum.Repo.TaskWorkflows.assign_workflow(task2, wf)
+      {:ok, _} = Sacrum.Repo.TaskWorkflows.move_to_step(task2_assigned, step2.id)
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          { tasks(projectId: "#{project.id}", stepId: "#{step1.id}") { title } }
+        """)
+        |> json_response(200)
+
+      titles = Enum.map(result["data"]["tasks"], & &1["title"])
+      assert "On Step 1" in titles
+      refute "On Step 2" in titles
+      refute "No Workflow" in titles
+    end
+
+    test "tasks query without stepId returns the same set as before this change", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+      {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "mystep", step_order: 1})
+      {:ok, _} = Accounts.Workflows.update(wf, %{initial_step_id: step.id})
+
+      {:ok, task1} = Accounts.Tasks.insert(user.id, project.id, %{title: "With WF"})
+      {:ok, _task2} = Accounts.Tasks.insert(user.id, project.id, %{title: "Without WF"})
+
+      Sacrum.Repo.TaskWorkflows.assign_workflow(task1, wf)
+      Sacrum.Repo.TaskWorkflows.move_to_step(task1, step.id)
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          { tasks(projectId: "#{project.id}") { title } }
+        """)
+        |> json_response(200)
+
+      titles = Enum.map(result["data"]["tasks"], & &1["title"])
+      assert "With WF" in titles
+      assert "Without WF" in titles
+      assert length(titles) == 2
+    end
   end
 
   # ─── 3. Missing Field Coverage ───────────────────────────────────────
