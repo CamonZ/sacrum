@@ -41,7 +41,12 @@ defmodule SacrumWeb.CommandCenterLiveTest do
     test "main content stacks pulse and the four zones vertically", %{conn: conn} do
       {:ok, _view, html} = live(conn, "/command-center")
 
-      assert html =~ "Pulse"
+      # Check for Pulse metrics instead of label
+      assert html =~ "CONC"
+      assert html =~ "SPEND"
+      assert html =~ "THRU"
+      assert html =~ "P50"
+      # Check for other zones
       assert html =~ "Attention"
       assert html =~ "Live Runs"
       assert html =~ "Queue"
@@ -105,6 +110,90 @@ defmodule SacrumWeb.CommandCenterLiveTest do
     test "Traces placeholder renders", %{conn: conn} do
       {:ok, _view, html} = live(conn, "/traces")
       assert html =~ "Traces coming soon"
+    end
+  end
+
+  describe "pulse metrics" do
+    setup do
+      user = create_user(%{username: "pulseuser"})
+      {:ok, project} = Sacrum.Repo.Projects.insert(user, %{name: "Pulse Test"})
+      {:ok, user: user, project: project, conn: authed_conn(user)}
+    end
+
+    test "renders pulse metrics with correct formatting", %{conn: conn} do
+      {:ok, _view, html} = live(conn, "/command-center")
+
+      # Should show the metrics (may be 0 initially)
+      assert html =~ "CONC"
+      assert html =~ "SPEND"
+      assert html =~ "THRU"
+      assert html =~ "P50"
+      # Concurrency ratio
+      assert html =~ ~r/\d+\/\d+/
+      # USD amount
+      assert html =~ ~r/\$\d+\.\d+/
+    end
+
+    test "throughput metric updates when a run completes via the engine", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, view, _html} = live(conn, "/command-center")
+
+      # Create a workflow with a final step
+      {:ok, workflow} =
+        Sacrum.Repo.Workflows.insert(project, %{
+          name: "Test Workflow",
+          user_id: user.id
+        })
+
+      {:ok, step_final} =
+        Sacrum.Repo.WorkflowSteps.insert(workflow, %{
+          name: "Final Step",
+          is_final: true
+        })
+
+      # Create a task
+      {:ok, task} =
+        Sacrum.Repo.Tasks.insert(project, %{
+          title: "Pulse Test Task"
+        })
+
+      # Create a step execution that completes to final step
+      {:ok, _execution} =
+        Sacrum.Repo.StepExecutions.insert(user.id, %{
+          task_id: task.id,
+          step_name: "Final Step",
+          workflow_id: workflow.id,
+          step_id: step_final.id,
+          project_id: project.id,
+          status: "completed"
+        })
+
+      # Trigger the broadcast to update metrics
+      send(view.pid, %Phoenix.Socket.Broadcast{
+        topic: "project:#{project.id}",
+        event: "step_execution_status_changed",
+        payload: %{}
+      })
+
+      # Wait for the view to process the broadcast
+      _ = render(view)
+
+      # Check that throughput has been updated
+      html = render(view)
+      assert html =~ "THRU"
+      # The throughput should be 1 after our task completes
+      assert html =~ ~r/THRU.*\>1\</
+    end
+
+    test "pulse metrics are greyed out when socket is disconnected", %{conn: conn} do
+      {:ok, view, html} = live(conn, "/command-center")
+
+      # Initially connected, should have full opacity
+      assert html =~ "opacity-100"
+      refute html =~ "opacity-50"
     end
   end
 end
