@@ -110,6 +110,7 @@ defmodule Sacrum.Orchestrator.ExecutionPool do
     status = %{
       available_slots: available_slots(state),
       in_use_count: map_size(state.in_use),
+      max_concurrent: state.max_concurrent,
       queue_length: :queue.len(state.queue)
     }
 

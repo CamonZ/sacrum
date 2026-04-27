@@ -613,4 +613,83 @@ defmodule SacrumWeb.CoreComponents do
     </div>
     """
   end
+
+  @doc """
+  Pulse strip component for the Command Center.
+
+  Renders four rolling 24h metrics in mono typography:
+  - Concurrency vs cap
+  - Spend (USD and tokens)
+  - Throughput
+  - P50 time-to-terminal-step
+
+  Greys out when the LiveView socket disconnects.
+  """
+  attr :concurrency, :integer, default: 0
+  attr :cap, :integer, default: 4
+  attr :spend_usd, :any, default: Decimal.new(0)
+  attr :spend_tokens, :integer, default: 0
+  attr :throughput, :integer, default: 0
+  attr :p50_duration_ms, :integer, default: 0
+  attr :connected?, :boolean, default: true
+
+  @spec pulse_strip(map()) :: Phoenix.LiveView.Rendered.t()
+  def pulse_strip(assigns) do
+    ~H"""
+    <div class={[
+      "grid grid-cols-2 gap-4 p-6 bg-surface border border-border rounded-lg",
+      "transition-opacity duration-200",
+      if(!@connected?, do: "opacity-50", else: "opacity-100")
+    ]}>
+      <div class="flex items-center gap-3">
+        <span class="text-text-muted text-xs uppercase tracking-wide">CONC</span>
+        <span class="font-mono text-text-primary font-medium">{@concurrency}/{@cap}</span>
+      </div>
+
+      <div class="flex items-center gap-3">
+        <span class="text-text-muted text-xs uppercase tracking-wide">SPEND</span>
+        <span class="font-mono text-text-primary font-medium">
+          {format_usd(@spend_usd)}
+          <span class="text-text-secondary">/ {format_tokens(@spend_tokens)}</span>
+        </span>
+      </div>
+
+      <div class="flex items-center gap-3">
+        <span class="text-text-muted text-xs uppercase tracking-wide">THRU</span>
+        <span class="font-mono text-text-primary font-medium">{@throughput}</span>
+      </div>
+
+      <div class="flex items-center gap-3">
+        <span class="text-text-muted text-xs uppercase tracking-wide">P50</span>
+        <span class="font-mono text-text-primary font-medium">
+          {format_duration(@p50_duration_ms)}
+        </span>
+      </div>
+    </div>
+    """
+  end
+
+  defp format_usd(%Decimal{} = decimal) do
+    "$" <> (decimal |> Decimal.round(2) |> Decimal.to_string())
+  end
+
+  defp format_tokens(count) when count >= 1_000_000 do
+    "#{Float.round(count / 1_000_000, 1)}M tok"
+  end
+
+  defp format_tokens(count) when count >= 1_000 do
+    "#{Float.round(count / 1_000, 1)}k tok"
+  end
+
+  defp format_tokens(count) when is_integer(count), do: "#{count} tok"
+
+  defp format_duration(ms) when is_integer(ms) and ms > 0 do
+    total_seconds = div(ms, 1000)
+    minutes = div(total_seconds, 60)
+    seconds = rem(total_seconds, 60)
+
+    if minutes > 0, do: "#{minutes}m#{seconds}s", else: "#{seconds}s"
+  end
+
+  defp format_duration(_), do: "0s"
 end

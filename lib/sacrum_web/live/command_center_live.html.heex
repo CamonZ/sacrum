@@ -7,15 +7,15 @@
   <%= if @has_projects do %>
     <div class="p-6 space-y-8">
       <section aria-labelledby="zone-pulse" class="space-y-3">
-        <h2
-          id="zone-pulse"
-          class="text-sm font-semibold uppercase tracking-wide text-text-secondary"
-        >
-          Pulse
-        </h2>
-        <div class="bg-surface border border-border rounded-lg p-6 text-text-muted text-sm">
-          24-hour sanity numbers: concurrency vs cap, spend, throughput, median time-to-terminal-step.
-        </div>
+        <.pulse_strip
+          concurrency={@concurrency}
+          cap={@cap}
+          spend_usd={@spend_usd}
+          spend_tokens={@spend_tokens}
+          throughput={@throughput}
+          p50_duration_ms={@p50_duration_ms}
+          connected?={connected?(@socket)}
+        />
       </section>
 
       <.spine_rule />
