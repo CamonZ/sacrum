@@ -164,6 +164,32 @@ defmodule Sacrum.Orchestrator.PromptContextTest do
       assert context["tags"] == ["test"]
     end
 
+    test "includes worktree field" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project)
+      task = create_task(user, project, workflow)
+
+      # Update task with a worktree value
+      {:ok, task_with_worktree} =
+        Accounts.Tasks.update(task, %{worktree: "/path/to/worktree"})
+
+      context = PromptContext.build_task_context(task_with_worktree)
+
+      assert context["worktree"] == "/path/to/worktree"
+    end
+
+    test "renders worktree as empty string when nil" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project)
+      task = create_task(user, project, workflow)
+
+      context = PromptContext.build_task_context(task)
+
+      assert context["worktree"] == ""
+    end
+
     test "includes code_refs as a list of maps" do
       user = create_user()
       project = create_project(user)
