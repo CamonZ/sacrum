@@ -1260,6 +1260,98 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       data = result["data"]["updateWorkflowStep"]
       assert data["outputSchema"] == nil
     end
+
+    test "createWorkflowStep rejects verboseDaemonLogging argument (not in schema)", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createWorkflowStep(
+              workflowId: "#{wf.id}"
+              name: "Step with verbose"
+              goal: "Test verbose logging"
+              stepOrder: 1
+              verboseDaemonLogging: true
+            ) { id name }
+          }
+        """)
+        |> json_response(200)
+
+      # GraphQL schema should reject the unknown argument
+      assert result["errors"] != nil
+
+      assert Enum.any?(result["errors"], fn error ->
+               String.contains?(to_string(error["message"]), "Unknown argument")
+             end)
+    end
+
+    test "updateWorkflowStep rejects verboseDaemonLogging argument (not in schema)", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+      {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "Original"})
+
+      assert step.verbose_daemon_logging == false
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            updateWorkflowStep(
+              id: "#{step.id}"
+              name: "Updated"
+              verboseDaemonLogging: true
+            ) { id name }
+          }
+        """)
+        |> json_response(200)
+
+      # GraphQL schema should reject the unknown argument
+      assert result["errors"] != nil
+
+      assert Enum.any?(result["errors"], fn error ->
+               String.contains?(to_string(error["message"]), "Unknown argument")
+             end)
+    end
+
+    test "createWorkflowStep without verboseDaemonLogging defaults to false", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createWorkflowStep(
+              workflowId: "#{wf.id}"
+              name: "Step without verbose"
+              goal: "Test verbose logging"
+              stepOrder: 1
+            ) { id name verboseDaemonLogging }
+          }
+        """)
+        |> json_response(200)
+
+      # Should succeed without the field
+      assert result["errors"] == nil
+      data = result["data"]["createWorkflowStep"]
+      assert data["name"] == "Step without verbose"
+      assert data["verboseDaemonLogging"] == false
+    end
   end
 
   describe "step execution queries" do

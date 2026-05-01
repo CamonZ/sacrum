@@ -203,4 +203,16 @@ defmodule Sacrum.Repo.WorkflowSteps do
         error
     end
   end
+
+  @doc """
+  Diagnostic-only setter that bypasses the public @update_fields allowlist.
+  Intended for iex / direct DB toggling — not exposed via GraphQL.
+  """
+  @spec set_verbose_logging(WorkflowStep.t(), boolean()) ::
+          {:ok, WorkflowStep.t()} | {:error, Ecto.Changeset.t()}
+  def set_verbose_logging(%WorkflowStep{} = step, enabled) when is_boolean(enabled) do
+    step
+    |> Ecto.Changeset.change(verbose_daemon_logging: enabled)
+    |> Repo.update()
+  end
 end

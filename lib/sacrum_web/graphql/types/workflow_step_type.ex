@@ -20,6 +20,7 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
     field :step_type, :string
     field :prompt, :string
     field :output_schema, :json
+    field :verbose_daemon_logging, :boolean
     field :inserted_at, :datetime
     field :updated_at, :datetime
 

@@ -382,9 +382,16 @@ defmodule SacrumWeb.ProjectChannel do
       worktree: data.task.worktree
     }
 
-    case data.step.output_schema do
-      nil -> payload
-      schema -> Map.put(payload, :output_schema, schema)
+    payload =
+      case data.step.output_schema do
+        nil -> payload
+        schema -> Map.put(payload, :output_schema, schema)
+      end
+
+    # Field omitted when false so older daemons (pre-flag) see an unchanged payload shape.
+    case data.step.verbose_daemon_logging do
+      true -> Map.put(payload, :verbose_daemon_logging, true)
+      _ -> payload
     end
   end
 
