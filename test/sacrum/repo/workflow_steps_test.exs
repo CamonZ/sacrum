@@ -204,7 +204,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       expected_schema = %{
         "type" => "object",
         "properties" => %{
-          "transition_to" => %{"type" => "string", "format" => "uuid"},
+          "transition_to" => %{"type" => "string"},
           "transition_type" => %{
             "type" => "string",
             "enum" => ["intra_workflow", "inter_workflow"]
@@ -241,7 +241,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       correct_schema = %{
         "type" => "object",
         "properties" => %{
-          "transition_to" => %{"type" => "string", "format" => "uuid"},
+          "transition_to" => %{"type" => "string"},
           "transition_type" => %{
             "type" => "string",
             "enum" => ["intra_workflow", "inter_workflow"]
@@ -315,7 +315,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       schema_with_handoff = %{
         "type" => "object",
         "properties" => %{
-          "transition_to" => %{"type" => "string", "format" => "uuid"},
+          "transition_to" => %{"type" => "string"},
           "transition_type" => %{
             "type" => "string",
             "enum" => ["intra_workflow", "inter_workflow"]
@@ -340,7 +340,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       invalid_schema = %{
         "type" => "object",
         "properties" => %{
-          "transition_to" => %{"type" => "string", "format" => "uuid"},
+          "transition_to" => %{"type" => "string"},
           "transition_type" => %{
             "type" => "string",
             "enum" => ["intra_workflow", "inter_workflow"]
@@ -363,7 +363,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       invalid_schema = %{
         "type" => "object",
         "properties" => %{
-          "transition_to" => %{"type" => "string", "format" => "uuid"},
+          "transition_to" => %{"type" => "string"},
           "transition_type" => %{
             "type" => "string",
             "enum" => ["intra_workflow", "inter_workflow"]
@@ -391,7 +391,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       expected_schema = %{
         "type" => "object",
         "properties" => %{
-          "transition_to" => %{"type" => "string", "format" => "uuid"},
+          "transition_to" => %{"type" => "string"},
           "transition_type" => %{
             "type" => "string",
             "enum" => ["intra_workflow", "inter_workflow"]
@@ -450,6 +450,81 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       {:ok, step} = WorkflowSteps.insert(workflow, @valid_attrs)
 
       assert step.verbose_daemon_logging == false
+    end
+  end
+
+  describe "routing_contract_schema without format key" do
+    test "routing_contract_schema/0 does not contain format key under transition_to" do
+      schema = WorkflowStep.routing_contract_schema()
+
+      assert schema["properties"]["transition_to"] == %{"type" => "string"}
+    end
+
+    test "route step persisted output_schema matches new canonical schema without format" do
+      workflow = create_workflow()
+      attrs = Map.merge(@valid_attrs, %{step_type: "route"})
+      {:ok, step} = WorkflowSteps.insert(workflow, attrs)
+
+      {:ok, fetched_step} = WorkflowSteps.get(step.id)
+
+      assert fetched_step.output_schema == WorkflowStep.routing_contract_schema()
+      refute Map.has_key?(fetched_step.output_schema["properties"]["transition_to"], "format")
+    end
+
+    test "update_changeset accepts new canonical schema without format" do
+      workflow = create_workflow()
+      {:ok, step} = WorkflowSteps.insert(workflow, @valid_attrs)
+
+      canonical_schema = WorkflowStep.routing_contract_schema()
+      attrs = %{step_type: "route", output_schema: canonical_schema}
+
+      assert {:ok, updated} = WorkflowSteps.update(step, attrs)
+      assert updated.output_schema == canonical_schema
+    end
+
+    test "update_changeset accepts routing contract schema without handoff" do
+      workflow = create_workflow()
+      {:ok, step} = WorkflowSteps.insert(workflow, @valid_attrs)
+
+      schema_without_handoff = %{
+        "type" => "object",
+        "properties" => %{
+          "transition_to" => %{"type" => "string"},
+          "transition_type" => %{
+            "type" => "string",
+            "enum" => ["intra_workflow", "inter_workflow"]
+          }
+        },
+        "required" => ["transition_to", "transition_type"],
+        "additionalProperties" => false
+      }
+
+      attrs = %{step_type: "route", output_schema: schema_without_handoff}
+      assert {:ok, updated} = WorkflowSteps.update(step, attrs)
+      assert updated.output_schema == schema_without_handoff
+    end
+
+    test "update_changeset rejects schema that re-introduces format key" do
+      workflow = create_workflow()
+      {:ok, step} = WorkflowSteps.insert(workflow, @valid_attrs)
+
+      invalid_schema = %{
+        "type" => "object",
+        "properties" => %{
+          "transition_to" => %{"type" => "string", "format" => "uuid"},
+          "transition_type" => %{
+            "type" => "string",
+            "enum" => ["intra_workflow", "inter_workflow"]
+          }
+        },
+        "required" => ["transition_to", "transition_type"],
+        "additionalProperties" => false
+      }
+
+      attrs = %{step_type: "route", output_schema: invalid_schema}
+      assert {:error, changeset} = WorkflowSteps.update(step, attrs)
+      assert %{output_schema: [message]} = errors_on(changeset)
+      assert String.contains?(message, "routing contract schema")
     end
   end
 end
