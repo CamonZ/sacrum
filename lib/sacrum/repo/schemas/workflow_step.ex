@@ -121,7 +121,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     %{
       "type" => "object",
       "properties" => %{
-        "transition_to" => %{"type" => "string", "format" => "uuid"},
+        "transition_to" => %{"type" => "string"},
         "transition_type" => %{"type" => "string", "enum" => ["intra_workflow", "inter_workflow"]},
         "handoff" => %{"type" => "object"}
       },
