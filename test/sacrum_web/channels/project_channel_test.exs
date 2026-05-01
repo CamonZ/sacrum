@@ -469,6 +469,90 @@ defmodule SacrumWeb.ProjectChannelTest do
     end
   end
 
+  describe "run_step_payload broadcast" do
+    test "includes verbose_daemon_logging when true" do
+      {_user, project, socket} = setup_socket()
+
+      {:ok, _reply, _socket} =
+        subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
+
+      task = build_task(project)
+      execution = build_step_execution(project)
+      step = build_workflow_step(project) |> Map.put(:verbose_daemon_logging, true)
+
+      data = %{
+        execution: execution,
+        rendered_prompt: "Test prompt",
+        step: step,
+        task: task
+      }
+
+      SacrumWeb.ProjectChannel.broadcast_run_step(project.id, data)
+
+      assert_broadcast "run_step", payload
+      assert payload.verbose_daemon_logging == true
+      assert payload.id == execution.id
+      assert payload.task_id == execution.task_id
+    end
+
+    test "omits verbose_daemon_logging when false" do
+      {_user, project, socket} = setup_socket()
+
+      {:ok, _reply, _socket} =
+        subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
+
+      task = build_task(project)
+      execution = build_step_execution(project)
+      step = build_workflow_step(project) |> Map.put(:verbose_daemon_logging, false)
+
+      data = %{
+        execution: execution,
+        rendered_prompt: "Test prompt",
+        step: step,
+        task: task
+      }
+
+      SacrumWeb.ProjectChannel.broadcast_run_step(project.id, data)
+
+      assert_broadcast "run_step", payload
+      # Should not include the field when false
+      refute Map.has_key?(payload, :verbose_daemon_logging)
+      assert payload.id == execution.id
+      assert payload.task_id == execution.task_id
+    end
+
+    test "includes both output_schema and verbose_daemon_logging when both present" do
+      {_user, project, socket} = setup_socket()
+
+      {:ok, _reply, _socket} =
+        subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
+
+      task = build_task(project)
+      execution = build_step_execution(project)
+
+      step =
+        build_workflow_step(project)
+        |> Map.put(:verbose_daemon_logging, true)
+        |> Map.put(:output_schema, %{
+          "type" => "object",
+          "properties" => %{"result" => %{"type" => "string"}}
+        })
+
+      data = %{
+        execution: execution,
+        rendered_prompt: "Test prompt",
+        step: step,
+        task: task
+      }
+
+      SacrumWeb.ProjectChannel.broadcast_run_step(project.id, data)
+
+      assert_broadcast "run_step", payload
+      assert payload.verbose_daemon_logging == true
+      assert payload.output_schema == step.output_schema
+    end
+  end
+
   defp build_task(project) do
     now = DateTime.utc_now()
 
@@ -554,6 +638,7 @@ defmodule SacrumWeb.ProjectChannelTest do
       workflow_id: Ecto.UUID.generate(),
       prompt: "Execute the test step",
       output_schema: nil,
+      verbose_daemon_logging: false,
       inserted_at: now,
       updated_at: now
     }

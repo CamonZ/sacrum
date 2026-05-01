@@ -409,4 +409,47 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       assert updated.output_schema == expected_schema
     end
   end
+
+  describe "verbose_daemon_logging field" do
+    test "insert ignores verbose_daemon_logging in attrs (defaults to false)" do
+      workflow = create_workflow()
+      attrs = Map.merge(@valid_attrs, %{verbose_daemon_logging: true})
+      {:ok, step} = WorkflowSteps.insert(workflow, attrs)
+
+      assert step.verbose_daemon_logging == false
+    end
+
+    test "update ignores verbose_daemon_logging in attrs (remains unchanged)" do
+      workflow = create_workflow()
+      {:ok, step} = WorkflowSteps.insert(workflow, @valid_attrs)
+      assert step.verbose_daemon_logging == false
+
+      {:ok, updated} = WorkflowSteps.update(step, %{verbose_daemon_logging: true})
+      assert updated.verbose_daemon_logging == false
+    end
+
+    test "set_verbose_logging can set the flag to true" do
+      workflow = create_workflow()
+      {:ok, step} = WorkflowSteps.insert(workflow, @valid_attrs)
+
+      {:ok, updated} = WorkflowSteps.set_verbose_logging(step, true)
+      assert updated.verbose_daemon_logging == true
+    end
+
+    test "set_verbose_logging can set the flag to false" do
+      workflow = create_workflow()
+      {:ok, step} = WorkflowSteps.insert(workflow, @valid_attrs)
+      {:ok, enabled} = WorkflowSteps.set_verbose_logging(step, true)
+
+      {:ok, disabled} = WorkflowSteps.set_verbose_logging(enabled, false)
+      assert disabled.verbose_daemon_logging == false
+    end
+
+    test "defaults to false on creation" do
+      workflow = create_workflow()
+      {:ok, step} = WorkflowSteps.insert(workflow, @valid_attrs)
+
+      assert step.verbose_daemon_logging == false
+    end
+  end
 end

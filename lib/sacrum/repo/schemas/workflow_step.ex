@@ -18,6 +18,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     field :step_type, :string, default: "execute"
     field :prompt, :string
     field :output_schema, :map
+    field :verbose_daemon_logging, :boolean, default: false
 
     belongs_to :workflow, Sacrum.Repo.Schemas.Workflow
     belongs_to :project, Sacrum.Repo.Schemas.Project
