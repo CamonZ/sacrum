@@ -8,6 +8,10 @@ defmodule SacrumWeb.BroadcastsTest do
   alias Sacrum.Repo.Users
   alias Sacrum.Repo.Projects
   alias Sacrum.Repo.Tasks
+  alias Sacrum.Repo.Workflows
+  alias Sacrum.Repo.WorkflowSteps
+  alias Sacrum.Repo.StepTransitions
+  alias Sacrum.Repo.TaskWorkflows
 
   @endpoint SacrumWeb.Endpoint
 
@@ -26,6 +30,31 @@ defmodule SacrumWeb.BroadcastsTest do
     {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}")
 
     {user, project}
+  end
+
+  defp create_workflow_with_steps(project) do
+    {:ok, workflow} = Workflows.insert(project, %{name: "Test Workflow"})
+    {:ok, step1} = WorkflowSteps.insert(workflow, %{name: "step1", step_order: 1})
+    {:ok, step2} = WorkflowSteps.insert(workflow, %{name: "step2", step_order: 2})
+    {:ok, step3} = WorkflowSteps.insert(workflow, %{name: "step3", step_order: 3, is_final: true})
+
+    {:ok, workflow} = Workflows.update(workflow, %{initial_step_id: step1.id})
+
+    {:ok, _} =
+      StepTransitions.insert(step1.user_id, %{
+        project_id: project.id,
+        from_step_id: step1.id,
+        to_step_id: step2.id
+      })
+
+    {:ok, _} =
+      StepTransitions.insert(step2.user_id, %{
+        project_id: project.id,
+        from_step_id: step2.id,
+        to_step_id: step3.id
+      })
+
+    {workflow, step1, step2, step3}
   end
 
   describe "task broadcasts from context" do
@@ -63,6 +92,89 @@ defmodule SacrumWeb.BroadcastsTest do
 
       assert_broadcast "task_deleted", %{id: id}
       assert id == task.id
+    end
+  end
+
+  describe "step execution broadcasts on TaskWorkflows" do
+    test "assign_workflow broadcasts both task_updated and step_execution_created" do
+      {_user, project} = setup_channel()
+
+      {:ok, task} = Tasks.insert(project, %{title: "New Task"})
+      assert_broadcast "task_created", _
+
+      {workflow, step1, _step2, _step3} = create_workflow_with_steps(project)
+
+      {:ok, _updated_task} = TaskWorkflows.assign_workflow(task, workflow)
+
+      assert_broadcast "task_updated", task_payload
+      assert task_payload.id == task.id
+      assert task_payload.workflow_id == workflow.id
+      assert task_payload.current_step_id == step1.id
+
+      assert_broadcast "step_execution_created", exec_payload
+      assert exec_payload.workflow_id == workflow.id
+      assert exec_payload.step_name == "step1"
+      assert exec_payload.status == "entered"
+    end
+
+    test "advance_to_step broadcasts both task_updated and step_execution_created" do
+      {_user, project} = setup_channel()
+
+      {:ok, task} = Tasks.insert(project, %{title: "New Task"})
+      assert_broadcast "task_created", _
+
+      {workflow, _step1, step2, _step3} = create_workflow_with_steps(project)
+
+      {:ok, assigned_task} = TaskWorkflows.assign_workflow(task, workflow)
+      assert_broadcast "task_updated", _
+      assert_broadcast "step_execution_created", _
+
+      {:ok, _advanced_task} = TaskWorkflows.advance_to_step(assigned_task, step2.id)
+
+      assert_broadcast "task_updated", task_payload
+      assert task_payload.current_step_id == step2.id
+
+      assert_broadcast "step_execution_created", exec_payload
+      assert exec_payload.step_name == "step2"
+      assert exec_payload.status == "entered"
+      assert exec_payload.workflow_id == workflow.id
+    end
+
+    test "move_to_step broadcasts both task_updated and step_execution_created" do
+      {_user, project} = setup_channel()
+
+      {:ok, task} = Tasks.insert(project, %{title: "New Task"})
+      assert_broadcast "task_created", _
+
+      {workflow, _step1, step2, _step3} = create_workflow_with_steps(project)
+
+      {:ok, assigned_task} = TaskWorkflows.assign_workflow(task, workflow)
+      assert_broadcast "task_updated", _
+      assert_broadcast "step_execution_created", _
+
+      {:ok, _moved_task} = TaskWorkflows.move_to_step(assigned_task, step2.id)
+
+      assert_broadcast "task_updated", task_payload
+      assert task_payload.current_step_id == step2.id
+
+      assert_broadcast "step_execution_created", exec_payload
+      assert exec_payload.step_name == "step2"
+      assert exec_payload.status == "entered"
+      assert exec_payload.workflow_id == workflow.id
+    end
+
+    test "assign_workflow does not broadcast on error" do
+      {_user, project} = setup_channel()
+
+      {:ok, task} = Tasks.insert(project, %{title: "New Task"})
+      assert_broadcast "task_created", _
+
+      {:ok, empty_workflow} = Workflows.insert(project, %{name: "Empty Workflow"})
+
+      {:error, :workflow_has_no_steps} = TaskWorkflows.assign_workflow(task, empty_workflow)
+
+      refute_broadcast "task_updated", _, 100
+      refute_broadcast "step_execution_created", _, 100
     end
   end
 end
