@@ -1,9 +1,13 @@
 defmodule Sacrum.Orchestrator.Routing.InterWorkflowTest do
   use Sacrum.DataCase
 
+  import Phoenix.ChannelTest
+
   alias Sacrum.Accounts
   alias Sacrum.Orchestrator.Routing.InterWorkflow
   alias Sacrum.Repo
+
+  @endpoint SacrumWeb.Endpoint
 
   # ===== Setup helpers =====
 
@@ -83,6 +87,13 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflowTest do
       Accounts.WorkflowTransitions.insert(user.id, Map.merge(default_attrs, attrs))
 
     transition
+  end
+
+  defp setup_channel(user, project) do
+    {:ok, token, _api_token} = Sacrum.Auth.create_api_token(user, %{name: "test token"})
+    {:ok, socket} = connect(SacrumWeb.UserSocket, %{"token" => token})
+    {:ok, _reply, socket} = subscribe_and_join(socket, "project:#{project.id}")
+    socket
   end
 
   # ===== Tests =====
@@ -425,6 +436,78 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflowTest do
       result = InterWorkflow.handle_inter_workflow_routing(data, fake_id, nil)
 
       assert {:error, :destination_workflow_not_found} = result
+    end
+  end
+
+  describe "broadcast on inter-workflow routing" do
+    test "broadcasts task_updated and step_execution_created on successful routing" do
+      user = create_user()
+      project = create_project(user)
+
+      from_workflow = create_workflow(user, project, %{"name" => "From"})
+      to_workflow = create_workflow(user, project, %{"name" => "To"})
+
+      from_step = create_step(user, from_workflow, %{"name" => "from_step"})
+      to_step = create_step(user, to_workflow, %{"name" => "to_step"})
+
+      create_workflow_transition(user, from_workflow, to_workflow, %{
+        "target_step_id" => to_step.id
+      })
+
+      task = create_task(user, project, from_workflow)
+
+      {:ok, task} =
+        Repo.update(Ecto.Changeset.change(task, %{current_step_id: from_step.id}))
+
+      setup_channel(user, project)
+
+      data = %{
+        task: task,
+        project_id: project.id,
+        user_id: user.id
+      }
+
+      assert {:ok, _} = InterWorkflow.handle_inter_workflow_routing(data, to_workflow.id, nil)
+
+      assert_broadcast "task_updated", task_payload
+      assert task_payload.id == task.id
+      assert task_payload.workflow_id == to_workflow.id
+      assert task_payload.current_step_id == to_step.id
+
+      assert_broadcast "step_execution_created", execution_payload
+      assert execution_payload.task_id == task.id
+      assert execution_payload.workflow_id == to_workflow.id
+      assert execution_payload.step_name == to_step.name
+      assert execution_payload.status == "entered"
+    end
+
+    test "does not broadcast on failed validation (no transition)" do
+      user = create_user()
+      project = create_project(user)
+
+      from_workflow = create_workflow(user, project, %{"name" => "From"})
+      to_workflow = create_workflow(user, project, %{"name" => "To"})
+
+      from_step = create_step(user, from_workflow, %{"name" => "from_step"})
+
+      task = create_task(user, project, from_workflow)
+
+      {:ok, task} =
+        Repo.update(Ecto.Changeset.change(task, %{current_step_id: from_step.id}))
+
+      setup_channel(user, project)
+
+      data = %{
+        task: task,
+        project_id: project.id,
+        user_id: user.id
+      }
+
+      assert {:error, :no_workflow_transition} =
+               InterWorkflow.handle_inter_workflow_routing(data, to_workflow.id, nil)
+
+      refute_broadcast "task_updated", _
+      refute_broadcast "step_execution_created", _
     end
   end
 end

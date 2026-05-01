@@ -15,6 +15,7 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflow do
   alias Ecto.{Changeset, Multi}
   alias Sacrum.Orchestrator.{FSMData, Retry, TaskCompletion, WorkflowGraph}
   alias Sacrum.Repo
+  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.{StepExecution, Workflow, WorkflowStep, WorkflowTransition}
 
   @doc """
@@ -201,6 +202,9 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflow do
             "target_step=#{target_step.id} (#{target_step.name}) execution=#{execution.id} " <>
             "handoff=#{inspect(handoff != nil)}"
         )
+
+        Broadcaster.broadcast({:ok, updated_task}, :task_updated, :project)
+        Broadcaster.broadcast_step_execution({:ok, execution}, :step_execution_created)
 
         {:ok, updated_task}
 
