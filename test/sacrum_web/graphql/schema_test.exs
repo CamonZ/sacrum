@@ -2,6 +2,8 @@ defmodule SacrumWeb.Graphql.SchemaTest do
   use SacrumWeb.ConnCase
 
   alias Sacrum.Accounts
+  alias Sacrum.Orchestrator.TaskFSMSupervisor
+  alias Sacrum.Orchestrator.TaskRegistry
 
   defp graphql(conn, query) do
     post(conn, "/graphql", %{"query" => query})
@@ -459,6 +461,132 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         |> json_response(200)
 
       assert result["data"]["moveToStep"]["currentStepId"] == step2.id
+    end
+
+    test "stopOrchestrator halts a running orchestrator", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+
+      child_spec = {Sacrum.Orchestrator.TaskOrchestrator, task_id: task.id, user_id: user.id}
+      {:ok, _pid} = TaskFSMSupervisor.start_child(child_spec)
+      assert [] !== Registry.lookup(TaskRegistry, task.id)
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            stopOrchestrator(taskId: "#{task.id}") {
+              id
+              title
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] == nil
+      assert result["data"]["stopOrchestrator"]["id"] == task.id
+      assert result["data"]["stopOrchestrator"]["title"] == "Task"
+
+      Process.sleep(50)
+      assert [] = Registry.lookup(TaskRegistry, task.id)
+    end
+
+    test "stopOrchestrator succeeds even when no orchestrator is running", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      assert [] = Registry.lookup(TaskRegistry, task.id)
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            stopOrchestrator(taskId: "#{task.id}") {
+              id
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] == nil
+      assert result["data"]["stopOrchestrator"]["id"] == task.id
+    end
+
+    test "stopOrchestrator is idempotent: calling it twice succeeds both times", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+
+      child_spec = {Sacrum.Orchestrator.TaskOrchestrator, task_id: task.id, user_id: user.id}
+      {:ok, _pid} = TaskFSMSupervisor.start_child(child_spec)
+
+      result1 =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            stopOrchestrator(taskId: "#{task.id}") { id }
+          }
+        """)
+        |> json_response(200)
+
+      assert result1["data"]["stopOrchestrator"]["id"] == task.id
+
+      result2 =
+        build_conn()
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            stopOrchestrator(taskId: "#{task.id}") { id }
+          }
+        """)
+        |> json_response(200)
+
+      assert result2["data"]["stopOrchestrator"]["id"] == task.id
+    end
+
+    test "stopOrchestrator rejects unauthenticated caller", %{conn: conn} do
+      user = create_user(%{email: "stop_unauth@example.com", username: "stop_unauth"})
+      {:ok, project} = Accounts.Projects.insert(user.id, %{name: "Test Project"})
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+
+      response =
+        graphql(conn, """
+          mutation {
+            stopOrchestrator(taskId: "#{task.id}") { id }
+          }
+        """)
+
+      assert response.status == 401
+    end
+
+    test "stopOrchestrator returns error when caller doesn't own the task", %{conn: conn} do
+      user = create_user(%{email: "stop_owner@example.com", username: "stop_owner"})
+      {:ok, project} = Accounts.Projects.insert(user.id, %{name: "Test Project"})
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+
+      other_user = create_user(%{email: "other_caller@example.com", username: "other_caller"})
+
+      result =
+        conn
+        |> authenticate(other_user)
+        |> graphql("""
+          mutation {
+            stopOrchestrator(taskId: "#{task.id}") { id }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] != nil
     end
   end
 

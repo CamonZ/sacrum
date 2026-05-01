@@ -346,6 +346,18 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
         end
       end)
     end
+
+    @desc "Stop the running TaskOrchestrator for a task. Idempotent."
+    field :stop_orchestrator, :task do
+      arg(:task_id, non_null(:uuid4))
+
+      resolve(fn %{task_id: task_id}, %{context: %{current_user: user}} ->
+        with {:ok, task} <- Accounts.Tasks.find(user.id, task_id) do
+          Sacrum.Orchestrator.stop(task_id)
+          {:ok, task}
+        end
+      end)
+    end
   end
 
   input_object :task_section_input do
