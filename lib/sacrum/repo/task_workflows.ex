@@ -42,6 +42,7 @@ defmodule Sacrum.Repo.TaskWorkflows do
   import Ecto.Query
   alias Ecto.Multi
   alias Sacrum.Repo
+  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.Project
   alias Sacrum.Repo.Schemas.{StepExecution, StepTransition, Task, Workflow, WorkflowStep}
 
@@ -124,8 +125,9 @@ defmodule Sacrum.Repo.TaskWorkflows do
       )
       |> Repo.transaction()
       |> case do
-        {:ok, %{task: task}} ->
+        {:ok, %{task: task, step_execution: execution}} ->
           broadcast_task_changed(task)
+          Broadcaster.broadcast_step_execution({:ok, execution}, :step_execution_created)
           {:ok, task}
 
         {:error, _op, changeset, _changes} ->
@@ -167,8 +169,9 @@ defmodule Sacrum.Repo.TaskWorkflows do
       )
       |> Repo.transaction()
       |> case do
-        {:ok, %{task: task}} ->
+        {:ok, %{task: task, step_execution: execution}} ->
           broadcast_task_changed(task)
+          Broadcaster.broadcast_step_execution({:ok, execution}, :step_execution_created)
           {:ok, task}
 
         {:error, _op, changeset, _changes} ->
@@ -505,8 +508,9 @@ defmodule Sacrum.Repo.TaskWorkflows do
     |> build_assign_workflow_multi(workflow, initial_step)
     |> Repo.transaction()
     |> case do
-      {:ok, %{task: task}} ->
+      {:ok, %{task: task, step_execution: execution}} ->
         broadcast_task_changed(task)
+        Broadcaster.broadcast_step_execution({:ok, execution}, :step_execution_created)
         {:ok, task}
 
       {:error, _op, changeset, _changes} ->
