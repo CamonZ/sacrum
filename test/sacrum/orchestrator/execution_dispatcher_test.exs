@@ -806,4 +806,34 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
     prompt
   end
+
+  describe "prompt persistence" do
+    setup [:setup_dispatch_context]
+
+    test "persists rendered prompt on the execution row and broadcasts the same text", ctx do
+      step =
+        create_step(ctx.user, ctx.workflow, %{
+          "prompt" => "Task: {{ task.title }} | Level: {{ task.level }}"
+        })
+
+      task = create_task(ctx.user, ctx.project) |> assign_workflow(ctx.workflow)
+      execution = create_entered_execution(ctx.user, task, step)
+      assert execution.prompt == nil
+
+      task = PromptRenderer.preload_for_rendering(task)
+      subscribe_to_project(ctx.project)
+
+      {:ok, dispatched} = ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, step.id)
+
+      expected = "Task: Test Task | Level: ticket"
+      assert dispatched.id == execution.id
+      assert dispatched.prompt == expected
+      assert Sacrum.Repo.get!(Sacrum.Repo.Schemas.StepExecution, execution.id).prompt == expected
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "run_step",
+        payload: %{prompt: ^expected}
+      }
+    end
+  end
 end

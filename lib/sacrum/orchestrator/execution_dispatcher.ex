@@ -40,19 +40,22 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
          {:ok, execution} <- find_entered_execution(task, step_id, task.workflow_id) do
       execution_data = ExecutionHistory.build_execution_data(task.id, execution)
       context = PromptContext.build_context(task, execution_data, step)
-      {:ok, rendered} = PromptRenderer.render(step.prompt, context)
 
-      Logger.info(
-        "[ExecutionDispatcher] Dispatching execution=#{execution.id} step=#{step.name} " <>
-          "task=#{task.id} prompt_length=#{String.length(rendered)}"
-      )
+      with {:ok, rendered} <- PromptRenderer.render(step.prompt, context),
+           {:ok, updated_execution} <-
+             Accounts.StepExecutions.update(execution, %{prompt: rendered}) do
+        Logger.info(
+          "[ExecutionDispatcher] Dispatching execution=#{updated_execution.id} step=#{step.name} " <>
+            "task=#{task.id} prompt_length=#{String.length(rendered)}"
+        )
 
-      Broadcaster.broadcast_run_step(
-        %{execution: execution, step: step, task: task, rendered_prompt: rendered},
-        task.project_id
-      )
+        Broadcaster.broadcast_run_step(
+          %{execution: updated_execution, step: step, task: task, rendered_prompt: rendered},
+          task.project_id
+        )
 
-      {:ok, execution}
+        {:ok, updated_execution}
+      end
     else
       {:error, reason} = err ->
         Logger.error("[ExecutionDispatcher] create_and_dispatch failed: #{inspect(reason)}")
