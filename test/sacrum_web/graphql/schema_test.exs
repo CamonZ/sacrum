@@ -806,7 +806,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         step_id: step1.id,
         project_id: project.id,
         step_name: "Step 1",
-        status: "entered"
+        status: "invalidated"
       })
 
       result =
@@ -1654,7 +1654,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["outputTokens"] == 50
     end
 
-    test "runStep dispatches existing entered StepExecution", %{
+    test "runStep creates and dispatches a StepExecution", %{
       conn: conn,
       user: user,
       project: project

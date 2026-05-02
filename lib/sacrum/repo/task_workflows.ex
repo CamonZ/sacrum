@@ -47,13 +47,11 @@ defmodule Sacrum.Repo.TaskWorkflows do
 
   @doc """
   Assigns a workflow to a task, setting current_step_id to the workflow's initial step.
-  Creates a StepExecution audit record for the initial step entry.
 
   Returns an error if an orchestrator process is registered for this task.
 
-  Idempotent: if the task is already assigned to this workflow at the initial step
-  with an existing "entered" StepExecution, returns {:ok, task} without inserting
-  a duplicate row.
+  Idempotent: if the task is already assigned to this workflow at the initial step,
+  returns {:ok, task} without re-assigning.
   """
   @spec assign_workflow(Task.t(), Workflow.t()) ::
           {:ok, Task.t()} | {:error, Ecto.Changeset.t()} | {:error, atom()}

@@ -20,11 +20,11 @@ defmodule Sacrum.Orchestrator.ExecutionHistory do
   `:failed_count` keys suitable for `PromptContext.build_context/3`.
   """
   @spec build_execution_data(String.t(), struct()) :: map()
-  def build_execution_data(task_id, entered_execution) do
+  def build_execution_data(task_id, dispatched_execution) do
     %{}
     |> put_previous_output(task_id)
-    |> put_handoff(entered_execution.handoff)
-    |> put_run_counts(task_id, entered_execution.step_id)
+    |> put_handoff(dispatched_execution.handoff)
+    |> put_run_counts(task_id, dispatched_execution.step_id)
   end
 
   @doc """
