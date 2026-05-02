@@ -50,11 +50,8 @@ const CookieConsent = {
     if (readConsent()) return
     this.el.hidden = false
     this.el.addEventListener("click", (e) => {
-      const choice =
-        e.target.id === "cookie-accept" ? "accepted" :
-        e.target.id === "cookie-reject" ? "rejected" : null
-      if (!choice) return
-      writeConsent(choice)
+      if (e.target.id !== "cookie-ok") return
+      writeConsent("acknowledged")
       this.el.remove()
     })
   }

@@ -191,8 +191,8 @@ defmodule SacrumWeb.HomeLiveTest do
       {:ok, _view, html} = live(build_conn(), "/")
 
       assert html =~ ~s(id="cookie-banner")
-      assert html =~ "Accept"
-      assert html =~ "Reject"
+      assert html =~ "This website utilizes cookies"
+      assert html =~ ~s(id="cookie-ok")
     end
 
     test "is hidden by default and gated by the consent hook" do
