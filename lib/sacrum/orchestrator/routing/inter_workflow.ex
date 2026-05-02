@@ -14,11 +14,11 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflow do
 
   import Ecto.Query
 
-  alias Ecto.{Changeset, Multi}
+  alias Ecto.Changeset
   alias Sacrum.Orchestrator.{FSMData, TaskCompletion, WorkflowGraph}
   alias Sacrum.Repo
   alias Sacrum.Repo.Broadcaster
-  alias Sacrum.Repo.Schemas.{StepExecution, Workflow, WorkflowStep, WorkflowTransition}
+  alias Sacrum.Repo.Schemas.{Workflow, WorkflowStep, WorkflowTransition}
 
   @doc """
   Routes to a destination workflow.
@@ -121,8 +121,8 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflow do
   end
 
   @doc """
-  Resolves the target step, then atomically updates the task and inserts the
-  entered execution in the destination workflow.
+  Resolves the target step, then atomically updates the task.
+  Does not create a StepExecution row — that happens exclusively at dispatch time.
   """
   @spec assign_destination_workflow(struct(), struct(), String.t() | nil, map() | nil) ::
           {:ok, struct()} | {:error, term()}
@@ -161,37 +161,21 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflow do
   end
 
   @doc """
-  Updates the task's workflow_id and current_step_id atomically, invalidating
-  any stale "entered" row left over from a prior routing pass. Does not create
-  a StepExecution row — that happens exclusively at dispatch time. Handoff
-  travels through FSMData and lands on the StepExecution row at dispatch.
+  Updates the task's workflow_id and current_step_id atomically.
+  Does not create a StepExecution row — that happens exclusively at dispatch time.
+  Handoff travels through FSMData and lands on the StepExecution row at dispatch.
   """
   @spec do_assign_destination_workflow(struct(), struct(), struct(), map() | nil) ::
           {:ok, struct()} | {:error, term()}
   def do_assign_destination_workflow(task, dest_workflow, target_step, handoff) do
-    multi =
-      Multi.new()
-      |> Multi.update_all(
-        :invalidate,
-        from(e in StepExecution,
-          where:
-            e.task_id == ^task.id and
-              e.step_id == ^target_step.id and
-              e.workflow_id == ^dest_workflow.id and
-              e.status == "entered"
-        ),
-        set: [status: "invalidated"]
-      )
-      |> Multi.update(
-        :task,
-        Changeset.change(task, %{
-          workflow_id: dest_workflow.id,
-          current_step_id: target_step.id
-        })
-      )
+    changeset =
+      Changeset.change(task, %{
+        workflow_id: dest_workflow.id,
+        current_step_id: target_step.id
+      })
 
-    case Repo.transaction(multi) do
-      {:ok, %{task: updated_task}} ->
+    case Repo.update(changeset) do
+      {:ok, updated_task} ->
         Logger.info(
           "[TaskOrchestrator:#{task.id}] Assigned destination workflow=#{dest_workflow.id} " <>
             "target_step=#{target_step.id} (#{target_step.name}) handoff=#{inspect(handoff != nil)}"
@@ -201,9 +185,9 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflow do
 
         {:ok, updated_task}
 
-      {:error, op, changeset, _changes} ->
+      {:error, changeset} ->
         Logger.error(
-          "[TaskOrchestrator:#{task.id}] Assign destination workflow failed op=#{inspect(op)} " <>
+          "[TaskOrchestrator:#{task.id}] Assign destination workflow failed " <>
             "dest_workflow=#{dest_workflow.id} errors=#{inspect(changeset.errors)}"
         )
 

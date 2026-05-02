@@ -405,73 +405,65 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
     end
   end
 
-  describe "invalidate-on-leave" do
-    test "advance_to_step does not invalidate pre-existing entered rows (dispatcher will handle at dispatch time)" do
+  describe "step-change does not create or modify executions" do
+    test "advance_to_step leaves existing executions untouched" do
       %{workflow: workflow, steps: steps, task: task} = setup_workflow_with_steps()
 
       {:ok, task} = TaskWorkflows.assign_workflow(task, workflow)
 
-      # Create a pre-existing "entered" row for the target step (e.g., from a previous dispatch cycle)
-      {:ok, _pre_existing} =
+      {:ok, pre_existing} =
         Accounts.StepExecutions.insert(task.user_id, %{
           "task_id" => task.id,
           "project_id" => task.project_id,
           "workflow_id" => workflow.id,
           "step_id" => steps.in_progress.id,
           "step_name" => steps.in_progress.name,
-          "status" => "entered"
+          "status" => "completed"
         })
 
-      # Advance to the same step via skip_orchestrator_check (simulating orchestrator call)
       {:ok, _updated_task} =
         TaskWorkflows.advance_to_step(task, steps.in_progress.id, skip_orchestrator_check: true)
 
-      # With the new architecture, advance_to_step only updates current_step_id
-      # Invalidation of old "entered" rows happens at dispatch time in the dispatcher
       all_executions =
         StepExecutions.all(
           conditions: [task_id: task.id, step_id: steps.in_progress.id],
           order_by: [asc: :inserted_at]
         )
 
-      # We still have the original "entered" row (advance_to_step doesn't create or invalidate)
       assert length(all_executions) == 1
-      original = List.first(all_executions)
-      assert original.status == "entered"
+      [reloaded] = all_executions
+      assert reloaded.id == pre_existing.id
+      assert reloaded.status == "completed"
     end
 
-    test "move_to_step does not invalidate pre-existing entered rows (dispatcher will handle at dispatch time)" do
+    test "move_to_step leaves existing executions untouched" do
       %{workflow: workflow, steps: steps, task: task} = setup_workflow_with_steps()
 
       {:ok, task} = TaskWorkflows.assign_workflow(task, workflow)
 
-      # Create a pre-existing "entered" row for the target step (e.g., from a previous dispatch cycle)
-      {:ok, _pre_existing} =
+      {:ok, pre_existing} =
         Accounts.StepExecutions.insert(task.user_id, %{
           "task_id" => task.id,
           "project_id" => task.project_id,
           "workflow_id" => workflow.id,
           "step_id" => steps.in_progress.id,
           "step_name" => steps.in_progress.name,
-          "status" => "entered"
+          "status" => "completed"
         })
 
-      # Move to the same step via skip_orchestrator_check (simulating orchestrator call)
       {:ok, _updated_task} =
         TaskWorkflows.move_to_step(task, steps.in_progress.id, skip_orchestrator_check: true)
 
-      # With the new architecture, move_to_step only updates current_step_id
-      # Invalidation of old "entered" rows happens at dispatch time in the dispatcher
       all_executions =
         StepExecutions.all(
           conditions: [task_id: task.id, step_id: steps.in_progress.id],
           order_by: [asc: :inserted_at]
         )
 
-      # We still have the original "entered" row (move_to_step doesn't create or invalidate)
       assert length(all_executions) == 1
-      original = List.first(all_executions)
-      assert original.status == "entered"
+      [reloaded] = all_executions
+      assert reloaded.id == pre_existing.id
+      assert reloaded.status == "completed"
     end
   end
 

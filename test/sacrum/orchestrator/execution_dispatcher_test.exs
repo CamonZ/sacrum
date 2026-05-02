@@ -64,12 +64,12 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
     task
   end
 
-  defp create_entered_execution(user, task, step) do
+  defp create_previous_execution(user, task, step) do
     import Ecto.Query
 
     query =
       from(e in Sacrum.Repo.Schemas.StepExecution,
-        where: e.task_id == ^task.id and e.step_id == ^step.id and e.status == "entered",
+        where: e.task_id == ^task.id and e.step_id == ^step.id and e.status == "invalidated",
         limit: 1
       )
 
@@ -82,7 +82,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
             "workflow_id" => step.workflow_id,
             "step_id" => step.id,
             "step_name" => step.name,
-            "status" => "entered"
+            "status" => "invalidated"
           })
 
         execution
@@ -112,7 +112,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       task = create_task(ctx.user, ctx.project)
       task = assign_workflow(task, ctx.workflow)
       task = PromptRenderer.preload_for_rendering(task)
-      _execution = create_entered_execution(ctx.user, task, step)
+      _execution = create_previous_execution(ctx.user, task, step)
 
       subscribe_to_project(ctx.project)
 
@@ -135,7 +135,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       task = create_task(ctx.user, ctx.project)
       task = assign_workflow(task, ctx.workflow)
       task = PromptRenderer.preload_for_rendering(task)
-      _execution = create_entered_execution(ctx.user, task, step)
+      _execution = create_previous_execution(ctx.user, task, step)
 
       subscribe_to_project(ctx.project)
 
@@ -177,7 +177,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       # Force-reload from DB to pick up the newly inserted sections
       task = Sacrum.Repo.get!(Sacrum.Repo.Schemas.Task, task.id)
       task = PromptRenderer.preload_for_rendering(task)
-      _execution = create_entered_execution(ctx.user, task, step)
+      _execution = create_previous_execution(ctx.user, task, step)
 
       subscribe_to_project(ctx.project)
 
@@ -201,7 +201,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       task = create_task(ctx.user, ctx.project)
       task = assign_workflow(task, ctx.workflow)
       task = PromptRenderer.preload_for_rendering(task)
-      _execution = create_entered_execution(ctx.user, task, step)
+      _execution = create_previous_execution(ctx.user, task, step)
 
       subscribe_to_project(ctx.project)
 
@@ -224,7 +224,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       task = create_task(ctx.user, ctx.project)
       task = assign_workflow(task, ctx.workflow)
       task = PromptRenderer.preload_for_rendering(task)
-      _execution = create_entered_execution(ctx.user, task, step)
+      _execution = create_previous_execution(ctx.user, task, step)
 
       subscribe_to_project(ctx.project)
 
@@ -262,8 +262,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
           "output" => "Analysis complete"
         })
 
-      # Create current entered execution
-      _current_exec = create_entered_execution(ctx.user, task, step)
+      _current_exec = create_previous_execution(ctx.user, task, step)
 
       task = PromptRenderer.preload_for_rendering(task)
 
@@ -290,7 +289,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       task = assign_workflow(task, ctx.workflow)
       task = PromptRenderer.preload_for_rendering(task)
 
-      _execution = create_entered_execution(ctx.user, task, step)
+      _execution = create_previous_execution(ctx.user, task, step)
 
       subscribe_to_project(ctx.project)
 
@@ -335,8 +334,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
           "output" => "Second analysis"
         })
 
-      # Current entered execution
-      _current = create_entered_execution(ctx.user, task, step)
+      _current = create_previous_execution(ctx.user, task, step)
 
       task = PromptRenderer.preload_for_rendering(task)
 
@@ -416,7 +414,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
           "output" => "{\"verdict\": \"approved\", \"should_retry\": false}"
         })
 
-      _current_exec = create_entered_execution(ctx.user, task, current_step)
+      _current_exec = create_previous_execution(ctx.user, task, current_step)
 
       task = PromptRenderer.preload_for_rendering(task)
 
@@ -456,7 +454,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
           "output" => "Just a plain string output"
         })
 
-      _current_exec = create_entered_execution(ctx.user, task, current_step)
+      _current_exec = create_previous_execution(ctx.user, task, current_step)
 
       task = PromptRenderer.preload_for_rendering(task)
 
@@ -504,7 +502,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
           "output" => "{ broken json"
         })
 
-      _current_exec = create_entered_execution(ctx.user, task, current_step)
+      _current_exec = create_previous_execution(ctx.user, task, current_step)
 
       task = PromptRenderer.preload_for_rendering(task)
 
@@ -559,7 +557,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
           "output" => fenced_output
         })
 
-      _current_exec = create_entered_execution(ctx.user, task, current_step)
+      _current_exec = create_previous_execution(ctx.user, task, current_step)
 
       task = PromptRenderer.preload_for_rendering(task)
 
@@ -629,7 +627,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
           "output" => "{\"result\": \"success\"}"
         })
 
-      _current_exec = create_entered_execution(ctx.user, task, current_step)
+      _current_exec = create_previous_execution(ctx.user, task, current_step)
 
       task = PromptRenderer.preload_for_rendering(task)
 
@@ -669,7 +667,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
           "output" => "plain string output"
         })
 
-      _current_exec = create_entered_execution(ctx.user, task, current_step)
+      _current_exec = create_previous_execution(ctx.user, task, current_step)
 
       task = PromptRenderer.preload_for_rendering(task)
 
@@ -701,7 +699,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       insert_execution(ctx, task, step.name, "completed")
       insert_execution(ctx, task, step.name, "completed")
       insert_execution(ctx, task, step.name, "failed")
-      create_entered_execution(ctx.user, task, step)
+      create_previous_execution(ctx.user, task, step)
 
       assert dispatch_prompt(ctx, task, step) == "This is run number 3"
     end
@@ -714,12 +712,12 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
       task = create_task(ctx.user, ctx.project) |> assign_workflow(ctx.workflow)
 
-      create_entered_execution(ctx.user, task, step)
+      create_previous_execution(ctx.user, task, step)
 
       assert dispatch_prompt(ctx, task, step) == "Run count: 0"
     end
 
-    test "run_count excludes 'entered' status executions", ctx do
+    test "run_count excludes 'invalidated' status executions", ctx do
       step =
         create_step(ctx.user, ctx.workflow, %{
           "prompt" => "Run count is {{ execution.run_count }}"
@@ -728,8 +726,8 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       task = create_task(ctx.user, ctx.project) |> assign_workflow(ctx.workflow)
 
       insert_execution(ctx, task, step.name, "completed")
-      insert_execution(ctx, task, step.name, "entered")
-      create_entered_execution(ctx.user, task, step)
+      insert_execution(ctx, task, step.name, "invalidated")
+      create_previous_execution(ctx.user, task, step)
 
       assert dispatch_prompt(ctx, task, step) == "Run count is 1"
     end
@@ -746,7 +744,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       insert_execution(ctx, task, step.name, "completed")
       insert_execution(ctx, task, step.name, "completed")
       insert_execution(ctx, task, step.name, "failed")
-      create_entered_execution(ctx.user, task, step)
+      create_previous_execution(ctx.user, task, step)
 
       assert dispatch_prompt(ctx, task, step) == "total=3 ok=2 ko=1"
     end
@@ -766,7 +764,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       insert_execution(ctx, task, step_a.name, "completed")
       insert_execution(ctx, task, step_a.name, "completed")
       insert_execution(ctx, task, step_b.name, "completed")
-      create_entered_execution(ctx.user, task, step_b)
+      create_previous_execution(ctx.user, task, step_b)
 
       assert dispatch_prompt(ctx, task, step_b) == "Step B run count: 1"
     end

@@ -188,7 +188,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
   end
 
   defp simulate_daemon_completion(task_id, project_id, output \\ "step completed") do
-    execution = get_latest_entered_execution(task_id)
+    execution = get_latest_started_execution(task_id)
 
     # Simulate what the daemon does: update status to "completed" with output
     {:ok, updated} =
@@ -208,7 +208,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
   end
 
   defp simulate_daemon_failure(task_id, project_id) do
-    execution = get_latest_entered_execution(task_id)
+    execution = get_latest_started_execution(task_id)
 
     {:ok, updated} =
       execution
@@ -224,7 +224,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     updated
   end
 
-  defp get_latest_entered_execution(task_id) do
+  defp get_latest_started_execution(task_id) do
     from(e in StepExecution,
       where: e.task_id == ^task_id and e.status == "started",
       order_by: [desc: e.inserted_at],
@@ -330,12 +330,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       executions = get_all_executions(task.id)
       step_names = Enum.map(executions, & &1.step_name)
 
-      # assign_workflow creates "entered" for step_1 (transitioned to "started" at dispatch),
-      # dispatcher creates "started" for step_2,
-      # step_3 is final, so no execution is created (task completes without dispatching it)
       assert "step_1" in step_names
       assert "step_2" in step_names
-      # step_3 should NOT have an execution since it's final and doesn't get dispatched
       assert "step_3" not in step_names
     end
 
@@ -2577,7 +2573,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       cleanup_spawned_orchestrators([child_task_1.id])
     end
 
-    test "inter-workflow routing marks prior entered execution as invalidated" do
+    test "inter-workflow routing updates task position without invalidating prior executions" do
       user = create_user()
       project = create_project(user)
 
@@ -2630,11 +2626,11 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
           workflow_id: dest_workflow.id,
           step_id: dest_step.id,
           step_name: dest_step.name,
-          status: "entered"
+          status: "invalidated"
         })
         |> Repo.insert()
 
-      {:ok, _updated_task} =
+      {:ok, updated_task} =
         Sacrum.Orchestrator.Routing.InterWorkflow.handle_inter_workflow_routing(
           %FSMData{
             task: task,
@@ -2645,18 +2641,23 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
           nil
         )
 
+      # Verify that inter-workflow routing updates the task's workflow and step
+      assert updated_task.workflow_id == dest_workflow.id
+      assert updated_task.current_step_id == dest_step.id
+
+      # Verify that prior executions are not modified
       prior_executions =
         Repo.all(
           from(e in StepExecution,
             where:
               e.task_id == ^task.id and
                 e.workflow_id == ^dest_workflow.id and
-                e.step_id == ^dest_step.id and
-                e.status == "invalidated"
+                e.step_id == ^dest_step.id
           )
         )
 
       assert length(prior_executions) >= 1
+      assert Enum.all?(prior_executions, &(&1.status == "invalidated"))
     end
   end
 end

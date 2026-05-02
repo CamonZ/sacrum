@@ -44,10 +44,6 @@ defmodule Sacrum.Repo.Schemas.StepExecution do
     |> foreign_key_constraint(:workflow_id)
     |> foreign_key_constraint(:step_id)
     |> foreign_key_constraint(:project_id)
-    |> unique_constraint([:task_id, :workflow_id, :step_id],
-      name: "idx_step_executions_entered_unique",
-      message: "only one entered execution per task/workflow/step"
-    )
   end
 
   @spec update_changeset(t(), map()) :: Ecto.Changeset.t()
