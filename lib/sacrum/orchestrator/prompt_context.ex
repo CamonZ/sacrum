@@ -43,7 +43,7 @@ defmodule Sacrum.Orchestrator.PromptContext do
   end
 
   @doc """
-  Builds the task context: id, title, description, level, tags, code_refs,
+  Builds the task context: id, title, description, level, tags, worktree, code_refs,
   plus one entry per section type (constraints, goals, etc.).
   """
   @spec build_task_context(Sacrum.Repo.Schemas.Task.t()) :: map()
@@ -53,7 +53,8 @@ defmodule Sacrum.Orchestrator.PromptContext do
       "title" => task.title || "",
       "description" => task.description || "",
       "level" => task.level || "",
-      "tags" => task.tags || []
+      "tags" => task.tags || [],
+      "worktree" => task.worktree || ""
     }
     |> Map.merge(group_sections_by_type(task.sections))
     |> Map.put("code_refs", build_code_refs_list(task.code_refs))
