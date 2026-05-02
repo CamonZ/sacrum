@@ -588,6 +588,57 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
       assert result["errors"] != nil
     end
+
+    test "stopOrchestrator marks an in_progress StepExecution as cancelled", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+
+      {:ok, execution} =
+        Accounts.StepExecutions.insert(user.id, %{
+          task_id: task.id,
+          step_name: "Test Step",
+          status: "in_progress",
+          project_id: project.id
+        })
+
+      test_pid = self()
+      ref = make_ref()
+
+      fake_orchestrator =
+        spawn_link(fn ->
+          {:ok, _} = Registry.register(Sacrum.Orchestrator.TaskRegistry, task.id, nil)
+          send(test_pid, {ref, :registered})
+          receive do: ({:stop, ^ref} -> :ok)
+        end)
+
+      receive do: ({^ref, :registered} -> :ok)
+
+      on_exit(fn ->
+        if Process.alive?(fake_orchestrator), do: send(fake_orchestrator, {:stop, ref})
+      end)
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            stopOrchestrator(taskId: "#{task.id}") {
+              id
+              title
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] == nil
+      assert result["data"]["stopOrchestrator"]["id"] == task.id
+
+      assert Sacrum.Repo.get!(Sacrum.Repo.Schemas.StepExecution, execution.id).status ==
+               "cancelled"
+    end
   end
 
   describe "workflow queries" do
