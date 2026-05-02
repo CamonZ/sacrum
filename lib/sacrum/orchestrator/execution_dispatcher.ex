@@ -2,17 +2,20 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   @moduledoc """
   Dispatches step executions to the daemon.
 
-  Finds the existing "entered" StepExecution for the current step,
+  Creates a StepExecution row in "started" status for the current step,
   renders the prompt using PromptRenderer with Liquid/Solid templates,
   and broadcasts a run_step event to the daemon.
+
+  The dispatcher is the single source of StepExecution row creation for
+  execute/evaluate/route steps. Transitions (advance_to_step, move_to_step)
+  only update current_step_id; execution rows are created exclusively
+  at dispatch time.
 
   Used by both the GraphQL runStep resolver and the TaskOrchestrator to
   ensure consistent execution dispatch behavior.
   """
 
   require Logger
-
-  import Ecto.Query
 
   alias Sacrum.Accounts
   alias Sacrum.Orchestrator.{ExecutionHistory, PromptContext, PromptRenderer}
@@ -21,23 +24,19 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   alias Sacrum.Repo.Schemas.StepExecution
 
   @doc """
-  Dispatches a step execution to the daemon.
+  Creates a "started" StepExecution for the current step and broadcasts run_step
+  to the daemon. The dispatcher is the single source of execution row creation
+  for execute/route/evaluate steps.
 
-  Fetches the step, finds the existing "entered" StepExecution scoped to
-  the current step and workflow, renders the prompt using PromptRenderer
-  with Liquid template syntax, broadcasts the run_step event, and returns
-  the execution.
-
-  Returns:
-    - {:ok, execution} on success
-    - {:error, :no_entered_execution} if no "entered" execution exists
-    - {:error, reason} on other failures
+  `handoff` is attached to the new row when present (typically supplied by the
+  orchestrator from FSMData after a route step).
   """
-  @spec create_and_dispatch(String.t(), struct(), String.t()) ::
+  @spec create_and_dispatch(String.t(), struct(), String.t(), map() | nil) ::
           {:ok, StepExecution.t()} | {:error, term()}
-  def create_and_dispatch(user_id, task, step_id) do
+  def create_and_dispatch(user_id, task, step_id, handoff \\ nil) do
     with {:ok, step} <- fetch_step(user_id, step_id),
-         {:ok, execution} <- find_entered_execution(task, step_id, task.workflow_id) do
+         :ok <- validate_workflow(task),
+         {:ok, execution} <- create_started_execution(task, step, handoff) do
       execution_data = ExecutionHistory.build_execution_data(task.id, execution)
       context = PromptContext.build_context(task, execution_data, step)
 
@@ -53,6 +52,8 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
           %{execution: updated_execution, step: step, task: task, rendered_prompt: rendered},
           task.project_id
         )
+
+        Broadcaster.broadcast_step_execution({:ok, updated_execution}, :step_execution_created)
 
         {:ok, updated_execution}
       end
@@ -70,23 +71,22 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
     )
   end
 
-  defp find_entered_execution(_task, _step_id, nil), do: {:error, :no_workflow}
+  defp validate_workflow(%{workflow_id: nil}), do: {:error, :no_workflow}
+  defp validate_workflow(_task), do: :ok
 
-  defp find_entered_execution(task, step_id, workflow_id) do
-    query =
-      from(e in StepExecution,
-        where:
-          e.task_id == ^task.id and
-            e.step_id == ^step_id and
-            e.workflow_id == ^workflow_id and
-            e.status == "entered",
-        order_by: [desc: e.inserted_at],
-        limit: 1
-      )
+  defp create_started_execution(task, step, handoff) do
+    attrs = %{
+      task_id: task.id,
+      workflow_id: task.workflow_id,
+      step_id: step.id,
+      step_name: step.name,
+      status: "started"
+    }
 
-    case Repo.one(query) do
-      nil -> {:error, :no_entered_execution}
-      execution -> {:ok, execution}
-    end
+    attrs = if is_map(handoff), do: Map.put(attrs, :handoff, handoff), else: attrs
+
+    %StepExecution{user_id: task.user_id, project_id: task.project_id}
+    |> StepExecution.create_changeset(attrs)
+    |> Repo.insert()
   end
 end

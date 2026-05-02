@@ -44,7 +44,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
          {:ok, updated_task} <-
            route_task_to_destination(data, dest_id, transition_type, handoff) do
       ExecutionPool.release_slot(data.slot_id)
-      new_data = %{data | slot_id: nil}
+      new_data = %{data | slot_id: nil, pending_handoff: handoff}
 
       case transition_type do
         "intra_workflow" ->

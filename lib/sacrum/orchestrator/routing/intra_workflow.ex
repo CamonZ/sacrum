@@ -13,11 +13,16 @@ defmodule Sacrum.Orchestrator.Routing.IntraWorkflow do
 
   alias Sacrum.Orchestrator.{FSMData, TaskCompletion}
   alias Sacrum.Repo
+  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.{StepTransition, WorkflowStep}
   alias Sacrum.Repo.TaskWorkflows
 
   @doc """
   Routes to a destination step within the same workflow.
+
+  Only updates the task's current_step_id; does not create a StepExecution row.
+  Handoff travels through FSMData (set by the caller) and is attached to the
+  StepExecution row when the dispatcher creates it.
   """
   @spec handle_intra_workflow_routing(FSMData.t(), String.t(), map() | nil) ::
           {:ok, struct()} | {:error, term()}
@@ -27,13 +32,12 @@ defmodule Sacrum.Orchestrator.Routing.IntraWorkflow do
     with {:ok, _dest_step} <- validate_destination_step(data, dest_step_id),
          :ok <- validate_step_transition_exists(data.task.current_step_id, dest_step_id),
          {:ok, updated_task} <-
-           TaskWorkflows.advance_to_step(data.task, dest_step_id, handoff,
-             skip_orchestrator_check: true
-           ) do
+           TaskWorkflows.advance_to_step(data.task, dest_step_id, skip_orchestrator_check: true) do
       Logger.info(
         "[TaskOrchestrator:#{task_id}] Route step routed intra_workflow from #{data.task.current_step_id} to #{dest_step_id} handoff=#{inspect(handoff != nil)}"
       )
 
+      Broadcaster.broadcast({:ok, updated_task}, :task_updated, :project)
       {:ok, updated_task}
     else
       {:error, reason} ->

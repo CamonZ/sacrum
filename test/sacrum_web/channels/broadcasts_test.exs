@@ -96,7 +96,7 @@ defmodule SacrumWeb.BroadcastsTest do
   end
 
   describe "step execution broadcasts on TaskWorkflows" do
-    test "assign_workflow broadcasts both task_updated and step_execution_created" do
+    test "assign_workflow broadcasts task_updated only (execution created at dispatch time)" do
       {_user, project} = setup_channel()
 
       {:ok, task} = Tasks.insert(project, %{title: "New Task"})
@@ -111,13 +111,10 @@ defmodule SacrumWeb.BroadcastsTest do
       assert task_payload.workflow_id == workflow.id
       assert task_payload.current_step_id == step1.id
 
-      assert_broadcast "step_execution_created", exec_payload
-      assert exec_payload.workflow_id == workflow.id
-      assert exec_payload.step_name == "step1"
-      assert exec_payload.status == "entered"
+      refute_broadcast "step_execution_created", _, 100
     end
 
-    test "advance_to_step broadcasts both task_updated and step_execution_created" do
+    test "advance_to_step broadcasts task_updated only (execution created at dispatch time)" do
       {_user, project} = setup_channel()
 
       {:ok, task} = Tasks.insert(project, %{title: "New Task"})
@@ -127,20 +124,16 @@ defmodule SacrumWeb.BroadcastsTest do
 
       {:ok, assigned_task} = TaskWorkflows.assign_workflow(task, workflow)
       assert_broadcast "task_updated", _
-      assert_broadcast "step_execution_created", _
 
       {:ok, _advanced_task} = TaskWorkflows.advance_to_step(assigned_task, step2.id)
 
+      # advance_to_step now only broadcasts task_updated, not step_execution_created
+      # Execution creation is delegated to ExecutionDispatcher.create_and_dispatch
       assert_broadcast "task_updated", task_payload
       assert task_payload.current_step_id == step2.id
-
-      assert_broadcast "step_execution_created", exec_payload
-      assert exec_payload.step_name == "step2"
-      assert exec_payload.status == "entered"
-      assert exec_payload.workflow_id == workflow.id
     end
 
-    test "move_to_step broadcasts both task_updated and step_execution_created" do
+    test "move_to_step broadcasts task_updated only (execution created at dispatch time)" do
       {_user, project} = setup_channel()
 
       {:ok, task} = Tasks.insert(project, %{title: "New Task"})
@@ -150,17 +143,13 @@ defmodule SacrumWeb.BroadcastsTest do
 
       {:ok, assigned_task} = TaskWorkflows.assign_workflow(task, workflow)
       assert_broadcast "task_updated", _
-      assert_broadcast "step_execution_created", _
 
       {:ok, _moved_task} = TaskWorkflows.move_to_step(assigned_task, step2.id)
 
+      # move_to_step now only broadcasts task_updated, not step_execution_created
+      # Execution creation is delegated to ExecutionDispatcher.create_and_dispatch
       assert_broadcast "task_updated", task_payload
       assert task_payload.current_step_id == step2.id
-
-      assert_broadcast "step_execution_created", exec_payload
-      assert exec_payload.step_name == "step2"
-      assert exec_payload.status == "entered"
-      assert exec_payload.workflow_id == workflow.id
     end
 
     test "assign_workflow does not broadcast on error" do

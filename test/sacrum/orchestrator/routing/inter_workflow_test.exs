@@ -328,7 +328,7 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflowTest do
       assert updated_task.current_step_id == to_step.id
     end
 
-    test "creates entered execution with handoff" do
+    test "does not create a StepExecution row at routing time" do
       user = create_user()
       project = create_project(user)
       from_workflow = create_workflow(user, project, %{"name" => "From"})
@@ -344,20 +344,22 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflowTest do
 
       handoff = %{"key" => "value"}
 
-      {:ok, _updated_task} =
+      {:ok, updated_task} =
         InterWorkflow.assign_destination_workflow(task, to_workflow, to_step.id, handoff)
 
-      execution =
+      assert updated_task.workflow_id == to_workflow.id
+      assert updated_task.current_step_id == to_step.id
+
+      execution_count =
         from(e in Sacrum.Repo.Schemas.StepExecution,
           where:
             e.task_id == ^task.id and
               e.workflow_id == ^to_workflow.id and
-              e.step_id == ^to_step.id and
-              e.status == "entered"
+              e.step_id == ^to_step.id
         )
-        |> Repo.one!()
+        |> Repo.aggregate(:count)
 
-      assert execution.handoff == handoff
+      assert execution_count == 0
     end
 
     test "resolves to initial step when target_step_id is nil" do
@@ -440,7 +442,7 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflowTest do
   end
 
   describe "broadcast on inter-workflow routing" do
-    test "broadcasts task_updated and step_execution_created on successful routing" do
+    test "broadcasts task_updated on successful routing (no step_execution_created)" do
       user = create_user()
       project = create_project(user)
 
@@ -469,16 +471,15 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflowTest do
 
       assert {:ok, _} = InterWorkflow.handle_inter_workflow_routing(data, to_workflow.id, nil)
 
+      # Per ticket constraint, routing helpers do NOT create StepExecution rows.
+      # Only task_updated is broadcast.
       assert_broadcast "task_updated", task_payload
       assert task_payload.id == task.id
       assert task_payload.workflow_id == to_workflow.id
       assert task_payload.current_step_id == to_step.id
 
-      assert_broadcast "step_execution_created", execution_payload
-      assert execution_payload.task_id == task.id
-      assert execution_payload.workflow_id == to_workflow.id
-      assert execution_payload.step_name == to_step.name
-      assert execution_payload.status == "entered"
+      # Verify no step_execution_created is broadcast
+      refute_broadcast "step_execution_created", _execution_payload
     end
 
     test "does not broadcast on failed validation (no transition)" do

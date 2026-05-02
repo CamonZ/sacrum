@@ -3,9 +3,11 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflow do
   Route step destination in a different workflow.
 
   Validates the destination workflow and transition, resolves the target step
-  (explicit, initial, or first by order), and atomically updates the task and
-  inserts an `"entered"` StepExecution in the new workflow. The continuation
-  reloads the FSM's workflow/step cache since the workflow has changed.
+  (explicit, initial, or first by order), and atomically updates the task's
+  workflow_id, current_step_id, and pending_handoff. Does not create a
+  StepExecution row — execution rows are created exclusively by the dispatcher
+  at dispatch time. The continuation reloads the FSM's workflow/step cache
+  since the workflow has changed.
   """
 
   require Logger
@@ -13,7 +15,7 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflow do
   import Ecto.Query
 
   alias Ecto.{Changeset, Multi}
-  alias Sacrum.Orchestrator.{FSMData, Retry, TaskCompletion, WorkflowGraph}
+  alias Sacrum.Orchestrator.{FSMData, TaskCompletion, WorkflowGraph}
   alias Sacrum.Repo
   alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.{StepExecution, Workflow, WorkflowStep, WorkflowTransition}
@@ -159,9 +161,10 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflow do
   end
 
   @doc """
-  Runs the transaction that updates the task's workflow/current_step and
-  inserts the `"entered"` StepExecution. Invalidates any prior "entered" row
-  for the target step in the destination workflow.
+  Updates the task's workflow_id and current_step_id atomically, invalidating
+  any stale "entered" row left over from a prior routing pass. Does not create
+  a StepExecution row — that happens exclusively at dispatch time. Handoff
+  travels through FSMData and lands on the StepExecution row at dispatch.
   """
   @spec do_assign_destination_workflow(struct(), struct(), struct(), map() | nil) ::
           {:ok, struct()} | {:error, term()}
@@ -179,8 +182,6 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflow do
         ),
         set: [status: "invalidated"]
       )
-      # Invalidated is correct here: inter-workflow routing is a genuine supersession,
-      # not a natural progression from a satisfied wait condition.
       |> Multi.update(
         :task,
         Changeset.change(task, %{
@@ -188,23 +189,15 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflow do
           current_step_id: target_step.id
         })
       )
-      |> Multi.insert(
-        :step_execution,
-        Retry.entered_step_execution_changeset(task, target_step, dest_workflow.id,
-          handoff: handoff
-        )
-      )
 
     case Repo.transaction(multi) do
-      {:ok, %{task: updated_task, step_execution: execution}} ->
+      {:ok, %{task: updated_task}} ->
         Logger.info(
           "[TaskOrchestrator:#{task.id}] Assigned destination workflow=#{dest_workflow.id} " <>
-            "target_step=#{target_step.id} (#{target_step.name}) execution=#{execution.id} " <>
-            "handoff=#{inspect(handoff != nil)}"
+            "target_step=#{target_step.id} (#{target_step.name}) handoff=#{inspect(handoff != nil)}"
         )
 
         Broadcaster.broadcast({:ok, updated_task}, :task_updated, :project)
-        Broadcaster.broadcast_step_execution({:ok, execution}, :step_execution_created)
 
         {:ok, updated_task}
 

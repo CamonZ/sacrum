@@ -92,7 +92,7 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
       assert updated.current_step_id == steps.backlog.id
     end
 
-    test "creates a StepExecution record" do
+    test "does not create a StepExecution record (dispatcher owns creation)" do
       %{workflow: workflow, task: task} = setup_workflow_with_steps()
 
       {:ok, _updated} = TaskWorkflows.assign_workflow(task, workflow)
@@ -100,9 +100,7 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
       executions =
         StepExecutions.all(conditions: [task_id: task.id], order_by: [asc: :inserted_at])
 
-      assert length(executions) == 1
-      assert hd(executions).step_name == "backlog"
-      assert hd(executions).status == "entered"
+      assert executions == []
     end
 
     test "falls back to first step by step_order when no initial_step_id" do
@@ -180,18 +178,22 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
       assert moved_back.current_step_id == steps.backlog.id
     end
 
-    test "creates StepExecution record for the move" do
+    test "updates current_step_id without creating StepExecution (dispatcher owns creation)" do
       %{workflow: workflow, steps: steps, task: task} = setup_workflow_with_steps()
       {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
 
-      {:ok, _moved} = TaskWorkflows.move_to_step(assigned, steps.in_progress.id)
-
-      executions =
+      executions_before =
         StepExecutions.all(conditions: [task_id: task.id], order_by: [asc: :inserted_at])
 
-      assert length(executions) == 2
-      assert List.last(executions).step_name == "in_progress"
-      assert List.last(executions).status == "entered"
+      assert executions_before == []
+
+      {:ok, moved} = TaskWorkflows.move_to_step(assigned, steps.in_progress.id)
+
+      executions_after =
+        StepExecutions.all(conditions: [task_id: task.id], order_by: [asc: :inserted_at])
+
+      assert executions_after == []
+      assert moved.current_step_id == steps.in_progress.id
     end
 
     test "returns error when no transition exists between steps" do
@@ -260,18 +262,22 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
       assert advanced.current_step_id == steps.in_progress.id
     end
 
-    test "creates an entered StepExecution for the target step" do
+    test "updates current_step_id without creating StepExecution (dispatcher owns creation)" do
       %{workflow: workflow, steps: steps, task: task} = setup_workflow_with_steps()
       {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
 
-      {:ok, _advanced} = TaskWorkflows.advance_to_step(assigned, steps.in_progress.id)
-
-      executions =
+      executions_before =
         StepExecutions.all(conditions: [task_id: task.id], order_by: [asc: :inserted_at])
 
-      assert length(executions) == 2
-      assert List.last(executions).step_name == "in_progress"
-      assert List.last(executions).status == "entered"
+      assert executions_before == []
+
+      {:ok, advanced} = TaskWorkflows.advance_to_step(assigned, steps.in_progress.id)
+
+      executions_after =
+        StepExecutions.all(conditions: [task_id: task.id], order_by: [asc: :inserted_at])
+
+      assert executions_after == []
+      assert advanced.current_step_id == steps.in_progress.id
     end
 
     test "does not validate transition existence" do
@@ -327,111 +333,6 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
 
       assert {:error, :step_not_found} =
                TaskWorkflows.advance_to_step(assigned, Ecto.UUID.generate())
-    end
-  end
-
-  describe "advance_to_step/3 with handoff" do
-    test "persists handoff on new execution atomically" do
-      %{workflow: workflow, task: task, steps: steps} = setup_workflow_with_steps()
-      {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
-
-      handoff_data = %{"feedback" => "needs_review", "reviewer" => "john@example.com"}
-
-      {:ok, updated} = TaskWorkflows.advance_to_step(assigned, steps.in_progress.id, handoff_data)
-
-      assert updated.current_step_id == steps.in_progress.id
-
-      # Verify the new execution has handoff persisted
-      executions =
-        StepExecutions.all(
-          conditions: [task_id: task.id, step_name: "in_progress"],
-          order_by: [desc: :inserted_at]
-        )
-
-      latest = List.first(executions)
-      assert latest.status == "entered"
-      assert latest.handoff == handoff_data
-    end
-
-    test "handles nil handoff gracefully" do
-      %{workflow: workflow, task: task, steps: steps} = setup_workflow_with_steps()
-      {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
-
-      {:ok, updated} = TaskWorkflows.advance_to_step(assigned, steps.in_progress.id, nil)
-
-      assert updated.current_step_id == steps.in_progress.id
-
-      executions =
-        StepExecutions.all(
-          conditions: [task_id: task.id, step_name: "in_progress"],
-          order_by: [desc: :inserted_at]
-        )
-
-      latest = List.first(executions)
-      assert latest.status == "entered"
-      assert is_nil(latest.handoff)
-    end
-
-    test "uses default nil when handoff is not provided" do
-      %{workflow: workflow, task: task, steps: steps} = setup_workflow_with_steps()
-      {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
-
-      {:ok, updated} = TaskWorkflows.advance_to_step(assigned, steps.in_progress.id)
-
-      assert updated.current_step_id == steps.in_progress.id
-
-      executions =
-        StepExecutions.all(
-          conditions: [task_id: task.id, step_name: "in_progress"],
-          order_by: [desc: :inserted_at]
-        )
-
-      latest = List.first(executions)
-      assert is_nil(latest.handoff)
-    end
-  end
-
-  describe "move_to_step/3 with handoff" do
-    test "persists handoff on new execution atomically" do
-      %{workflow: workflow, task: task, steps: steps} = setup_workflow_with_steps()
-      {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
-      {:ok, in_progress} = TaskWorkflows.move_to_step(assigned, steps.in_progress.id)
-
-      handoff_data = %{"status" => "approved", "timestamp" => "2025-04-18T10:00:00Z"}
-
-      {:ok, updated} = TaskWorkflows.move_to_step(in_progress, steps.done.id, handoff_data)
-
-      assert updated.current_step_id == steps.done.id
-
-      # Verify the new execution has handoff persisted
-      executions =
-        StepExecutions.all(
-          conditions: [task_id: task.id, step_name: "done"],
-          order_by: [desc: :inserted_at]
-        )
-
-      latest = List.first(executions)
-      assert latest.status == "entered"
-      assert latest.handoff == handoff_data
-    end
-
-    test "handles nil handoff on move_to_step" do
-      %{workflow: workflow, task: task, steps: steps} = setup_workflow_with_steps()
-      {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
-      {:ok, in_progress} = TaskWorkflows.move_to_step(assigned, steps.in_progress.id)
-
-      {:ok, updated} = TaskWorkflows.move_to_step(in_progress, steps.done.id, nil)
-
-      assert updated.current_step_id == steps.done.id
-
-      executions =
-        StepExecutions.all(
-          conditions: [task_id: task.id, step_name: "done"],
-          order_by: [desc: :inserted_at]
-        )
-
-      latest = List.first(executions)
-      assert is_nil(latest.handoff)
     end
   end
 
@@ -505,12 +406,12 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
   end
 
   describe "invalidate-on-leave" do
-    test "advance_to_step invalidates prior entered row for target step" do
+    test "advance_to_step does not invalidate pre-existing entered rows (dispatcher will handle at dispatch time)" do
       %{workflow: workflow, steps: steps, task: task} = setup_workflow_with_steps()
 
       {:ok, task} = TaskWorkflows.assign_workflow(task, workflow)
 
-      # Create a pre-existing "entered" row for the target step (simulating CLI handoff)
+      # Create a pre-existing "entered" row for the target step (e.g., from a previous dispatch cycle)
       {:ok, _pre_existing} =
         Accounts.StepExecutions.insert(task.user_id, %{
           "task_id" => task.id,
@@ -523,31 +424,28 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
 
       # Advance to the same step via skip_orchestrator_check (simulating orchestrator call)
       {:ok, _updated_task} =
-        TaskWorkflows.advance_to_step(task, steps.in_progress.id, nil,
-          skip_orchestrator_check: true
-        )
+        TaskWorkflows.advance_to_step(task, steps.in_progress.id, skip_orchestrator_check: true)
 
-      # Verify the pre-existing row is invalidated
+      # With the new architecture, advance_to_step only updates current_step_id
+      # Invalidation of old "entered" rows happens at dispatch time in the dispatcher
       all_executions =
         StepExecutions.all(
           conditions: [task_id: task.id, step_id: steps.in_progress.id],
           order_by: [asc: :inserted_at]
         )
 
-      assert length(all_executions) == 2
-      invalidated = List.first(all_executions)
-      assert invalidated.status == "invalidated"
-
-      entered = List.last(all_executions)
-      assert entered.status == "entered"
+      # We still have the original "entered" row (advance_to_step doesn't create or invalidate)
+      assert length(all_executions) == 1
+      original = List.first(all_executions)
+      assert original.status == "entered"
     end
 
-    test "move_to_step invalidates prior entered row for target step" do
+    test "move_to_step does not invalidate pre-existing entered rows (dispatcher will handle at dispatch time)" do
       %{workflow: workflow, steps: steps, task: task} = setup_workflow_with_steps()
 
       {:ok, task} = TaskWorkflows.assign_workflow(task, workflow)
 
-      # Create a pre-existing "entered" row for the target step
+      # Create a pre-existing "entered" row for the target step (e.g., from a previous dispatch cycle)
       {:ok, _pre_existing} =
         Accounts.StepExecutions.insert(task.user_id, %{
           "task_id" => task.id,
@@ -560,26 +458,25 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
 
       # Move to the same step via skip_orchestrator_check (simulating orchestrator call)
       {:ok, _updated_task} =
-        TaskWorkflows.move_to_step(task, steps.in_progress.id, nil, skip_orchestrator_check: true)
+        TaskWorkflows.move_to_step(task, steps.in_progress.id, skip_orchestrator_check: true)
 
-      # Verify the pre-existing row is invalidated
+      # With the new architecture, move_to_step only updates current_step_id
+      # Invalidation of old "entered" rows happens at dispatch time in the dispatcher
       all_executions =
         StepExecutions.all(
           conditions: [task_id: task.id, step_id: steps.in_progress.id],
           order_by: [asc: :inserted_at]
         )
 
-      assert length(all_executions) == 2
-      invalidated = List.first(all_executions)
-      assert invalidated.status == "invalidated"
-
-      entered = List.last(all_executions)
-      assert entered.status == "entered"
+      # We still have the original "entered" row (move_to_step doesn't create or invalidate)
+      assert length(all_executions) == 1
+      original = List.first(all_executions)
+      assert original.status == "entered"
     end
   end
 
   describe "assign_workflow idempotency" do
-    test "calling assign_workflow twice produces exactly one entered StepExecution" do
+    test "calling assign_workflow twice is a no-op on the second call" do
       %{workflow: workflow, task: task} = setup_workflow_with_steps()
 
       {:ok, assigned1} = TaskWorkflows.assign_workflow(task, workflow)
@@ -590,16 +487,11 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
 
       executions =
         StepExecutions.all(
-          conditions: [
-            task_id: task.id,
-            workflow_id: workflow.id,
-            status: "entered"
-          ],
+          conditions: [task_id: task.id, workflow_id: workflow.id],
           order_by: [asc: :inserted_at]
         )
 
-      assert length(executions) == 1
-      assert hd(executions).step_name == "backlog"
+      assert executions == []
     end
 
     test "simulates full vtb add -w default shape: Accounts.Tasks.insert + explicit assign_workflow" do
@@ -628,19 +520,14 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
 
       executions =
         StepExecutions.all(
-          conditions: [
-            task_id: task.id,
-            workflow_id: workflow.id,
-            status: "entered"
-          ],
+          conditions: [task_id: task.id, workflow_id: workflow.id],
           order_by: [asc: :inserted_at]
         )
 
-      assert length(executions) == 1
-      assert hd(executions).step_name == "backlog"
+      assert executions == []
     end
 
-    test "re-assigning to a different workflow still invalidates the prior entered row" do
+    test "re-assigning to a different workflow updates workflow and step ids" do
       user = create_user()
       project = create_project(user)
 
@@ -655,36 +542,12 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
       task = create_task(project)
 
       {:ok, task} = TaskWorkflows.assign_workflow(task, workflow1)
-
-      executions_w1 =
-        StepExecutions.all(
-          conditions: [task_id: task.id, workflow_id: workflow1.id],
-          order_by: [asc: :inserted_at]
-        )
-
-      assert length(executions_w1) == 1
-      assert hd(executions_w1).status == "entered"
+      assert task.workflow_id == workflow1.id
+      assert task.current_step_id == step1_w1.id
 
       {:ok, task} = TaskWorkflows.assign_workflow(task, workflow2)
-
-      executions_w1_after =
-        StepExecutions.all(
-          conditions: [task_id: task.id, workflow_id: workflow1.id],
-          order_by: [asc: :inserted_at]
-        )
-
-      assert length(executions_w1_after) == 1
-      assert hd(executions_w1_after).status == "invalidated"
-
-      executions_w2 =
-        StepExecutions.all(
-          conditions: [task_id: task.id, workflow_id: workflow2.id],
-          order_by: [asc: :inserted_at]
-        )
-
-      assert length(executions_w2) == 1
-      assert hd(executions_w2).status == "entered"
-      assert hd(executions_w2).step_name == "step_a"
+      assert task.workflow_id == workflow2.id
+      assert task.current_step_id == step1_w2.id
     end
 
     test "assign_workflow still rejects when orchestrator is active even if workflow matches" do

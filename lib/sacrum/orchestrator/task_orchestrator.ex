@@ -290,9 +290,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     with {:ok, next_step_id} <- WorkflowGraph.select_single_transition(next_transitions),
          :ok <- mark_satisfied_wait_completed(task_id),
          {:ok, updated_task} <-
-           TaskWorkflows.advance_to_step(data.task, next_step_id, nil,
-             skip_orchestrator_check: true
-           ) do
+           TaskWorkflows.advance_to_step(data.task, next_step_id, skip_orchestrator_check: true) do
       ExecutionPool.release_slot(data.slot_id)
 
       TaskCompletion.determine_next_state(next_step_id, %{
@@ -339,9 +337,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
 
     with {:ok, next_step_id} <- WorkflowGraph.select_single_transition(next_transitions),
          {:ok, updated_task} <-
-           TaskWorkflows.advance_to_step(data.task, next_step_id, nil,
-             skip_orchestrator_check: true
-           ) do
+           TaskWorkflows.advance_to_step(data.task, next_step_id, skip_orchestrator_check: true) do
       ExecutionPool.release_slot(data.slot_id)
 
       TaskCompletion.determine_next_state(next_step_id, %{
@@ -397,7 +393,12 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   defp dispatch_execution(data, task, current_step) do
     task_id = data.task.id
 
-    case ExecutionDispatcher.create_and_dispatch(data.user_id, task, current_step.id) do
+    case ExecutionDispatcher.create_and_dispatch(
+           data.user_id,
+           task,
+           current_step.id,
+           data.pending_handoff
+         ) do
       {:ok, execution} ->
         unless data.subscribed do
           :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{data.project_id}")
@@ -407,7 +408,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
           "[TaskOrchestrator:#{task_id}] Dispatched execution #{execution.id} step=#{current_step.name}"
         )
 
-        {:keep_state, %{data | current_execution_id: execution.id, subscribed: true}}
+        {:keep_state,
+         %{data | current_execution_id: execution.id, subscribed: true, pending_handoff: nil}}
 
       {:error, reason} ->
         Logger.error(

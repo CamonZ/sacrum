@@ -102,7 +102,7 @@ defmodule Sacrum.Orchestrator.ExecutionHistory do
     from(e in StepExecution,
       where:
         e.task_id == ^task_id and e.step_id == ^step_id and
-          e.status in ["completed", "failed"],
+          e.status in ["completed", "failed", "cancelled"],
       group_by: e.status,
       select: {e.status, count(e.id)}
     )
@@ -113,7 +113,7 @@ defmodule Sacrum.Orchestrator.ExecutionHistory do
       where:
         e.task_id == ^task_id and
           (e.step_id == ^step_id or (is_nil(e.step_id) and e.step_name == ^step_name)) and
-          e.status in ["completed", "failed"],
+          e.status in ["completed", "failed", "cancelled"],
       group_by: e.status,
       select: {e.status, count(e.id)}
     )

@@ -353,7 +353,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       assert prompt == "Latest: Second analysis"
     end
 
-    test "handoff from entered execution is available in context", ctx do
+    test "handoff passed to create_and_dispatch is available in context", ctx do
       step =
         create_step(ctx.user, ctx.workflow, %{
           "prompt" => "Handoff context: {{ execution.handoff | json_encode }}"
@@ -361,28 +361,20 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
       task = create_task(ctx.user, ctx.project)
       task = assign_workflow(task, ctx.workflow)
-
-      # Get or create entered execution with handoff
-      entered = create_entered_execution(ctx.user, task, step)
-
-      {:ok, _updated} =
-        Accounts.StepExecutions.update(entered, %{
-          "handoff" => %{"routing_key" => "user_approved"}
-        })
-
       task = PromptRenderer.preload_for_rendering(task)
 
       subscribe_to_project(ctx.project)
 
-      {:ok, _exec} = ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, step.id)
+      {:ok, _exec} =
+        ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, step.id, %{
+          "routing_key" => "user_approved"
+        })
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "run_step",
         payload: %{prompt: prompt}
       }
 
-      # Handoff should be available to the template
-      # Note: exact JSON format may vary, but handoff context should be accessible
       assert String.contains?(prompt, "routing_key")
     end
   end
@@ -817,8 +809,6 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
         })
 
       task = create_task(ctx.user, ctx.project) |> assign_workflow(ctx.workflow)
-      execution = create_entered_execution(ctx.user, task, step)
-      assert execution.prompt == nil
 
       task = PromptRenderer.preload_for_rendering(task)
       subscribe_to_project(ctx.project)
@@ -826,9 +816,8 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       {:ok, dispatched} = ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, step.id)
 
       expected = "Task: Test Task | Level: ticket"
-      assert dispatched.id == execution.id
       assert dispatched.prompt == expected
-      assert Sacrum.Repo.get!(Sacrum.Repo.Schemas.StepExecution, execution.id).prompt == expected
+      assert Sacrum.Repo.get!(Sacrum.Repo.Schemas.StepExecution, dispatched.id).prompt == expected
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "run_step",
