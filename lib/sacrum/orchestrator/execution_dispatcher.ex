@@ -17,6 +17,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
 
   require Logger
 
+  alias Ecto.Multi
   alias Sacrum.Accounts
   alias Sacrum.Orchestrator.{ExecutionHistory, PromptContext, PromptRenderer}
   alias Sacrum.Repo
@@ -37,9 +38,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   def create_and_dispatch(user_id, task, step_id, handoff \\ nil) do
     with {:ok, step} <- fetch_step(user_id, step_id),
          :ok <- validate_workflow(task),
-         {:ok, task} <- stamp_started_at_if_needed(task),
-         {:ok, execution} <- create_started_execution(task, step, handoff),
-         {:ok, task} <- Status.refresh(task) do
+         {:ok, %{execution: execution, task: task}} <- insert_and_stamp(task, step, handoff) do
       execution_data = ExecutionHistory.build_execution_data(task.id, execution)
       context = PromptContext.build_context(task, execution_data, step)
 
@@ -61,6 +60,10 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
         {:ok, updated_execution}
       end
     else
+      {:error, _op, reason, _changes} ->
+        Logger.error("[ExecutionDispatcher] create_and_dispatch failed: #{inspect(reason)}")
+        {:error, reason}
+
       {:error, reason} = err ->
         Logger.error("[ExecutionDispatcher] create_and_dispatch failed: #{inspect(reason)}")
         err
@@ -77,13 +80,18 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   defp validate_workflow(%{workflow_id: nil}), do: {:error, :no_workflow}
   defp validate_workflow(_task), do: :ok
 
-  defp stamp_started_at_if_needed(%{started_at: nil} = task) do
-    Accounts.Tasks.update(task, %{started_at: DateTime.utc_now()})
+  # Inserts the started StepExecution and updates the task (started_at +
+  # derived status) in a single transaction. The task changeset is built
+  # *after* the execution insert so that derive/1 sees the new execution and
+  # produces :running.
+  defp insert_and_stamp(task, step, handoff) do
+    Multi.new()
+    |> Multi.insert(:execution, started_execution_changeset(task, step, handoff))
+    |> Multi.update(:task, fn _changes -> task_dispatch_changeset(task) end)
+    |> Repo.transaction()
   end
 
-  defp stamp_started_at_if_needed(task), do: {:ok, task}
-
-  defp create_started_execution(task, step, handoff) do
+  defp started_execution_changeset(task, step, handoff) do
     attrs = %{
       task_id: task.id,
       workflow_id: task.workflow_id,
@@ -94,8 +102,17 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
 
     attrs = if is_map(handoff), do: Map.put(attrs, :handoff, handoff), else: attrs
 
-    %StepExecution{user_id: task.user_id, project_id: task.project_id}
-    |> StepExecution.create_changeset(attrs)
-    |> Repo.insert()
+    StepExecution.create_changeset(
+      %StepExecution{user_id: task.user_id, project_id: task.project_id},
+      attrs
+    )
+  end
+
+  defp task_dispatch_changeset(task) do
+    changes = if is_nil(task.started_at), do: %{started_at: DateTime.utc_now()}, else: %{}
+
+    task
+    |> Ecto.Changeset.change(changes)
+    |> Status.put_status()
   end
 end

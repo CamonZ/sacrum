@@ -6,7 +6,6 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
 
   require Logger
 
-  alias Ecto.Multi
   alias Sacrum.Orchestrator.FSMData
   alias Sacrum.Repo
   alias Sacrum.Repo.Broadcaster
@@ -14,24 +13,24 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
 
   @doc """
   Mark the task as completed by setting `completed_at` (idempotent — only stamps
-  when currently nil) and refresh `status` in a single transaction.
+  when currently nil) and refresh `status` in a single update.
 
-  Returns `{:ok, :completed, new_data}` or `{:error, reason}`.
+  Returns `{:ok, :completed, new_data}` or `{:error, changeset}`.
   """
   @spec handle_completion(FSMData.t()) ::
-          {:ok, :completed, FSMData.t()} | {:error, term()}
+          {:ok, :completed, FSMData.t()} | {:error, Ecto.Changeset.t()}
   def handle_completion(%{task: %{completed_at: nil} = task} = data) do
-    Multi.new()
-    |> Multi.update(:task, Ecto.Changeset.change(task, %{completed_at: DateTime.utc_now()}))
-    |> Multi.update(:status, fn %{task: t} -> Status.changeset(t) end)
-    |> Repo.transaction()
+    task
+    |> Ecto.Changeset.change(%{completed_at: DateTime.utc_now()})
+    |> Status.put_status()
+    |> Repo.update()
     |> case do
-      {:ok, %{status: refreshed}} ->
+      {:ok, refreshed} ->
         Broadcaster.broadcast({:ok, refreshed}, :task_updated, :project)
         {:ok, :completed, %{data | task: refreshed}}
 
-      {:error, _op, changeset, _changes} ->
-        {:error, changeset}
+      {:error, _changeset} = error ->
+        error
     end
   end
 

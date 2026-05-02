@@ -72,7 +72,7 @@ defmodule Sacrum.Tasks.Status do
   """
   @spec refresh(Task.t()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
   def refresh(%Task{} = task) do
-    cs = changeset(task)
+    cs = put_status(Ecto.Changeset.change(task))
 
     if cs.changes == %{} do
       {:ok, cs.data}
@@ -82,12 +82,16 @@ defmodule Sacrum.Tasks.Status do
   end
 
   @doc """
-  Builds a changeset that sets `status` to the derived value. Suitable for
-  composing into an `Ecto.Multi` so that the position update and the status
-  refresh land in one transaction.
+  Chains the derived `status` into an existing changeset, so the caller can
+  do a single `Repo.update/1` (or `Multi.update/3`) that writes the position
+  change and the status change atomically.
+
+  Derives against the post-change view of the task by applying the changeset
+  before deriving.
   """
-  @spec changeset(Task.t()) :: Ecto.Changeset.t()
-  def changeset(%Task{} = task) do
-    Ecto.Changeset.change(task, %{status: Atom.to_string(derive(task))})
+  @spec put_status(Ecto.Changeset.t()) :: Ecto.Changeset.t()
+  def put_status(%Ecto.Changeset{} = changeset) do
+    applied = Ecto.Changeset.apply_changes(changeset)
+    Ecto.Changeset.put_change(changeset, :status, Atom.to_string(derive(applied)))
   end
 end

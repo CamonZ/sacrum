@@ -40,7 +40,6 @@ defmodule Sacrum.Repo.TaskWorkflows do
   """
 
   import Ecto.Query
-  alias Ecto.Multi
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.Project
   alias Sacrum.Repo.Schemas.{StepTransition, Task, Workflow, WorkflowStep}
@@ -63,7 +62,11 @@ defmodule Sacrum.Repo.TaskWorkflows do
       if already_assigned?(task, workflow, initial_step) do
         {:ok, task}
       else
-        execute_assign_workflow_multi(task, workflow, initial_step)
+        task
+        |> task_workflow_changeset(workflow.id, initial_step.id)
+        |> Status.put_status()
+        |> Repo.update()
+        |> broadcast_on_success()
       end
     end
   end
@@ -73,11 +76,11 @@ defmodule Sacrum.Repo.TaskWorkflows do
   """
   @spec unassign_workflow(Task.t()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
   def unassign_workflow(%Task{} = task) do
-    Multi.new()
-    |> Multi.update(:task, task_workflow_changeset(task, nil, nil))
-    |> Multi.update(:status, fn %{task: t} -> Status.changeset(t) end)
-    |> Repo.transaction()
-    |> handle_position_transaction()
+    task
+    |> task_workflow_changeset(nil, nil)
+    |> Status.put_status()
+    |> Repo.update()
+    |> broadcast_on_success()
   end
 
   @doc """
@@ -120,11 +123,11 @@ defmodule Sacrum.Repo.TaskWorkflows do
     with :ok <- maybe_check_orchestrator(task.id, opts),
          {:ok, target_step} <- get_workflow_step(task.workflow_id, step_id),
          :ok <- maybe_validate_transition(task, target_step, mode) do
-      Multi.new()
-      |> Multi.update(:task, Ecto.Changeset.change(task, %{current_step_id: target_step.id}))
-      |> Multi.update(:status, fn %{task: t} -> Status.changeset(t) end)
-      |> Repo.transaction()
-      |> handle_position_transaction()
+      task
+      |> Ecto.Changeset.change(%{current_step_id: target_step.id})
+      |> Status.put_status()
+      |> Repo.update()
+      |> broadcast_on_success()
     end
   end
 
@@ -185,13 +188,6 @@ defmodule Sacrum.Repo.TaskWorkflows do
     end
   end
 
-  @spec build_assign_workflow_multi(Task.t(), Workflow.t(), WorkflowStep.t()) :: Multi.t()
-  defp build_assign_workflow_multi(task, workflow, initial_step) do
-    Multi.new()
-    |> Multi.update(:task, task_workflow_changeset(task, workflow.id, initial_step.id))
-    |> Multi.update(:status, fn %{task: t} -> Status.changeset(t) end)
-  end
-
   @spec task_workflow_changeset(Task.t(), String.t() | nil, String.t() | nil) ::
           Ecto.Changeset.t()
   defp task_workflow_changeset(task, workflow_id, step_id) do
@@ -233,8 +229,9 @@ defmodule Sacrum.Repo.TaskWorkflows do
     end
   end
 
-  @spec broadcast_task_changed(Task.t()) :: :ok
-  defp broadcast_task_changed(task) do
+  @spec broadcast_on_success({:ok, Task.t()} | {:error, Ecto.Changeset.t()}) ::
+          {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
+  defp broadcast_on_success({:ok, %Task{} = task} = ok) do
     require Logger
     task = Repo.preload(task, :project)
 
@@ -245,31 +242,12 @@ defmodule Sacrum.Repo.TaskWorkflows do
 
       _ ->
         Logger.warning("[Broadcast] task_updated failed to extract project_id")
-        :ok
     end
+
+    ok
   end
 
-  @spec execute_assign_workflow_multi(Task.t(), Workflow.t(), WorkflowStep.t()) ::
-          {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
-  defp execute_assign_workflow_multi(task, workflow, initial_step) do
-    task
-    |> build_assign_workflow_multi(workflow, initial_step)
-    |> Repo.transaction()
-    |> handle_position_transaction()
-  end
-
-  @spec handle_position_transaction(
-          {:ok, %{status: Task.t()}}
-          | {:error, atom(), Ecto.Changeset.t(), map()}
-        ) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
-  defp handle_position_transaction({:ok, %{status: refreshed}}) do
-    broadcast_task_changed(refreshed)
-    {:ok, refreshed}
-  end
-
-  defp handle_position_transaction({:error, _op, changeset, _changes}) do
-    {:error, changeset}
-  end
+  defp broadcast_on_success({:error, _changeset} = error), do: error
 
   @spec already_assigned?(Task.t(), Workflow.t(), WorkflowStep.t()) :: boolean()
   defp already_assigned?(task, workflow, initial_step) do
