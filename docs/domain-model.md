@@ -199,3 +199,49 @@ The codebase uses a **three-layer architecture** (Accounts → Repo → Ecto) in
 | Project | `Schemas.Project` | `Repo.Projects` | `Accounts.Projects` | `project_type.ex` |
 
 Complex operations (transition syncing, workflow assignment, step movement) use `Ecto.Multi` for transactional safety. Dependency management includes BFS shortest-path and DFS cycle-detection algorithms.
+
+## Task Status
+
+Task status is derived from orchestrator state by `Sacrum.Tasks.Status.derive/1` and persisted into the `tasks.status` column. The orchestrator (and any operation that mutates positional state or the dependency graph) is responsible for keeping the column in sync via `Sacrum.Tasks.Status.refresh/1`. Read paths (GraphQL, queries, filters) read the column directly.
+
+### Status Values
+
+Derivation rules are evaluated in order — the first match wins.
+
+- **`:running`** — Daemon is executing the current step
+  - Precondition: Latest StepExecution has status "started" or "in_progress"
+- **`:waiting`** — Parent waiting for its children (a `wait_children` step)
+  - Precondition: Latest StepExecution has status "waiting"
+- **`:done`** — Task completed at a terminal position
+  - Preconditions: latest StepExecution is "completed", `current_step.is_final == true`, the current step has no outgoing step transitions, and the workflow has no outgoing workflow transitions. (The `is_final` flag alone is not load-bearing — outgoing transitions disqualify regardless.)
+- **`:ready`** — `current_step_id` is set and none of the above apply
+
+Task dependencies (blockers) are *not* part of status derivation. Blockers are an informational relationship; they do not move a task into `:waiting`. Read paths that need "actionable now" (e.g. `listReady`) filter dependents in the query layer, not via status.
+
+### Timestamp Stamping Invariants
+
+Timestamps are stamped **exclusively by the orchestrator** (ExecutionDispatcher and TaskCompletion). They are never set by user mutations.
+
+**`started_at`** — Stamped in `ExecutionDispatcher.create_and_dispatch/4` when the task first dispatches (if currently nil).
+- Idempotent: subsequent dispatches do not re-stamp; the timestamp persists for the task's lifetime
+- Represents the first moment the orchestrator began work on the task
+
+**`completed_at`** — Stamped in `TaskCompletion.handle_completion/1` when the task reaches the final step of a terminal workflow and the latest StepExecution is completed (if currently nil).
+- Idempotent: retries or repeated completions do not re-stamp
+- Represents the task's transition to the :done state
+
+### Refresh Points
+
+Operations that change derivation inputs run the position update and the status refresh in the same `Ecto.Multi`/transaction, using `Status.changeset/1` as the second step:
+
+- `TaskWorkflows.assign_workflow / unassign_workflow / advance_to_step / move_to_step` — wraps the position update and status refresh in one transaction; broadcasts after commit
+- `TaskCompletion.handle_completion/1` — wraps `completed_at` stamping and status refresh in one transaction
+- `ExecutionDispatcher.create_and_dispatch/4` — calls `Status.refresh/1` after the started execution is inserted
+
+`TaskDependencies.add_dependency / remove_dependency` do not refresh status — dependencies are not derivation inputs.
+
+### Example
+
+```elixir
+status = Sacrum.Tasks.Status.derive(task)  # auto-preloads; => :ready | :running | :waiting | :done
+```

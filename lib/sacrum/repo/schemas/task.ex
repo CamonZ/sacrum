@@ -40,6 +40,7 @@ defmodule Sacrum.Repo.Schemas.Task do
     field :completed_at, :utc_datetime_usec
     field :worktree, :string
     field :archived, :boolean, default: false
+    field :status, :string, default: "ready"
 
     belongs_to :project, Sacrum.Repo.Schemas.Project
     belongs_to :workflow, Sacrum.Repo.Schemas.Workflow

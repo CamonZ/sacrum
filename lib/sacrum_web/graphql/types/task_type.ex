@@ -32,6 +32,8 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
     field :inserted_at, :datetime
     field :updated_at, :datetime
 
+    field :status, :string
+
     # Associations
     field :project_id, :id
 

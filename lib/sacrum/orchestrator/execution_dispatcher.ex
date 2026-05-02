@@ -22,6 +22,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   alias Sacrum.Repo
   alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.StepExecution
+  alias Sacrum.Tasks.Status
 
   @doc """
   Creates a "started" StepExecution for the current step and broadcasts run_step
@@ -36,7 +37,9 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   def create_and_dispatch(user_id, task, step_id, handoff \\ nil) do
     with {:ok, step} <- fetch_step(user_id, step_id),
          :ok <- validate_workflow(task),
-         {:ok, execution} <- create_started_execution(task, step, handoff) do
+         {:ok, task} <- stamp_started_at_if_needed(task),
+         {:ok, execution} <- create_started_execution(task, step, handoff),
+         {:ok, task} <- Status.refresh(task) do
       execution_data = ExecutionHistory.build_execution_data(task.id, execution)
       context = PromptContext.build_context(task, execution_data, step)
 
@@ -73,6 +76,12 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
 
   defp validate_workflow(%{workflow_id: nil}), do: {:error, :no_workflow}
   defp validate_workflow(_task), do: :ok
+
+  defp stamp_started_at_if_needed(%{started_at: nil} = task) do
+    Accounts.Tasks.update(task, %{started_at: DateTime.utc_now()})
+  end
+
+  defp stamp_started_at_if_needed(task), do: {:ok, task}
 
   defp create_started_execution(task, step, handoff) do
     attrs = %{

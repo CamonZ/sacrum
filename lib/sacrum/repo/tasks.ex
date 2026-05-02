@@ -36,7 +36,7 @@ defmodule Sacrum.Repo.Tasks do
     - `:parent_id` - filter by parent task (via hierarchy)
     - `:blocked` - when false, exclude tasks with incomplete dependencies
     - `:search` - text search on title/description
-    - `:status` - filter by workflow step name
+    - `:status` - filter by derived task status (`"ready" | "running" | "waiting" | "done"`)
     - `:step_id` - filter by workflow step ID
     - `:tags` - filter by tags (any match)
     - `:root_only` - when true, exclude tasks that have a parent
@@ -158,12 +158,8 @@ defmodule Sacrum.Repo.Tasks do
 
   defp apply_filter(query, :status, nil), do: query
 
-  defp apply_filter(query, :status, step_name) do
-    from(t in query,
-      join: ws in Sacrum.Repo.Schemas.WorkflowStep,
-      on: ws.id == t.current_step_id,
-      where: ws.name == ^step_name
-    )
+  defp apply_filter(query, :status, status) when is_binary(status) do
+    where(query, [t], t.status == ^status)
   end
 
   defp apply_filter(query, :step_id, nil), do: query

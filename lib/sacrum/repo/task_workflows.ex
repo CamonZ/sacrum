@@ -44,6 +44,7 @@ defmodule Sacrum.Repo.TaskWorkflows do
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.Project
   alias Sacrum.Repo.Schemas.{StepTransition, Task, Workflow, WorkflowStep}
+  alias Sacrum.Tasks.Status
 
   @doc """
   Assigns a workflow to a task, setting current_step_id to the workflow's initial step.
@@ -72,9 +73,11 @@ defmodule Sacrum.Repo.TaskWorkflows do
   """
   @spec unassign_workflow(Task.t()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
   def unassign_workflow(%Task{} = task) do
-    task
-    |> task_workflow_changeset(nil, nil)
-    |> Repo.update()
+    Multi.new()
+    |> Multi.update(:task, task_workflow_changeset(task, nil, nil))
+    |> Multi.update(:status, fn %{task: t} -> Status.changeset(t) end)
+    |> Repo.transaction()
+    |> handle_position_transaction()
   end
 
   @doc """
@@ -95,21 +98,8 @@ defmodule Sacrum.Repo.TaskWorkflows do
   def advance_to_step(%Task{current_step_id: nil}, _step_id, _opts),
     do: {:error, :no_current_step}
 
-  def advance_to_step(%Task{} = task, step_id, opts) do
-    with :ok <- maybe_check_orchestrator(task.id, opts),
-         {:ok, target_step} <- get_workflow_step(task.workflow_id, step_id) do
-      changeset = Ecto.Changeset.change(task, %{current_step_id: target_step.id})
-
-      case Repo.update(changeset) do
-        {:ok, updated_task} ->
-          broadcast_task_changed(updated_task)
-          {:ok, updated_task}
-
-        {:error, changeset} ->
-          {:error, changeset}
-      end
-    end
-  end
+  def advance_to_step(%Task{} = task, step_id, opts),
+    do: change_step(task, step_id, opts, validate_transition: false)
 
   @doc """
   Moves a task to a specific step, requiring an explicit StepTransition between
@@ -121,22 +111,29 @@ defmodule Sacrum.Repo.TaskWorkflows do
   def move_to_step(%Task{workflow_id: nil}, _step_id, _opts), do: {:error, :no_workflow}
   def move_to_step(%Task{current_step_id: nil}, _step_id, _opts), do: {:error, :no_current_step}
 
-  def move_to_step(%Task{} = task, step_id, opts) do
+  def move_to_step(%Task{} = task, step_id, opts),
+    do: change_step(task, step_id, opts, validate_transition: true)
+
+  @spec change_step(Task.t(), String.t(), keyword(), keyword()) ::
+          {:ok, Task.t()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
+  defp change_step(%Task{} = task, step_id, opts, mode) do
     with :ok <- maybe_check_orchestrator(task.id, opts),
          {:ok, target_step} <- get_workflow_step(task.workflow_id, step_id),
-         :ok <- validate_transition_exists(task.current_step_id, target_step.id) do
-      changeset = Ecto.Changeset.change(task, %{current_step_id: target_step.id})
-
-      case Repo.update(changeset) do
-        {:ok, updated_task} ->
-          broadcast_task_changed(updated_task)
-          {:ok, updated_task}
-
-        {:error, changeset} ->
-          {:error, changeset}
-      end
+         :ok <- maybe_validate_transition(task, target_step, mode) do
+      Multi.new()
+      |> Multi.update(:task, Ecto.Changeset.change(task, %{current_step_id: target_step.id}))
+      |> Multi.update(:status, fn %{task: t} -> Status.changeset(t) end)
+      |> Repo.transaction()
+      |> handle_position_transaction()
     end
   end
+
+  defp maybe_validate_transition(%Task{current_step_id: from_id}, %WorkflowStep{id: to_id},
+         validate_transition: true
+       ),
+       do: validate_transition_exists(from_id, to_id)
+
+  defp maybe_validate_transition(_task, _step, validate_transition: false), do: :ok
 
   @doc """
   Returns the current WorkflowStep for a task, or {:error, :no_current_step}.
@@ -190,7 +187,9 @@ defmodule Sacrum.Repo.TaskWorkflows do
 
   @spec build_assign_workflow_multi(Task.t(), Workflow.t(), WorkflowStep.t()) :: Multi.t()
   defp build_assign_workflow_multi(task, workflow, initial_step) do
-    Multi.update(Multi.new(), :task, task_workflow_changeset(task, workflow.id, initial_step.id))
+    Multi.new()
+    |> Multi.update(:task, task_workflow_changeset(task, workflow.id, initial_step.id))
+    |> Multi.update(:status, fn %{task: t} -> Status.changeset(t) end)
   end
 
   @spec task_workflow_changeset(Task.t(), String.t() | nil, String.t() | nil) ::
@@ -256,14 +255,20 @@ defmodule Sacrum.Repo.TaskWorkflows do
     task
     |> build_assign_workflow_multi(workflow, initial_step)
     |> Repo.transaction()
-    |> case do
-      {:ok, %{task: task}} ->
-        broadcast_task_changed(task)
-        {:ok, task}
+    |> handle_position_transaction()
+  end
 
-      {:error, _op, changeset, _changes} ->
-        {:error, changeset}
-    end
+  @spec handle_position_transaction(
+          {:ok, %{status: Task.t()}}
+          | {:error, atom(), Ecto.Changeset.t(), map()}
+        ) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
+  defp handle_position_transaction({:ok, %{status: refreshed}}) do
+    broadcast_task_changed(refreshed)
+    {:ok, refreshed}
+  end
+
+  defp handle_position_transaction({:error, _op, changeset, _changes}) do
+    {:error, changeset}
   end
 
   @spec already_assigned?(Task.t(), Workflow.t(), WorkflowStep.t()) :: boolean()
