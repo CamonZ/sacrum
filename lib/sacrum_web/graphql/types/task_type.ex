@@ -311,42 +311,6 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
       end)
     end
 
-    field :start_step, :task do
-      arg(:task_id, non_null(:uuid4))
-
-      resolve(fn %{task_id: task_id}, %{context: %{current_user: user}} ->
-        with {:ok, task} <- Accounts.Tasks.find(user.id, task_id) do
-          TaskWorkflows.start_current_step(task)
-        end
-      end)
-    end
-
-    field :complete_step, :task do
-      arg(:task_id, non_null(:uuid4))
-
-      resolve(fn %{task_id: task_id}, %{context: %{current_user: user}} ->
-        with {:ok, task} <- Accounts.Tasks.find(user.id, task_id) do
-          TaskWorkflows.complete_current_step(task)
-        end
-      end)
-    end
-
-    field :reject_step, :task do
-      arg(:task_id, non_null(:uuid4))
-      arg(:target_step_id, non_null(:uuid4))
-      arg(:feedback, :string)
-
-      resolve(fn args, %{context: %{current_user: user}} ->
-        with {:ok, task} <- Accounts.Tasks.find(user.id, args.task_id) do
-          TaskWorkflows.reject_current_step(
-            task,
-            args.target_step_id,
-            Map.get(args, :feedback)
-          )
-        end
-      end)
-    end
-
     @desc "Stop the running TaskOrchestrator for a task. Idempotent."
     field :stop_orchestrator, :task do
       arg(:task_id, non_null(:uuid4))
