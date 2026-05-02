@@ -3,7 +3,7 @@ defmodule Sacrum.Orchestrator do
   High-level API for managing running TaskOrchestrator instances.
 
   Stopping an orchestrator halts any in-flight step execution:
-  - Marks the in-flight step execution as "cancelled"
+  - Marks the in-flight step execution as "cancelled" (matches status in ["started", "in_progress", "waiting"])
   - Broadcasts cancel_step to the daemon (fire-and-forget)
   - Terminates the FSM child
   """
@@ -44,7 +44,7 @@ defmodule Sacrum.Orchestrator do
   defp find_in_flight_execution(task_id) do
     query =
       from(e in StepExecution,
-        where: e.task_id == ^task_id and e.status == "started",
+        where: e.task_id == ^task_id and e.status in ["started", "in_progress", "waiting"],
         order_by: [desc: e.inserted_at],
         limit: 1
       )

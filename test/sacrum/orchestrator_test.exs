@@ -5,6 +5,8 @@ defmodule Sacrum.OrchestratorTest do
   alias Sacrum.Orchestrator
   alias Sacrum.Orchestrator.TaskFSMSupervisor
   alias Sacrum.Orchestrator.TaskRegistry
+  alias Sacrum.Repo
+  alias Sacrum.Repo.Schemas.StepExecution
 
   defp create_user(attrs \\ %{}) do
     default_attrs = %{
@@ -72,6 +74,19 @@ defmodule Sacrum.OrchestratorTest do
     updated_task
   end
 
+  defp create_step_execution(task, user_id, status) do
+    {:ok, execution} =
+      Accounts.StepExecutions.insert(user_id, %{
+        task_id: task.id,
+        step_name: "Test Step",
+        status: status,
+        workflow_id: task.workflow_id,
+        project_id: task.project_id
+      })
+
+    execution
+  end
+
   describe "Orchestrator.stop/1" do
     test "returns {:ok, :stopped} when an orchestrator exists and terminates the registered pid" do
       user = create_user()
@@ -110,6 +125,85 @@ defmodule Sacrum.OrchestratorTest do
       assert {:ok, :stopped} = Orchestrator.stop(task.id)
       Process.sleep(50)
       assert {:ok, :not_running} = Orchestrator.stop(task.id)
+    end
+  end
+
+  describe "Orchestrator.stop/1 with active StepExecution" do
+    setup do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project, auto_advance: false)
+      _step = create_step(user, workflow, %{})
+      task = create_task(user, project) |> assign_workflow_to_task(workflow)
+
+      test_pid = self()
+      ref = make_ref()
+
+      fake_orchestrator =
+        spawn_link(fn ->
+          {:ok, _} = Registry.register(TaskRegistry, task.id, nil)
+          send(test_pid, {ref, :registered})
+          receive do: ({:stop, ^ref} -> :ok)
+        end)
+
+      receive do: ({^ref, :registered} -> :ok)
+
+      on_exit(fn ->
+        if Process.alive?(fake_orchestrator), do: send(fake_orchestrator, {:stop, ref})
+      end)
+
+      {:ok, user: user, task: task}
+    end
+
+    test "cancels when the latest StepExecution status is 'in_progress'", ctx do
+      execution = create_step_execution(ctx.task, ctx.user.id, "in_progress")
+
+      assert {:ok, :stopped} = Orchestrator.stop(ctx.task.id)
+
+      assert Repo.get!(StepExecution, execution.id).status == "cancelled"
+    end
+
+    test "cancels when status is 'waiting'", ctx do
+      execution = create_step_execution(ctx.task, ctx.user.id, "waiting")
+
+      assert {:ok, :stopped} = Orchestrator.stop(ctx.task.id)
+
+      assert Repo.get!(StepExecution, execution.id).status == "cancelled"
+    end
+
+    test "cancels when status is 'started' (existing behavior preserved)", ctx do
+      execution = create_step_execution(ctx.task, ctx.user.id, "started")
+
+      assert {:ok, :stopped} = Orchestrator.stop(ctx.task.id)
+
+      assert Repo.get!(StepExecution, execution.id).status == "cancelled"
+    end
+
+    test "leaves a 'completed' row unchanged", ctx do
+      execution = create_step_execution(ctx.task, ctx.user.id, "completed")
+
+      assert {:ok, :stopped} = Orchestrator.stop(ctx.task.id)
+
+      assert Repo.get!(StepExecution, execution.id).status == "completed"
+    end
+
+    test "matches the latest in-flight execution by inserted_at desc", ctx do
+      older = create_step_execution(ctx.task, ctx.user.id, "started")
+      Process.sleep(10)
+      newer = create_step_execution(ctx.task, ctx.user.id, "in_progress")
+
+      assert {:ok, :stopped} = Orchestrator.stop(ctx.task.id)
+
+      assert Repo.get!(StepExecution, older.id).status == "started"
+      assert Repo.get!(StepExecution, newer.id).status == "cancelled"
+    end
+
+    test "does not re-cancel a row already in 'cancelled' state", ctx do
+      execution = create_step_execution(ctx.task, ctx.user.id, "cancelled")
+
+      assert {:ok, :stopped} = Orchestrator.stop(ctx.task.id)
+
+      assert Repo.get!(StepExecution, execution.id).status == "cancelled"
     end
   end
 end
