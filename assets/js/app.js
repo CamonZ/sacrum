@@ -25,11 +25,43 @@ import {LiveSocket} from "phoenix_live_view"
 import {hooks as colocatedHooks} from "phoenix-colocated/sacrum"
 import topbar from "../vendor/topbar"
 
+const CONSENT_KEY = "vertebrae_consent"
+
+function readConsent() {
+  try {
+    const value = window.localStorage.getItem(CONSENT_KEY)
+    if (value) return value
+  } catch (_e) {}
+  const match = document.cookie.match(/(?:^|; )vertebrae_consent=([^;]+)/)
+  return match ? match[1] : null
+}
+
+function writeConsent(choice) {
+  try {
+    window.localStorage.setItem(CONSENT_KEY, choice)
+    return
+  } catch (_e) {}
+  const expires = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toUTCString()
+  document.cookie = `${CONSENT_KEY}=${choice};expires=${expires};path=/;SameSite=Lax`
+}
+
+const CookieConsent = {
+  mounted() {
+    if (readConsent()) return
+    this.el.hidden = false
+    this.el.addEventListener("click", (e) => {
+      if (e.target.id !== "cookie-ok") return
+      writeConsent("acknowledged")
+      this.el.remove()
+    })
+  }
+}
+
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
   params: {_csrf_token: csrfToken},
-  hooks: {...colocatedHooks},
+  hooks: {...colocatedHooks, CookieConsent},
 })
 
 // Show progress bar on live navigation and form submits

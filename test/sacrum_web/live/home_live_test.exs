@@ -185,4 +185,28 @@ defmodule SacrumWeb.HomeLiveTest do
       assert result =~ "Welcome to the waitlist!"
     end
   end
+
+  describe "cookie banner" do
+    test "is rendered on the landing page" do
+      {:ok, _view, html} = live(build_conn(), "/")
+
+      assert html =~ ~s(id="cookie-banner")
+      assert html =~ "This website utilizes cookies"
+      assert html =~ ~s(id="cookie-ok")
+    end
+
+    test "is hidden by default and gated by the consent hook" do
+      {:ok, _view, html} = live(build_conn(), "/")
+
+      assert html =~ ~s(phx-hook="CookieConsent")
+      assert html =~ "hidden"
+    end
+
+    test "exposes an accessible region for screen readers" do
+      {:ok, _view, html} = live(build_conn(), "/")
+
+      assert html =~ ~s(role="region")
+      assert html =~ ~s(aria-label="Cookie consent")
+    end
+  end
 end
