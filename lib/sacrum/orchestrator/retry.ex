@@ -2,20 +2,15 @@ defmodule Sacrum.Orchestrator.Retry do
   @moduledoc """
   Handles step execution retries when the daemon reports a failure.
 
-  Inserts a fresh `"entered"` StepExecution for the current step (reusing any
-  prior handoff) and re-dispatches it, capped at `@max_retries`. The FSM is
-  expected to reset `run_retry_attempt` on a successful completion so failure
-  bursts on different steps don't accumulate.
+  Re-dispatches the current step up to `@max_retries` times, capped at `@max_retries`.
+  The dispatcher creates the new StepExecution row each time.
+  The FSM is expected to reset `run_retry_attempt` on a successful completion
+  so failure bursts on different steps don't accumulate.
   """
 
   require Logger
 
-  import Ecto.Query
-
-  alias Ecto.Multi
   alias Sacrum.Orchestrator.{ExecutionDispatcher, FSMData, WorkflowGraph}
-  alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.StepExecution
 
   @max_retries 5
 
@@ -42,39 +37,11 @@ defmodule Sacrum.Orchestrator.Retry do
     end
   end
 
-  @doc """
-  Builds the `"entered"` StepExecution changeset shared by the retry path and
-  cross-workflow assignment. Uses `task.workflow_id` when `workflow_id` is nil.
-  """
-  @spec entered_step_execution_changeset(struct(), struct(), String.t() | nil, keyword()) ::
-          Ecto.Changeset.t()
-  def entered_step_execution_changeset(task, step, workflow_id, opts) do
-    StepExecution.create_changeset(
-      %StepExecution{user_id: task.user_id, project_id: task.project_id},
-      %{
-        task_id: task.id,
-        workflow_id: workflow_id || task.workflow_id,
-        step_id: step.id,
-        step_name: step.name,
-        status: "entered",
-        handoff: Keyword.get(opts, :handoff)
-      }
-    )
-  end
-
   defp create_retry_execution_and_dispatch(data) do
     task_id = data.task.id
     attempt = data.run_retry_attempt + 1
 
     with {:ok, current_step} <- WorkflowGraph.get_current_step(data),
-         handoff = prior_step_handoff(data.task.id, current_step.id),
-         {:ok, _execution_ops} <-
-           invalidate_and_insert_entered_execution(
-             data.task,
-             current_step,
-             data.task.workflow_id,
-             handoff
-           ),
          {:ok, execution} <-
            ExecutionDispatcher.create_and_dispatch(data.user_id, data.task, current_step.id) do
       new_data = %{data | current_execution_id: execution.id, run_retry_attempt: attempt}
@@ -92,40 +59,5 @@ defmodule Sacrum.Orchestrator.Retry do
 
         {:next_state, :failed, data}
     end
-  end
-
-  defp prior_step_handoff(task_id, step_id) do
-    query =
-      from(e in StepExecution,
-        where: e.task_id == ^task_id and e.step_id == ^step_id,
-        order_by: [desc: e.inserted_at],
-        limit: 1,
-        select: e.handoff
-      )
-
-    Repo.one(query)
-  end
-
-  defp invalidate_and_insert_entered_execution(task, step, workflow_id, handoff) do
-    task_id = task.id
-    step_id = step.id
-
-    Multi.new()
-    |> Multi.update_all(
-      :invalidate,
-      from(e in StepExecution,
-        where:
-          e.task_id == ^task_id and
-            e.step_id == ^step_id and
-            e.workflow_id == ^workflow_id and
-            e.status == "entered"
-      ),
-      set: [status: "invalidated"]
-    )
-    |> Multi.insert(
-      :new_execution,
-      entered_step_execution_changeset(task, step, workflow_id, handoff: handoff)
-    )
-    |> Repo.transaction()
   end
 end

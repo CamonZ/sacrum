@@ -42,9 +42,8 @@ defmodule Sacrum.Repo.TaskWorkflows do
   import Ecto.Query
   alias Ecto.Multi
   alias Sacrum.Repo
-  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.Project
-  alias Sacrum.Repo.Schemas.{StepExecution, StepTransition, Task, Workflow, WorkflowStep}
+  alias Sacrum.Repo.Schemas.{StepTransition, Task, Workflow, WorkflowStep}
 
   @doc """
   Assigns a workflow to a task, setting current_step_id to the workflow's initial step.
@@ -83,98 +82,59 @@ defmodule Sacrum.Repo.TaskWorkflows do
   @doc """
   Advances a task to a specific step within its current workflow.
 
-  Validates that the target step belongs to the task's current workflow, then
-  updates the task's current_step_id and creates an "entered" StepExecution
-  audit record. Optionally stores handoff data on the new execution record.
-  Transition validity is assumed since transitions are validated on creation.
+  Updates the task's current_step_id only. StepExecution rows are created
+  exclusively by ExecutionDispatcher at dispatch time. Handoff data flows
+  through orchestrator FSM state, not through this function.
 
-  By default, returns an error if an orchestrator process is registered for this task
-  (CLI-only call). Pass `skip_orchestrator_check: true` for internal/orchestrator calls.
-
-  Options:
-    - `skip_orchestrator_check` (boolean): Skip orchestrator registration check
-
-  Returns:
-    - {:ok, task} with updated current_step_id on success
-    - {:error, :no_workflow} if task has no workflow
-    - {:error, :no_current_step} if task has no current step
-    - {:error, :step_not_found} if target step doesn't exist
-    - {:error, :step_not_in_workflow} if target step belongs to a different workflow
-    - {:error, :orchestrator_active} if an orchestrator process is registered (CLI-only)
-    - {:error, changeset} on database errors
+  Pass `skip_orchestrator_check: true` for internal/orchestrator calls.
   """
-  @spec advance_to_step(Task.t(), String.t(), map() | nil, keyword()) ::
+  @spec advance_to_step(Task.t(), String.t(), keyword()) ::
           {:ok, Task.t()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
-  def advance_to_step(task, step_id, handoff \\ nil, opts \\ [])
+  def advance_to_step(task, step_id, opts \\ [])
 
-  def advance_to_step(%Task{workflow_id: nil}, _step_id, _handoff, _opts),
-    do: {:error, :no_workflow}
+  def advance_to_step(%Task{workflow_id: nil}, _step_id, _opts), do: {:error, :no_workflow}
 
-  def advance_to_step(%Task{current_step_id: nil}, _step_id, _handoff, _opts),
+  def advance_to_step(%Task{current_step_id: nil}, _step_id, _opts),
     do: {:error, :no_current_step}
 
-  def advance_to_step(%Task{} = task, step_id, handoff, opts) do
+  def advance_to_step(%Task{} = task, step_id, opts) do
     with :ok <- maybe_check_orchestrator(task.id, opts),
          {:ok, target_step} <- get_workflow_step(task.workflow_id, step_id) do
-      Multi.new()
-      |> invalidate_entered_executions(task.id, task.workflow_id, target_step.id)
-      |> Multi.update(:task, task_workflow_changeset(task, task.workflow_id, target_step.id))
-      |> Multi.insert(
-        :step_execution,
-        step_execution_attrs(task, task.workflow_id, target_step, handoff)
-      )
-      |> Repo.transaction()
-      |> case do
-        {:ok, %{task: task, step_execution: execution}} ->
-          broadcast_task_changed(task)
-          Broadcaster.broadcast_step_execution({:ok, execution}, :step_execution_created)
-          {:ok, task}
+      changeset = Ecto.Changeset.change(task, %{current_step_id: target_step.id})
 
-        {:error, _op, changeset, _changes} ->
+      case Repo.update(changeset) do
+        {:ok, updated_task} ->
+          broadcast_task_changed(updated_task)
+          {:ok, updated_task}
+
+        {:error, changeset} ->
           {:error, changeset}
       end
     end
   end
 
   @doc """
-  Moves a task to a specific step within its current workflow.
-  Validates that the target step belongs to the task's current workflow and
-  that a StepTransition exists between the current step and the target step
-  (in either direction).
-
-  Optionally stores handoff data on the new execution record.
-  Creates a StepExecution audit record for the new step.
-
-  By default, returns an error if an orchestrator process is registered for this task
-  (CLI-only call). Pass `skip_orchestrator_check: true` for internal/orchestrator calls.
+  Moves a task to a specific step, requiring an explicit StepTransition between
+  the current and target step. Updates current_step_id only.
   """
-  @spec move_to_step(Task.t(), String.t(), map() | nil, keyword()) ::
+  @spec move_to_step(Task.t(), String.t(), keyword()) ::
           {:ok, Task.t()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
-  def move_to_step(task, step_id, handoff \\ nil, opts \\ [])
-  def move_to_step(%Task{workflow_id: nil}, _step_id, _handoff, _opts), do: {:error, :no_workflow}
+  def move_to_step(task, step_id, opts \\ [])
+  def move_to_step(%Task{workflow_id: nil}, _step_id, _opts), do: {:error, :no_workflow}
+  def move_to_step(%Task{current_step_id: nil}, _step_id, _opts), do: {:error, :no_current_step}
 
-  def move_to_step(%Task{current_step_id: nil}, _step_id, _handoff, _opts),
-    do: {:error, :no_current_step}
-
-  def move_to_step(%Task{} = task, step_id, handoff, opts) do
+  def move_to_step(%Task{} = task, step_id, opts) do
     with :ok <- maybe_check_orchestrator(task.id, opts),
          {:ok, target_step} <- get_workflow_step(task.workflow_id, step_id),
          :ok <- validate_transition_exists(task.current_step_id, target_step.id) do
-      Multi.new()
-      |> invalidate_entered_executions(task.id, task.workflow_id, target_step.id)
-      |> Multi.update(:task, task_workflow_changeset(task, task.workflow_id, target_step.id))
-      |> Multi.insert(
-        :step_execution,
-        step_execution_attrs(task, task.workflow_id, target_step, handoff)
-      )
-      |> Repo.transaction()
-      |> case do
-        {:ok, %{task: task, step_execution: execution}} ->
-          broadcast_task_changed(task)
-          Broadcaster.broadcast_step_execution({:ok, execution}, :step_execution_created)
-          {:ok, task}
+      changeset = Ecto.Changeset.change(task, %{current_step_id: target_step.id})
 
-        {:error, _op, changeset, _changes} ->
+      case Repo.update(changeset) do
+        {:ok, updated_task} ->
+          broadcast_task_changed(updated_task)
+          {:ok, updated_task}
+
+        {:error, changeset} ->
           {:error, changeset}
       end
     end
@@ -195,6 +155,7 @@ defmodule Sacrum.Repo.TaskWorkflows do
 
   # Private helpers
 
+  @spec maybe_check_orchestrator(String.t(), keyword()) :: :ok | {:error, :orchestrator_active}
   defp maybe_check_orchestrator(task_id, opts) do
     if Keyword.get(opts, :skip_orchestrator_check, false) do
       :ok
@@ -203,6 +164,7 @@ defmodule Sacrum.Repo.TaskWorkflows do
     end
   end
 
+  @spec check_orchestrator_not_active(String.t()) :: :ok | {:error, :orchestrator_active}
   defp check_orchestrator_not_active(task_id) do
     case Registry.lookup(Sacrum.Orchestrator.TaskRegistry, task_id) do
       [] -> :ok
@@ -210,21 +172,9 @@ defmodule Sacrum.Repo.TaskWorkflows do
     end
   end
 
-  defp invalidate_entered_executions(multi, task_id, workflow_id, step_id) do
-    Multi.update_all(
-      multi,
-      :invalidate,
-      from(e in StepExecution,
-        where:
-          e.task_id == ^task_id and
-            e.step_id == ^step_id and
-            e.workflow_id == ^workflow_id and
-            e.status == "entered"
-      ),
-      set: [status: "invalidated"]
-    )
-  end
-
+  @spec resolve_initial_step(Workflow.t()) ::
+          {:ok, WorkflowStep.t()}
+          | {:error, :initial_step_not_found | :workflow_has_no_steps}
   defp resolve_initial_step(%Workflow{initial_step_id: step_id})
        when not is_nil(step_id) do
     case Repo.get(WorkflowStep, step_id) do
@@ -240,35 +190,13 @@ defmodule Sacrum.Repo.TaskWorkflows do
     end
   end
 
+  @spec build_assign_workflow_multi(Task.t(), Workflow.t(), WorkflowStep.t()) :: Multi.t()
   defp build_assign_workflow_multi(task, workflow, initial_step) do
-    Multi.new()
-    |> maybe_invalidate_previous_workflow(task, workflow.id)
-    |> Multi.update(:task, task_workflow_changeset(task, workflow.id, initial_step.id))
-    |> Multi.insert(
-      :step_execution,
-      step_execution_attrs(task, workflow.id, initial_step)
-    )
+    Multi.update(Multi.new(), :task, task_workflow_changeset(task, workflow.id, initial_step.id))
   end
 
-  defp maybe_invalidate_previous_workflow(multi, %Task{current_step_id: nil}, _new_workflow_id),
-    do: multi
-
-  defp maybe_invalidate_previous_workflow(multi, %Task{workflow_id: same}, same), do: multi
-
-  defp maybe_invalidate_previous_workflow(multi, task, _new_workflow_id) do
-    Multi.update_all(
-      multi,
-      :invalidate,
-      from(e in StepExecution,
-        where:
-          e.task_id == ^task.id and
-            e.workflow_id == ^task.workflow_id and
-            e.status == "entered"
-      ),
-      set: [status: "invalidated"]
-    )
-  end
-
+  @spec task_workflow_changeset(Task.t(), String.t() | nil, String.t() | nil) ::
+          Ecto.Changeset.t()
   defp task_workflow_changeset(task, workflow_id, step_id) do
     task
     |> Ecto.Changeset.change(%{workflow_id: workflow_id, current_step_id: step_id})
@@ -276,23 +204,8 @@ defmodule Sacrum.Repo.TaskWorkflows do
     |> Ecto.Changeset.foreign_key_constraint(:current_step_id)
   end
 
-  defp step_execution_attrs(%Task{} = task, workflow_id, step, handoff \\ nil) do
-    attrs = %{
-      task_id: task.id,
-      workflow_id: workflow_id,
-      step_id: step.id,
-      step_name: step.name,
-      status: "entered"
-    }
-
-    attrs = if is_map(handoff), do: Map.put(attrs, :handoff, handoff), else: attrs
-
-    StepExecution.create_changeset(
-      %StepExecution{user_id: task.user_id, project_id: task.project_id},
-      attrs
-    )
-  end
-
+  @spec get_workflow_step(String.t(), String.t()) ::
+          {:ok, WorkflowStep.t()} | {:error, :step_not_found | :step_not_in_workflow}
   defp get_workflow_step(workflow_id, step_id) do
     case Repo.get(WorkflowStep, step_id) do
       nil ->
@@ -307,6 +220,7 @@ defmodule Sacrum.Repo.TaskWorkflows do
     end
   end
 
+  @spec validate_transition_exists(String.t(), String.t()) :: :ok | {:error, :no_transition}
   defp validate_transition_exists(from_step_id, to_step_id) do
     query =
       from(t in StepTransition,
@@ -322,6 +236,7 @@ defmodule Sacrum.Repo.TaskWorkflows do
     end
   end
 
+  @spec broadcast_task_changed(Task.t()) :: :ok
   defp broadcast_task_changed(task) do
     require Logger
     task = Repo.preload(task, :project)
@@ -337,14 +252,15 @@ defmodule Sacrum.Repo.TaskWorkflows do
     end
   end
 
+  @spec execute_assign_workflow_multi(Task.t(), Workflow.t(), WorkflowStep.t()) ::
+          {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
   defp execute_assign_workflow_multi(task, workflow, initial_step) do
     task
     |> build_assign_workflow_multi(workflow, initial_step)
     |> Repo.transaction()
     |> case do
-      {:ok, %{task: task, step_execution: execution}} ->
+      {:ok, %{task: task}} ->
         broadcast_task_changed(task)
-        Broadcaster.broadcast_step_execution({:ok, execution}, :step_execution_created)
         {:ok, task}
 
       {:error, _op, changeset, _changes} ->
@@ -352,17 +268,8 @@ defmodule Sacrum.Repo.TaskWorkflows do
     end
   end
 
+  @spec already_assigned?(Task.t(), Workflow.t(), WorkflowStep.t()) :: boolean()
   defp already_assigned?(task, workflow, initial_step) do
-    task.workflow_id == workflow.id and
-      task.current_step_id == initial_step.id and
-      Repo.exists?(
-        from(e in StepExecution,
-          where:
-            e.task_id == ^task.id and
-              e.step_id == ^initial_step.id and
-              e.workflow_id == ^workflow.id and
-              e.status == "entered"
-        )
-      )
+    task.workflow_id == workflow.id and task.current_step_id == initial_step.id
   end
 end

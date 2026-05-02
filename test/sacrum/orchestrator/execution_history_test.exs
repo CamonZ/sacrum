@@ -1,12 +1,9 @@
 defmodule Sacrum.Orchestrator.ExecutionHistoryTest do
   use Sacrum.DataCase
 
-  import Ecto.Query
-
   alias Sacrum.Accounts
   alias Sacrum.Orchestrator.ExecutionHistory
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.StepExecution
 
   # ===== Setup helpers =====
 
@@ -83,15 +80,6 @@ defmodule Sacrum.Orchestrator.ExecutionHistoryTest do
     execution
   end
 
-  defp get_entered_execution(task, step) do
-    Repo.one!(
-      from(e in StepExecution,
-        where: e.task_id == ^task.id and e.status == "entered" and e.step_id == ^step.id,
-        limit: 1
-      )
-    )
-  end
-
   # ===== Tests =====
 
   describe "build_execution_data/2" do
@@ -102,10 +90,11 @@ defmodule Sacrum.Orchestrator.ExecutionHistoryTest do
       step = create_step(user, workflow, %{})
       task = create_task(user, project, workflow)
 
-      entered = get_entered_execution(task, step)
-
-      {:ok, entered} =
-        Accounts.StepExecutions.update(entered, %{"handoff" => %{"key" => "value"}})
+      entered =
+        create_step_execution(user, task, workflow, step, %{
+          "status" => "started",
+          "handoff" => %{"key" => "value"}
+        })
 
       _previous =
         create_step_execution(user, task, workflow, step, %{
@@ -130,7 +119,8 @@ defmodule Sacrum.Orchestrator.ExecutionHistoryTest do
       step = create_step(user, workflow, %{})
       task = create_task(user, project, workflow)
 
-      entered = get_entered_execution(task, step)
+      entered =
+        create_step_execution(user, task, workflow, step, %{"status" => "started"})
 
       _completed1 =
         create_step_execution(user, task, workflow, step, %{
@@ -289,9 +279,7 @@ defmodule Sacrum.Orchestrator.ExecutionHistoryTest do
       step = create_step(user, workflow, %{})
       task = create_task(user, project, workflow)
 
-      entered = get_entered_execution(task, step)
-      {:ok, _} = Accounts.StepExecutions.update(entered, %{"status" => "started"})
-
+      create_step_execution(user, task, workflow, step, %{"status" => "started"})
       create_step_execution(user, task, workflow, step, %{"status" => "dispatched"})
 
       data = ExecutionHistory.put_run_counts(%{}, task.id, step.id)

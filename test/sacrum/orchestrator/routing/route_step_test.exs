@@ -143,7 +143,8 @@ defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
         steps: %{current_step.id => current_step, next_step.id => next_step},
         workflow: workflow,
         transitions: %{current_step.id => [next_step.id]},
-        slot_id: slot
+        slot_id: slot,
+        pending_handoff: nil
       }
 
       result = RouteStep.handle_route_step_transition(data, current_step)
@@ -213,7 +214,8 @@ defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
         steps: %{from_step.id => from_step, to_step.id => to_step},
         workflow: from_workflow,
         transitions: %{from_step.id => []},
-        slot_id: slot
+        slot_id: slot,
+        pending_handoff: nil
       }
 
       result = RouteStep.handle_route_step_transition(data, from_step)
@@ -268,7 +270,8 @@ defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
         user_id: user.id,
         steps: %{current_step.id => current_step},
         workflow: workflow,
-        slot_id: slot
+        slot_id: slot,
+        pending_handoff: nil
       }
 
       # Call the handler
