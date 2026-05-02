@@ -8,23 +8,33 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
 
   alias Sacrum.Orchestrator.FSMData
   alias Sacrum.Repo
+  alias Sacrum.Repo.Broadcaster
+  alias Sacrum.Tasks.Status
 
   @doc """
-  Mark the task as completed by setting `completed_at`.
+  Mark the task as completed by setting `completed_at` (idempotent — only stamps
+  when currently nil) and refresh `status` in a single update.
 
-  Returns `{:ok, :completed, new_data}` or `{:error, reason}`.
+  Returns `{:ok, :completed, new_data}` or `{:error, changeset}`.
   """
   @spec handle_completion(FSMData.t()) ::
-          {:ok, :completed, FSMData.t()} | {:error, term()}
-  def handle_completion(data) do
-    data.task
+          {:ok, :completed, FSMData.t()} | {:error, Ecto.Changeset.t()}
+  def handle_completion(%{task: %{completed_at: nil} = task} = data) do
+    task
     |> Ecto.Changeset.change(%{completed_at: DateTime.utc_now()})
+    |> Status.put_status()
     |> Repo.update()
     |> case do
-      {:ok, updated_task} -> {:ok, :completed, %{data | task: updated_task}}
-      {:error, reason} -> {:error, reason}
+      {:ok, refreshed} ->
+        Broadcaster.broadcast({:ok, refreshed}, :task_updated, :project)
+        {:ok, :completed, %{data | task: refreshed}}
+
+      {:error, _changeset} = error ->
+        error
     end
   end
+
+  def handle_completion(data), do: {:ok, :completed, data}
 
   @doc """
   Determine the next FSM state based on the step and workflow configuration.

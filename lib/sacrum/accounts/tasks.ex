@@ -49,7 +49,7 @@ defmodule Sacrum.Accounts.Tasks do
     - `:parent_id` - filter by parent task
     - `:blocked` - when false, exclude tasks with incomplete dependencies
     - `:search` - text search on title/description
-    - `:status` - filter by workflow step name
+    - `:status` - filter by derived task status (`"ready" | "running" | "waiting" | "done"`)
     - `:tags` - filter by tags
     - `:root_only` - when true, exclude tasks with parents
     - `:workflow_id` - filter by assigned workflow

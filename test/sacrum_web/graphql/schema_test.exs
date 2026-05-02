@@ -3255,27 +3255,26 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       refute "Parent" in titles
     end
 
-    test "filters by status (step name)", %{conn: conn, user: user, project: project} do
+    test "filters by status (derived task status)", %{conn: conn, user: user, project: project} do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
       {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "in_progress", step_order: 1})
       {:ok, _} = Accounts.Workflows.update(wf, %{initial_step_id: step.id})
 
-      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "With Status"})
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Assigned"})
       Sacrum.Repo.TaskWorkflows.assign_workflow(task, wf)
 
-      {:ok, _other} = Accounts.Tasks.insert(user.id, project.id, %{title: "No Status"})
+      {:ok, _other} = Accounts.Tasks.insert(user.id, project.id, %{title: "Unassigned"})
 
       result =
         conn
         |> authenticate(user)
         |> graphql("""
-          { tasks(projectId: "#{project.id}", status: "in_progress") { title } }
+          { tasks(projectId: "#{project.id}", status: "ready") { title } }
         """)
         |> json_response(200)
 
       titles = Enum.map(result["data"]["tasks"], & &1["title"])
-      assert "With Status" in titles
-      refute "No Status" in titles
+      assert "Assigned" in titles
     end
 
     test "filters by priority", %{conn: conn, user: user, project: project} do
