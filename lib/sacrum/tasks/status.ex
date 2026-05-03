@@ -5,7 +5,8 @@ defmodule Sacrum.Tasks.Status do
   Status values: `:ready`, `:running`, `:waiting`, `:done`.
 
   Derivation rules (evaluated in order):
-    * `:running` — latest StepExecution is `started` or `in_progress`
+    * `:running` — latest StepExecution is `started`, `in_progress`, or
+      `cancelling` (an in-flight cancel that the daemon hasn't acked yet)
     * `:waiting` — latest StepExecution is `waiting` (a parent waiting on its
       children via a `wait_children` step)
     * `:done`    — latest StepExecution is `completed`, the current step is
@@ -44,8 +45,9 @@ defmodule Sacrum.Tasks.Status do
     end
   end
 
-  defp running?(%StepExecution{status: status}) when status in ["started", "in_progress"],
-    do: true
+  defp running?(%StepExecution{status: status})
+       when status in ["started", "in_progress", "cancelling"],
+       do: true
 
   defp running?(_), do: false
 
@@ -66,8 +68,8 @@ defmodule Sacrum.Tasks.Status do
 
   # No active execution. "completed" reaches here only when done?/2 returned
   # false — i.e. more transitions remain — so the task is ready to advance.
-  # Active states ("started", "in_progress", "waiting") are handled by the
-  # earlier clauses in derive/1.
+  # Active states ("started", "in_progress", "cancelling", "waiting") are
+  # handled by the earlier clauses in derive/1.
   defp ready?(_task, nil), do: true
 
   defp ready?(_task, %StepExecution{status: status})
