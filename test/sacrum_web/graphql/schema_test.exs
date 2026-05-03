@@ -471,7 +471,10 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
 
       child_spec = {Sacrum.Orchestrator.TaskOrchestrator, task_id: task.id, user_id: user.id}
-      {:ok, _pid} = TaskFSMSupervisor.start_child(child_spec)
+      {:ok, pid} = TaskFSMSupervisor.start_child(child_spec)
+      Ecto.Adapters.SQL.Sandbox.allow(Sacrum.Repo, self(), pid)
+      :sys.get_state(pid)
+
       assert [] !== Registry.lookup(TaskRegistry, task.id)
 
       result =
@@ -528,10 +531,19 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       {:ok, task2} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task 2"})
 
       child_spec1 = {Sacrum.Orchestrator.TaskOrchestrator, task_id: task1.id, user_id: user.id}
-      {:ok, _pid1} = TaskFSMSupervisor.start_child(child_spec1)
+      {:ok, pid1} = TaskFSMSupervisor.start_child(child_spec1)
 
       child_spec2 = {Sacrum.Orchestrator.TaskOrchestrator, task_id: task2.id, user_id: user.id}
-      {:ok, _pid2} = TaskFSMSupervisor.start_child(child_spec2)
+      {:ok, pid2} = TaskFSMSupervisor.start_child(child_spec2)
+
+      # Allow the orchestrators on the test sandbox so their auto-dispatch
+      # state_timeout (TaskOrchestrator.dispatch_execution → WorkflowSteps.get_by)
+      # can run, then sync via :sys.get_state to wait for that dispatch to finish
+      # before any stopOrchestrator call kills the process mid-checkout.
+      Ecto.Adapters.SQL.Sandbox.allow(Sacrum.Repo, self(), pid1)
+      Ecto.Adapters.SQL.Sandbox.allow(Sacrum.Repo, self(), pid2)
+      :sys.get_state(pid1)
+      :sys.get_state(pid2)
 
       auth_conn = authenticate(conn, user)
 
