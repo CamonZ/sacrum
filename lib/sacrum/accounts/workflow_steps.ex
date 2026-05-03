@@ -15,6 +15,14 @@ defmodule Sacrum.Accounts.WorkflowSteps do
   alias Sacrum.Repo.Schemas.WorkflowStep
   alias Sacrum.Repo.WorkflowSteps, as: WorkflowStepsRepo
 
+  @spec resolve_short_id(String.t(), String.t(), String.t(), String.t()) ::
+          {:ok, WorkflowStep.t()}
+          | {:error, :not_found | :invalid_prefix}
+          | {:error, {:ambiguous, [String.t()]}}
+  def resolve_short_id(user_id, project_id, workflow_id, prefix) when is_binary(user_id) do
+    WorkflowStepsRepo.find_by_uuid_prefix(prefix, project_id, workflow_id, user_id)
+  end
+
   @doc """
   Insert a new workflow step for a user within a workflow.
   Accepts either (workflow_struct, attrs) or (user_id, attrs).

@@ -33,7 +33,9 @@ defmodule Sacrum.Accounts.Tasks do
   end
 
   @spec resolve_short_id(String.t(), String.t(), String.t()) ::
-          {:ok, Task.t()} | {:error, :not_found | :invalid_prefix}
+          {:ok, Task.t()}
+          | {:error, :not_found | :invalid_prefix}
+          | {:error, {:ambiguous, [String.t()]}}
   def resolve_short_id(user_id, project_id, prefix) when is_binary(user_id) do
     TasksRepo.find_by_uuid_prefix(prefix, project_id, user_id)
   end

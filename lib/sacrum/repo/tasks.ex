@@ -24,6 +24,7 @@ defmodule Sacrum.Repo.Tasks do
   alias Sacrum.Repo.Schemas.TaskDependency
   alias Sacrum.Repo.TaskDependencies
   alias Sacrum.Repo.TaskHierarchy
+  alias Sacrum.Repo.UuidPrefixResolver
 
   @doc """
   Lists tasks with optional filters.
@@ -195,28 +196,17 @@ defmodule Sacrum.Repo.Tasks do
 
   defp apply_filter(query, :archived, true), do: query
 
-  @hex_prefix_regex ~r/\A[0-9a-f]{1,8}\z/i
-
   @spec find_by_uuid_prefix(String.t(), String.t(), String.t()) ::
-          {:ok, Task.t()} | {:error, :not_found | :invalid_prefix}
+          {:ok, Task.t()}
+          | {:error, :not_found | :invalid_prefix}
+          | {:error, {:ambiguous, [String.t()]}}
   def find_by_uuid_prefix(prefix, project_id, user_id) do
-    if Regex.match?(@hex_prefix_regex, prefix) do
-      query =
-        from(t in Task,
-          where:
-            fragment("left(?::text, ?)", t.id, ^String.length(prefix)) == ^String.downcase(prefix) and
-              t.project_id == ^project_id and
-              t.user_id == ^user_id,
-          preload: [:sections, :parent]
-        )
+    query =
+      from(t in Task,
+        where: t.project_id == ^project_id and t.user_id == ^user_id
+      )
 
-      case Repo.one(query) do
-        nil -> {:error, :not_found}
-        task -> {:ok, task}
-      end
-    else
-      {:error, :invalid_prefix}
-    end
+    UuidPrefixResolver.find_by_prefix(query, prefix, preloads: [:sections, :parent])
   end
 
   @spec insert(Project.t(), map()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}

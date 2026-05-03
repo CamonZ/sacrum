@@ -7,6 +7,7 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
   import Absinthe.Resolution.Helpers
 
   alias Sacrum.Accounts
+  alias SacrumWeb.Graphql.ShortIdErrors
 
   object :workflow_step do
     field :id, :id
@@ -87,6 +88,25 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
         case Accounts.WorkflowSteps.get_by(user.id, conditions: [id: id]) do
           {:ok, step} -> {:ok, step}
           error -> error
+        end
+      end)
+    end
+
+    field :resolve_step_short_id, :workflow_step do
+      arg(:project_id, non_null(:uuid4))
+      arg(:workflow_id, non_null(:uuid4))
+      arg(:prefix, non_null(:string))
+
+      resolve(fn %{project_id: project_id, workflow_id: workflow_id, prefix: prefix},
+                 %{context: %{current_user: user}} ->
+        with {:ok, _project} <- Accounts.Projects.get_by(user.id, conditions: [id: project_id]),
+             {:ok, _workflow} <-
+               Accounts.Workflows.get_by(user.id,
+                 conditions: [id: workflow_id, project_id: project_id]
+               ) do
+          user.id
+          |> Accounts.WorkflowSteps.resolve_short_id(project_id, workflow_id, prefix)
+          |> ShortIdErrors.format("step", prefix)
         end
       end)
     end

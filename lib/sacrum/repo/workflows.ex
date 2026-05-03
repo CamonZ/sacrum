@@ -31,6 +31,20 @@ defmodule Sacrum.Repo.Workflows do
   alias Sacrum.Repo.Schemas.Workflow
   alias Sacrum.Repo.Schemas.WorkflowTransition
   alias Sacrum.Repo.SyncHelper
+  alias Sacrum.Repo.UuidPrefixResolver
+
+  @spec find_by_uuid_prefix(String.t(), String.t(), String.t()) ::
+          {:ok, Workflow.t()}
+          | {:error, :not_found | :invalid_prefix}
+          | {:error, {:ambiguous, [String.t()]}}
+  def find_by_uuid_prefix(prefix, project_id, user_id) do
+    query =
+      from(w in Workflow,
+        where: w.project_id == ^project_id and w.user_id == ^user_id
+      )
+
+    UuidPrefixResolver.find_by_prefix(query, prefix)
+  end
 
   @spec insert(Project.t(), map()) :: {:ok, Workflow.t()} | {:error, Ecto.Changeset.t()}
   def insert(%Project{id: project_id, user_id: user_id}, attrs),

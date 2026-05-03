@@ -12,6 +12,7 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
   alias Sacrum.Orchestrator.TaskRegistry
   alias Sacrum.Repo.TaskDependencies
   alias Sacrum.Repo.TaskWorkflows
+  alias SacrumWeb.Graphql.ShortIdErrors
 
   object :task do
     field :id, :id
@@ -153,7 +154,9 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
 
       resolve(fn %{project_id: project_id, prefix: prefix}, %{context: %{current_user: user}} ->
         with {:ok, _project} <- Accounts.Projects.get_by(user.id, conditions: [id: project_id]) do
-          Accounts.Tasks.resolve_short_id(user.id, project_id, prefix)
+          user.id
+          |> Accounts.Tasks.resolve_short_id(project_id, prefix)
+          |> ShortIdErrors.format("task", prefix)
         end
       end)
     end
