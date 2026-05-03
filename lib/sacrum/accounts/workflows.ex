@@ -13,7 +13,10 @@ defmodule Sacrum.Accounts.Workflows do
 
   alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.Workflow
+  alias Sacrum.Repo.Schemas.WorkflowTransition
   alias Sacrum.Repo.Workflows, as: WorkflowsRepo
+
+  import Ecto.Query
 
   @doc """
   Insert a new workflow for a user within a project.
@@ -36,12 +39,34 @@ defmodule Sacrum.Accounts.Workflows do
   @doc """
   Update a workflow.
   """
-  @spec update(Workflow.t(), map()) :: {:ok, Workflow.t()} | {:error, Ecto.Changeset.t()}
+  @spec update(Workflow.t(), map()) ::
+          {:ok, Workflow.t()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
   def update(%Workflow{} = workflow, attrs) do
-    workflow
-    |> Workflow.update_changeset(attrs)
-    |> WorkflowsRepo.update()
-    |> Broadcaster.broadcast(:workflow_updated, :project)
+    with :ok <- validate_is_final_no_outgoing_transitions(workflow, attrs) do
+      workflow
+      |> Workflow.update_changeset(attrs)
+      |> WorkflowsRepo.update()
+      |> Broadcaster.broadcast(:workflow_updated, :project)
+    end
+  end
+
+  defp validate_is_final_no_outgoing_transitions(%Workflow{id: id}, attrs) do
+    is_final = Map.get(attrs, :is_final, Map.get(attrs, "is_final"))
+
+    if is_final == true do
+      count =
+        Sacrum.Repo.one(
+          from(t in WorkflowTransition, where: t.from_workflow_id == ^id, select: count(t.id))
+        )
+
+      if count > 0 do
+        {:error, :is_final_with_outgoing_transitions}
+      else
+        :ok
+      end
+    else
+      :ok
+    end
   end
 
   @doc """

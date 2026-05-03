@@ -588,6 +588,7 @@ defmodule SacrumWeb.ProjectChannelTest do
       description: "A workflow",
       auto_advance: false,
       is_default: false,
+      is_final: false,
       display_order: 1,
       metadata: %{},
       initial_step_id: nil,
