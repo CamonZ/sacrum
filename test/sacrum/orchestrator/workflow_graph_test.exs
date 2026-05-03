@@ -103,41 +103,9 @@ defmodule Sacrum.Orchestrator.WorkflowGraphTest do
       assert transitions[step1.id] == [step2.id]
       assert transitions[step2.id] == []
     end
-
-    test "returns error when workflow not found" do
-      user = create_user()
-      project = create_project(user)
-      workflow = create_workflow(user, project)
-      step = create_step(user, workflow, %{})
-      {:ok, workflow} = Accounts.Workflows.update(workflow, %{initial_step_id: step.id})
-      task = create_task(user, project, workflow)
-
-      # Delete the workflow
-      Repo.delete(workflow)
-
-      result = WorkflowGraph.load_workflow_and_graph(user.id, task)
-      assert result == {:error, :not_found}
-    end
   end
 
   describe "get_current_step/1" do
-    test "returns error when task has no current step" do
-      user = create_user()
-      project = create_project(user)
-      workflow = create_workflow(user, project)
-      step = create_step(user, workflow, %{})
-      task = create_task(user, project, workflow)
-
-      # Unset the current_step_id to test the no current step case
-      {:ok, task_without_step} =
-        Repo.update(Ecto.Changeset.change(task, %{current_step_id: nil}))
-
-      data = %{task: task_without_step, steps: %{step.id => step}}
-
-      result = WorkflowGraph.get_current_step(data)
-      assert result == {:error, :no_current_step}
-    end
-
     test "returns error when current step not found in cache" do
       user = create_user()
       project = create_project(user)

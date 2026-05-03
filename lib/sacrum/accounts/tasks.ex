@@ -14,11 +14,9 @@ defmodule Sacrum.Accounts.Tasks do
   alias Sacrum.Repo
   alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.Task
-  alias Sacrum.Repo.Schemas.Workflow
   alias Sacrum.Repo.TaskDependencies
   alias Sacrum.Repo.TaskHierarchy
   alias Sacrum.Repo.Tasks, as: TasksRepo
-  alias Sacrum.Repo.TaskWorkflows
 
   @doc """
   Find a task by UUID or short_id within a user's scope.
@@ -72,6 +70,10 @@ defmodule Sacrum.Accounts.Tasks do
   @doc """
   Insert a new task for a user within a project.
   Accepts either (project_struct, attrs) or (user_id, project_id, attrs).
+
+  If no workflow_id and current_step_id are provided in attrs, they are
+  auto-assigned from the project's default Backlog workflow. An error is
+  raised if no default workflow exists.
   """
   @spec insert(map(), map()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
   def insert(%{id: project_id, user_id: user_id}, attrs) do
@@ -80,12 +82,7 @@ defmodule Sacrum.Accounts.Tasks do
 
   @spec insert(String.t(), String.t(), map()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
   def insert(user_id, project_id, attrs) when is_binary(user_id) and is_binary(project_id) do
-    %Task{project_id: project_id, user_id: user_id}
-    |> Task.create_changeset(attrs)
-    |> TasksRepo.insert()
-    |> preload_sections()
-    |> maybe_assign_default_workflow(project_id)
-    |> Broadcaster.broadcast(:task_created, :project)
+    TasksRepo.insert(project_id, user_id, attrs)
   end
 
   @doc """
@@ -227,32 +224,6 @@ defmodule Sacrum.Accounts.Tasks do
       _ ->
         :ok
     end
-  end
-
-  defp maybe_assign_default_workflow({:ok, %Task{workflow_id: nil} = task}, project_id) do
-    case find_default_workflow(project_id) do
-      nil ->
-        {:ok, task}
-
-      workflow ->
-        case TaskWorkflows.assign_workflow(task, workflow) do
-          {:ok, task} -> {:ok, task}
-          {:error, _} -> {:ok, task}
-        end
-    end
-  end
-
-  defp maybe_assign_default_workflow(result, _project_id), do: result
-
-  defp find_default_workflow(project_id) do
-    import Ecto.Query
-
-    Repo.one(
-      from(w in Workflow,
-        where: w.project_id == ^project_id and w.is_default == true,
-        limit: 1
-      )
-    )
   end
 
   defp preload_sections({:ok, task}), do: {:ok, Repo.preload(task, :sections, force: true)}

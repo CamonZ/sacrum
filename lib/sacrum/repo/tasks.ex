@@ -225,17 +225,13 @@ defmodule Sacrum.Repo.Tasks do
   end
 
   def insert(%Project{id: project_id}, attrs) do
-    %Task{project_id: project_id}
-    |> Task.create_changeset(attrs)
-    |> Repo.insert()
-    |> preload_sections()
-    |> Broadcaster.broadcast(:task_created, :project)
+    insert(project_id, attrs)
   end
 
   @spec insert(String.t(), map()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
   def insert(project_id, attrs) when is_binary(project_id) and is_map(attrs) do
     %Task{project_id: project_id}
-    |> Task.create_changeset(attrs)
+    |> Task.create_changeset(assign_default_workflow_attrs(attrs, project_id))
     |> Repo.insert()
     |> preload_sections()
     |> Broadcaster.broadcast(:task_created, :project)
@@ -246,10 +242,57 @@ defmodule Sacrum.Repo.Tasks do
   @spec insert(String.t(), String.t(), map()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
   def insert(project_id, user_id, attrs) when is_binary(project_id) and is_binary(user_id) do
     %Task{project_id: project_id, user_id: user_id}
-    |> Task.create_changeset(attrs)
+    |> Task.create_changeset(assign_default_workflow_attrs(attrs, project_id))
     |> Repo.insert()
     |> preload_sections()
     |> Broadcaster.broadcast(:task_created, :project)
+  end
+
+  @doc """
+  Assigns the project's default workflow and its initial step into `attrs`
+  unless `:workflow_id` / `"workflow_id"` is already provided. If no default
+  workflow exists, returns attrs unchanged so the NOT NULL constraint surfaces
+  the error at insert time.
+  """
+  @spec assign_default_workflow_attrs(map(), String.t()) :: map()
+  def assign_default_workflow_attrs(attrs, project_id)
+      when not is_map_key(attrs, :workflow_id) and not is_map_key(attrs, "workflow_id") do
+    case find_default_workflow(project_id) do
+      nil ->
+        attrs
+
+      workflow ->
+        step = resolve_initial_step(workflow)
+
+        attrs
+        |> Map.put(:workflow_id, workflow.id)
+        |> Map.put(:current_step_id, step.id)
+    end
+  end
+
+  def assign_default_workflow_attrs(attrs, _project_id), do: attrs
+
+  defp find_default_workflow(project_id) do
+    Repo.one(
+      from(w in Sacrum.Repo.Schemas.Workflow,
+        where: w.project_id == ^project_id and w.is_default == true,
+        limit: 1
+      )
+    )
+  end
+
+  defp resolve_initial_step(%{initial_step_id: step_id}) when not is_nil(step_id) do
+    Repo.get!(Sacrum.Repo.Schemas.WorkflowStep, step_id)
+  end
+
+  defp resolve_initial_step(workflow) do
+    Repo.one!(
+      from(s in Sacrum.Repo.Schemas.WorkflowStep,
+        where: s.workflow_id == ^workflow.id,
+        order_by: s.step_order,
+        limit: 1
+      )
+    )
   end
 
   @spec update(Task.t(), map()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}

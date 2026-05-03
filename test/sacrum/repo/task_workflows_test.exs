@@ -126,18 +126,6 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
     end
   end
 
-  describe "unassign_workflow/1" do
-    test "clears workflow_id and current_step_id" do
-      %{workflow: workflow, task: task} = setup_workflow_with_steps()
-      {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
-
-      {:ok, unassigned} = TaskWorkflows.unassign_workflow(assigned)
-
-      assert is_nil(unassigned.workflow_id)
-      assert is_nil(unassigned.current_step_id)
-    end
-  end
-
   describe "get_current_step/1" do
     test "returns the current WorkflowStep" do
       %{workflow: workflow, steps: steps, task: task} = setup_workflow_with_steps()
@@ -147,14 +135,6 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
 
       assert step.id == steps.backlog.id
       assert step.name == "backlog"
-    end
-
-    test "returns error when task has no current step" do
-      user = create_user()
-      project = create_project(user)
-      task = create_task(project)
-
-      assert {:error, :no_current_step} = TaskWorkflows.get_current_step(task)
     end
   end
 
@@ -225,31 +205,6 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
       assert {:error, :step_not_found} =
                TaskWorkflows.move_to_step(assigned, Ecto.UUID.generate())
     end
-
-    test "returns error when task has no workflow" do
-      user = create_user()
-      project = create_project(user)
-      task = create_task(project)
-
-      assert {:error, :no_workflow} =
-               TaskWorkflows.move_to_step(task, Ecto.UUID.generate())
-    end
-
-    test "returns error when task has no current step" do
-      user = create_user()
-      project = create_project(user)
-      task = create_task(project)
-      # Manually set workflow_id but no current_step_id (edge case)
-      workflow = create_workflow(project)
-
-      {:ok, task} =
-        task
-        |> Ecto.Changeset.change(%{workflow_id: workflow.id})
-        |> Sacrum.Repo.update()
-
-      assert {:error, :no_current_step} =
-               TaskWorkflows.move_to_step(task, Ecto.UUID.generate())
-    end
   end
 
   describe "advance_to_step/2" do
@@ -288,30 +243,6 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
       {:ok, advanced} = TaskWorkflows.advance_to_step(assigned, steps.done.id)
 
       assert advanced.current_step_id == steps.done.id
-    end
-
-    test "returns error when task has no workflow" do
-      user = create_user()
-      project = create_project(user)
-      task = create_task(project)
-
-      assert {:error, :no_workflow} =
-               TaskWorkflows.advance_to_step(task, Ecto.UUID.generate())
-    end
-
-    test "returns error when task has no current step" do
-      user = create_user()
-      project = create_project(user)
-      task = create_task(project)
-      workflow = create_workflow(project)
-
-      {:ok, task} =
-        task
-        |> Ecto.Changeset.change(%{workflow_id: workflow.id})
-        |> Sacrum.Repo.update()
-
-      assert {:error, :no_current_step} =
-               TaskWorkflows.advance_to_step(task, Ecto.UUID.generate())
     end
 
     test "returns error when step does not belong to workflow" do
@@ -489,30 +420,34 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
     test "simulates full vtb add -w default shape: Accounts.Tasks.insert + explicit assign_workflow" do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(project)
-      step1 = create_step(workflow, %{name: "backlog", step_order: 1})
-      step2 = create_step(workflow, %{name: "in_progress", step_order: 2})
-      step3 = create_step(workflow, %{name: "done", step_order: 3, is_final: true})
+      # Get the auto-created default Backlog workflow
+      workflows = Workflows.all(conditions: [project_id: project.id])
+      default_workflow = Enum.find(workflows, &(&1.is_default == true))
 
-      {:ok, workflow} = Workflows.update(workflow, %{initial_step_id: step1.id, is_default: true})
+      default_backlog_step =
+        Sacrum.Repo.get!(Sacrum.Repo.Schemas.WorkflowStep, default_workflow.initial_step_id)
 
-      create_transition(step1, step2)
+      # Create additional steps to mimic workflow
+      step2 = create_step(default_workflow, %{name: "in_progress", step_order: 2})
+      step3 = create_step(default_workflow, %{name: "done", step_order: 3, is_final: true})
+
+      create_transition(default_backlog_step, step2)
       create_transition(step2, step3)
 
       {:ok, task} = Accounts.Tasks.insert(project, %{title: "Test Task"})
 
       task = Sacrum.Repo.get!(Sacrum.Repo.Schemas.Task, task.id)
-      assert task.workflow_id == workflow.id
-      assert task.current_step_id == step1.id
+      assert task.workflow_id == default_workflow.id
+      assert task.current_step_id == default_backlog_step.id
 
-      {:ok, task_after_explicit} = TaskWorkflows.assign_workflow(task, workflow)
+      {:ok, task_after_explicit} = TaskWorkflows.assign_workflow(task, default_workflow)
 
-      assert task_after_explicit.workflow_id == workflow.id
-      assert task_after_explicit.current_step_id == step1.id
+      assert task_after_explicit.workflow_id == default_workflow.id
+      assert task_after_explicit.current_step_id == default_backlog_step.id
 
       executions =
         StepExecutions.all(
-          conditions: [task_id: task.id, workflow_id: workflow.id],
+          conditions: [task_id: task.id, workflow_id: default_workflow.id],
           order_by: [asc: :inserted_at]
         )
 

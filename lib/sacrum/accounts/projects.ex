@@ -15,12 +15,12 @@ defmodule Sacrum.Accounts.Projects do
 
   @doc """
   Insert a new project for a user.
+
+  Automatically creates a default "Backlog" workflow with an initial step.
   """
   @spec insert(String.t(), map()) :: {:ok, Project.t()} | {:error, Ecto.Changeset.t()}
   def insert(user_id, attrs) when is_binary(user_id) do
-    %Project{user_id: user_id}
-    |> Project.create_changeset(attrs)
-    |> ProjectsRepo.insert()
+    ProjectsRepo.insert(user_id, attrs)
   end
 
   @doc """
