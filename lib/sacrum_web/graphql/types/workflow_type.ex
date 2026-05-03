@@ -17,6 +17,7 @@ defmodule SacrumWeb.Graphql.Types.WorkflowType do
     field :auto_advance, :boolean
     field :display_order, :integer
     field :is_default, :boolean
+    field :is_final, :boolean
     field :kanban_column, :string
     field :inserted_at, :datetime
     field :updated_at, :datetime
@@ -99,6 +100,7 @@ defmodule SacrumWeb.Graphql.Types.WorkflowType do
       arg(:auto_advance, :boolean)
       arg(:display_order, :integer)
       arg(:is_default, :boolean)
+      arg(:is_final, :boolean)
       arg(:kanban_column, :string)
 
       resolve(fn args, %{context: %{current_user: user}} ->
@@ -119,13 +121,22 @@ defmodule SacrumWeb.Graphql.Types.WorkflowType do
       arg(:auto_advance, :boolean)
       arg(:display_order, :integer)
       arg(:is_default, :boolean)
+      arg(:is_final, :boolean)
       arg(:initial_step_id, :uuid4)
       arg(:kanban_column, :string)
 
       resolve(fn %{id: id} = args, %{context: %{current_user: user}} ->
         with {:ok, workflow} <- Accounts.Workflows.get_by(user.id, conditions: [id: id]) do
           attrs = Map.drop(args, [:id])
-          Accounts.Workflows.update(workflow, attrs)
+
+          case Accounts.Workflows.update(workflow, attrs) do
+            {:error, :is_final_with_outgoing_transitions} ->
+              {:error,
+               "cannot mark workflow as final: workflow has outgoing transitions. Remove the transitions first."}
+
+            other ->
+              other
+          end
         end
       end)
     end
