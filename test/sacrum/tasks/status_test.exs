@@ -135,6 +135,27 @@ defmodule Sacrum.Tasks.StatusTest do
 
       assert Status.derive(task) == :running
     end
+
+    test "returns :running when latest StepExecution is cancelling" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project)
+      step = create_step(workflow)
+
+      task = create_task(user, project, workflow, step)
+
+      {:ok, _execution} =
+        Accounts.StepExecutions.insert(task.user_id, %{
+          task_id: task.id,
+          project_id: task.project_id,
+          workflow_id: workflow.id,
+          step_id: step.id,
+          step_name: step.name,
+          status: "cancelling"
+        })
+
+      assert Status.derive(task) == :running
+    end
   end
 
   describe "derive/1 - waiting state" do
