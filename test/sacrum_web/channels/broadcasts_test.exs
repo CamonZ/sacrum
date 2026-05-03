@@ -12,6 +12,7 @@ defmodule SacrumWeb.BroadcastsTest do
   alias Sacrum.Repo.WorkflowSteps
   alias Sacrum.Repo.StepTransitions
   alias Sacrum.Repo.TaskWorkflows
+  alias Sacrum.Accounts.WorkflowTransitions
 
   @endpoint SacrumWeb.Endpoint
 
@@ -164,6 +165,52 @@ defmodule SacrumWeb.BroadcastsTest do
 
       refute_broadcast "task_updated", _, 100
       refute_broadcast "step_execution_created", _, 100
+    end
+  end
+
+  describe "workflow transition broadcasts" do
+    test "creating a workflow transition broadcasts workflow_transition_created" do
+      {user, project} = setup_channel()
+
+      {:ok, workflow1} = Workflows.insert(project, %{name: "Implementation"})
+      {:ok, workflow2} = Workflows.insert(project, %{name: "Review"})
+
+      {:ok, transition} =
+        WorkflowTransitions.insert(user.id, %{
+          "from_workflow_id" => workflow1.id,
+          "to_workflow_id" => workflow2.id,
+          "project_id" => project.id,
+          "label" => "promote"
+        })
+
+      assert_broadcast "workflow_transition_created", payload
+      assert payload.id == transition.id
+      assert payload.from_workflow_id == workflow1.id
+      assert payload.to_workflow_id == workflow2.id
+      assert payload.label == "promote"
+    end
+
+    test "deleting a workflow transition broadcasts workflow_transition_deleted" do
+      {user, project} = setup_channel()
+
+      {:ok, workflow1} = Workflows.insert(project, %{name: "Implementation"})
+      {:ok, workflow2} = Workflows.insert(project, %{name: "Review"})
+
+      {:ok, transition} =
+        WorkflowTransitions.insert(user.id, %{
+          "from_workflow_id" => workflow1.id,
+          "to_workflow_id" => workflow2.id,
+          "project_id" => project.id
+        })
+
+      assert_broadcast "workflow_transition_created", _
+
+      {:ok, _} = WorkflowTransitions.delete(transition)
+
+      assert_broadcast "workflow_transition_deleted", payload
+      assert payload.id == transition.id
+      assert payload.from_workflow_id == workflow1.id
+      assert payload.to_workflow_id == workflow2.id
     end
   end
 end
