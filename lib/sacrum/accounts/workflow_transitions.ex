@@ -10,6 +10,7 @@ defmodule Sacrum.Accounts.WorkflowTransitions do
     preloads: [],
     default_order: [asc: :inserted_at]
 
+  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.WorkflowTransition
   alias Sacrum.Repo.WorkflowTransitions, as: WorkflowTransitionsRepo
 
@@ -20,7 +21,9 @@ defmodule Sacrum.Accounts.WorkflowTransitions do
   @spec insert(String.t(), map()) ::
           {:ok, WorkflowTransition.t()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
   def insert(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
-    WorkflowTransitionsRepo.insert(user_id, attrs)
+    user_id
+    |> WorkflowTransitionsRepo.insert(attrs)
+    |> Broadcaster.broadcast(:workflow_transition_created, :project)
   end
 
   @doc """
@@ -29,6 +32,13 @@ defmodule Sacrum.Accounts.WorkflowTransitions do
   @spec delete(WorkflowTransition.t()) ::
           {:ok, WorkflowTransition.t()} | {:error, Ecto.Changeset.t()}
   def delete(%WorkflowTransition{} = transition) do
-    WorkflowTransitionsRepo.delete(transition)
+    case WorkflowTransitionsRepo.delete(transition) do
+      {:ok, deleted} ->
+        Broadcaster.broadcast_event(deleted, :workflow_transition_deleted, :project)
+        {:ok, deleted}
+
+      error ->
+        error
+    end
   end
 end

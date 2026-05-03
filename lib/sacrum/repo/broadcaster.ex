@@ -22,6 +22,8 @@ defmodule Sacrum.Repo.Broadcaster do
     step_deleted: :broadcast_step_deleted,
     step_transition_created: :broadcast_step_transition_created,
     step_transition_deleted: :broadcast_step_transition_deleted,
+    workflow_transition_created: :broadcast_workflow_transition_created,
+    workflow_transition_deleted: :broadcast_workflow_transition_deleted,
     step_execution_created: :broadcast_step_execution_created,
     step_execution_status_changed: :broadcast_step_execution_status_changed,
     session_log_created: :broadcast_session_log_created,

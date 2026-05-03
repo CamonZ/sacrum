@@ -1,5 +1,5 @@
 defmodule Sacrum.Accounts.WorkflowTransitionsTest do
-  use Sacrum.DataCase, async: true
+  use Sacrum.DataCase, async: false
 
   alias Sacrum.Accounts.WorkflowTransitions
   alias Sacrum.Accounts.Workflows
@@ -108,6 +108,70 @@ defmodule Sacrum.Accounts.WorkflowTransitionsTest do
       transitions = WorkflowTransitions.list_by(user1.id)
       assert length(transitions) == 1
       assert hd(transitions).user_id == user1.id
+    end
+  end
+
+  describe "broadcasts" do
+    test "insert/2 broadcasts workflow_transition_created on success" do
+      user = create_user()
+      {project, workflow1, workflow2} = create_workflows(user)
+
+      :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
+
+      {:ok, transition} =
+        WorkflowTransitions.insert(user.id, %{
+          "from_workflow_id" => workflow1.id,
+          "to_workflow_id" => workflow2.id,
+          "project_id" => project.id,
+          "label" => "promote"
+        })
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "workflow_transition_created",
+        payload: payload
+      }
+
+      assert payload.id == transition.id
+      assert payload.from_workflow_id == workflow1.id
+      assert payload.to_workflow_id == workflow2.id
+      assert payload.label == "promote"
+    end
+
+    test "insert/2 does not broadcast on validation error" do
+      user = create_user()
+      {project, _workflow1, _workflow2} = create_workflows(user)
+
+      :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
+
+      assert {:error, %Ecto.Changeset{}} =
+               WorkflowTransitions.insert(user.id, %{"project_id" => project.id})
+
+      refute_receive %Phoenix.Socket.Broadcast{event: "workflow_transition_created"}, 100
+    end
+
+    test "delete/1 broadcasts workflow_transition_deleted on success" do
+      user = create_user()
+      {project, workflow1, workflow2} = create_workflows(user)
+
+      {:ok, transition} =
+        WorkflowTransitions.insert(user.id, %{
+          "from_workflow_id" => workflow1.id,
+          "to_workflow_id" => workflow2.id,
+          "project_id" => project.id
+        })
+
+      :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
+
+      {:ok, _deleted} = WorkflowTransitions.delete(transition)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "workflow_transition_deleted",
+        payload: payload
+      }
+
+      assert payload.id == transition.id
+      assert payload.from_workflow_id == workflow1.id
+      assert payload.to_workflow_id == workflow2.id
     end
   end
 end

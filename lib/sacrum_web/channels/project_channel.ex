@@ -18,6 +18,8 @@ defmodule SacrumWeb.ProjectChannel do
     "step_deleted",
     "step_transition_created",
     "step_transition_deleted",
+    "workflow_transition_created",
+    "workflow_transition_deleted",
     "step_execution_created",
     "step_execution_status_changed",
     "session_log_created",
@@ -175,6 +177,26 @@ defmodule SacrumWeb.ProjectChannel do
     )
   end
 
+  # Workflow transition broadcasts
+
+  @spec broadcast_workflow_transition_created(String.t(), map()) :: :ok | {:error, term()}
+  def broadcast_workflow_transition_created(project_id, transition) do
+    SacrumWeb.Endpoint.broadcast(
+      "project:#{project_id}",
+      "workflow_transition_created",
+      workflow_transition_payload(transition)
+    )
+  end
+
+  @spec broadcast_workflow_transition_deleted(String.t(), map()) :: :ok | {:error, term()}
+  def broadcast_workflow_transition_deleted(project_id, transition) do
+    SacrumWeb.Endpoint.broadcast(
+      "project:#{project_id}",
+      "workflow_transition_deleted",
+      workflow_transition_payload(transition)
+    )
+  end
+
   # Step execution broadcasts
 
   @spec broadcast_step_execution_created(String.t(), map()) :: :ok | {:error, term()}
@@ -321,6 +343,18 @@ defmodule SacrumWeb.ProjectChannel do
       id: transition.id,
       from_step_id: transition.from_step_id,
       to_step_id: transition.to_step_id,
+      label: transition.label,
+      inserted_at: transition.inserted_at,
+      updated_at: transition.updated_at
+    }
+  end
+
+  defp workflow_transition_payload(transition) do
+    %{
+      id: transition.id,
+      from_workflow_id: transition.from_workflow_id,
+      to_workflow_id: transition.to_workflow_id,
+      target_step_id: transition.target_step_id,
       label: transition.label,
       inserted_at: transition.inserted_at,
       updated_at: transition.updated_at
