@@ -18,6 +18,14 @@ defmodule Sacrum.Accounts.Workflows do
 
   import Ecto.Query
 
+  @spec resolve_short_id(String.t(), String.t(), String.t()) ::
+          {:ok, Workflow.t()}
+          | {:error, :not_found | :invalid_prefix}
+          | {:error, {:ambiguous, [String.t()]}}
+  def resolve_short_id(user_id, project_id, prefix) when is_binary(user_id) do
+    WorkflowsRepo.find_by_uuid_prefix(prefix, project_id, user_id)
+  end
+
   @doc """
   Insert a new workflow for a user within a project.
   Accepts either (project_struct, attrs) or (user_id, project_id, attrs).

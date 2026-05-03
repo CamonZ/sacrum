@@ -7,6 +7,7 @@ defmodule SacrumWeb.Graphql.Types.WorkflowType do
   import Absinthe.Resolution.Helpers
 
   alias Sacrum.Accounts
+  alias SacrumWeb.Graphql.ShortIdErrors
 
   object :workflow do
     field :id, :id
@@ -87,6 +88,19 @@ defmodule SacrumWeb.Graphql.Types.WorkflowType do
       resolve(fn %{project_id: project_id}, %{context: %{current_user: user}} ->
         {:ok, workflows, aggregates} = Accounts.Workflows.pipeline_summary(user.id, project_id)
         {:ok, Enum.map(workflows, &attach_pipeline_aggregates(&1, aggregates))}
+      end)
+    end
+
+    field :resolve_workflow_short_id, :workflow do
+      arg(:project_id, non_null(:uuid4))
+      arg(:prefix, non_null(:string))
+
+      resolve(fn %{project_id: project_id, prefix: prefix}, %{context: %{current_user: user}} ->
+        with {:ok, _project} <- Accounts.Projects.get_by(user.id, conditions: [id: project_id]) do
+          user.id
+          |> Accounts.Workflows.resolve_short_id(project_id, prefix)
+          |> ShortIdErrors.format("workflow", prefix)
+        end
       end)
     end
   end

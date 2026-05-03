@@ -33,6 +33,23 @@ defmodule Sacrum.Repo.WorkflowSteps do
   alias Sacrum.Repo.Schemas.Workflow
   alias Sacrum.Repo.Schemas.WorkflowStep
   alias Sacrum.Repo.SyncHelper
+  alias Sacrum.Repo.UuidPrefixResolver
+
+  @spec find_by_uuid_prefix(String.t(), String.t(), String.t(), String.t()) ::
+          {:ok, WorkflowStep.t()}
+          | {:error, :not_found | :invalid_prefix}
+          | {:error, {:ambiguous, [String.t()]}}
+  def find_by_uuid_prefix(prefix, project_id, workflow_id, user_id) do
+    query =
+      from(s in WorkflowStep,
+        where:
+          s.workflow_id == ^workflow_id and
+            s.project_id == ^project_id and
+            s.user_id == ^user_id
+      )
+
+    UuidPrefixResolver.find_by_prefix(query, prefix)
+  end
 
   @doc """
   Insert a new workflow step. Accepts Workflow struct (with or without user_id).
