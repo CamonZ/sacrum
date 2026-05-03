@@ -10,7 +10,6 @@ defmodule Sacrum.Accounts.WorkflowTransitions do
     preloads: [],
     default_order: [asc: :inserted_at]
 
-  alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.WorkflowTransition
   alias Sacrum.Repo.WorkflowTransitions, as: WorkflowTransitionsRepo
 
@@ -18,20 +17,10 @@ defmodule Sacrum.Accounts.WorkflowTransitions do
   Insert a new workflow transition for a user.
   Extracts from_workflow_id, to_workflow_id, and project_id from attrs.
   """
-  @spec insert(String.t(), map()) :: {:ok, WorkflowTransition.t()} | {:error, Ecto.Changeset.t()}
+  @spec insert(String.t(), map()) ::
+          {:ok, WorkflowTransition.t()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
   def insert(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
-    from_workflow_id = Map.get(attrs, "from_workflow_id") || Map.get(attrs, :from_workflow_id)
-    to_workflow_id = Map.get(attrs, "to_workflow_id") || Map.get(attrs, :to_workflow_id)
-    project_id = Map.get(attrs, "project_id") || Map.get(attrs, :project_id)
-
-    %WorkflowTransition{
-      user_id: user_id,
-      from_workflow_id: from_workflow_id,
-      to_workflow_id: to_workflow_id,
-      project_id: project_id
-    }
-    |> WorkflowTransition.create_changeset(attrs)
-    |> Repo.insert()
+    WorkflowTransitionsRepo.insert(user_id, attrs)
   end
 
   @doc """

@@ -9,8 +9,7 @@ defmodule Sacrum.Tasks.Status do
     * `:waiting` — latest StepExecution is `waiting` (a parent waiting on its
       children via a `wait_children` step)
     * `:done`    — latest StepExecution is `completed`, the current step is
-      final, the step has no outgoing step transitions, and the workflow has
-      no outgoing workflow transitions
+      final (is_final=true), and the workflow is final (is_final=true)
     * `:ready`   — none of the above apply
 
   Tasks always have `workflow_id` and `current_step_id` set (NOT NULL,
@@ -28,8 +27,8 @@ defmodule Sacrum.Tasks.Status do
 
   @preloads [
     :step_executions,
-    current_step: :transitions,
-    workflow: :transitions
+    :workflow,
+    :current_step
   ]
 
   @spec derive(Task.t()) :: status()
@@ -55,12 +54,12 @@ defmodule Sacrum.Tasks.Status do
 
   defp done?(
          %Task{
-           current_step: %WorkflowStep{is_final: true, transitions: step_txs},
-           workflow: %Workflow{transitions: wf_txs}
+           current_step: %WorkflowStep{is_final: true},
+           workflow: %Workflow{is_final: true}
          },
          %StepExecution{status: "completed"}
        ) do
-    Enum.empty?(step_txs) and Enum.empty?(wf_txs)
+    true
   end
 
   defp done?(_task, _latest), do: false
