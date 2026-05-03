@@ -1,0 +1,32 @@
+{
+  "name": "sacrum-vtb",
+  "version": "0.1.0",
+  "description": "Sacrum Vertebrae task-management skills and ticket workflows.",
+  "author": {
+    "name": "Camonz"
+  },
+  "license": "UNLICENSED",
+  "keywords": [
+    "sacrum",
+    "vtb",
+    "vertebrae",
+    "tasks"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Sacrum VTB",
+    "shortDescription": "Vertebrae task-management and workflow skills for Sacrum",
+    "longDescription": "Provides vtb command skills and ticket implementation workflows for the Sacrum repository.",
+    "developerName": "Camonz",
+    "category": "Coding",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Show me the next ready Sacrum task.",
+      "Create a well-formed vtb ticket."
+    ]
+  }
+}
