@@ -184,6 +184,50 @@ defmodule Sacrum.Tasks.StatusTest do
     end
   end
 
+  describe "derive/1 - failed state" do
+    test "returns :failed when latest StepExecution is failed" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project)
+      step = create_step(workflow)
+
+      task = create_task(user, project, workflow, step)
+
+      {:ok, _execution} =
+        Accounts.StepExecutions.insert(task.user_id, %{
+          task_id: task.id,
+          project_id: task.project_id,
+          workflow_id: workflow.id,
+          step_id: step.id,
+          step_name: step.name,
+          status: "failed"
+        })
+
+      assert Status.derive(task) == :failed
+    end
+
+    test "does not derive as :ready when execution is failed" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project)
+      step = create_step(workflow)
+
+      task = create_task(user, project, workflow, step)
+
+      {:ok, _execution} =
+        Accounts.StepExecutions.insert(task.user_id, %{
+          task_id: task.id,
+          project_id: task.project_id,
+          workflow_id: workflow.id,
+          step_id: step.id,
+          step_name: step.name,
+          status: "failed"
+        })
+
+      assert Status.derive(task) != :ready
+    end
+  end
+
   describe "derive/1 - done state" do
     test "returns :done when on final step of terminal workflow with completed execution" do
       user = create_user()

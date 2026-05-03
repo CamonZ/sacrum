@@ -37,6 +37,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{StepExecution, Task}
   alias Sacrum.Repo.TaskWorkflows
+  alias Sacrum.Tasks.Status
 
   @spec start_link(keyword()) :: {:ok, pid()} | {:error, term()}
   def start_link(opts) do
@@ -168,6 +169,17 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   def handle_event(:enter, prev_state, :failed, data) do
     Logger.error("[TaskOrchestrator:#{data.task.id}] enter #{prev_state} -> :failed, stopping")
     if data.slot_id, do: ExecutionPool.release_slot(data.slot_id)
+
+    case Status.refresh(data.task) do
+      {:ok, _} ->
+        :ok
+
+      {:error, cs} ->
+        Logger.error(
+          "[TaskOrchestrator:#{data.task.id}] failed to persist :failed status: #{inspect(cs.errors)}"
+        )
+    end
+
     {:stop, :normal, data}
   end
 

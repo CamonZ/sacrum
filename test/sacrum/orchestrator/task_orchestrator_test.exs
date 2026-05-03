@@ -2660,4 +2660,34 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       assert Enum.all?(prior_executions, &(&1.status == "invalidated"))
     end
   end
+
+  describe "retry exhaustion persists :failed status" do
+    test "after max retry exhaustion, task.status is persisted as 'failed' and derive returns :failed" do
+      %{user: user, project: project, task: task} =
+        setup_linear_workflow(step_count: 1)
+
+      pid = start_orchestrator(task, user)
+      wait_for_state(pid, :executing)
+
+      max_retries = Sacrum.Orchestrator.Retry.max_retries()
+
+      # Drive the orchestrator to retry exhaustion. Each daemon failure either
+      # spawns a new retry execution (attempt < max) or transitions to :failed.
+      for attempt <- 1..max_retries do
+        simulate_daemon_failure(task.id, project.id)
+
+        if attempt < max_retries do
+          wait_for_execution_count(task.id, attempt + 1)
+        end
+      end
+
+      wait_for_exit(pid)
+
+      refute Process.alive?(pid)
+
+      reloaded = Repo.get!(Sacrum.Repo.Schemas.Task, task.id)
+      assert reloaded.status == "failed"
+      assert Sacrum.Tasks.Status.derive(reloaded) == :failed
+    end
+  end
 end

@@ -2,12 +2,15 @@ defmodule Sacrum.Tasks.Status do
   @moduledoc """
   Derives task status from orchestrator state (StepExecution + DAG position).
 
-  Status values: `:ready`, `:running`, `:waiting`, `:done`.
+  Status values: `:ready`, `:running`, `:waiting`, `:done`, `:failed`.
 
   Derivation rules (evaluated in order):
     * `:running` — latest StepExecution is `started` or `in_progress`
     * `:waiting` — latest StepExecution is `waiting` (a parent waiting on its
       children via a `wait_children` step)
+    * `:failed`  — latest StepExecution is `failed` (the orchestrator FSM has
+      reached its terminal `:failed` state and persisted this status before
+      stopping)
     * `:done`    — latest StepExecution is `completed`, the current step is
       final (is_final=true), and the workflow is final (is_final=true)
     * `:ready`   — none of the above apply
@@ -23,7 +26,7 @@ defmodule Sacrum.Tasks.Status do
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{StepExecution, Task, Workflow, WorkflowStep}
 
-  @type status :: :ready | :running | :waiting | :done
+  @type status :: :ready | :running | :waiting | :failed | :done
 
   @preloads [
     :step_executions,
@@ -39,6 +42,7 @@ defmodule Sacrum.Tasks.Status do
     cond do
       running?(latest) -> :running
       waiting?(latest) -> :waiting
+      failed?(latest) -> :failed
       done?(task, latest) -> :done
       ready?(task, latest) -> :ready
     end
@@ -51,6 +55,9 @@ defmodule Sacrum.Tasks.Status do
 
   defp waiting?(%StepExecution{status: "waiting"}), do: true
   defp waiting?(_), do: false
+
+  defp failed?(%StepExecution{status: "failed"}), do: true
+  defp failed?(_), do: false
 
   defp done?(
          %Task{
@@ -67,11 +74,11 @@ defmodule Sacrum.Tasks.Status do
   # No active execution. "completed" reaches here only when done?/2 returned
   # false — i.e. more transitions remain — so the task is ready to advance.
   # Active states ("started", "in_progress", "waiting") are handled by the
-  # earlier clauses in derive/1.
+  # earlier clauses in derive/1. "failed" is handled by failed?/1 above.
   defp ready?(_task, nil), do: true
 
   defp ready?(_task, %StepExecution{status: status})
-       when status in ["pending", "cancelled", "failed", "completed"],
+       when status in ["pending", "cancelled", "completed"],
        do: true
 
   defp ready?(_task, _latest), do: false
