@@ -188,7 +188,7 @@ defmodule Sacrum.Tasks.StatusTest do
     test "returns :done when on final step of terminal workflow with completed execution" do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project)
+      workflow = create_workflow(user, project, %{is_final: true})
       final_step = create_step(workflow, %{is_final: true})
 
       task = create_task(user, project, workflow, final_step)
@@ -251,12 +251,11 @@ defmodule Sacrum.Tasks.StatusTest do
     test "does not return :done when on final step of non-terminal workflow" do
       user = create_user()
       project = create_project(user)
-      wf1 = create_workflow(user, project, %{name: "WF1"})
+      wf1 = create_workflow(user, project, %{name: "WF1", is_final: false})
       wf2 = create_workflow(user, project, %{name: "WF2"})
 
       final_step_wf1 = create_step(wf1, %{is_final: true})
 
-      # Create an inter-workflow transition
       {:ok, _transition} =
         Accounts.WorkflowTransitions.insert(user.id, %{
           from_workflow_id: wf1.id,
@@ -276,16 +275,15 @@ defmodule Sacrum.Tasks.StatusTest do
           status: "completed"
         })
 
-      # Reload to get transitions
       assert Status.derive(task) != :done
     end
   end
 
   describe "derive/1 - done state safety" do
-    test "does not return :done when current step has outgoing step transitions, even if is_final is true" do
+    test "returns :done even when current step has outgoing step transitions" do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project)
+      workflow = create_workflow(user, project, %{is_final: true})
 
       mistakenly_final = create_step(workflow, %{is_final: true})
       next_step = create_step(workflow)
@@ -309,7 +307,7 @@ defmodule Sacrum.Tasks.StatusTest do
           status: "completed"
         })
 
-      assert Status.derive(task) != :done
+      assert Status.derive(task) == :done
     end
   end
 

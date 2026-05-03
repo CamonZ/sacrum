@@ -53,22 +53,42 @@ defmodule Sacrum.Repo.WorkflowTransitions do
   @doc """
   Insert a new workflow transition with user_id.
   Extracts from_workflow_id, to_workflow_id, and project_id from attrs.
+
+  ## Validations
+
+  - `:from_workflow_is_final` — the from_workflow must not have is_final=true
   """
-  @spec insert(String.t(), map()) :: {:ok, WorkflowTransition.t()} | {:error, Ecto.Changeset.t()}
+  @spec insert(String.t(), map()) ::
+          {:ok, WorkflowTransition.t()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
   def insert(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
     from_workflow_id = Map.get(attrs, "from_workflow_id") || Map.get(attrs, :from_workflow_id)
     to_workflow_id = Map.get(attrs, "to_workflow_id") || Map.get(attrs, :to_workflow_id)
     project_id = Map.get(attrs, "project_id") || Map.get(attrs, :project_id)
 
-    %WorkflowTransition{
-      user_id: user_id,
-      from_workflow_id: from_workflow_id,
-      to_workflow_id: to_workflow_id,
-      project_id: project_id
-    }
-    |> WorkflowTransition.create_changeset(attrs)
-    |> Repo.insert()
+    with :ok <- validate_from_workflow_not_final(attrs) do
+      %WorkflowTransition{
+        user_id: user_id,
+        from_workflow_id: from_workflow_id,
+        to_workflow_id: to_workflow_id,
+        project_id: project_id
+      }
+      |> WorkflowTransition.create_changeset(attrs)
+      |> Repo.insert()
+    end
   end
 
   defoverridable insert: 2
+
+  defp validate_from_workflow_not_final(attrs) do
+    from_id = attrs[:from_workflow_id] || attrs["from_workflow_id"]
+
+    if is_nil(from_id) do
+      :ok
+    else
+      case Repo.one(from w in Workflow, where: w.id == ^from_id, select: w.is_final) do
+        true -> {:error, :from_workflow_is_final}
+        _ -> :ok
+      end
+    end
+  end
 end

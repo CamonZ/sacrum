@@ -58,6 +58,20 @@ defmodule Sacrum.Repo.WorkflowTransitionsTest do
       assert %{from_workflow_id: ["transition already exists between these workflows"]} =
                errors_on(changeset)
     end
+
+    test "rejects outgoing transition from a workflow marked is_final" do
+      {:ok, user} = Users.insert(@valid_user_attrs)
+      {:ok, project} = Projects.insert(user, %{name: "Proj"})
+      {:ok, terminal} = Workflows.insert(project, %{name: "Done", is_final: true})
+      {:ok, target} = Workflows.insert(project, %{name: "Other"})
+
+      assert {:error, :from_workflow_is_final} =
+               WorkflowTransitions.insert(user.id, %{
+                 project_id: project.id,
+                 from_workflow_id: terminal.id,
+                 to_workflow_id: target.id
+               })
+    end
   end
 
   describe "all/1" do
