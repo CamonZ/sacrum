@@ -1,0 +1,20 @@
+{
+  "name": "sacrum-local",
+  "interface": {
+    "displayName": "Sacrum Local"
+  },
+  "plugins": [
+    {
+      "name": "sacrum-vtb",
+      "source": {
+        "source": "local",
+        "path": "./.agents/plugins/sacrum-vtb"
+      },
+      "policy": {
+        "installation": "INSTALLED_BY_DEFAULT",
+        "authentication": "ON_USE"
+      },
+      "category": "Coding"
+    }
+  ]
+}
