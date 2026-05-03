@@ -104,16 +104,6 @@ defmodule Sacrum.Orchestrator.SchedulerTest do
       assert Registry.lookup(TaskRegistry, task.id) != []
     end
 
-    test "rejects task without workflow" do
-      user = create_user()
-      project = create_project(user)
-      task = create_task(user, project)
-
-      result = Scheduler.schedule_task(%{id: task.id})
-
-      assert result == {:error, :no_workflow_assigned}
-    end
-
     test "rejects already completed task" do
       user = create_user()
       project = create_project(user)
@@ -233,38 +223,6 @@ defmodule Sacrum.Orchestrator.SchedulerTest do
 
       # Verify task C's orchestrator was NOT started (because task B is still incomplete)
       assert Registry.lookup(TaskRegistry, task_c.id) == []
-    end
-
-    test "skips dependent task without workflow" do
-      user = create_user()
-      project = create_project(user)
-      workflow = create_workflow(user, project)
-      step = create_step(user, workflow, %{name: "Step 1", step_order: 1})
-      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: step.id})
-
-      # Create task A (with workflow) and task B (without workflow)
-      task_a = create_task(user, project, %{title: "Task A"})
-      task_a = assign_workflow_to_task(user, task_a, workflow)
-
-      task_b = create_task(user, project, %{title: "Task B"})
-      # Don't assign workflow to task B
-
-      # Make task B depend on task A
-      add_dependency(task_b, task_a)
-
-      # Complete task A
-      task_a = mark_task_completed(task_a)
-
-      # Notify scheduler
-      result = Scheduler.notify_task_completed(task_a.id, %{status: "completed"})
-
-      # Give it time to process
-      Process.sleep(200)
-
-      assert result == :ok
-
-      # Verify task B's orchestrator was NOT started (no workflow)
-      assert Registry.lookup(TaskRegistry, task_b.id) == []
     end
 
     test "handles non-existent task gracefully" do

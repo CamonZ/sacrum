@@ -83,13 +83,12 @@ defmodule Sacrum.Tasks.StatusTest do
       assert Status.derive(task) == :ready
     end
 
-    test "returns :ready for task without step assignment (no current_step_id)" do
+    test "returns :ready for newly inserted task (auto-assigned default workflow)" do
       user = create_user()
       project = create_project(user)
-
       task = create_task(user, project)
 
-      assert Status.derive(task) == :waiting
+      assert Status.derive(task) == :ready
     end
   end
 
@@ -375,6 +374,35 @@ defmodule Sacrum.Tasks.StatusTest do
       {:ok, refreshed} = Status.refresh(task)
       assert refreshed.status == "running"
       assert Repo.get!(Task, task.id).status == "running"
+    end
+  end
+
+  describe "workflow assignment on insert" do
+    test "auto-assigns the project's default workflow when none is given" do
+      user = create_user()
+      project = create_project(user)
+
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Auto-assigned Task"})
+
+      assert task.workflow_id != nil
+      assert task.current_step_id != nil
+    end
+
+    test "respects explicit workflow_id and current_step_id" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project)
+      step = create_step(workflow)
+
+      {:ok, task} =
+        Accounts.Tasks.insert(user.id, project.id, %{
+          title: "Task with explicit workflow",
+          workflow_id: workflow.id,
+          current_step_id: step.id
+        })
+
+      assert task.workflow_id == workflow.id
+      assert task.current_step_id == step.id
     end
   end
 end

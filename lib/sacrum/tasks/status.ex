@@ -11,7 +11,11 @@ defmodule Sacrum.Tasks.Status do
     * `:done`    — latest StepExecution is `completed`, the current step is
       final, the step has no outgoing step transitions, and the workflow has
       no outgoing workflow transitions
-    * `:ready`   — `current_step_id` is set and none of the above apply
+    * `:ready`   — none of the above apply
+
+  Tasks always have `workflow_id` and `current_step_id` set (NOT NULL,
+  defaulted to the project's Backlog workflow at creation time), so there is
+  no "unassigned" status.
 
   Task dependencies (blockers) are *not* part of status derivation. Dependencies
   are an informational relationship; they do not move a task into `:waiting`.
@@ -37,8 +41,7 @@ defmodule Sacrum.Tasks.Status do
       running?(latest) -> :running
       waiting?(latest) -> :waiting
       done?(task, latest) -> :done
-      task.current_step_id != nil -> :ready
-      true -> :waiting
+      ready?(task, latest) -> :ready
     end
   end
 
@@ -61,6 +64,18 @@ defmodule Sacrum.Tasks.Status do
   end
 
   defp done?(_task, _latest), do: false
+
+  # No active execution. "completed" reaches here only when done?/2 returned
+  # false — i.e. more transitions remain — so the task is ready to advance.
+  # Active states ("started", "in_progress", "waiting") are handled by the
+  # earlier clauses in derive/1.
+  defp ready?(_task, nil), do: true
+
+  defp ready?(_task, %StepExecution{status: status})
+       when status in ["pending", "cancelled", "failed", "completed"],
+       do: true
+
+  defp ready?(_task, _latest), do: false
 
   defp latest_step_execution(%Task{step_executions: executions}) do
     Enum.max_by(executions, & &1.inserted_at, DateTime, fn -> nil end)

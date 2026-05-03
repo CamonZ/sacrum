@@ -46,51 +46,61 @@ defmodule Sacrum.Accounts.TasksTest do
       assert task.project_id == project.id
     end
 
-    test "auto-assigns default workflow when project has one" do
+    test "auto-assigns default workflow created by Projects.insert" do
       user = create_user()
       project = create_project(user)
 
-      {:ok, workflow} =
+      # Projects.insert auto-creates a default Backlog workflow
+      {:ok, task} = Tasks.insert(user.id, project.id, %{title: "Auto WF Task"})
+
+      assert task.workflow_id != nil
+      assert task.current_step_id != nil
+    end
+
+    test "uses custom default workflow if explicitly set" do
+      user = create_user()
+      {:ok, project} = Projects.insert(user.id, %{name: "Test Project"})
+
+      # Get the auto-created default Backlog workflow
+      workflows = Sacrum.Repo.Workflows.all(conditions: [project_id: project.id])
+      backlog = Enum.find(workflows, &(&1.is_default == true))
+
+      # Unset it as default so we can create a new default
+      {:ok, _} = Sacrum.Repo.Workflows.update(backlog, %{is_default: false})
+
+      # Create a custom default workflow
+      {:ok, custom_workflow} =
         Sacrum.Accounts.Workflows.insert(user.id, project.id, %{
-          name: "Default WF",
+          name: "Custom Default",
           is_default: true
         })
 
       {:ok, step} =
-        Sacrum.Accounts.WorkflowSteps.insert(workflow, %{name: "Step 1", step_order: 1})
+        Sacrum.Accounts.WorkflowSteps.insert(custom_workflow, %{
+          name: "Custom Step",
+          step_order: 1
+        })
 
-      {:ok, workflow} = Sacrum.Repo.Workflows.update(workflow, %{initial_step_id: step.id})
+      {:ok, custom_workflow} =
+        Sacrum.Repo.Workflows.update(custom_workflow, %{initial_step_id: step.id})
 
-      {:ok, task} = Tasks.insert(user.id, project.id, %{title: "Auto WF Task"})
+      {:ok, task} = Tasks.insert(user.id, project.id, %{title: "Custom WF Task"})
 
-      assert task.workflow_id == workflow.id
+      # Should use the custom workflow (since it's now the default)
+      assert task.workflow_id == custom_workflow.id
       assert task.current_step_id == step.id
     end
 
-    test "does not assign workflow when no default exists" do
+    test "auto-created default workflow has initial step" do
       user = create_user()
       project = create_project(user)
 
-      {:ok, task} = Tasks.insert(user.id, project.id, %{title: "No WF Task"})
+      # Projects.insert auto-creates a default workflow with initial step
+      {:ok, task} = Tasks.insert(user.id, project.id, %{title: "Task with Step"})
 
-      assert is_nil(task.workflow_id)
-      assert is_nil(task.current_step_id)
-    end
-
-    test "does not fail when default workflow has no steps" do
-      user = create_user()
-      project = create_project(user)
-
-      {:ok, _workflow} =
-        Sacrum.Accounts.Workflows.insert(user.id, project.id, %{
-          name: "Empty Default WF",
-          is_default: true
-        })
-
-      {:ok, task} = Tasks.insert(user.id, project.id, %{title: "Graceful Task"})
-
-      # Should return task without workflow (graceful failure)
-      assert is_nil(task.workflow_id)
+      # Task should be assigned to the auto-created default workflow
+      assert task.workflow_id != nil
+      assert task.current_step_id != nil
     end
   end
 

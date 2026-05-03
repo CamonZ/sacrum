@@ -9,7 +9,17 @@ defmodule Sacrum.Repo.Schemas.Task do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @create_fields [:title, :description, :level, :priority, :tags, :worktree, :parent_id]
+  @create_fields [
+    :title,
+    :description,
+    :level,
+    :priority,
+    :tags,
+    :worktree,
+    :parent_id,
+    :workflow_id,
+    :current_step_id
+  ]
   @update_fields [
     :title,
     :description,
@@ -88,6 +98,8 @@ defmodule Sacrum.Repo.Schemas.Task do
     |> unique_constraint(:short_id)
     |> foreign_key_constraint(:project_id)
     |> foreign_key_constraint(:parent_id)
+    |> foreign_key_constraint(:workflow_id)
+    |> foreign_key_constraint(:current_step_id)
   end
 
   @spec update_changeset(t(), map()) :: Ecto.Changeset.t()

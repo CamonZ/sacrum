@@ -267,21 +267,6 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
       end)
     end
 
-    field :unassign_workflow, :task do
-      arg(:task_id, non_null(:uuid4))
-
-      resolve(fn %{task_id: task_id}, resolution_context ->
-        current_user = resolution_context.context.current_user
-        api_token = resolution_context.context[:api_token]
-
-        with :ok <-
-               check_fsm_mutation_allowed(task_id, api_token, "unassignWorkflow", current_user),
-             {:ok, task} <- Accounts.Tasks.find(current_user.id, task_id) do
-          TaskWorkflows.unassign_workflow(task)
-        end
-      end)
-    end
-
     field :move_to_step, :task do
       arg(:task_id, non_null(:uuid4))
       arg(:step_id, non_null(:uuid4))

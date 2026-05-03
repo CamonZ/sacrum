@@ -92,8 +92,9 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
       {:ok, _} = WorkflowSteps.insert(workflow2, %{name: "User2 Step"})
 
       steps = WorkflowSteps.list_by(user1.id)
-      assert length(steps) == 1
-      assert hd(steps).user_id == user1.id
+      # Project creation auto-creates a Backlog step; create_workflow adds a second.
+      assert length(steps) == 2
+      assert Enum.all?(steps, &(&1.user_id == user1.id))
     end
 
     test "filters by workflow_id" do

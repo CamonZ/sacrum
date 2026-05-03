@@ -84,8 +84,8 @@ defmodule Sacrum.Accounts.WorkflowsTest do
       {:ok, _} = Workflows.insert(user2.id, project2.id, %{name: "User2 Workflow"})
 
       workflows = Workflows.list_by(user1.id)
-      assert length(workflows) == 1
-      assert hd(workflows).user_id == user1.id
+      assert length(workflows) == 2
+      assert Enum.all?(workflows, &(&1.user_id == user1.id))
     end
 
     test "filters by project_id" do
@@ -97,8 +97,10 @@ defmodule Sacrum.Accounts.WorkflowsTest do
       {:ok, _} = Workflows.insert(user.id, project2.id, %{name: "Workflow 2"})
 
       workflows = Workflows.list_by(user.id, conditions: [project_id: project1.id])
-      assert length(workflows) == 1
-      assert hd(workflows).project_id == project1.id
+      assert length(workflows) == 2
+      assert Enum.all?(workflows, &(&1.project_id == project1.id))
+      assert Enum.any?(workflows, &(&1.name == "Backlog"))
+      assert Enum.any?(workflows, &(&1.name == "Workflow 1"))
     end
   end
 end

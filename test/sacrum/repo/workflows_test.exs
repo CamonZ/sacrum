@@ -58,24 +58,23 @@ defmodule Sacrum.Repo.WorkflowsTest do
 
       attrs =
         Map.merge(@valid_attrs, %{
+          name: "Custom Workflow",
           auto_advance: true,
-          is_default: true,
+          is_default: false,
           display_order: 1,
           metadata: %{"color" => "blue"}
         })
 
       assert {:ok, %Workflow{} = workflow} = Workflows.insert(project, attrs)
       assert workflow.auto_advance == true
-      assert workflow.is_default == true
+      assert workflow.is_default == false
       assert workflow.display_order == 1
       assert workflow.metadata == %{"color" => "blue"}
     end
 
     test "rejects creating second default workflow in same project" do
       project = create_project()
-
-      attrs_default = Map.merge(@valid_attrs, %{is_default: true})
-      assert {:ok, _first_default} = Workflows.insert(project, attrs_default)
+      # A default workflow (Backlog) is auto-created with the project
 
       attrs_second_default =
         Map.merge(@valid_attrs, %{name: "Second Default", is_default: true})
@@ -98,17 +97,25 @@ defmodule Sacrum.Repo.WorkflowsTest do
       {:ok, project1} = Projects.insert(user, %{name: "Project 1"})
       {:ok, project2} = Projects.insert(user, %{name: "Project 2"})
 
-      attrs_default = Map.merge(@valid_attrs, %{is_default: true})
-      assert {:ok, _w1} = Workflows.insert(project1, attrs_default)
-      assert {:ok, _w2} = Workflows.insert(project2, attrs_default)
+      # Both projects auto-create a Backlog default workflow, so verify they are separate
+      workflows1 = Workflows.all(conditions: [project_id: project1.id])
+      workflows2 = Workflows.all(conditions: [project_id: project2.id])
+
+      assert Enum.any?(workflows1, &(&1.is_default == true))
+      assert Enum.any?(workflows2, &(&1.is_default == true))
+
+      # And the default workflows are separate for each project
+      default1 = Enum.find(workflows1, &(&1.is_default == true))
+      default2 = Enum.find(workflows2, &(&1.is_default == true))
+      assert default1.project_id != default2.project_id
     end
   end
 
   describe "all/1" do
     test "returns workflows for a given project" do
       project = create_project()
-      {:ok, w1} = Workflows.insert(project, %{name: "First", display_order: 1})
-      {:ok, w2} = Workflows.insert(project, %{name: "Second", display_order: 2})
+      {:ok, _w1} = Workflows.insert(project, %{name: "First", display_order: 1})
+      {:ok, _w2} = Workflows.insert(project, %{name: "Second", display_order: 2})
 
       workflows =
         Workflows.all(
@@ -116,8 +123,11 @@ defmodule Sacrum.Repo.WorkflowsTest do
           order_by: [asc: :display_order, asc: :inserted_at]
         )
 
-      assert length(workflows) == 2
-      assert Enum.map(workflows, & &1.id) == [w1.id, w2.id]
+      assert length(workflows) == 3
+      names = Enum.map(workflows, & &1.name)
+      assert "Backlog" in names
+      assert "First" in names
+      assert "Second" in names
     end
 
     test "does not return workflows from other projects" do
@@ -133,18 +143,25 @@ defmodule Sacrum.Repo.WorkflowsTest do
           order_by: [asc: :display_order, asc: :inserted_at]
         )
 
-      assert length(workflows) == 1
-      assert hd(workflows).name == "W1"
+      assert length(workflows) == 2
+      names = Enum.map(workflows, & &1.name)
+      assert "Backlog" in names
+      assert "W1" in names
+      assert "W2" not in names
     end
 
-    test "returns empty list when project has no workflows" do
+    test "returns at least the auto-created Backlog workflow for new projects" do
       project = create_project()
 
-      assert [] =
-               Workflows.all(
-                 conditions: [project_id: project.id],
-                 order_by: [asc: :display_order, asc: :inserted_at]
-               )
+      workflows =
+        Workflows.all(
+          conditions: [project_id: project.id],
+          order_by: [asc: :display_order, asc: :inserted_at]
+        )
+
+      assert length(workflows) >= 1
+      assert hd(workflows).name == "Backlog"
+      assert hd(workflows).is_default == true
     end
   end
 
@@ -175,18 +192,19 @@ defmodule Sacrum.Repo.WorkflowsTest do
 
     test "updates auto_advance and is_default" do
       project = create_project()
-      {:ok, workflow} = Workflows.insert(project, @valid_attrs)
+      # Get the auto-created default workflow (Backlog)
+      workflows = Workflows.all(conditions: [project_id: project.id])
+      existing_default = Enum.find(workflows, &(&1.is_default == true))
 
-      assert {:ok, updated} = Workflows.update(workflow, %{auto_advance: true, is_default: true})
+      # Update it to turn off auto_advance and keep it as default
+      assert {:ok, updated} = Workflows.update(existing_default, %{auto_advance: true})
       assert updated.auto_advance == true
       assert updated.is_default == true
     end
 
     test "rejects updating workflow to default when another default exists" do
       project = create_project()
-
-      {:ok, _first_workflow} =
-        Workflows.insert(project, Map.merge(@valid_attrs, %{name: "First", is_default: true}))
+      # A default Backlog workflow already exists from project creation
 
       {:ok, second_workflow} =
         Workflows.insert(project, Map.merge(@valid_attrs, %{name: "Second"}))
@@ -199,14 +217,14 @@ defmodule Sacrum.Repo.WorkflowsTest do
 
     test "allows setting workflow as default by unsetting other default first" do
       project = create_project()
-
-      {:ok, first_workflow} =
-        Workflows.insert(project, Map.merge(@valid_attrs, %{name: "First", is_default: true}))
+      # Get the auto-created default workflow (Backlog)
+      workflows = Workflows.all(conditions: [project_id: project.id])
+      existing_default = Enum.find(workflows, &(&1.is_default == true))
 
       {:ok, second_workflow} =
         Workflows.insert(project, Map.merge(@valid_attrs, %{name: "Second"}))
 
-      assert {:ok, _updated_first} = Workflows.update(first_workflow, %{is_default: false})
+      assert {:ok, _updated_first} = Workflows.update(existing_default, %{is_default: false})
 
       assert {:ok, updated_second} = Workflows.update(second_workflow, %{is_default: true})
       assert updated_second.is_default == true

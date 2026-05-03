@@ -4,8 +4,7 @@ defmodule Sacrum.Repo.TaskWorkflows do
 
   ## Error Contract
 
-  - `assign_workflow/2` returns `{:ok, task}` or `{:error, changeset}`
-  - `unassign_workflow/1` returns `{:ok, task}` or `{:error, changeset}`
+  - `assign_workflow/2` returns `{:ok, task}` or `{:error, changeset}` or `{:error, atom}`
   - `advance_to_step/2` returns `{:ok, task}` or `{:error, changeset}` or `{:error, atom}`
   - `move_to_step/2` returns `{:ok, task}` or `{:error, changeset}` or `{:error, atom}`
   - `get_current_step/1` returns `{:ok, step}` or `{:error, atom}`
@@ -13,14 +12,10 @@ defmodule Sacrum.Repo.TaskWorkflows do
   ## Domain-Specific Errors
 
   `advance_to_step/2` may return `{:error, atom}` for:
-  - `:no_workflow` - when task has no workflow assigned
-  - `:no_current_step` - when task has no current step assigned
   - `:step_not_found` - when target step does not exist
   - `:step_not_in_workflow` - when target step belongs to a different workflow
 
   `move_to_step/2` may return `{:error, atom}` for:
-  - `:no_workflow` - when task has no workflow assigned
-  - `:no_current_step` - when task has no current step assigned
   - `:step_not_found` - when target step does not exist
   - `:step_not_in_workflow` - when target step belongs to a different workflow
   - `:no_transition` - when no transition exists between current and target steps
@@ -72,18 +67,6 @@ defmodule Sacrum.Repo.TaskWorkflows do
   end
 
   @doc """
-  Removes the workflow assignment from a task, clearing workflow_id and current_step_id.
-  """
-  @spec unassign_workflow(Task.t()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
-  def unassign_workflow(%Task{} = task) do
-    task
-    |> task_workflow_changeset(nil, nil)
-    |> Status.put_status()
-    |> Repo.update()
-    |> broadcast_on_success()
-  end
-
-  @doc """
   Advances a task to a specific step within its current workflow.
 
   Updates the task's current_step_id only. StepExecution rows are created
@@ -94,14 +77,7 @@ defmodule Sacrum.Repo.TaskWorkflows do
   """
   @spec advance_to_step(Task.t(), String.t(), keyword()) ::
           {:ok, Task.t()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
-  def advance_to_step(task, step_id, opts \\ [])
-
-  def advance_to_step(%Task{workflow_id: nil}, _step_id, _opts), do: {:error, :no_workflow}
-
-  def advance_to_step(%Task{current_step_id: nil}, _step_id, _opts),
-    do: {:error, :no_current_step}
-
-  def advance_to_step(%Task{} = task, step_id, opts),
+  def advance_to_step(%Task{} = task, step_id, opts \\ []),
     do: change_step(task, step_id, opts, validate_transition: false)
 
   @doc """
@@ -110,11 +86,7 @@ defmodule Sacrum.Repo.TaskWorkflows do
   """
   @spec move_to_step(Task.t(), String.t(), keyword()) ::
           {:ok, Task.t()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
-  def move_to_step(task, step_id, opts \\ [])
-  def move_to_step(%Task{workflow_id: nil}, _step_id, _opts), do: {:error, :no_workflow}
-  def move_to_step(%Task{current_step_id: nil}, _step_id, _opts), do: {:error, :no_current_step}
-
-  def move_to_step(%Task{} = task, step_id, opts),
+  def move_to_step(%Task{} = task, step_id, opts \\ []),
     do: change_step(task, step_id, opts, validate_transition: true)
 
   @spec change_step(Task.t(), String.t(), keyword(), keyword()) ::
