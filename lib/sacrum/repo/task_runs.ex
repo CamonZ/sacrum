@@ -8,8 +8,7 @@ defmodule Sacrum.Repo.TaskRuns do
   import Ecto.Query
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.TaskRun
-
-  @active_statuses [:executing, :waiting, :stopping]
+  alias Sacrum.TaskRuns.Status, as: TaskRunStatus
 
   @spec insert(String.t(), String.t(), String.t(), map()) ::
           {:ok, TaskRun.t()} | {:error, Ecto.Changeset.t()}
@@ -34,7 +33,7 @@ defmodule Sacrum.Repo.TaskRuns do
     query =
       TaskRun
       |> apply_conditions(conditions)
-      |> where([tr], tr.status in ^@active_statuses)
+      |> where([tr], tr.status in ^TaskRunStatus.active_statuses())
       |> order_by([tr], desc: tr.inserted_at)
       |> limit(1)
 
