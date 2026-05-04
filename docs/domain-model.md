@@ -16,7 +16,7 @@ Sacrum is an API-only workflow engine and task management system built with Phoe
 - Tagging, priority, and level classification
 - Human review flags with rejection/revision feedback
 
-**Execution tracking** — Every step transition creates an immutable `StepExecution` record capturing the step name, status, and optional LLM metadata (model, provider, token counts, cost, duration). Session logs attach free-text content to executions.
+**Execution tracking** — Durable `TaskRun` records track automation lifecycle for a task run. `StepExecution` records track individual step attempts inside a run, including the step name, attempt status, and optional LLM metadata (model, provider, token counts, cost, duration). Session logs attach free-text content to executions.
 
 **Real-time updates** — State changes broadcast to a Phoenix channel (`ProjectChannel`) keyed by project ID (`project:<project_id>`), so connected clients receive live events for task, workflow, and step mutations.
 
@@ -33,8 +33,9 @@ User
            ├── CodeRef (direct)
            ├── TaskHierarchy (parent ← child)
            ├── TaskDependency (task ← depends_on)
-           └── StepExecution
-                └── SessionLog
+           └── TaskRun
+                └── StepExecution
+                     └── SessionLog
 ```
 
 All entities use UUID primary keys and `utc_datetime_usec` timestamps.
@@ -196,17 +197,29 @@ The codebase uses a **three-layer architecture** (Accounts → Repo → Ecto) in
 | WorkflowStep | `Schemas.WorkflowStep` | `Repo.WorkflowSteps` | `Accounts.WorkflowSteps` | `workflow_step_type.ex` |
 | Section | `Schemas.TaskSection` | `Repo.TaskSections` | `Accounts.Sections` | `section_types.ex` |
 | StepExecution | `Schemas.StepExecution` | `Repo.StepExecutions` | `Accounts.StepExecutions` | `execution_types.ex` |
+| TaskRun | `Schemas.TaskRun` | `Repo.TaskRuns` | `Accounts.TaskRuns` | Not exposed yet |
 | Project | `Schemas.Project` | `Repo.Projects` | `Accounts.Projects` | `project_type.ex` |
 
 Complex operations (transition syncing, workflow assignment, step movement) use `Ecto.Multi` for transactional safety. Dependency management includes BFS shortest-path and DFS cycle-detection algorithms.
 
-## Task Status
+## Status and Run State
+
+Sacrum has separate status fields for separate questions. Do not collapse them into one source of truth.
+
+| Field | Answers | Source of Truth |
+|-------|---------|-----------------|
+| `Task.status` | Where is the task in the human/workflow queue? | Derived task workflow position |
+| `TaskRun.status` | What is the automation run doing now? | Durable run lifecycle |
+| `StepExecution.status` | What happened to one step attempt? | Daemon/orchestrator attempt updates |
+| `SessionLog` | What text/content was emitted during an attempt? | Append-only log content, no lifecycle status |
+
+Use `Task.status` for workflow filters such as ready, waiting, running, and done. Use `TaskRun.status` for automation controls such as whether a run is active or stoppable. Use `StepExecution.status` for attempt history, retry diagnostics, and LLM metadata. `SessionLog` has no state/status field; it records content attached to a `StepExecution` and must not be used to infer run state.
+
+### Task.status
 
 Task status is derived from orchestrator state by `Sacrum.Tasks.Status.derive/1` and persisted into the `tasks.status` column. The orchestrator (and any operation that mutates positional state or the dependency graph) is responsible for keeping the column in sync via `Sacrum.Tasks.Status.refresh/1`. Read paths (GraphQL, queries, filters) read the column directly.
 
-### Status Values
-
-Derivation rules are evaluated in order — the first match wins.
+Derivation rules are evaluated in order; the first match wins.
 
 - **`:running`** — Daemon is executing the current step
   - Precondition: Latest StepExecution has status "started" or "in_progress"
@@ -217,6 +230,52 @@ Derivation rules are evaluated in order — the first match wins.
 - **`:ready`** — `current_step_id` is set and none of the above apply
 
 Task dependencies (blockers) are *not* part of status derivation. Blockers are an informational relationship; they do not move a task into `:waiting`. Read paths that need "actionable now" (e.g. `listReady`) filter dependents in the query layer, not via status.
+
+### TaskRun.status
+
+`TaskRun.status` is the canonical automation lifecycle for a durable run. The reusable contract lives in `Sacrum.TaskRuns.Status`.
+
+Canonical values:
+
+- **`:queued`** — Run exists and is waiting to be picked up or resumed.
+- **`:executing`** — The run is actively executing a step attempt.
+- **`:waiting`** — The run is active but blocked on child runs or another orchestrated wait.
+- **`:stopping`** — Stop has been requested and shutdown/cancellation is in progress.
+- **`:stopped`** — The run stopped before successful completion.
+- **`:completed`** — The run reached its successful outcome.
+- **`:failed`** — The run exhausted retry/recovery policy or hit a permanent run failure.
+
+Predicate semantics:
+
+- `active?` is true for `:queued`, `:executing`, `:waiting`, and `:stopping`.
+- `terminal?` is true for `:stopped`, `:completed`, and `:failed`.
+- `successful?` is true only for `:completed`.
+- `failed?` is true only for `:failed`.
+- `stoppable?` is true for `:queued`, `:executing`, and `:waiting`; `:stopping` is still active but stop has already been requested.
+
+`StepExecution.status == "failed"` does not by itself mean the `TaskRun` failed. A failed step attempt can be retried while the enclosing `TaskRun.status` remains `:queued`, `:executing`, or `:waiting`. Set `TaskRun.status` to `:failed` only when retry/recovery is exhausted or the run has a permanent failure.
+
+### Waiting on Children
+
+A parent run that dispatches child task runs and then waits for them maps to `TaskRun.status == :waiting`. This status is active and stoppable: the run still owns automation work even though it is not currently executing a daemon step.
+
+The current wait step may also have `StepExecution.status == "waiting"`, but that is attempt-level state. The parent run leaves `:waiting` when the orchestrator resumes after children complete, when stop succeeds, or when the run fails.
+
+### Child Run Lineage
+
+Manual runs default to a new root `TaskRun`. Do not attach a manually started run to an existing parent just because the task has a parent task or dependency relationship.
+
+Server-side orchestration may create a child run by supplying a validated `parent_task_run_id` and the matching `root_task_run_id`/`triggered_by_step_execution_id`. If the parent run is missing, out of scope, or not created by orchestration, reject the lineage instead of inferring it from task hierarchy. GUI and CLI callers should not propagate child-run lineage directly.
+
+### StepExecution.status
+
+`StepExecution.status` is attempt-level state. It can record values such as `"started"`, `"in_progress"`, `"waiting"`, `"completed"`, `"failed"`, `"cancelled"`, or `"invalidated"` for a single attempt. Use it for historical execution rows, retry counts, handoff payloads, prompts, output, and telemetry.
+
+Never derive permanent task or run failure from the latest `StepExecution.status` alone. Retry gaps, cancellations, waiting states, and orchestrator crashes make that ambiguous; `TaskRun.status` is the durable run-level answer.
+
+### SessionLog
+
+`SessionLog` entries are content records attached to a `StepExecution`. They do not have state or status, and they should not drive task status, run status, retry policy, or active-run detection.
 
 ### Timestamp Stamping Invariants
 
@@ -244,4 +303,5 @@ Operations that change derivation inputs run the position update and the status 
 
 ```elixir
 status = Sacrum.Tasks.Status.derive(task)  # auto-preloads; => :ready | :running | :waiting | :done
+active = Sacrum.TaskRuns.Status.active?(task_run.status)
 ```

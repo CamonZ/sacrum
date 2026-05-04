@@ -10,6 +10,7 @@ defmodule Sacrum.Accounts.TaskRunsTest do
   alias Sacrum.Repo.Schemas.StepExecution
   alias Sacrum.Repo.Schemas.TaskRun
   alias Sacrum.Repo.Users
+  alias Sacrum.TaskRuns.Status, as: TaskRunStatus
 
   defp create_user do
     suffix = System.unique_integer([:positive])
@@ -32,6 +33,51 @@ defmodule Sacrum.Accounts.TaskRunsTest do
     {project, task, workflow}
   end
 
+  describe "TaskRun status contract" do
+    test "defines canonical lifecycle statuses" do
+      assert TaskRunStatus.values() == [
+               :queued,
+               :executing,
+               :waiting,
+               :stopping,
+               :stopped,
+               :completed,
+               :failed
+             ]
+
+      assert TaskRun.statuses() == TaskRunStatus.values()
+    end
+
+    test "classifies active, terminal, successful, failed, and stoppable statuses" do
+      for status <- [:queued, :executing, :waiting, :stopping] do
+        assert TaskRunStatus.active?(status)
+        refute TaskRunStatus.terminal?(status)
+        refute TaskRunStatus.successful?(status)
+        refute TaskRunStatus.failed?(status)
+      end
+
+      for status <- [:queued, :executing, :waiting] do
+        assert TaskRunStatus.stoppable?(status)
+      end
+
+      refute TaskRunStatus.stoppable?(:stopping)
+
+      for status <- [:stopped, :completed, :failed] do
+        assert TaskRunStatus.terminal?(status)
+        refute TaskRunStatus.active?(status)
+        refute TaskRunStatus.stoppable?(status)
+      end
+
+      assert TaskRunStatus.successful?(:completed)
+      refute TaskRunStatus.successful?(:stopped)
+      refute TaskRunStatus.successful?(:failed)
+
+      assert TaskRunStatus.failed?(:failed)
+      refute TaskRunStatus.failed?(:stopped)
+      refute TaskRunStatus.failed?(:completed)
+    end
+  end
+
   describe "TaskRun changesets" do
     test "validate required ownership and status fields" do
       changeset = TaskRun.create_changeset(%TaskRun{}, %{})
@@ -46,14 +92,14 @@ defmodule Sacrum.Accounts.TaskRunsTest do
       assert get_change(changeset, :started_at)
     end
 
-    test "accepts intended lifecycle statuses including waiting" do
+    test "accepts canonical lifecycle statuses" do
       task_run = %TaskRun{
         task_id: Ecto.UUID.generate(),
         project_id: Ecto.UUID.generate(),
         user_id: Ecto.UUID.generate()
       }
 
-      for status <- [:executing, :waiting, :stopping, :completed, :failed, :cancelled] do
+      for status <- TaskRunStatus.values() do
         changeset = TaskRun.create_changeset(task_run, %{status: status})
 
         assert changeset.valid?, "expected #{inspect(status)} to be valid"
@@ -61,16 +107,18 @@ defmodule Sacrum.Accounts.TaskRunsTest do
       end
     end
 
-    test "reject invalid statuses" do
+    test "rejects statuses outside the TaskRun contract" do
       task_run = %TaskRun{
         task_id: Ecto.UUID.generate(),
         project_id: Ecto.UUID.generate(),
         user_id: Ecto.UUID.generate()
       }
 
-      changeset = TaskRun.create_changeset(task_run, %{status: "entered"})
+      for status <- [:cancelled, "entered"] do
+        changeset = TaskRun.create_changeset(task_run, %{status: status})
 
-      assert %{status: ["is invalid"]} = errors_on(changeset)
+        assert %{status: ["is invalid"]} = errors_on(changeset)
+      end
     end
   end
 
@@ -90,12 +138,15 @@ defmodule Sacrum.Accounts.TaskRunsTest do
   end
 
   describe "get_active_for_task/2" do
-    test "returns the latest active run scoped to the user, including waiting runs" do
+    test "returns the latest active run scoped to the user using the status contract" do
       user = create_user()
       {project, task, _workflow} = create_task_with_workflow(user)
       {:ok, _completed} = TaskRuns.insert(user.id, project.id, task.id, %{status: :completed})
+      {:ok, _queued} = TaskRuns.insert(user.id, project.id, task.id, %{status: :queued})
       {:ok, _executing} = TaskRuns.insert(user.id, project.id, task.id, %{status: :executing})
-      {:ok, active} = TaskRuns.insert(user.id, project.id, task.id, %{status: :waiting})
+      {:ok, _waiting} = TaskRuns.insert(user.id, project.id, task.id, %{status: :waiting})
+      {:ok, active} = TaskRuns.insert(user.id, project.id, task.id, %{status: :stopping})
+      {:ok, _stopped} = TaskRuns.insert(user.id, project.id, task.id, %{status: :stopped})
 
       other_user = create_user()
 
@@ -137,6 +188,51 @@ defmodule Sacrum.Accounts.TaskRunsTest do
   end
 
   describe "step execution association" do
+    test "failed step attempt does not make an active retrying TaskRun permanently failed" do
+      user = create_user()
+      {project, task, workflow} = create_task_with_workflow(user)
+      {:ok, task_run} = TaskRuns.insert(user.id, project.id, task.id)
+
+      {:ok, failed_attempt} =
+        StepExecutions.insert(user.id, %{
+          "task_id" => task.id,
+          "task_run_id" => task_run.id,
+          "project_id" => project.id,
+          "workflow_id" => workflow.id,
+          "step_name" => "retryable_step",
+          "status" => "failed"
+        })
+
+      assert {:ok, retrying_run} =
+               TaskRuns.update(task_run, %{
+                 status: :executing,
+                 latest_step_execution_id: failed_attempt.id
+               })
+
+      assert failed_attempt.status == "failed"
+      assert retrying_run.latest_step_execution_id == failed_attempt.id
+      assert TaskRunStatus.active?(retrying_run.status)
+      assert TaskRunStatus.stoppable?(retrying_run.status)
+      refute TaskRunStatus.failed?(retrying_run.status)
+      refute TaskRunStatus.terminal?(retrying_run.status)
+
+      assert {:ok, found} = TaskRuns.get_active_for_task(user.id, task.id)
+      assert found.id == retrying_run.id
+
+      assert {:ok, retry_exhausted_run} =
+               TaskRuns.update(retrying_run, %{
+                 status: :failed,
+                 ended_at: DateTime.utc_now()
+               })
+
+      assert retry_exhausted_run.latest_step_execution_id == failed_attempt.id
+      assert TaskRunStatus.failed?(retry_exhausted_run.status)
+      assert TaskRunStatus.terminal?(retry_exhausted_run.status)
+      refute TaskRunStatus.active?(retry_exhausted_run.status)
+
+      assert {:error, :not_found} = TaskRuns.get_active_for_task(user.id, task.id)
+    end
+
     test "preserves task_run_id and lists executions for a run" do
       user = create_user()
       {project, task, workflow} = create_task_with_workflow(user)

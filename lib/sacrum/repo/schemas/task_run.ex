@@ -2,11 +2,13 @@ defmodule Sacrum.Repo.Schemas.TaskRun do
   use Ecto.Schema
   import Ecto.Changeset
 
+  alias Sacrum.TaskRuns.Status, as: TaskRunStatus
+
   @type t :: %__MODULE__{}
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @statuses [:executing, :waiting, :stopping, :completed, :failed, :cancelled]
+  @statuses TaskRunStatus.values()
 
   @create_fields ~w(
     task_id project_id user_id status started_at ended_at stop_requested_at
