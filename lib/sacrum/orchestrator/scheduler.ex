@@ -11,7 +11,7 @@ defmodule Sacrum.Orchestrator.Scheduler do
   require Logger
 
   alias Sacrum.Orchestrator.Routing.WaitChildren
-  alias Sacrum.Orchestrator.{TaskOrchestrator, TaskRegistry}
+  alias Sacrum.Orchestrator.{TaskOrchestrator, TaskRegistry, TaskRunLifecycle}
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.{TaskDependencies, TaskHierarchy}
@@ -67,12 +67,13 @@ defmodule Sacrum.Orchestrator.Scheduler do
          {:ok, task_record} <- fetch_task(task_id),
          :ok <- validate_workflow(task_record),
          :ok <- validate_not_completed(task_record),
-         :ok <- validate_no_active_fsm(task_id) do
+         :ok <- validate_no_active_fsm(task_id),
+         {:ok, task_run} <- TaskRunLifecycle.get_or_create_root_run(task_record) do
       Logger.info(
-        "[Scheduler] All validations passed for task_id=#{task_id}, starting orchestrator"
+        "[Scheduler] All validations passed for task_id=#{task_id}, task_run_id=#{task_run.id}, starting orchestrator"
       )
 
-      start_orchestrator(task_id, task_record.user_id)
+      start_orchestrator(task_id, task_record.user_id, task_run.id)
     else
       {:error, reason} = err ->
         Logger.error("[Scheduler] validate_and_schedule failed: #{inspect(reason)}")
@@ -121,7 +122,7 @@ defmodule Sacrum.Orchestrator.Scheduler do
     case WaitChildren.should_wake_parent(parent) do
       :wake ->
         Logger.info("[Scheduler] Parent task #{parent.id} all children done, waking")
-        start_orchestrator_if_not_running(parent.id, parent.user_id)
+        start_orchestrator_if_not_running(parent)
 
       :no_wake ->
         :ok
@@ -151,7 +152,7 @@ defmodule Sacrum.Orchestrator.Scheduler do
         :skip
 
       true ->
-        start_orchestrator_if_not_running(dependent_task.id, dependent_task.user_id)
+        start_orchestrator_if_not_running(dependent_task)
     end
   end
 
@@ -161,19 +162,27 @@ defmodule Sacrum.Orchestrator.Scheduler do
     |> Enum.all?(&(not is_nil(&1.completed_at)))
   end
 
-  defp start_orchestrator_if_not_running(task_id, user_id) do
-    unless fsm_running?(task_id), do: start_orchestrator(task_id, user_id)
+  defp start_orchestrator_if_not_running(task) do
+    if fsm_running?(task.id) do
+      :ok
+    else
+      with {:ok, task_run} <- TaskRunLifecycle.get_or_create_root_run(task) do
+        start_orchestrator(task.id, task.user_id, task_run.id)
+      end
+    end
   end
 
   defp fsm_running?(task_id) do
     Registry.lookup(TaskRegistry, task_id) != []
   end
 
-  defp start_orchestrator(task_id, user_id) do
+  defp start_orchestrator(task_id, user_id, task_run_id) do
     alias Sacrum.Orchestrator.TaskFSMSupervisor
-    child_opts = [task_id: task_id, user_id: user_id]
+    child_opts = [task_id: task_id, user_id: user_id, task_run_id: task_run_id]
 
-    Logger.info("[Scheduler] Starting orchestrator: task=#{task_id} user=#{user_id}")
+    Logger.info(
+      "[Scheduler] Starting orchestrator: task=#{task_id} user=#{user_id} task_run=#{task_run_id}"
+    )
 
     case TaskFSMSupervisor.start_child({TaskOrchestrator, child_opts}) do
       {:ok, pid} ->

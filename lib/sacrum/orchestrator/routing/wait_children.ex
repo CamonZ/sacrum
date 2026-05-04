@@ -14,10 +14,11 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
 
   import Ecto.Query
 
-  alias Sacrum.Orchestrator.{ExecutionPool, FSMData, TaskFSMSupervisor, TaskOrchestrator}
+  alias Sacrum.Orchestrator.{ExecutionPool, FSMData, Scheduler}
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.{StepExecution, Task, WorkflowStep}
+  alias Sacrum.Repo.Schemas.{StepExecution, Task, TaskRun, WorkflowStep}
   alias Sacrum.Repo.TaskHierarchy
+  alias Sacrum.Tasks.Status
 
   @spec handle_wait_children_entry(FSMData.t()) ::
           {:stop_parent, FSMData.t()} | {:error_parent, FSMData.t()}
@@ -80,6 +81,7 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
 
     attrs = %{
       task_id: data.task.id,
+      task_run_id: data.task_run_id,
       workflow_id: data.task.workflow_id,
       step_id: data.task.current_step_id,
       step_name: step_name,
@@ -87,10 +89,41 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
       handoff: %{"child_ids" => child_ids}
     }
 
+    Repo.transaction(fn ->
+      with {:ok, execution} <- insert_waiting_step_execution(data, attrs),
+           {:ok, _task_run} <- mark_task_run_waiting(data.task_run_id, execution.id),
+           {:ok, _task} <- refresh_task_status(data.task) do
+        execution
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp insert_waiting_step_execution(data, attrs) do
     %StepExecution{user_id: data.user_id, project_id: data.project_id}
     |> StepExecution.create_changeset(attrs)
     |> Repo.insert()
   end
+
+  defp mark_task_run_waiting(task_run_id, execution_id) do
+    task_run_id
+    |> fetch_task_run!()
+    |> TaskRun.update_changeset(%{
+      status: :waiting,
+      latest_step_execution_id: execution_id
+    })
+    |> Repo.update()
+  end
+
+  defp refresh_task_status(task) do
+    task
+    |> Ecto.Changeset.change()
+    |> Status.put_status()
+    |> Repo.update()
+  end
+
+  defp fetch_task_run!(task_run_id), do: Repo.get!(TaskRun, task_run_id)
 
   defp schedule_all_children(children, user_id) do
     Enum.reduce_while(children, :ok, fn child, _acc ->
@@ -101,29 +134,26 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
     end)
   end
 
-  defp start_child_orchestrator(child, user_id) do
+  defp start_child_orchestrator(child, _user_id) do
     case Registry.lookup(Sacrum.Orchestrator.TaskRegistry, child.id) do
       [_ | _] ->
         :ok
 
       [] ->
-        case TaskFSMSupervisor.start_child(
-               {TaskOrchestrator, task_id: child.id, user_id: user_id}
-             ) do
-          {:ok, _pid} ->
-            :ok
-
-          {:error, {:already_started, _pid}} ->
-            :ok
-
-          {:error, reason} ->
-            Logger.error(
-              "[WaitChildren] Failed to start child orchestrator for task #{child.id}: #{inspect(reason)}"
-            )
-
-            {:error, reason}
+        case Scheduler.schedule_task(%{id: child.id}) do
+          :ok -> :ok
+          {:error, :orchestrator_already_running} -> :ok
+          {:error, reason} -> log_child_start_failure(child, reason)
         end
     end
+  end
+
+  defp log_child_start_failure(child, reason) do
+    Logger.error(
+      "[WaitChildren] Failed to start child orchestrator for task #{child.id}: #{inspect(reason)}"
+    )
+
+    {:error, reason}
   end
 
   defp fetch_waiting_execution(task_id) do

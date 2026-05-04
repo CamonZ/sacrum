@@ -30,6 +30,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     Retry,
     Scheduler,
     TaskCompletion,
+    TaskRunLifecycle,
     WorkflowGraph
   }
 
@@ -42,11 +43,12 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   def start_link(opts) do
     task_id = Keyword.fetch!(opts, :task_id)
     user_id = Keyword.fetch!(opts, :user_id)
+    task_run_id = Keyword.get(opts, :task_run_id)
 
     :gen_statem.start_link(
       {:via, Registry, {Sacrum.Orchestrator.TaskRegistry, task_id}},
       __MODULE__,
-      {user_id, task_id},
+      {user_id, task_id, task_run_id},
       []
     )
   end
@@ -68,24 +70,35 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   end
 
   @impl :gen_statem
-  def init({user_id, task_id}) do
+  def init({user_id, task_id, task_run_id}) do
     case Repo.get(Task, task_id) do
       nil ->
         Logger.error("[TaskOrchestrator:#{task_id}] Task not found")
         :stop
 
       task ->
-        data = %FSMData{
-          user_id: user_id,
-          task: task,
-          project_id: task.project_id
-        }
+        case ensure_task_run_id(task, task_run_id) do
+          {:ok, task_run_id} ->
+            data = %FSMData{
+              user_id: user_id,
+              task: task,
+              task_run_id: task_run_id,
+              project_id: task.project_id
+            }
 
-        Logger.info(
-          "[TaskOrchestrator:#{task_id}] Starting user=#{user_id} project=#{task.project_id} workflow=#{inspect(task.workflow_id)} step=#{inspect(task.current_step_id)}"
-        )
+            Logger.info(
+              "[TaskOrchestrator:#{task_id}] Starting user=#{user_id} project=#{task.project_id} task_run=#{task_run_id} workflow=#{inspect(task.workflow_id)} step=#{inspect(task.current_step_id)}"
+            )
 
-        {:ok, :initializing, data}
+            {:ok, :initializing, data}
+
+          {:error, reason} ->
+            Logger.error(
+              "[TaskOrchestrator:#{task_id}] Failed to initialize TaskRun: #{inspect(reason)}"
+            )
+
+            :stop
+        end
     end
   end
 
@@ -102,10 +115,22 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
         "current_step=#{inspect(task.current_step_id)} slot_id=#{inspect(data.slot_id)}"
 
     case reason do
-      :normal -> Logger.info(msg)
-      :shutdown -> Logger.warning(msg)
-      {:shutdown, _} -> Logger.warning(msg)
-      _ -> Logger.error(msg <> " current_execution=#{inspect(data.current_execution_id)}")
+      :normal ->
+        Logger.info(msg)
+
+      :shutdown ->
+        Logger.warning(msg)
+
+      {:shutdown, _} ->
+        Logger.warning(msg)
+
+      _ ->
+        Logger.error(msg <> " current_execution=#{inspect(data.current_execution_id)}")
+
+        mark_run_failed_if_active(data, reason, %{
+          state: state,
+          current_execution_id: data.current_execution_id
+        })
     end
 
     if data.slot_id, do: ExecutionPool.release_slot(data.slot_id)
@@ -168,6 +193,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   def handle_event(:enter, prev_state, :failed, data) do
     Logger.error("[TaskOrchestrator:#{data.task.id}] enter #{prev_state} -> :failed, stopping")
     if data.slot_id, do: ExecutionPool.release_slot(data.slot_id)
+    mark_run_failed_if_active(data, :orchestrator_failed, %{previous_state: prev_state})
     {:stop, :normal, data}
   end
 
@@ -363,6 +389,37 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
 
   # ===== PRIVATE HELPERS =====
 
+  defp ensure_task_run_id(_task, task_run_id) when is_binary(task_run_id), do: {:ok, task_run_id}
+
+  defp ensure_task_run_id(task, nil) do
+    with {:ok, task_run} <- TaskRunLifecycle.get_or_create_root_run(task) do
+      {:ok, task_run.id}
+    end
+  end
+
+  defp mark_run_failed_if_active(%{task_run_id: nil}, _reason, _context), do: :ok
+
+  defp mark_run_failed_if_active(%{task_run_id: task_run_id} = data, reason, context) do
+    context =
+      Map.merge(
+        %{
+          task_id: data.task.id,
+          current_execution_id: data.current_execution_id,
+          run_retry_attempt: data.run_retry_attempt
+        },
+        context
+      )
+
+    case TaskRunLifecycle.mark_failed_if_active(task_run_id, reason, context) do
+      {:ok, _task_run_or_terminal} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error("[TaskOrchestrator] Failed to mark TaskRun failed: #{inspect(reason)}")
+        :ok
+    end
+  end
+
   defp handle_execution_status_changed(execution_id, _status, %{current_execution_id: current})
        when execution_id != current,
        do: :keep_state_and_data
@@ -397,6 +454,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
            data.user_id,
            task,
            current_step.id,
+           data.task_run_id,
            data.pending_handoff
          ) do
       {:ok, execution} ->

@@ -6,7 +6,7 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
 
   require Logger
 
-  alias Sacrum.Orchestrator.FSMData
+  alias Sacrum.Orchestrator.{FSMData, TaskRunLifecycle}
   alias Sacrum.Repo
   alias Sacrum.Repo.Broadcaster
   alias Sacrum.Tasks.Status
@@ -26,6 +26,7 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
     |> Repo.update()
     |> case do
       {:ok, refreshed} ->
+        mark_task_run_completed(data)
         Broadcaster.broadcast({:ok, refreshed}, :task_updated, :project)
         {:ok, :completed, %{data | task: refreshed}}
 
@@ -34,7 +35,10 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
     end
   end
 
-  def handle_completion(data), do: {:ok, :completed, data}
+  def handle_completion(data) do
+    mark_task_run_completed(data)
+    {:ok, :completed, data}
+  end
 
   @doc """
   Determine the next FSM state based on the step and workflow configuration.
@@ -63,9 +67,36 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
         {:next_state, :completing, data}
 
       _step ->
-        if data.workflow.auto_advance,
-          do: {:next_state, :awaiting_execution, data},
-          else: {:stop, :normal, data}
+        if data.workflow.auto_advance do
+          {:next_state, :awaiting_execution, data}
+        else
+          mark_task_run_completed(data, %{
+            outcome_kind: "step_completed",
+            outcome_context: %{
+              "reason" => "auto_advance_disabled",
+              "current_step_id" => next_step_id
+            }
+          })
+
+          {:stop, :normal, data}
+        end
+    end
+  end
+
+  defp mark_task_run_completed(data, attrs \\ %{outcome_kind: "completed"}) do
+    case Map.get(data, :task_run_id) do
+      nil ->
+        :ok
+
+      task_run_id ->
+        case TaskRunLifecycle.mark_completed(task_run_id, attrs) do
+          {:ok, _task_run} ->
+            :ok
+
+          {:error, reason} ->
+            Logger.error("[TaskCompletion] Failed to mark TaskRun completed: #{inspect(reason)}")
+            :ok
+        end
     end
   end
 end

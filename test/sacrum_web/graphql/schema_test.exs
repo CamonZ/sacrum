@@ -1710,7 +1710,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
             runStep(
               taskId: "#{task.id}"
               stepId: "#{step.id}"
-            ) { id stepName status taskId }
+            ) { id stepName status taskId taskRunId }
           }
         """)
         |> json_response(200)
@@ -1721,6 +1721,45 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["status"] == "started"
       assert data["taskId"] == task.id
       assert data["id"] != nil
+      assert data["taskRunId"] != nil
+
+      task_run = Sacrum.Repo.get!(Sacrum.Repo.Schemas.TaskRun, data["taskRunId"])
+      assert task_run.task_id == task.id
+      assert task_run.status == :executing
+      assert task_run.latest_step_execution_id == data["id"]
+    end
+
+    test "runStep reuses an existing active root TaskRun", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+      {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "step_1", goal: "Do something"})
+      {:ok, task} = Sacrum.Repo.TaskWorkflows.assign_workflow(task, wf)
+      {:ok, task_run} = Accounts.TaskRuns.insert(user.id, project.id, task.id, %{status: :queued})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            runStep(
+              taskId: "#{task.id}"
+              stepId: "#{step.id}"
+            ) { id taskRunId status }
+          }
+        """)
+        |> json_response(200)
+
+      data = result["data"]["runStep"]
+      assert data["status"] == "started"
+      assert data["taskRunId"] == task_run.id
+
+      reloaded_run = Sacrum.Repo.get!(Sacrum.Repo.Schemas.TaskRun, task_run.id)
+      assert reloaded_run.status == :executing
+      assert reloaded_run.latest_step_execution_id == data["id"]
     end
 
     test "runStep with invalid task_id returns error", %{conn: conn, user: user, project: project} do

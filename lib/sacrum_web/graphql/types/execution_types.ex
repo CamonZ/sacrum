@@ -10,12 +10,13 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
   import Absinthe.Resolution.Helpers
 
   alias Sacrum.Accounts
-  alias Sacrum.Orchestrator.{ExecutionDispatcher, Scheduler}
+  alias Sacrum.Orchestrator.{ExecutionDispatcher, Scheduler, TaskRunLifecycle}
   alias Sacrum.Repo.Broadcaster
 
   object :step_execution do
     field :id, :id
     field :task_id, :id
+    field :task_run_id, :id
     field :step_name, :string
     field :status, :string
     field :context, :json
@@ -194,7 +195,9 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
                  preloads: [:sections, :code_refs, :workflow, :current_step]
                ),
              :ok <- check_daemon_presence(task.project_id) do
-          ExecutionDispatcher.create_and_dispatch(user.id, task, step_id)
+          with {:ok, task_run} <- TaskRunLifecycle.get_or_create_root_run(task) do
+            ExecutionDispatcher.create_and_dispatch(user.id, task, step_id, task_run)
+          end
         end
       end)
     end

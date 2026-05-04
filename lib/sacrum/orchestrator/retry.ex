@@ -43,7 +43,12 @@ defmodule Sacrum.Orchestrator.Retry do
 
     with {:ok, current_step} <- WorkflowGraph.get_current_step(data),
          {:ok, execution} <-
-           ExecutionDispatcher.create_and_dispatch(data.user_id, data.task, current_step.id) do
+           ExecutionDispatcher.create_and_dispatch(
+             data.user_id,
+             data.task,
+             current_step.id,
+             data.task_run_id
+           ) do
       new_data = %{data | current_execution_id: execution.id, run_retry_attempt: attempt}
 
       Logger.info(

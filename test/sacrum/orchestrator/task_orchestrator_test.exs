@@ -284,8 +284,16 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
       executions = get_all_executions(task.id)
       assert length(executions) == 1
-      assert hd(executions).status == "completed"
-      assert hd(executions).step_name == "step_1"
+      execution = hd(executions)
+      assert execution.status == "completed"
+      assert execution.step_name == "step_1"
+      assert execution.task_run_id != nil
+
+      task_run = Repo.get!(Sacrum.Repo.Schemas.TaskRun, execution.task_run_id)
+      assert task_run.status == :completed
+      assert task_run.latest_step_execution_id == execution.id
+      assert %DateTime{} = task_run.ended_at
+      assert {:error, :not_found} = Accounts.TaskRuns.get_active_for_task(user.id, task.id)
     end
   end
 
@@ -1875,6 +1883,12 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       child_ids = waiting_exec.handoff["child_ids"]
       assert Enum.member?(child_ids, child_task_1.id)
       assert Enum.member?(child_ids, child_task_2.id)
+      assert waiting_exec.task_run_id != nil
+
+      {:ok, parent_run} = Accounts.TaskRuns.get_active_for_task(user.id, parent_task.id)
+      assert parent_run.id == waiting_exec.task_run_id
+      assert parent_run.status == :waiting
+      assert parent_run.latest_step_execution_id == waiting_exec.id
 
       # Clean up spawned child orchestrators
       cleanup_spawned_orchestrators([child_task_1.id, child_task_2.id])
