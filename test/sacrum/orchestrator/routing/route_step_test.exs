@@ -91,6 +91,22 @@ defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
     execution
   end
 
+  defp create_task_run(user, task, attrs \\ %{}) do
+    {:ok, task_run} =
+      Accounts.TaskRuns.insert(
+        user.id,
+        task.project_id,
+        task.id,
+        Map.merge(%{status: :executing}, attrs)
+      )
+
+    task_run
+  end
+
+  defp subscribe_project(project) do
+    Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
+  end
+
   # ===== Tests =====
 
   describe "handle_route_step_transition/2" do
@@ -163,6 +179,99 @@ defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
         other ->
           flunk("Unexpected result: #{inspect(other)}")
       end
+    end
+
+    test "commits route decision, task movement, task run outcome, and broadcasts execution update",
+         %{pool: pool} do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project, %{auto_advance: false})
+      current_step = create_step(user, workflow, %{"name" => "route_step", "step_order" => 1})
+
+      next_step =
+        create_step(user, workflow, %{
+          "name" => "manual_review",
+          "step_order" => 2,
+          "is_final" => false
+        })
+
+      create_transition(user, current_step, next_step)
+
+      task = create_task(user, project, workflow)
+
+      {:ok, task} =
+        Repo.update(Ecto.Changeset.change(task, %{current_step_id: current_step.id}))
+
+      task_run = create_task_run(user, task)
+
+      route_output =
+        Jason.encode!(%{
+          "transition_to" => next_step.id,
+          "transition_type" => "intra_workflow",
+          "handoff" => %{"review" => "needed"}
+        })
+
+      execution =
+        create_step_execution(user, task, workflow, current_step.name, %{
+          "status" => "completed",
+          "output" => route_output,
+          "task_run_id" => task_run.id
+        })
+
+      {:ok, slot} = ExecutionPool.request_slot(pool, self(), :infinity)
+      subscribe_project(project)
+
+      data = %{
+        task: task,
+        task_run_id: task_run.id,
+        project_id: project.id,
+        user_id: user.id,
+        steps: %{current_step.id => current_step, next_step.id => next_step},
+        workflow: workflow,
+        transitions: %{current_step.id => [next_step.id]},
+        slot_id: slot,
+        pending_handoff: nil
+      }
+
+      assert {:stop, :normal, returned_data} =
+               RouteStep.handle_route_step_transition(data, current_step)
+
+      assert returned_data.pending_handoff == %{"review" => "needed"}
+
+      updated_task = Repo.get!(Sacrum.Repo.Schemas.Task, task.id)
+      assert updated_task.current_step_id == next_step.id
+
+      updated_execution = Repo.get!(Sacrum.Repo.Schemas.StepExecution, execution.id)
+      assert updated_execution.transition_result != nil
+
+      assert Jason.decode!(updated_execution.transition_result) == %{
+               "dest_id" => next_step.id,
+               "transition_type" => "intra_workflow"
+             }
+
+      completed_run = Repo.get!(Sacrum.Repo.Schemas.TaskRun, task_run.id)
+      assert completed_run.status == :completed
+      assert completed_run.outcome_kind == "step_completed"
+
+      assert completed_run.outcome_context == %{
+               "reason" => "auto_advance_disabled",
+               "current_step_id" => next_step.id
+             }
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "step_execution_status_changed",
+        payload: %{
+          id: execution_id,
+          transition_result: transition_result
+        }
+      }
+
+      assert execution_id == execution.id
+
+      assert Jason.decode!(transition_result) == %{
+               "dest_id" => next_step.id,
+               "transition_type" => "intra_workflow"
+             }
     end
 
     test "inter-workflow happy path: routes task to destination workflow", %{pool: pool} do

@@ -81,6 +81,16 @@ defmodule Sacrum.Repo.TaskWorkflows do
     do: change_step(task, step_id, opts, validate_transition: false)
 
   @doc """
+  Builds the task changeset for advancing to a step without persisting or
+  broadcasting. Orchestrator state transitions use this to compose step
+  movement with StepExecution/TaskRun writes in one transaction.
+  """
+  @spec advance_to_step_changeset(Task.t(), String.t(), keyword()) ::
+          {:ok, Ecto.Changeset.t()} | {:error, atom()}
+  def advance_to_step_changeset(%Task{} = task, step_id, opts \\ []),
+    do: change_step_changeset(task, step_id, opts, validate_transition: false)
+
+  @doc """
   Moves a task to a specific step, requiring an explicit StepTransition between
   the current and target step. Updates current_step_id only.
   """
@@ -89,17 +99,37 @@ defmodule Sacrum.Repo.TaskWorkflows do
   def move_to_step(%Task{} = task, step_id, opts \\ []),
     do: change_step(task, step_id, opts, validate_transition: true)
 
+  @doc """
+  Builds the task changeset for moving to a step without persisting or
+  broadcasting.
+  """
+  @spec move_to_step_changeset(Task.t(), String.t(), keyword()) ::
+          {:ok, Ecto.Changeset.t()} | {:error, atom()}
+  def move_to_step_changeset(%Task{} = task, step_id, opts \\ []),
+    do: change_step_changeset(task, step_id, opts, validate_transition: true)
+
   @spec change_step(Task.t(), String.t(), keyword(), keyword()) ::
           {:ok, Task.t()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
   defp change_step(%Task{} = task, step_id, opts, mode) do
+    with {:ok, changeset} <- change_step_changeset(task, step_id, opts, mode) do
+      changeset
+      |> Repo.update()
+      |> broadcast_on_success()
+    end
+  end
+
+  @spec change_step_changeset(Task.t(), String.t(), keyword(), keyword()) ::
+          {:ok, Ecto.Changeset.t()} | {:error, atom()}
+  defp change_step_changeset(%Task{} = task, step_id, opts, mode) do
     with :ok <- maybe_check_orchestrator(task.id, opts),
          {:ok, target_step} <- get_workflow_step(task.workflow_id, step_id),
          :ok <- maybe_validate_transition(task, target_step, mode) do
-      task
-      |> Ecto.Changeset.change(%{current_step_id: target_step.id})
-      |> Status.put_status()
-      |> Repo.update()
-      |> broadcast_on_success()
+      changeset =
+        task
+        |> Ecto.Changeset.change(%{current_step_id: target_step.id})
+        |> Status.put_status()
+
+      {:ok, changeset}
     end
   end
 
@@ -163,10 +193,7 @@ defmodule Sacrum.Repo.TaskWorkflows do
   @spec task_workflow_changeset(Task.t(), String.t() | nil, String.t() | nil) ::
           Ecto.Changeset.t()
   defp task_workflow_changeset(task, workflow_id, step_id) do
-    task
-    |> Ecto.Changeset.change(%{workflow_id: workflow_id, current_step_id: step_id})
-    |> Ecto.Changeset.foreign_key_constraint(:workflow_id)
-    |> Ecto.Changeset.foreign_key_constraint(:current_step_id)
+    Task.assign_workflow_changeset(task, workflow_id, step_id)
   end
 
   @spec get_workflow_step(String.t(), String.t()) ::

@@ -96,6 +96,18 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
     Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
   end
 
+  defp create_task_run(ctx, task) do
+    {:ok, task_run} =
+      Accounts.TaskRuns.insert(ctx.user.id, task.project_id, task.id, %{status: :queued})
+
+    task_run
+  end
+
+  defp create_and_dispatch(ctx, task, step, handoff \\ nil) do
+    task_run = create_task_run(ctx, task)
+    ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, step.id, task_run, handoff)
+  end
+
   defp setup_dispatch_context(_) do
     user = create_user()
     project = create_project(user)
@@ -116,7 +128,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
       subscribe_to_project(ctx.project)
 
-      {:ok, _exec} = ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, step.id)
+      {:ok, _exec} = create_and_dispatch(ctx, task, step)
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "run_step",
@@ -139,7 +151,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
       subscribe_to_project(ctx.project)
 
-      {:ok, _exec} = ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, step.id)
+      {:ok, _exec} = create_and_dispatch(ctx, task, step)
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "run_step",
@@ -181,7 +193,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
       subscribe_to_project(ctx.project)
 
-      {:ok, _exec} = ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, step.id)
+      {:ok, _exec} = create_and_dispatch(ctx, task, step)
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "run_step",
@@ -205,7 +217,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
       subscribe_to_project(ctx.project)
 
-      {:ok, _exec} = ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, step.id)
+      {:ok, _exec} = create_and_dispatch(ctx, task, step)
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "run_step",
@@ -228,7 +240,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
       subscribe_to_project(ctx.project)
 
-      {:ok, _exec} = ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, step.id)
+      {:ok, _exec} = create_and_dispatch(ctx, task, step)
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "run_step",
@@ -268,7 +280,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
       subscribe_to_project(ctx.project)
 
-      {:ok, _exec} = ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, step.id)
+      {:ok, _exec} = create_and_dispatch(ctx, task, step)
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "run_step",
@@ -293,7 +305,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
       subscribe_to_project(ctx.project)
 
-      {:ok, _exec} = ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, step.id)
+      {:ok, _exec} = create_and_dispatch(ctx, task, step)
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "run_step",
@@ -340,7 +352,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
       subscribe_to_project(ctx.project)
 
-      {:ok, _exec} = ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, step.id)
+      {:ok, _exec} = create_and_dispatch(ctx, task, step)
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "run_step",
@@ -364,7 +376,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       subscribe_to_project(ctx.project)
 
       {:ok, _exec} =
-        ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, step.id, %{
+        create_and_dispatch(ctx, task, step, %{
           "routing_key" => "user_approved"
         })
 
@@ -420,7 +432,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
       subscribe_to_project(ctx.project)
 
-      {:ok, _exec} = ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, current_step.id)
+      {:ok, _exec} = create_and_dispatch(ctx, task, current_step)
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "run_step",
@@ -460,7 +472,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
       subscribe_to_project(ctx.project)
 
-      {:ok, _exec} = ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, current_step.id)
+      {:ok, _exec} = create_and_dispatch(ctx, task, current_step)
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "run_step",
@@ -508,7 +520,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
       subscribe_to_project(ctx.project)
 
-      {:ok, _exec} = ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, current_step.id)
+      {:ok, _exec} = create_and_dispatch(ctx, task, current_step)
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "run_step",
@@ -563,7 +575,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
       subscribe_to_project(ctx.project)
 
-      {:ok, _exec} = ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, current_step.id)
+      {:ok, _exec} = create_and_dispatch(ctx, task, current_step)
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "run_step",
@@ -633,7 +645,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
       subscribe_to_project(ctx.project)
 
-      {:ok, _exec} = ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, current_step.id)
+      {:ok, _exec} = create_and_dispatch(ctx, task, current_step)
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "run_step",
@@ -673,7 +685,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
       subscribe_to_project(ctx.project)
 
-      {:ok, _exec} = ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, current_step.id)
+      {:ok, _exec} = create_and_dispatch(ctx, task, current_step)
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "run_step",
@@ -787,7 +799,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
     task = PromptRenderer.preload_for_rendering(task)
     subscribe_to_project(ctx.project)
 
-    {:ok, _exec} = ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, step.id)
+    {:ok, _exec} = create_and_dispatch(ctx, task, step)
 
     assert_receive %Phoenix.Socket.Broadcast{
       event: "run_step",
@@ -800,6 +812,46 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
   describe "prompt persistence" do
     setup [:setup_dispatch_context]
 
+    test "attaches execution to TaskRun and moves the run to executing", ctx do
+      step = create_step(ctx.user, ctx.workflow, %{})
+      task = create_task(ctx.user, ctx.project) |> assign_workflow(ctx.workflow)
+      task = PromptRenderer.preload_for_rendering(task)
+      task_run = create_task_run(ctx, task)
+
+      subscribe_to_project(ctx.project)
+
+      {:ok, dispatched} =
+        ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, step.id, task_run)
+
+      reloaded_run = Sacrum.Repo.get!(Sacrum.Repo.Schemas.TaskRun, task_run.id)
+
+      assert dispatched.task_run_id == task_run.id
+      assert reloaded_run.status == :executing
+      assert reloaded_run.latest_step_execution_id == dispatched.id
+      assert reloaded_run.ended_at == nil
+    end
+
+    test "marks TaskRun failed when dispatch fails after run creation", ctx do
+      _step = create_step(ctx.user, ctx.workflow, %{})
+      task = create_task(ctx.user, ctx.project) |> assign_workflow(ctx.workflow)
+      task = PromptRenderer.preload_for_rendering(task)
+      task_run = create_task_run(ctx, task)
+
+      assert {:error, :not_found} =
+               ExecutionDispatcher.create_and_dispatch(
+                 ctx.user.id,
+                 task,
+                 Ecto.UUID.generate(),
+                 task_run
+               )
+
+      failed_run = Sacrum.Repo.get!(Sacrum.Repo.Schemas.TaskRun, task_run.id)
+      assert failed_run.status == :failed
+      assert %DateTime{} = failed_run.ended_at
+      assert failed_run.failure_kind == "dispatch_failed"
+      assert failed_run.failure_reason =~ "not_found"
+    end
+
     test "persists rendered prompt on the execution row and broadcasts the same text", ctx do
       step =
         create_step(ctx.user, ctx.workflow, %{
@@ -811,7 +863,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       task = PromptRenderer.preload_for_rendering(task)
       subscribe_to_project(ctx.project)
 
-      {:ok, dispatched} = ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, step.id)
+      {:ok, dispatched} = create_and_dispatch(ctx, task, step)
 
       expected = "Task: Test Task | Level: ticket"
       assert dispatched.prompt == expected

@@ -74,10 +74,11 @@ defmodule Sacrum.OrchestratorTest do
     updated_task
   end
 
-  defp create_step_execution(task, user_id, status) do
+  defp create_step_execution(task, user_id, status, task_run_id \\ nil) do
     {:ok, execution} =
       Accounts.StepExecutions.insert(user_id, %{
         task_id: task.id,
+        task_run_id: task_run_id,
         step_name: "Test Step",
         status: status,
         workflow_id: task.workflow_id,
@@ -85,6 +86,13 @@ defmodule Sacrum.OrchestratorTest do
       })
 
     execution
+  end
+
+  defp create_task_run(task, user_id, status \\ :executing) do
+    {:ok, task_run} =
+      Accounts.TaskRuns.insert(user_id, task.project_id, task.id, %{status: status})
+
+    task_run
   end
 
   describe "Orchestrator.stop/1" do
@@ -118,13 +126,27 @@ defmodule Sacrum.OrchestratorTest do
       _step = create_step(user, workflow, %{})
       task = create_task(user, project)
       task = assign_workflow_to_task(task, workflow)
-
-      child_spec = {Sacrum.Orchestrator.TaskOrchestrator, task_id: task.id, user_id: user.id}
-      {:ok, _pid} = TaskFSMSupervisor.start_child(child_spec)
+      _task_run = create_task_run(task, user.id, :executing)
 
       assert {:ok, :stopped} = Orchestrator.stop(task.id)
-      Process.sleep(50)
       assert {:ok, :not_running} = Orchestrator.stop(task.id)
+    end
+
+    test "stops a durable active TaskRun when no FSM is registered" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project, auto_advance: false)
+      _step = create_step(user, workflow, %{})
+      task = create_task(user, project)
+      task = assign_workflow_to_task(task, workflow)
+      task_run = create_task_run(task, user.id, :waiting)
+
+      assert {:ok, :stopped} = Orchestrator.stop(task.id)
+
+      stopped_run = Repo.get!(Sacrum.Repo.Schemas.TaskRun, task_run.id)
+      assert stopped_run.status == :stopped
+      assert %DateTime{} = stopped_run.stop_requested_at
+      assert %DateTime{} = stopped_run.ended_at
     end
   end
 
@@ -152,19 +174,25 @@ defmodule Sacrum.OrchestratorTest do
         if Process.alive?(fake_orchestrator), do: send(fake_orchestrator, {:stop, ref})
       end)
 
-      {:ok, user: user, task: task}
+      task_run = create_task_run(task, user.id)
+
+      {:ok, user: user, task: task, task_run: task_run}
     end
 
     test "cancels when the latest StepExecution status is 'in_progress'", ctx do
-      execution = create_step_execution(ctx.task, ctx.user.id, "in_progress")
+      execution = create_step_execution(ctx.task, ctx.user.id, "in_progress", ctx.task_run.id)
 
       assert {:ok, :stopped} = Orchestrator.stop(ctx.task.id)
 
       assert Repo.get!(StepExecution, execution.id).status == "cancelled"
+      stopped_run = Repo.get!(Sacrum.Repo.Schemas.TaskRun, ctx.task_run.id)
+      assert stopped_run.status == :stopped
+      assert %DateTime{} = stopped_run.stop_requested_at
+      assert %DateTime{} = stopped_run.ended_at
     end
 
     test "cancels when status is 'waiting'", ctx do
-      execution = create_step_execution(ctx.task, ctx.user.id, "waiting")
+      execution = create_step_execution(ctx.task, ctx.user.id, "waiting", ctx.task_run.id)
 
       assert {:ok, :stopped} = Orchestrator.stop(ctx.task.id)
 
@@ -172,7 +200,7 @@ defmodule Sacrum.OrchestratorTest do
     end
 
     test "cancels when status is 'started' (existing behavior preserved)", ctx do
-      execution = create_step_execution(ctx.task, ctx.user.id, "started")
+      execution = create_step_execution(ctx.task, ctx.user.id, "started", ctx.task_run.id)
 
       assert {:ok, :stopped} = Orchestrator.stop(ctx.task.id)
 
@@ -188,14 +216,29 @@ defmodule Sacrum.OrchestratorTest do
     end
 
     test "matches the latest in-flight execution by inserted_at desc", ctx do
-      older = create_step_execution(ctx.task, ctx.user.id, "started")
+      older = create_step_execution(ctx.task, ctx.user.id, "started", ctx.task_run.id)
       Process.sleep(10)
-      newer = create_step_execution(ctx.task, ctx.user.id, "in_progress")
+      newer = create_step_execution(ctx.task, ctx.user.id, "in_progress", ctx.task_run.id)
 
       assert {:ok, :stopped} = Orchestrator.stop(ctx.task.id)
 
       assert Repo.get!(StepExecution, older.id).status == "started"
       assert Repo.get!(StepExecution, newer.id).status == "cancelled"
+    end
+
+    test "does not cancel a stale in-flight row from another run", ctx do
+      {:ok, old_task_run} =
+        Accounts.TaskRuns.insert(ctx.user.id, ctx.task.project_id, ctx.task.id, %{
+          status: :failed,
+          ended_at: DateTime.utc_now()
+        })
+
+      stale = create_step_execution(ctx.task, ctx.user.id, "in_progress", old_task_run.id)
+
+      assert {:ok, :stopped} = Orchestrator.stop(ctx.task.id)
+
+      assert Repo.get!(StepExecution, stale.id).status == "in_progress"
+      assert Repo.get!(Sacrum.Repo.Schemas.TaskRun, ctx.task_run.id).status == :stopped
     end
 
     test "does not re-cancel a row already in 'cancelled' state", ctx do

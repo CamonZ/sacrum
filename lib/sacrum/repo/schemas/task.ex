@@ -121,6 +121,15 @@ defmodule Sacrum.Repo.Schemas.Task do
     )
   end
 
+  @spec assign_workflow_changeset(t(), Ecto.UUID.t() | nil, Ecto.UUID.t() | nil) ::
+          Ecto.Changeset.t()
+  def assign_workflow_changeset(task, workflow_id, current_step_id) do
+    task
+    |> change(%{workflow_id: workflow_id, current_step_id: current_step_id})
+    |> foreign_key_constraint(:workflow_id)
+    |> foreign_key_constraint(:current_step_id)
+  end
+
   defp maybe_generate_short_id(changeset) do
     case get_field(changeset, :short_id) do
       nil -> put_change(changeset, :short_id, generate_short_id())

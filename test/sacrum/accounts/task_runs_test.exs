@@ -6,6 +6,7 @@ defmodule Sacrum.Accounts.TaskRunsTest do
   alias Sacrum.Accounts.TaskRuns
   alias Sacrum.Accounts.Tasks
   alias Sacrum.Accounts.Workflows
+  alias Sacrum.Orchestrator.TaskRunLifecycle
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.StepExecution
   alias Sacrum.Repo.Schemas.TaskRun
@@ -231,6 +232,25 @@ defmodule Sacrum.Accounts.TaskRunsTest do
       refute TaskRunStatus.active?(retry_exhausted_run.status)
 
       assert {:error, :not_found} = TaskRuns.get_active_for_task(user.id, task.id)
+    end
+
+    test "stopping TaskRun is not converted to failed by failure cleanup" do
+      user = create_user()
+      {project, task, _workflow} = create_task_with_workflow(user)
+
+      {:ok, task_run} =
+        TaskRuns.insert(user.id, project.id, task.id, %{
+          status: :stopping,
+          stop_requested_at: DateTime.utc_now()
+        })
+
+      assert {:ok, :unchanged} =
+               TaskRunLifecycle.mark_failed_if_active(task_run, :dispatch_failed)
+
+      reloaded = Repo.get!(TaskRun, task_run.id)
+      assert reloaded.status == :stopping
+      assert reloaded.failure_kind == nil
+      assert reloaded.ended_at == nil
     end
 
     test "preserves task_run_id and lists executions for a run" do

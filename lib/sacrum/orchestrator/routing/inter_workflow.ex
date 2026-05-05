@@ -14,11 +14,10 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflow do
 
   import Ecto.Query
 
-  alias Ecto.Changeset
   alias Sacrum.Orchestrator.{FSMData, TaskCompletion, WorkflowGraph}
   alias Sacrum.Repo
   alias Sacrum.Repo.Broadcaster
-  alias Sacrum.Repo.Schemas.{Workflow, WorkflowStep, WorkflowTransition}
+  alias Sacrum.Repo.Schemas.{Task, Workflow, WorkflowStep, WorkflowTransition}
 
   @doc """
   Routes to a destination workflow.
@@ -135,6 +134,21 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflow do
   end
 
   @doc """
+  Builds the task changeset for assigning the destination workflow without
+  persisting or broadcasting. Orchestrator route transitions use this to commit
+  the route decision and task movement atomically.
+  """
+  @spec assign_destination_workflow_changeset(struct(), struct(), String.t() | nil, map() | nil) ::
+          {:ok, Ecto.Changeset.t()} | {:error, term()}
+  def assign_destination_workflow_changeset(task, dest_workflow, target_step_id, _handoff) do
+    dest_workflow = Repo.preload(dest_workflow, :workflow_steps)
+
+    with {:ok, target_step} <- resolve_target_step(dest_workflow, target_step_id) do
+      {:ok, Task.assign_workflow_changeset(task, dest_workflow.id, target_step.id)}
+    end
+  end
+
+  @doc """
   Resolves the target step: explicit id if given, otherwise the workflow's
   `initial_step_id` when set, otherwise the first step by `step_order`.
   """
@@ -168,11 +182,7 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflow do
   @spec do_assign_destination_workflow(struct(), struct(), struct(), map() | nil) ::
           {:ok, struct()} | {:error, term()}
   def do_assign_destination_workflow(task, dest_workflow, target_step, handoff) do
-    changeset =
-      Changeset.change(task, %{
-        workflow_id: dest_workflow.id,
-        current_step_id: target_step.id
-      })
+    changeset = Task.assign_workflow_changeset(task, dest_workflow.id, target_step.id)
 
     case Repo.update(changeset) do
       {:ok, updated_task} ->

@@ -11,6 +11,7 @@ defmodule Sacrum.Orchestrator.FSMData do
   defstruct [
     :user_id,
     :task,
+    :task_run_id,
     :project_id,
     :workflow,
     :current_execution_id,
@@ -25,6 +26,7 @@ defmodule Sacrum.Orchestrator.FSMData do
   @type t :: %__MODULE__{
           user_id: binary(),
           task: Task.t(),
+          task_run_id: binary() | nil,
           project_id: binary(),
           workflow: Workflow.t() | nil,
           steps: %{optional(binary()) => WorkflowStep.t()},

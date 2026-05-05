@@ -63,6 +63,11 @@ defmodule Sacrum.Orchestrator.TaskCompletionTest do
     task
   end
 
+  defp create_task_run(user, project, task, attrs \\ %{status: :executing}) do
+    {:ok, task_run} = Accounts.TaskRuns.insert(user.id, project.id, task.id, attrs)
+    task_run
+  end
+
   # ===== Tests =====
 
   describe "handle_completion/1" do
@@ -81,6 +86,19 @@ defmodule Sacrum.Orchestrator.TaskCompletionTest do
 
       assert new_data.task.completed_at != nil
       assert new_data.task.id == task.id
+    end
+
+    test "does not complete task when task run completion cannot be prepared" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project)
+      _step = create_step(user, workflow, %{})
+      task = create_task(user, project, workflow)
+
+      data = %{task: task, task_run_id: Ecto.UUID.generate()}
+
+      assert {:error, :task_run_not_found} = TaskCompletion.handle_completion(data)
+      assert Repo.get!(Sacrum.Repo.Schemas.Task, task.id).completed_at == nil
     end
   end
 
@@ -163,9 +181,11 @@ defmodule Sacrum.Orchestrator.TaskCompletionTest do
       workflow = create_workflow(user, project, auto_advance: false)
       next_step = create_step(user, workflow, %{"is_final" => false})
       task = create_task(user, project, workflow)
+      task_run = create_task_run(user, project, task)
 
       data = %{
         task: task,
+        task_run_id: task_run.id,
         steps: %{next_step.id => next_step},
         workflow: workflow
       }
@@ -173,6 +193,14 @@ defmodule Sacrum.Orchestrator.TaskCompletionTest do
       result = TaskCompletion.determine_next_state(next_step.id, data)
 
       assert result == {:stop, :normal, data}
+
+      unchanged_run = Repo.get!(Sacrum.Repo.Schemas.TaskRun, task_run.id)
+      assert unchanged_run.status == :executing
+
+      assert {:stop, :normal, attrs} = TaskCompletion.next_state_decision(next_step.id, data)
+      assert attrs.outcome_kind == "step_completed"
+      assert attrs.outcome_context["reason"] == "auto_advance_disabled"
+      assert attrs.outcome_context["current_step_id"] == next_step.id
     end
   end
 end

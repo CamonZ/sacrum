@@ -2,7 +2,7 @@ defmodule Sacrum.Orchestrator.SchedulerTest do
   use Sacrum.DataCase, async: false
 
   alias Sacrum.Accounts
-  alias Sacrum.Orchestrator.Scheduler
+  alias Sacrum.Orchestrator.{ExecutionPool, Scheduler}
   alias Sacrum.Orchestrator.TaskRegistry
   alias Sacrum.Repo
 
@@ -101,6 +101,41 @@ defmodule Sacrum.Orchestrator.SchedulerTest do
 
       # Verify orchestrator was started
       assert {:ok, result} == {:ok, :ok}
+      assert Registry.lookup(TaskRegistry, task.id) != []
+    end
+
+    test "creates a queued TaskRun before execution slot is granted" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project)
+      step = create_step(user, workflow, %{name: "Step 1", step_order: 1})
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: step.id})
+
+      task = create_task(user, project)
+      task = assign_workflow_to_task(user, task, workflow)
+
+      available_slots = ExecutionPool.pool_status().available_slots
+
+      held_slots =
+        if available_slots > 0 do
+          for _ <- 1..available_slots do
+            {:ok, slot_id} = ExecutionPool.request_slot(self(), 1_000)
+            slot_id
+          end
+        else
+          []
+        end
+
+      on_exit(fn ->
+        Enum.each(held_slots, &ExecutionPool.release_slot/1)
+        Sacrum.Orchestrator.stop(task.id)
+      end)
+
+      assert :ok = Scheduler.schedule_task(%{id: task.id})
+
+      {:ok, task_run} = Accounts.TaskRuns.get_active_for_task(user.id, task.id)
+      assert task_run.status == :queued
+      assert task_run.latest_step_execution_id == nil
       assert Registry.lookup(TaskRegistry, task.id) != []
     end
 
