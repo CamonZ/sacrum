@@ -36,6 +36,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
 
   alias Sacrum.Orchestrator.Routing.{RouteStep, WaitChildren}
   alias Sacrum.Repo
+  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.{StepExecution, Task}
   alias Sacrum.Repo.TaskWorkflows
 
@@ -314,10 +315,9 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     next_transitions = WorkflowGraph.get_outgoing_transitions(data, current_step.id)
 
     with {:ok, next_step_id} <- WorkflowGraph.select_single_transition(next_transitions),
-         :ok <- mark_satisfied_wait_completed(task_id),
-         {:ok, updated_task} <-
-           TaskWorkflows.advance_to_step(data.task, next_step_id, skip_orchestrator_check: true) do
+         {:ok, %{task: updated_task}} <- commit_wait_children_transition(data, next_step_id) do
       ExecutionPool.release_slot(data.slot_id)
+      Broadcaster.broadcast({:ok, updated_task}, :task_updated, :project)
 
       TaskCompletion.determine_next_state(next_step_id, %{
         data
@@ -343,28 +343,14 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     end
   end
 
-  defp mark_satisfied_wait_completed(task_id) do
-    case latest_waiting_execution(task_id) do
-      nil ->
-        :ok
-
-      execution ->
-        execution
-        |> StepExecution.update_changeset(%{status: "completed"})
-        |> Repo.update()
-
-        :ok
-    end
-  end
-
   defp handle_single_transition_step(data, current_step) do
     task_id = data.task.id
     next_transitions = WorkflowGraph.get_outgoing_transitions(data, current_step.id)
 
     with {:ok, next_step_id} <- WorkflowGraph.select_single_transition(next_transitions),
-         {:ok, updated_task} <-
-           TaskWorkflows.advance_to_step(data.task, next_step_id, skip_orchestrator_check: true) do
+         {:ok, %{task: updated_task}} <- commit_task_step_transition(data, next_step_id) do
       ExecutionPool.release_slot(data.slot_id)
+      Broadcaster.broadcast({:ok, updated_task}, :task_updated, :project)
 
       TaskCompletion.determine_next_state(next_step_id, %{
         data
@@ -386,6 +372,82 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
         {:next_state, :failed, %{data | slot_id: nil}}
     end
   end
+
+  defp commit_wait_children_transition(data, next_step_id) do
+    decision = TaskCompletion.next_state_decision(next_step_id, data)
+
+    Repo.transaction(fn ->
+      with {:ok, changes} <- maybe_complete_waiting_execution(data.task.id, %{}),
+           {:ok, changes} <- advance_task_step(data, next_step_id, changes),
+           {:ok, changes} <- maybe_mark_task_run_completed(data, decision, changes) do
+        changes
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp commit_task_step_transition(data, next_step_id) do
+    decision = TaskCompletion.next_state_decision(next_step_id, data)
+
+    Repo.transaction(fn ->
+      with {:ok, changes} <- advance_task_step(data, next_step_id, %{}),
+           {:ok, changes} <- maybe_mark_task_run_completed(data, decision, changes) do
+        changes
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp maybe_complete_waiting_execution(task_id, changes) do
+    case latest_waiting_execution(task_id) do
+      nil ->
+        {:ok, changes}
+
+      execution ->
+        execution
+        |> StepExecution.update_changeset(%{status: "completed"})
+        |> Repo.update()
+        |> put_transaction_change(changes, :waiting_execution)
+    end
+  end
+
+  defp advance_task_step(data, next_step_id, changes) do
+    with {:ok, changeset} <-
+           TaskWorkflows.advance_to_step_changeset(data.task, next_step_id,
+             skip_orchestrator_check: true
+           ),
+         {:ok, task} <- Repo.update(changeset) do
+      {:ok, Map.put(changes, :task, task)}
+    end
+  end
+
+  defp maybe_mark_task_run_completed(_data, {:next_state, _state}, changes), do: {:ok, changes}
+  defp maybe_mark_task_run_completed(_data, {:failed, _reason}, changes), do: {:ok, changes}
+
+  defp maybe_mark_task_run_completed(data, {:stop, _reason, attrs}, changes) do
+    case Map.get(data, :task_run_id) do
+      nil ->
+        {:ok, changes}
+
+      task_run_id ->
+        mark_task_run_completed(task_run_id, attrs, changes)
+    end
+  end
+
+  defp mark_task_run_completed(task_run_id, attrs, changes) do
+    with {:ok, task_run} <- TaskRunLifecycle.fetch_task_run(task_run_id),
+         {:ok, task_run} <-
+           task_run
+           |> TaskRunLifecycle.completed_changeset(attrs)
+           |> Repo.update() do
+      {:ok, Map.put(changes, :task_run, task_run)}
+    end
+  end
+
+  defp put_transaction_change({:ok, value}, changes, key), do: {:ok, Map.put(changes, key, value)}
+  defp put_transaction_change({:error, reason}, _changes, _key), do: {:error, reason}
 
   # ===== PRIVATE HELPERS =====
 

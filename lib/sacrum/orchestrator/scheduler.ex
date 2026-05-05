@@ -26,6 +26,12 @@ defmodule Sacrum.Orchestrator.Scheduler do
     GenServer.call(__MODULE__, {:schedule_task, task})
   end
 
+  @spec schedule_task_run(binary(), binary()) :: :ok | {:error, term()}
+  def schedule_task_run(task_id, task_run_id)
+      when is_binary(task_id) and is_binary(task_run_id) do
+    GenServer.call(__MODULE__, {:schedule_task_run, task_id, task_run_id})
+  end
+
   @spec notify_task_completed(binary(), map()) :: :ok | {:error, term()}
   def notify_task_completed(task_id, result) do
     GenServer.call(__MODULE__, {:notify_task_completed, task_id, result})
@@ -40,6 +46,12 @@ defmodule Sacrum.Orchestrator.Scheduler do
   @impl true
   def handle_call({:schedule_task, task}, _from, state) do
     result = validate_and_schedule(task)
+    {:reply, result, state}
+  end
+
+  @impl true
+  def handle_call({:schedule_task_run, task_id, task_run_id}, _from, state) do
+    result = validate_and_schedule_existing_run(task_id, task_run_id)
     {:reply, result, state}
   end
 
@@ -81,6 +93,26 @@ defmodule Sacrum.Orchestrator.Scheduler do
     end
   end
 
+  defp validate_and_schedule_existing_run(task_id, task_run_id) do
+    with {:ok, task_record} <- fetch_task(task_id),
+         :ok <- validate_workflow(task_record),
+         :ok <- validate_not_completed(task_record),
+         :ok <- validate_no_active_fsm(task_id),
+         {:ok, task_run} <- TaskRunLifecycle.fetch_task_run(task_run_id),
+         :ok <- validate_task_run_matches(task_run, task_record),
+         {:ok, task_run} <- TaskRunLifecycle.validate_dispatchable(task_run) do
+      Logger.info(
+        "[Scheduler] Starting existing TaskRun task_id=#{task_id}, task_run_id=#{task_run.id}"
+      )
+
+      start_orchestrator(task_id, task_record.user_id, task_run.id)
+    else
+      {:error, reason} = err ->
+        Logger.error("[Scheduler] validate_and_schedule_existing_run failed: #{inspect(reason)}")
+        err
+    end
+  end
+
   defp extract_task_id(task) do
     case Map.fetch(task, :id) do
       {:ok, id} -> {:ok, id}
@@ -98,6 +130,22 @@ defmodule Sacrum.Orchestrator.Scheduler do
 
   defp validate_no_active_fsm(task_id) do
     if fsm_running?(task_id), do: {:error, :orchestrator_already_running}, else: :ok
+  end
+
+  defp validate_task_run_matches(task_run, task) do
+    cond do
+      task_run.user_id != task.user_id ->
+        {:error, :task_run_user_mismatch}
+
+      task_run.project_id != task.project_id ->
+        {:error, :task_run_project_mismatch}
+
+      task_run.task_id != task.id ->
+        {:error, :task_run_task_mismatch}
+
+      true ->
+        :ok
+    end
   end
 
   defp notify_dependents(task_id) do

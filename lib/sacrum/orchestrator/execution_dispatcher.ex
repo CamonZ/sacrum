@@ -53,19 +53,10 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   def create_and_dispatch(user_id, task, step_id, task_run_or_id, handoff \\ nil) do
     with {:ok, step} <- fetch_step(user_id, step_id),
          :ok <- validate_workflow(task),
-         {:ok, task_run} <- fetch_and_validate_task_run(task_run_or_id, task),
-         {:ok, %{execution: execution, task: task, task_run: updated_task_run}} <-
-           insert_and_stamp(task, step, task_run, handoff) do
-      execution_data = ExecutionHistory.build_execution_data(task.id, execution)
-      context = PromptContext.build_context(task, execution_data, step)
-
-      render_and_broadcast(task, step, execution, context, updated_task_run)
+         {:ok, task_run} <- fetch_and_validate_task_run(task_run_or_id, task) do
+      {:ok, rendered} = render_dispatch_prompt(task, step, task_run, handoff)
+      commit_and_broadcast_dispatch(task, step, task_run, handoff, rendered)
     else
-      {:error, _op, reason, _changes} ->
-        Logger.error("[ExecutionDispatcher] create_and_dispatch failed: #{inspect(reason)}")
-        mark_dispatch_failure(task_run_or_id, reason)
-        {:error, reason}
-
       {:error, reason} = err ->
         Logger.error("[ExecutionDispatcher] create_and_dispatch failed: #{inspect(reason)}")
         mark_dispatch_failure(task_run_or_id, reason)
@@ -83,12 +74,36 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   defp validate_workflow(%{workflow_id: nil}), do: {:error, :no_workflow}
   defp validate_workflow(_task), do: :ok
 
-  # Inserts the started StepExecution, advances the TaskRun cursor/status, and
-  # updates task timestamps/derived status in one transaction. The task changeset
-  # is built after the execution insert so derive/1 sees the new execution.
-  defp insert_and_stamp(task, step, task_run, handoff) do
+  defp render_dispatch_prompt(task, step, task_run, handoff) do
+    execution = execution_struct(task, step, task_run, handoff, %{})
+    execution_data = ExecutionHistory.build_execution_data(task.id, execution)
+    context = PromptContext.build_context(task, execution_data, step)
+
+    PromptRenderer.render(step.prompt, context)
+  end
+
+  defp commit_and_broadcast_dispatch(task, step, task_run, handoff, rendered) do
+    case insert_and_stamp(task, step, task_run, handoff, rendered) do
+      {:ok, %{execution: execution, task: task, task_run: updated_task_run}} ->
+        broadcast_dispatch(task, step, execution, rendered, updated_task_run)
+
+      {:error, _op, reason, _changes} ->
+        Logger.error("[ExecutionDispatcher] create_and_dispatch failed: #{inspect(reason)}")
+        mark_dispatch_failure(task_run, reason)
+        {:error, reason}
+    end
+  end
+
+  # Inserts the started StepExecution with its rendered prompt, advances the
+  # TaskRun cursor/status, and updates task timestamps/derived status in one
+  # transaction. The task changeset is built after the execution insert so
+  # derive/1 sees the new execution.
+  defp insert_and_stamp(task, step, task_run, handoff, rendered) do
     Multi.new()
-    |> Multi.insert(:execution, started_execution_changeset(task, step, task_run, handoff))
+    |> Multi.insert(
+      :execution,
+      execution_changeset(task, step, task_run, handoff, %{prompt: rendered})
+    )
     |> Multi.update(:task_run, fn %{execution: execution} ->
       TaskRun.update_changeset(task_run, %{
         status: :executing,
@@ -99,22 +114,45 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
     |> Repo.transaction()
   end
 
-  defp started_execution_changeset(task, step, task_run, handoff) do
-    attrs = %{
+  defp execution_changeset(task, step, task_run, handoff, overrides) do
+    task
+    |> execution_struct(step, task_run, handoff, overrides)
+    |> StepExecution.create_changeset(execution_attrs(task, step, task_run, handoff, overrides))
+  end
+
+  defp execution_struct(task, step, task_run, handoff, overrides) do
+    attrs = execution_attrs(task, step, task_run, handoff, overrides)
+
+    %StepExecution{
+      user_id: task.user_id,
+      project_id: task.project_id,
       task_id: task.id,
       task_run_id: task_run.id,
       workflow_id: task.workflow_id,
       step_id: step.id,
       step_name: step.name,
-      status: "started"
+      status: attrs.status,
+      handoff: attrs[:handoff],
+      prompt: attrs[:prompt],
+      output: attrs[:output]
     }
+  end
 
-    attrs = if is_map(handoff), do: Map.put(attrs, :handoff, handoff), else: attrs
+  defp execution_attrs(task, step, task_run, handoff, overrides) do
+    attrs =
+      Map.merge(
+        %{
+          task_id: task.id,
+          task_run_id: task_run.id,
+          workflow_id: task.workflow_id,
+          step_id: step.id,
+          step_name: step.name,
+          status: "started"
+        },
+        overrides
+      )
 
-    StepExecution.create_changeset(
-      %StepExecution{user_id: task.user_id, project_id: task.project_id},
-      attrs
-    )
+    if is_map(handoff), do: Map.put(attrs, :handoff, handoff), else: attrs
   end
 
   defp task_dispatch_changeset(task) do
@@ -123,6 +161,22 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
     task
     |> Ecto.Changeset.change(changes)
     |> Status.put_status()
+  end
+
+  defp broadcast_dispatch(task, step, execution, rendered, task_run) do
+    Logger.info(
+      "[ExecutionDispatcher] Dispatching execution=#{execution.id} step=#{step.name} " <>
+        "task=#{task.id} task_run=#{task_run.id} prompt_length=#{String.length(rendered)}"
+    )
+
+    Broadcaster.broadcast_run_step(
+      %{execution: execution, step: step, task: task, rendered_prompt: rendered},
+      task.project_id
+    )
+
+    Broadcaster.broadcast_step_execution({:ok, execution}, :step_execution_created)
+
+    {:ok, execution}
   end
 
   defp fetch_and_validate_task_run(%TaskRun{} = task_run, task) do
@@ -153,44 +207,6 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
       true ->
         {:ok, task_run}
     end
-  end
-
-  defp render_and_broadcast(task, step, execution, context, task_run) do
-    with {:ok, rendered} <- PromptRenderer.render(step.prompt, context),
-         {:ok, updated_execution} <-
-           Accounts.StepExecutions.update(execution, %{prompt: rendered}) do
-      Logger.info(
-        "[ExecutionDispatcher] Dispatching execution=#{updated_execution.id} step=#{step.name} " <>
-          "task=#{task.id} task_run=#{task_run.id} prompt_length=#{String.length(rendered)}"
-      )
-
-      Broadcaster.broadcast_run_step(
-        %{execution: updated_execution, step: step, task: task, rendered_prompt: rendered},
-        task.project_id
-      )
-
-      Broadcaster.broadcast_step_execution({:ok, updated_execution}, :step_execution_created)
-
-      {:ok, updated_execution}
-    else
-      {:error, reason} = error ->
-        mark_execution_failed(execution, reason)
-
-        TaskRunLifecycle.mark_failed(task_run, {:dispatch_failed, reason}, %{
-          execution_id: execution.id
-        })
-
-        error
-    end
-  end
-
-  defp mark_execution_failed(execution, reason) do
-    execution
-    |> StepExecution.update_changeset(%{
-      status: "failed",
-      output: "Dispatch failed before daemon execution: #{inspect(reason)}"
-    })
-    |> Repo.update()
   end
 
   defp mark_dispatch_failure(_task_run_or_id, reason)

@@ -7,6 +7,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteDecision do
 
   alias Sacrum.Accounts
   alias Sacrum.Orchestrator.StructuredOutput
+  alias Sacrum.Repo.Schemas.StepExecution
 
   @valid_transition_types ["intra_workflow", "inter_workflow"]
 
@@ -57,7 +58,8 @@ defmodule Sacrum.Orchestrator.Routing.RouteDecision do
   @doc """
   Persists the route decision to the StepExecution record.
 
-  Done before routing so the decision survives downstream failures (forensics).
+  The existing StepExecution schema stores `transition_result` as a string, so
+  the normalized route decision is JSON-encoded for that legacy field.
   """
   @spec persist_route_decision(
           Sacrum.Repo.Schemas.StepExecution.t(),
@@ -65,10 +67,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteDecision do
           String.t()
         ) :: :ok | {:error, term()}
   def persist_route_decision(execution, dest_id, transition_type) do
-    transition_result =
-      Jason.encode!(%{"dest_id" => dest_id, "transition_type" => transition_type})
-
-    case Accounts.StepExecutions.update(execution, %{transition_result: transition_result}) do
+    case Accounts.StepExecutions.update(execution, route_decision_attrs(dest_id, transition_type)) do
       {:ok, _} ->
         :ok
 
@@ -80,6 +79,11 @@ defmodule Sacrum.Orchestrator.Routing.RouteDecision do
 
         {:error, {:route_decision_persist_failed, reason}}
     end
+  end
+
+  @spec route_decision_changeset(StepExecution.t(), String.t(), String.t()) :: Ecto.Changeset.t()
+  def route_decision_changeset(%StepExecution{} = execution, dest_id, transition_type) do
+    StepExecution.update_changeset(execution, route_decision_attrs(dest_id, transition_type))
   end
 
   @doc """
@@ -95,5 +99,12 @@ defmodule Sacrum.Orchestrator.Routing.RouteDecision do
     )
 
     :ok
+  end
+
+  defp route_decision_attrs(dest_id, transition_type) do
+    %{
+      transition_result:
+        Jason.encode!(%{"dest_id" => dest_id, "transition_type" => transition_type})
+    }
   end
 end

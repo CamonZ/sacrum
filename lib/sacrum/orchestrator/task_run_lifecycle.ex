@@ -38,10 +38,11 @@ defmodule Sacrum.Orchestrator.TaskRunLifecycle do
 
   @spec mark_waiting(binary() | TaskRun.t(), binary()) :: {:ok, TaskRun.t()} | {:error, term()}
   def mark_waiting(task_run_or_id, latest_step_execution_id) do
-    update_task_run(task_run_or_id, %{
-      status: :waiting,
-      latest_step_execution_id: latest_step_execution_id
-    })
+    with {:ok, %TaskRun{} = task_run} <- fetch_task_run(task_run_or_id) do
+      task_run
+      |> waiting_changeset(latest_step_execution_id)
+      |> Repo.update()
+    end
   end
 
   @spec mark_stopping(binary() | TaskRun.t()) :: {:ok, TaskRun.t()} | {:error, term()}
@@ -55,7 +56,9 @@ defmodule Sacrum.Orchestrator.TaskRunLifecycle do
   def mark_stopping(%TaskRun{} = task_run) do
     cond do
       TaskRunStatus.stoppable?(task_run.status) ->
-        update_task_run(task_run, %{status: :stopping, stop_requested_at: DateTime.utc_now()})
+        task_run
+        |> stopping_changeset()
+        |> Repo.update()
 
       task_run.status == :stopping ->
         {:ok, task_run}
@@ -67,26 +70,30 @@ defmodule Sacrum.Orchestrator.TaskRunLifecycle do
 
   @spec mark_stopped(binary() | TaskRun.t()) :: {:ok, TaskRun.t()} | {:error, term()}
   def mark_stopped(task_run_or_id) do
-    update_task_run(task_run_or_id, %{status: :stopped, ended_at: DateTime.utc_now()})
+    with {:ok, %TaskRun{} = task_run} <- fetch_task_run(task_run_or_id) do
+      task_run
+      |> stopped_changeset()
+      |> Repo.update()
+    end
   end
 
   @spec mark_completed(binary() | TaskRun.t(), map()) :: {:ok, TaskRun.t()} | {:error, term()}
   def mark_completed(task_run_or_id, attrs \\ %{}) when is_map(attrs) do
-    attrs
-    |> Map.merge(%{status: :completed, ended_at: DateTime.utc_now()})
-    |> then(&update_task_run(task_run_or_id, &1))
+    with {:ok, %TaskRun{} = task_run} <- fetch_task_run(task_run_or_id) do
+      task_run
+      |> completed_changeset(attrs)
+      |> Repo.update()
+    end
   end
 
   @spec mark_failed(binary() | TaskRun.t(), term(), map()) ::
           {:ok, TaskRun.t()} | {:error, term()}
   def mark_failed(task_run_or_id, reason, context \\ %{}) when is_map(context) do
-    update_task_run(task_run_or_id, %{
-      status: :failed,
-      ended_at: DateTime.utc_now(),
-      failure_kind: failure_kind(reason),
-      failure_reason: failure_reason(reason),
-      failure_context: stringify_context(context)
-    })
+    with {:ok, %TaskRun{} = task_run} <- fetch_task_run(task_run_or_id) do
+      task_run
+      |> failed_changeset(reason, context)
+      |> Repo.update()
+    end
   end
 
   @spec mark_failed_if_active(binary() | TaskRun.t(), term(), map()) ::
@@ -99,15 +106,49 @@ defmodule Sacrum.Orchestrator.TaskRunLifecycle do
     end
   end
 
-  defp update_task_run(task_run_or_id, attrs) do
-    with {:ok, %TaskRun{} = task_run} <- fetch_task_run(task_run_or_id) do
-      TaskRuns.update(task_run, attrs)
-    end
+  @spec waiting_changeset(TaskRun.t(), binary()) :: Ecto.Changeset.t()
+  def waiting_changeset(%TaskRun{} = task_run, latest_step_execution_id) do
+    TaskRun.update_changeset(task_run, %{
+      status: :waiting,
+      latest_step_execution_id: latest_step_execution_id
+    })
   end
 
-  defp fetch_task_run(%TaskRun{} = task_run), do: {:ok, task_run}
+  @spec stopping_changeset(TaskRun.t()) :: Ecto.Changeset.t()
+  def stopping_changeset(%TaskRun{} = task_run) do
+    TaskRun.update_changeset(task_run, %{status: :stopping, stop_requested_at: DateTime.utc_now()})
+  end
 
-  defp fetch_task_run(task_run_id) when is_binary(task_run_id) do
+  @spec stopped_changeset(TaskRun.t(), map()) :: Ecto.Changeset.t()
+  def stopped_changeset(%TaskRun{} = task_run, attrs \\ %{}) when is_map(attrs) do
+    attrs
+    |> Map.merge(%{status: :stopped, ended_at: DateTime.utc_now()})
+    |> then(&TaskRun.update_changeset(task_run, &1))
+  end
+
+  @spec completed_changeset(TaskRun.t(), map()) :: Ecto.Changeset.t()
+  def completed_changeset(%TaskRun{} = task_run, attrs \\ %{}) when is_map(attrs) do
+    attrs
+    |> Map.merge(%{status: :completed, ended_at: DateTime.utc_now()})
+    |> then(&TaskRun.update_changeset(task_run, &1))
+  end
+
+  @spec failed_changeset(TaskRun.t(), term(), map()) :: Ecto.Changeset.t()
+  def failed_changeset(%TaskRun{} = task_run, reason, context \\ %{}) when is_map(context) do
+    TaskRun.update_changeset(task_run, %{
+      status: :failed,
+      ended_at: DateTime.utc_now(),
+      failure_kind: failure_kind(reason),
+      failure_reason: failure_reason(reason),
+      failure_context: stringify_context(context)
+    })
+  end
+
+  @spec fetch_task_run(binary() | TaskRun.t()) ::
+          {:ok, TaskRun.t()} | {:error, :task_run_not_found}
+  def fetch_task_run(%TaskRun{} = task_run), do: {:ok, task_run}
+
+  def fetch_task_run(task_run_id) when is_binary(task_run_id) do
     case Repo.get(TaskRun, task_run_id) do
       nil -> {:error, :task_run_not_found}
       task_run -> {:ok, task_run}

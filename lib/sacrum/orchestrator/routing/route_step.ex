@@ -11,10 +11,20 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
 
   import Ecto.Query
 
-  alias Sacrum.Orchestrator.{ExecutionPool, FSMData, OutputValidator}
+  alias Sacrum.Orchestrator.{
+    ExecutionPool,
+    FSMData,
+    OutputValidator,
+    TaskCompletion,
+    TaskRunLifecycle,
+    WorkflowGraph
+  }
+
   alias Sacrum.Orchestrator.Routing.{InterWorkflow, IntraWorkflow, RouteDecision}
   alias Sacrum.Repo
+  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.StepExecution
+  alias Sacrum.Repo.TaskWorkflows
 
   @doc """
   Main entry point for handling a route step transition. Returns a gen_statem
@@ -32,19 +42,21 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
          :ok <- OutputValidator.validate_routing_contract(decoded),
          {:ok, %{dest_id: dest_id, transition_type: transition_type, handoff: handoff}} <-
            RouteDecision.extract_routing_data(decoded),
-         :ok <-
-           RouteDecision.log_route_decision(
-             task_id,
-             execution.id,
-             dest_id,
-             transition_type,
-             handoff
-           ),
-         :ok <- RouteDecision.persist_route_decision(execution, dest_id, transition_type),
-         {:ok, updated_task} <-
-           route_task_to_destination(data, dest_id, transition_type, handoff) do
+         {:ok, route_plan} <- prepare_route_plan(data, dest_id, transition_type, handoff),
+         {:ok, %{task: updated_task, route_execution: route_execution}} <-
+           commit_route_transition(data, execution, dest_id, transition_type, route_plan) do
+      RouteDecision.log_route_decision(
+        task_id,
+        execution.id,
+        dest_id,
+        transition_type,
+        handoff
+      )
+
       ExecutionPool.release_slot(data.slot_id)
       new_data = %{data | slot_id: nil, pending_handoff: handoff}
+      Broadcaster.broadcast_step_execution({:ok, route_execution}, :step_execution_status_changed)
+      Broadcaster.broadcast({:ok, updated_task}, :task_updated, :project)
 
       case transition_type do
         "intra_workflow" ->
@@ -64,11 +76,86 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
     end
   end
 
-  defp route_task_to_destination(data, dest_id, "intra_workflow", handoff),
-    do: IntraWorkflow.handle_intra_workflow_routing(data, dest_id, handoff)
+  defp prepare_route_plan(data, dest_id, "intra_workflow", handoff) do
+    with {:ok, _dest_step} <- IntraWorkflow.validate_destination_step(data, dest_id),
+         :ok <- IntraWorkflow.validate_step_transition_exists(data.task.current_step_id, dest_id),
+         {:ok, changeset} <-
+           TaskWorkflows.advance_to_step_changeset(data.task, dest_id,
+             skip_orchestrator_check: true
+           ) do
+      preview_task = Ecto.Changeset.apply_changes(changeset)
+      decision = TaskCompletion.next_state_decision(preview_task.current_step_id, data)
 
-  defp route_task_to_destination(data, dest_id, "inter_workflow", handoff),
-    do: InterWorkflow.handle_inter_workflow_routing(data, dest_id, handoff)
+      {:ok, %{task_changeset: changeset, decision: decision, handoff: handoff}}
+    end
+  end
+
+  defp prepare_route_plan(data, dest_id, "inter_workflow", handoff) do
+    with {:ok, dest_workflow} <- InterWorkflow.validate_destination_workflow(data, dest_id),
+         :ok <- InterWorkflow.validate_workflow_transition_exists(data.task.workflow_id, dest_id),
+         target_step_id <- InterWorkflow.get_target_step_for_workflow_transition(data, dest_id),
+         {:ok, changeset} <-
+           InterWorkflow.assign_destination_workflow_changeset(
+             data.task,
+             dest_workflow,
+             target_step_id,
+             handoff
+           ),
+         preview_task = Ecto.Changeset.apply_changes(changeset),
+         {:ok, workflow, steps, transitions} <-
+           WorkflowGraph.load_workflow_and_graph(data.user_id, preview_task) do
+      decision_data = %{
+        data
+        | task: preview_task,
+          workflow: workflow,
+          steps: steps,
+          transitions: transitions
+      }
+
+      decision = TaskCompletion.next_state_decision(preview_task.current_step_id, decision_data)
+
+      {:ok, %{task_changeset: changeset, decision: decision, handoff: handoff}}
+    end
+  end
+
+  defp commit_route_transition(data, execution, dest_id, transition_type, route_plan) do
+    Repo.transaction(fn ->
+      with {:ok, route_execution} <-
+             execution
+             |> RouteDecision.route_decision_changeset(dest_id, transition_type)
+             |> Repo.update(),
+           {:ok, updated_task} <- Repo.update(route_plan.task_changeset),
+           {:ok, changes} <-
+             maybe_mark_task_run_completed(data, route_plan.decision, %{
+               route_execution: route_execution,
+               task: updated_task
+             }) do
+        changes
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp maybe_mark_task_run_completed(_data, {:next_state, _state}, changes), do: {:ok, changes}
+  defp maybe_mark_task_run_completed(_data, {:failed, _reason}, changes), do: {:ok, changes}
+
+  defp maybe_mark_task_run_completed(data, {:stop, _reason, attrs}, changes) do
+    case Map.get(data, :task_run_id) do
+      nil -> {:ok, changes}
+      task_run_id -> mark_task_run_completed(task_run_id, attrs, changes)
+    end
+  end
+
+  defp mark_task_run_completed(task_run_id, attrs, changes) do
+    with {:ok, task_run} <- TaskRunLifecycle.fetch_task_run(task_run_id),
+         {:ok, task_run} <-
+           task_run
+           |> TaskRunLifecycle.completed_changeset(attrs)
+           |> Repo.update() do
+      {:ok, Map.put(changes, :task_run, task_run)}
+    end
+  end
 
   defp get_latest_completed_execution(task_id) do
     query =
