@@ -2,6 +2,7 @@ defmodule SacrumWeb.Graphql.TaskRunApiTest do
   use SacrumWeb.ConnCase
 
   alias Sacrum.Accounts
+  alias Sacrum.Repo.TaskDependencies
 
   defp graphql(conn, query) do
     post(conn, "/graphql", %{"query" => query})
@@ -32,6 +33,59 @@ defmodule SacrumWeb.Graphql.TaskRunApiTest do
     {:ok, task} = Sacrum.Repo.TaskWorkflows.assign_workflow(task, workflow)
 
     {task, workflow}
+  end
+
+  defp run_controls_result(conn, user, task_id) do
+    result =
+      graphql_result(conn, user, """
+      {
+        task(id: "#{task_id}") {
+          id
+          runControls {
+            runnable
+            stoppable
+            disabledReasonCode
+            disabledReason
+            activeRun {
+              id
+              taskId
+              status
+              latestStepExecutionId
+            }
+          }
+        }
+      }
+      """)
+
+    assert result["errors"] == nil
+    result["data"]["task"]["runControls"]
+  end
+
+  defp create_step_execution(user, task, task_run_id, status) do
+    Accounts.StepExecutions.insert(user.id, %{
+      task_id: task.id,
+      task_run_id: task_run_id,
+      project_id: task.project_id,
+      workflow_id: task.workflow_id,
+      step_name: "execute",
+      status: status
+    })
+  end
+
+  defp assert_runnable(controls) do
+    assert controls["runnable"] == true
+    assert controls["stoppable"] == false
+    assert controls["disabledReasonCode"] == nil
+    assert controls["disabledReason"] == nil
+    assert controls["activeRun"] == nil
+  end
+
+  defp assert_disabled(controls, reason_code) do
+    assert controls["runnable"] == false
+    assert controls["stoppable"] == false
+    assert controls["disabledReasonCode"] == reason_code
+    assert is_binary(controls["disabledReason"])
+    assert controls["activeRun"] == nil
   end
 
   defp stop_if_running(task_id) do
@@ -274,6 +328,128 @@ defmodule SacrumWeb.Graphql.TaskRunApiTest do
     end
   end
 
+  describe "runControls GraphQL contract" do
+    setup [:setup_user_and_project]
+
+    test "returns stoppable controls for actionable active TaskRun lifecycle states", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      for status <- [:queued, :executing, :waiting] do
+        task = create_task(user, project, "Controls #{status}")
+        {:ok, run} = Accounts.TaskRuns.insert(user.id, project.id, task.id, %{status: status})
+
+        controls = run_controls_result(conn, user, task.id)
+
+        assert controls["runnable"] == false
+        assert controls["stoppable"] == true
+        assert controls["disabledReasonCode"] == "active_run"
+        assert controls["disabledReason"] == "Task already has an active run"
+        assert controls["activeRun"]["id"] == run.id
+        assert controls["activeRun"]["taskId"] == task.id
+        assert controls["activeRun"]["status"] == Atom.to_string(status)
+      end
+    end
+
+    test "returns stable disabled controls for stopping TaskRuns", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      task = create_task(user, project, "Controls stopping")
+      {:ok, run} = Accounts.TaskRuns.insert(user.id, project.id, task.id, %{status: :stopping})
+
+      controls = run_controls_result(conn, user, task.id)
+
+      assert controls["runnable"] == false
+      assert controls["stoppable"] == false
+      assert controls["disabledReasonCode"] == "stopping"
+      assert controls["disabledReason"] == "Task run is already stopping"
+      assert controls["activeRun"]["id"] == run.id
+      assert controls["activeRun"]["taskId"] == task.id
+      assert controls["activeRun"]["status"] == "stopping"
+    end
+
+    test "returns runnable controls with no active run and reason codes for disabled tasks", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {runnable_task, _workflow} = create_workflow_task(user, project)
+      assert_runnable(run_controls_result(conn, user, runnable_task.id))
+
+      completed = create_task(user, project, "Completed controls")
+      {:ok, completed} = Accounts.Tasks.update(completed, %{completed_at: DateTime.utc_now()})
+
+      archived = create_task(user, project, "Archived controls")
+      {:ok, archived} = Accounts.Tasks.update(archived, %{archived: true})
+
+      blocker = create_task(user, project, "Controls blocker")
+      blocked = create_task(user, project, "Blocked controls")
+      {:ok, _dependency} = TaskDependencies.add_dependency(blocked, blocker)
+
+      assert_disabled(run_controls_result(conn, user, completed.id), "completed")
+      assert_disabled(run_controls_result(conn, user, archived.id), "archived")
+      assert_disabled(run_controls_result(conn, user, blocked.id), "blocked")
+    end
+
+    test "keeps Stop state during active retry gaps with a latest failed step", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {task, _workflow} = create_workflow_task(user, project)
+      {:ok, run} = Accounts.TaskRuns.insert(user.id, project.id, task.id, %{status: :queued})
+      {:ok, execution} = create_step_execution(user, task, run.id, "failed")
+      {:ok, _run} = Accounts.TaskRuns.update(run, %{latest_step_execution_id: execution.id})
+
+      controls = run_controls_result(conn, user, task.id)
+
+      assert controls["runnable"] == false
+      assert controls["stoppable"] == true
+      assert controls["disabledReasonCode"] == "active_run"
+      assert controls["activeRun"]["id"] == run.id
+      assert controls["activeRun"]["latestStepExecutionId"] == execution.id
+    end
+
+    test "calling stopRun twice leaves runControls stable for a fresh query", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {task, _workflow} = create_workflow_task(user, project)
+      {:ok, run} = Accounts.TaskRuns.insert(user.id, project.id, task.id, %{status: :queued})
+
+      first_stop =
+        graphql_result(conn, user, """
+        mutation {
+          stopRun(taskId: "#{task.id}") {
+            id
+            status
+          }
+        }
+        """)
+
+      second_stop =
+        graphql_result(conn, user, """
+        mutation {
+          stopRun(taskId: "#{task.id}") {
+            id
+            status
+          }
+        }
+        """)
+
+      assert first_stop["errors"] == nil
+      assert first_stop["data"]["stopRun"]["id"] == run.id
+      assert first_stop["data"]["stopRun"]["status"] == "stopped"
+      assert second_stop["errors"] == nil
+      assert second_stop["data"]["stopRun"] == nil
+      assert_runnable(run_controls_result(conn, user, task.id))
+    end
+  end
+
   describe "TaskRun GraphQL mutations" do
     setup [:setup_user_and_project]
 
@@ -395,6 +571,7 @@ defmodule SacrumWeb.Graphql.TaskRunApiTest do
     setup [:setup_user_and_project]
 
     test "broadcasts creation and update payloads for realtime clients", %{
+      conn: conn,
       user: user,
       project: project
     } do
@@ -405,20 +582,37 @@ defmodule SacrumWeb.Graphql.TaskRunApiTest do
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "task_run_created",
-        payload: %{id: id, task_id: task_id, status: "queued"}
+        payload: %{
+          id: id,
+          task_id: task_id,
+          status: "queued",
+          run_controls: created_controls
+        }
       }
 
       assert id == run.id
       assert task_id == task.id
+      assert_channel_controls_converge(created_controls, run_controls_result(conn, user, task.id))
 
       {:ok, updated} = Accounts.TaskRuns.update(run, %{status: :waiting})
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "task_run_updated",
-        payload: %{id: id, status: "waiting"}
+        payload: %{id: id, status: "waiting", run_controls: updated_controls}
       }
 
       assert id == updated.id
+      assert_channel_controls_converge(updated_controls, run_controls_result(conn, user, task.id))
     end
+  end
+
+  defp assert_channel_controls_converge(channel_controls, graphql_controls) do
+    assert channel_controls.runnable == graphql_controls["runnable"]
+    assert channel_controls.stoppable == graphql_controls["stoppable"]
+    assert channel_controls.disabled_reason_code == graphql_controls["disabledReasonCode"]
+    assert channel_controls.disabled_reason == graphql_controls["disabledReason"]
+    assert channel_controls.active_run.id == graphql_controls["activeRun"]["id"]
+    assert channel_controls.active_run.task_id == graphql_controls["activeRun"]["taskId"]
+    assert channel_controls.active_run.status == graphql_controls["activeRun"]["status"]
   end
 end

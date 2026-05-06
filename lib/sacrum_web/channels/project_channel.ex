@@ -2,6 +2,7 @@ defmodule SacrumWeb.ProjectChannel do
   use Phoenix.Channel
 
   alias Sacrum.Accounts.Projects
+  alias Sacrum.TaskRuns.RunControls
   alias Sacrum.TaskRuns.Status, as: TaskRunStatus
 
   @valid_client_types ~w(default daemon)
@@ -409,6 +410,14 @@ defmodule SacrumWeb.ProjectChannel do
   end
 
   defp task_run_payload(task_run) do
+    task_run
+    |> task_run_base_payload()
+    |> Map.put(:run_controls, task_run_controls_payload(task_run))
+  end
+
+  defp task_run_base_payload(nil), do: nil
+
+  defp task_run_base_payload(task_run) do
     %{
       id: task_run.id,
       task_id: task_run.task_id,
@@ -426,6 +435,18 @@ defmodule SacrumWeb.ProjectChannel do
       inserted_at: task_run.inserted_at,
       updated_at: task_run.updated_at
     }
+  end
+
+  defp task_run_controls_payload(task_run) do
+    case RunControls.for_task_run(task_run) do
+      {:ok, controls} ->
+        controls
+        |> RunControls.to_payload()
+        |> Map.update!(:active_run, &task_run_base_payload/1)
+
+      {:error, :not_found} ->
+        nil
+    end
   end
 
   defp session_log_payload(log) do
