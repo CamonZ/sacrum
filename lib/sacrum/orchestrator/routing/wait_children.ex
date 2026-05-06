@@ -18,6 +18,7 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
   alias Sacrum.Orchestrator.Routing.WaitChildren.ChildRuns
   alias Sacrum.Orchestrator.TaskRuns.{Lookup, StateTransitions}
   alias Sacrum.Repo
+  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.{StepExecution, Task, TaskRun, WorkflowStep}
   alias Sacrum.Repo.TaskHierarchy
   alias Sacrum.Tasks.Status
@@ -109,6 +110,8 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
            |> Repo.update(),
          {:ok, updated_task} <- Repo.update(task_status_changeset(data.task)),
          {:ok, child_runs} <- get_or_create_child_runs(children, updated_task_run, execution.id) do
+      Broadcaster.broadcast_task_run({:ok, updated_task_run}, :task_run_updated)
+
       %{
         execution: execution,
         task_run: updated_task_run,

@@ -26,6 +26,8 @@ defmodule Sacrum.Repo.Broadcaster do
     workflow_transition_deleted: :broadcast_workflow_transition_deleted,
     step_execution_created: :broadcast_step_execution_created,
     step_execution_status_changed: :broadcast_step_execution_status_changed,
+    task_run_created: :broadcast_task_run_created,
+    task_run_updated: :broadcast_task_run_updated,
     session_log_created: :broadcast_session_log_created,
     section_created: :broadcast_section_created,
     section_updated: :broadcast_section_updated,
@@ -152,6 +154,13 @@ defmodule Sacrum.Repo.Broadcaster do
   end
 
   def broadcast_step_execution({:error, _} = error, _event), do: error
+
+  @doc """
+  Broadcast a TaskRun lifecycle change.
+  """
+  @spec broadcast_task_run({:ok, struct()} | {:error, term()}, atom()) ::
+          {:ok, struct()} | {:error, term()}
+  def broadcast_task_run(result, event), do: broadcast(result, event, :project)
 
   @doc """
   Broadcast a session log by looking up its step execution and task to get the project.

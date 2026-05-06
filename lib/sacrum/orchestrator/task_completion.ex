@@ -151,8 +151,12 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
     |> Completion.changeset(attrs)
     |> Repo.update()
     |> case do
-      {:ok, task_run} -> {:ok, Map.put(changes, :task_run, task_run)}
-      {:error, reason} -> {:error, reason}
+      {:ok, task_run} ->
+        Broadcaster.broadcast_task_run({:ok, task_run}, :task_run_updated)
+        {:ok, Map.put(changes, :task_run, task_run)}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 end

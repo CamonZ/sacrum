@@ -5,6 +5,7 @@ defmodule Sacrum.Orchestrator.TaskRuns.Failure do
 
   alias Sacrum.Orchestrator.TaskRuns.Lookup
   alias Sacrum.Repo
+  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.TaskRun
   alias Sacrum.TaskRuns.Status, as: TaskRunStatus
 
@@ -25,6 +26,7 @@ defmodule Sacrum.Orchestrator.TaskRuns.Failure do
     task_run
     |> changeset(reason, context)
     |> Repo.update()
+    |> Broadcaster.broadcast_task_run(:task_run_updated)
   end
 
   @spec changeset(TaskRun.t(), term(), map()) :: Ecto.Changeset.t()

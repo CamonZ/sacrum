@@ -458,6 +458,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
            task_run
            |> Completion.changeset(attrs)
            |> Repo.update() do
+      Broadcaster.broadcast_task_run({:ok, task_run}, :task_run_updated)
       {:ok, Map.put(changes, :task_run, task_run)}
     end
   end

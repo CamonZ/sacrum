@@ -50,6 +50,7 @@ defmodule SacrumWeb.Graphql.Schema do
       |> Dataloader.add_source(Sacrum.Accounts.StepTransitions, Dataloader.Ecto.new(Sacrum.Repo))
       |> Dataloader.add_source(Sacrum.Accounts.StepExecutions, Dataloader.Ecto.new(Sacrum.Repo))
       |> Dataloader.add_source(Sacrum.Accounts.SessionLogs, Dataloader.Ecto.new(Sacrum.Repo))
+      |> Dataloader.add_source(Sacrum.Accounts.TaskRuns, Dataloader.Ecto.new(Sacrum.Repo))
 
     Map.put(ctx, :loader, loader)
   end

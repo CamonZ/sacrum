@@ -2,6 +2,7 @@ defmodule SacrumWeb.ProjectChannel do
   use Phoenix.Channel
 
   alias Sacrum.Accounts.Projects
+  alias Sacrum.TaskRuns.Status, as: TaskRunStatus
 
   @valid_client_types ~w(default daemon)
   @daemon_events ~w(run_step cancel_step)
@@ -22,6 +23,8 @@ defmodule SacrumWeb.ProjectChannel do
     "workflow_transition_deleted",
     "step_execution_created",
     "step_execution_status_changed",
+    "task_run_created",
+    "task_run_updated",
     "session_log_created",
     "section_created",
     "section_updated",
@@ -217,6 +220,26 @@ defmodule SacrumWeb.ProjectChannel do
     )
   end
 
+  # TaskRun broadcasts
+
+  @spec broadcast_task_run_created(String.t(), map()) :: :ok | {:error, term()}
+  def broadcast_task_run_created(project_id, task_run) do
+    SacrumWeb.Endpoint.broadcast(
+      "project:#{project_id}",
+      "task_run_created",
+      task_run_payload(task_run)
+    )
+  end
+
+  @spec broadcast_task_run_updated(String.t(), map()) :: :ok | {:error, term()}
+  def broadcast_task_run_updated(project_id, task_run) do
+    SacrumWeb.Endpoint.broadcast(
+      "project:#{project_id}",
+      "task_run_updated",
+      task_run_payload(task_run)
+    )
+  end
+
   # Daemon broadcasts
 
   @spec broadcast_run_step(String.t(), map()) :: :ok | {:error, term()}
@@ -365,6 +388,7 @@ defmodule SacrumWeb.ProjectChannel do
     %{
       id: execution.id,
       task_id: execution.task_id,
+      task_run_id: execution.task_run_id,
       workflow_id: execution.workflow_id,
       step_name: execution.step_name,
       status: execution.status,
@@ -381,6 +405,26 @@ defmodule SacrumWeb.ProjectChannel do
       handoff: execution.handoff,
       inserted_at: execution.inserted_at,
       updated_at: execution.updated_at
+    }
+  end
+
+  defp task_run_payload(task_run) do
+    %{
+      id: task_run.id,
+      task_id: task_run.task_id,
+      project_id: task_run.project_id,
+      status: TaskRunStatus.wire_value(task_run.status),
+      started_at: task_run.started_at,
+      ended_at: task_run.ended_at,
+      stop_requested_at: task_run.stop_requested_at,
+      latest_step_execution_id: task_run.latest_step_execution_id,
+      outcome_kind: task_run.outcome_kind,
+      outcome_context: task_run.outcome_context,
+      parent_task_run_id: task_run.parent_task_run_id,
+      root_task_run_id: task_run.root_task_run_id,
+      triggered_by_step_execution_id: task_run.triggered_by_step_execution_id,
+      inserted_at: task_run.inserted_at,
+      updated_at: task_run.updated_at
     }
   end
 

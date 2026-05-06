@@ -6,6 +6,7 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren.ChildRuns do
   alias Sacrum.Accounts.TaskRuns
   alias Sacrum.Orchestrator.TaskRuns.Root
   alias Sacrum.Repo
+  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.{Task, TaskRun}
 
   @spec get_or_create(Task.t(), TaskRun.t(), String.t()) :: {:ok, TaskRun.t()} | {:error, term()}
@@ -71,8 +72,12 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren.ChildRuns do
     |> TaskRun.lineage_changeset(%{triggered_by_step_execution_id: trigger_id})
     |> Repo.update()
     |> case do
-      {:ok, task_run} -> Root.validate_dispatchable(task_run)
-      error -> error
+      {:ok, task_run} ->
+        Broadcaster.broadcast_task_run({:ok, task_run}, :task_run_updated)
+        Root.validate_dispatchable(task_run)
+
+      error ->
+        error
     end
   end
 
