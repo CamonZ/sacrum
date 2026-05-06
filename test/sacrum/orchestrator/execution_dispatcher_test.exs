@@ -848,8 +848,8 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       failed_run = Sacrum.Repo.get!(Sacrum.Repo.Schemas.TaskRun, task_run.id)
       assert failed_run.status == :failed
       assert %DateTime{} = failed_run.ended_at
-      assert failed_run.failure_kind == "dispatch_failed"
-      assert failed_run.failure_reason =~ "not_found"
+      assert failed_run.outcome_kind == "dispatch_failed"
+      assert failed_run.outcome_context["reason"] == "not_found"
     end
 
     test "persists rendered prompt on the execution row and broadcasts the same text", ctx do

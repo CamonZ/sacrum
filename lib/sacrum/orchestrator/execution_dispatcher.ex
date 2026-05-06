@@ -19,12 +19,15 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
 
   alias Ecto.Multi
   alias Sacrum.Accounts
-  alias Sacrum.Orchestrator.{ExecutionHistory, PromptContext, PromptRenderer, TaskRunLifecycle}
+  alias Sacrum.Orchestrator.{ExecutionHistory, PromptContext, PromptRenderer}
+  alias Sacrum.Orchestrator.TaskRuns.Failure
   alias Sacrum.Repo
   alias Sacrum.Repo.Broadcaster
-  alias Sacrum.Repo.Schemas.{StepExecution, TaskRun}
+  alias Sacrum.Repo.Schemas.{StepExecution, Task, TaskRun, WorkflowStep}
   alias Sacrum.TaskRuns.Status, as: TaskRunStatus
   alias Sacrum.Tasks.Status
+
+  @typep handoff :: map() | nil
 
   defguardp task_run_lookup_error(reason)
             when reason in [
@@ -64,6 +67,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
     end
   end
 
+  @spec fetch_step(binary(), binary()) :: {:ok, WorkflowStep.t()} | {:error, term()}
   defp fetch_step(user_id, step_id) do
     Accounts.WorkflowSteps.get_by(user_id,
       conditions: [id: step_id],
@@ -71,9 +75,12 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
     )
   end
 
+  @spec validate_workflow(map()) :: :ok | {:error, :no_workflow}
   defp validate_workflow(%{workflow_id: nil}), do: {:error, :no_workflow}
   defp validate_workflow(_task), do: :ok
 
+  @spec render_dispatch_prompt(Task.t(), WorkflowStep.t(), TaskRun.t(), handoff()) ::
+          {:ok, String.t()} | {:error, term()}
   defp render_dispatch_prompt(task, step, task_run, handoff) do
     execution = execution_struct(task, step, task_run, handoff, %{})
     execution_data = ExecutionHistory.build_execution_data(task.id, execution)
@@ -82,6 +89,14 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
     PromptRenderer.render(step.prompt, context)
   end
 
+  @spec commit_and_broadcast_dispatch(
+          Task.t(),
+          WorkflowStep.t(),
+          TaskRun.t(),
+          handoff(),
+          String.t()
+        ) ::
+          {:ok, StepExecution.t()} | {:error, term()}
   defp commit_and_broadcast_dispatch(task, step, task_run, handoff, rendered) do
     case insert_and_stamp(task, step, task_run, handoff, rendered) do
       {:ok, %{execution: execution, task: task, task_run: updated_task_run}} ->
@@ -98,6 +113,8 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   # TaskRun cursor/status, and updates task timestamps/derived status in one
   # transaction. The task changeset is built after the execution insert so
   # derive/1 sees the new execution.
+  @spec insert_and_stamp(Task.t(), WorkflowStep.t(), TaskRun.t(), handoff(), String.t()) ::
+          {:ok, map()} | {:error, atom(), term(), map()}
   defp insert_and_stamp(task, step, task_run, handoff, rendered) do
     Multi.new()
     |> Multi.insert(
@@ -114,12 +131,16 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
     |> Repo.transaction()
   end
 
+  @spec execution_changeset(Task.t(), WorkflowStep.t(), TaskRun.t(), handoff(), map()) ::
+          Ecto.Changeset.t()
   defp execution_changeset(task, step, task_run, handoff, overrides) do
     task
     |> execution_struct(step, task_run, handoff, overrides)
     |> StepExecution.create_changeset(execution_attrs(task, step, task_run, handoff, overrides))
   end
 
+  @spec execution_struct(Task.t(), WorkflowStep.t(), TaskRun.t(), handoff(), map()) ::
+          StepExecution.t()
   defp execution_struct(task, step, task_run, handoff, overrides) do
     attrs = execution_attrs(task, step, task_run, handoff, overrides)
 
@@ -138,6 +159,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
     }
   end
 
+  @spec execution_attrs(Task.t(), WorkflowStep.t(), TaskRun.t(), handoff(), map()) :: map()
   defp execution_attrs(task, step, task_run, handoff, overrides) do
     attrs =
       Map.merge(
@@ -155,6 +177,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
     if is_map(handoff), do: Map.put(attrs, :handoff, handoff), else: attrs
   end
 
+  @spec task_dispatch_changeset(Task.t()) :: Ecto.Changeset.t()
   defp task_dispatch_changeset(task) do
     changes = if is_nil(task.started_at), do: %{started_at: DateTime.utc_now()}, else: %{}
 
@@ -163,6 +186,8 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
     |> Status.put_status()
   end
 
+  @spec broadcast_dispatch(Task.t(), WorkflowStep.t(), StepExecution.t(), String.t(), TaskRun.t()) ::
+          {:ok, StepExecution.t()}
   defp broadcast_dispatch(task, step, execution, rendered, task_run) do
     Logger.info(
       "[ExecutionDispatcher] Dispatching execution=#{execution.id} step=#{step.name} " <>
@@ -179,6 +204,8 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
     {:ok, execution}
   end
 
+  @spec fetch_and_validate_task_run(TaskRun.t() | binary(), Task.t()) ::
+          {:ok, TaskRun.t()} | {:error, term()}
   defp fetch_and_validate_task_run(%TaskRun{} = task_run, task) do
     validate_task_run(task_run, task)
   end
@@ -190,6 +217,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
     end
   end
 
+  @spec validate_task_run(TaskRun.t(), Task.t()) :: {:ok, TaskRun.t()} | {:error, term()}
   defp validate_task_run(%TaskRun{} = task_run, task) do
     cond do
       task_run.user_id != task.user_id ->
@@ -209,6 +237,8 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
     end
   end
 
+  @spec mark_dispatch_failure(term(), term()) ::
+          :ok | {:ok, TaskRun.t() | :unchanged} | {:error, term()}
   defp mark_dispatch_failure(_task_run_or_id, reason)
        when task_run_lookup_error(reason),
        do: :ok
@@ -218,13 +248,14 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   defp mark_dispatch_failure(task_run_or_id, reason) do
     case fetch_task_run_for_failure(task_run_or_id) do
       {:ok, task_run} ->
-        TaskRunLifecycle.mark_failed_if_active(task_run, {:dispatch_failed, reason})
+        Failure.mark_if_active(task_run, {:dispatch_failed, reason})
 
       {:error, _reason} ->
         :ok
     end
   end
 
+  @spec fetch_task_run_for_failure(term()) :: {:ok, TaskRun.t()} | {:error, term()}
   defp fetch_task_run_for_failure(%TaskRun{} = task_run), do: {:ok, task_run}
 
   defp fetch_task_run_for_failure(task_run_id) when is_binary(task_run_id) do

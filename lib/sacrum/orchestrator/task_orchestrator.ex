@@ -30,15 +30,22 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     Retry,
     Scheduler,
     TaskCompletion,
-    TaskRunLifecycle,
     WorkflowGraph
   }
 
   alias Sacrum.Orchestrator.Routing.{RouteStep, WaitChildren}
+  alias Sacrum.Orchestrator.TaskRuns.{Completion, Failure, Lookup, Root}
   alias Sacrum.Repo
   alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.{StepExecution, Task}
   alias Sacrum.Repo.TaskWorkflows
+
+  @typep fsm_transition ::
+           :keep_state_and_data
+           | {:keep_state, FSMData.t()}
+           | {:keep_state, FSMData.t(), list()}
+           | {:next_state, atom(), FSMData.t()}
+           | {:stop, atom(), FSMData.t()}
 
   @spec start_link(keyword()) :: {:ok, pid()} | {:error, term()}
   def start_link(opts) do
@@ -310,6 +317,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
 
   # ===== TRANSITION HANDLERS =====
 
+  @spec handle_wait_children_transition(FSMData.t(), struct()) :: fsm_transition()
   defp handle_wait_children_transition(data, current_step) do
     task_id = data.task.id
     next_transitions = WorkflowGraph.get_outgoing_transitions(data, current_step.id)
@@ -343,6 +351,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     end
   end
 
+  @spec handle_single_transition_step(FSMData.t(), struct()) :: fsm_transition()
   defp handle_single_transition_step(data, current_step) do
     task_id = data.task.id
     next_transitions = WorkflowGraph.get_outgoing_transitions(data, current_step.id)
@@ -373,6 +382,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     end
   end
 
+  @spec commit_wait_children_transition(FSMData.t(), binary()) :: {:ok, map()} | {:error, term()}
   defp commit_wait_children_transition(data, next_step_id) do
     decision = TaskCompletion.next_state_decision(next_step_id, data)
 
@@ -387,6 +397,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     end)
   end
 
+  @spec commit_task_step_transition(FSMData.t(), binary()) :: {:ok, map()} | {:error, term()}
   defp commit_task_step_transition(data, next_step_id) do
     decision = TaskCompletion.next_state_decision(next_step_id, data)
 
@@ -400,6 +411,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     end)
   end
 
+  @spec maybe_complete_waiting_execution(binary(), map()) :: {:ok, map()} | {:error, term()}
   defp maybe_complete_waiting_execution(task_id, changes) do
     case latest_waiting_execution(task_id) do
       nil ->
@@ -413,6 +425,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     end
   end
 
+  @spec advance_task_step(FSMData.t(), binary(), map()) :: {:ok, map()} | {:error, term()}
   defp advance_task_step(data, next_step_id, changes) do
     with {:ok, changeset} <-
            TaskWorkflows.advance_to_step_changeset(data.task, next_step_id,
@@ -423,6 +436,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     end
   end
 
+  @spec maybe_mark_task_run_completed(FSMData.t(), tuple(), map()) ::
+          {:ok, map()} | {:error, term()}
   defp maybe_mark_task_run_completed(_data, {:next_state, _state}, changes), do: {:ok, changes}
   defp maybe_mark_task_run_completed(_data, {:failed, _reason}, changes), do: {:ok, changes}
 
@@ -436,29 +451,34 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     end
   end
 
+  @spec mark_task_run_completed(binary(), map(), map()) :: {:ok, map()} | {:error, term()}
   defp mark_task_run_completed(task_run_id, attrs, changes) do
-    with {:ok, task_run} <- TaskRunLifecycle.fetch_task_run(task_run_id),
+    with {:ok, task_run} <- Lookup.fetch(task_run_id),
          {:ok, task_run} <-
            task_run
-           |> TaskRunLifecycle.completed_changeset(attrs)
+           |> Completion.changeset(attrs)
            |> Repo.update() do
       {:ok, Map.put(changes, :task_run, task_run)}
     end
   end
 
+  @spec put_transaction_change({:ok, term()} | {:error, term()}, map(), atom()) ::
+          {:ok, map()} | {:error, term()}
   defp put_transaction_change({:ok, value}, changes, key), do: {:ok, Map.put(changes, key, value)}
   defp put_transaction_change({:error, reason}, _changes, _key), do: {:error, reason}
 
   # ===== PRIVATE HELPERS =====
 
+  @spec ensure_task_run_id(Task.t(), binary() | nil) :: {:ok, binary()} | {:error, term()}
   defp ensure_task_run_id(_task, task_run_id) when is_binary(task_run_id), do: {:ok, task_run_id}
 
   defp ensure_task_run_id(task, nil) do
-    with {:ok, task_run} <- TaskRunLifecycle.get_or_create_root_run(task) do
+    with {:ok, task_run} <- Root.get_or_create(task) do
       {:ok, task_run.id}
     end
   end
 
+  @spec mark_run_failed_if_active(map(), term(), map()) :: :ok
   defp mark_run_failed_if_active(%{task_run_id: nil}, _reason, _context), do: :ok
 
   defp mark_run_failed_if_active(%{task_run_id: task_run_id} = data, reason, context) do
@@ -472,7 +492,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
         context
       )
 
-    case TaskRunLifecycle.mark_failed_if_active(task_run_id, reason, context) do
+    case Failure.mark_if_active(task_run_id, reason, context) do
       {:ok, _task_run_or_terminal} ->
         :ok
 
@@ -482,6 +502,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     end
   end
 
+  @spec handle_execution_status_changed(binary(), String.t(), FSMData.t()) :: fsm_transition()
   defp handle_execution_status_changed(execution_id, _status, %{current_execution_id: current})
        when execution_id != current,
        do: :keep_state_and_data
@@ -502,6 +523,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
 
   defp handle_execution_status_changed(_execution_id, _status, _data), do: :keep_state_and_data
 
+  @spec reload_task(binary()) :: {:ok, Task.t()} | {:error, :task_not_found}
   defp reload_task(task_id) do
     case Repo.get(Task, task_id) do
       nil -> {:error, :task_not_found}
@@ -509,6 +531,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     end
   end
 
+  @spec dispatch_execution(FSMData.t(), Task.t(), struct()) :: fsm_transition()
   defp dispatch_execution(data, task, current_step) do
     task_id = data.task.id
 
@@ -540,6 +563,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     end
   end
 
+  @spec request_execution_slot(binary(), FSMData.t()) ::
+          {:next_state, :executing | :failed, FSMData.t()}
   defp request_execution_slot(task_id, data) do
     case ExecutionPool.request_slot(self()) do
       {:ok, slot_id} ->
@@ -555,6 +580,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     end
   end
 
+  @spec resuming_from_wait_children?(FSMData.t()) :: boolean()
   defp resuming_from_wait_children?(data) do
     case WorkflowGraph.get_current_step(data) do
       {:ok, %{step_type: "wait_children"}} -> latest_waiting_execution(data.task.id) != nil
@@ -562,6 +588,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     end
   end
 
+  @spec latest_waiting_execution(binary()) :: StepExecution.t() | nil
   defp latest_waiting_execution(task_id) do
     Repo.one(
       from(e in StepExecution,

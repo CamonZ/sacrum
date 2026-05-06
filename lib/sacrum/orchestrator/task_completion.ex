@@ -6,7 +6,8 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
 
   require Logger
 
-  alias Sacrum.Orchestrator.{FSMData, TaskRunLifecycle}
+  alias Sacrum.Orchestrator.FSMData
+  alias Sacrum.Orchestrator.TaskRuns.{Completion, Lookup}
   alias Sacrum.Repo
   alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.TaskRun
@@ -31,6 +32,7 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
     end
   end
 
+  @spec commit_completion(FSMData.t()) :: {:ok, map()} | {:error, term()}
   defp commit_completion(%{task: task} = data) do
     Repo.transaction(fn ->
       with {:ok, task_run} <- fetch_optional_task_run(Map.get(data, :task_run_id)),
@@ -115,6 +117,8 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
     |> Status.put_status()
   end
 
+  @spec to_fsm_transition(tuple(), FSMData.t()) ::
+          {:next_state, atom(), FSMData.t()} | {:stop, atom(), FSMData.t()}
   defp to_fsm_transition({:failed, :no_current_step}, data) do
     Logger.error("[TaskOrchestrator:#{data.task.id}] No current step after transition")
     {:next_state, :failed, data}
@@ -128,20 +132,23 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
   defp to_fsm_transition({:next_state, state}, data), do: {:next_state, state, data}
   defp to_fsm_transition({:stop, reason, _attrs}, data), do: {:stop, reason, data}
 
+  @spec fetch_optional_task_run(binary() | nil) :: {:ok, TaskRun.t() | nil} | {:error, term()}
   defp fetch_optional_task_run(nil), do: {:ok, nil}
 
   defp fetch_optional_task_run(task_run_id) do
-    case TaskRunLifecycle.fetch_task_run(task_run_id) do
+    case Lookup.fetch(task_run_id) do
       {:ok, %TaskRun{} = task_run} -> {:ok, task_run}
       {:error, reason} -> {:error, reason}
     end
   end
 
+  @spec maybe_mark_task_run_completed(TaskRun.t() | nil, map(), map()) ::
+          {:ok, map()} | {:error, term()}
   defp maybe_mark_task_run_completed(nil, _attrs, changes), do: {:ok, changes}
 
   defp maybe_mark_task_run_completed(%TaskRun{} = task_run, attrs, changes) do
     task_run
-    |> TaskRunLifecycle.completed_changeset(attrs)
+    |> Completion.changeset(attrs)
     |> Repo.update()
     |> case do
       {:ok, task_run} -> {:ok, Map.put(changes, :task_run, task_run)}

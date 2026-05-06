@@ -16,24 +16,26 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
     FSMData,
     OutputValidator,
     TaskCompletion,
-    TaskRunLifecycle,
     WorkflowGraph
   }
 
   alias Sacrum.Orchestrator.Routing.{InterWorkflow, IntraWorkflow, RouteDecision}
+  alias Sacrum.Orchestrator.TaskRuns.{Completion, Lookup}
   alias Sacrum.Repo
   alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.StepExecution
   alias Sacrum.Repo.TaskWorkflows
 
+  @typep fsm_transition ::
+           {:next_state, atom(), FSMData.t()}
+           | {:keep_state, FSMData.t()}
+           | {:stop, atom(), FSMData.t()}
+
   @doc """
   Main entry point for handling a route step transition. Returns a gen_statem
   state transition tuple.
   """
-  @spec handle_route_step_transition(FSMData.t(), struct()) ::
-          {:next_state, atom(), FSMData.t()}
-          | {:keep_state, FSMData.t()}
-          | {:stop, atom(), FSMData.t()}
+  @spec handle_route_step_transition(FSMData.t(), struct()) :: fsm_transition()
   def handle_route_step_transition(data, _current_step) do
     task_id = data.task.id
 
@@ -76,6 +78,8 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
     end
   end
 
+  @spec prepare_route_plan(FSMData.t(), binary(), String.t(), map() | nil) ::
+          {:ok, map()} | {:error, term()}
   defp prepare_route_plan(data, dest_id, "intra_workflow", handoff) do
     with {:ok, _dest_step} <- IntraWorkflow.validate_destination_step(data, dest_id),
          :ok <- IntraWorkflow.validate_step_transition_exists(data.task.current_step_id, dest_id),
@@ -118,6 +122,8 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
     end
   end
 
+  @spec commit_route_transition(FSMData.t(), StepExecution.t(), binary(), String.t(), map()) ::
+          {:ok, map()} | {:error, term()}
   defp commit_route_transition(data, execution, dest_id, transition_type, route_plan) do
     Repo.transaction(fn ->
       with {:ok, route_execution} <-
@@ -137,6 +143,8 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
     end)
   end
 
+  @spec maybe_mark_task_run_completed(FSMData.t(), tuple(), map()) ::
+          {:ok, map()} | {:error, term()}
   defp maybe_mark_task_run_completed(_data, {:next_state, _state}, changes), do: {:ok, changes}
   defp maybe_mark_task_run_completed(_data, {:failed, _reason}, changes), do: {:ok, changes}
 
@@ -147,16 +155,19 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
     end
   end
 
+  @spec mark_task_run_completed(binary(), map(), map()) :: {:ok, map()} | {:error, term()}
   defp mark_task_run_completed(task_run_id, attrs, changes) do
-    with {:ok, task_run} <- TaskRunLifecycle.fetch_task_run(task_run_id),
+    with {:ok, task_run} <- Lookup.fetch(task_run_id),
          {:ok, task_run} <-
            task_run
-           |> TaskRunLifecycle.completed_changeset(attrs)
+           |> Completion.changeset(attrs)
            |> Repo.update() do
       {:ok, Map.put(changes, :task_run, task_run)}
     end
   end
 
+  @spec get_latest_completed_execution(binary()) ::
+          {:ok, StepExecution.t()} | {:error, :no_completed_execution}
   defp get_latest_completed_execution(task_id) do
     query =
       from(e in StepExecution,

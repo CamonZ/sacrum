@@ -19,7 +19,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
   alias Sacrum.Orchestrator.TaskOrchestrator
   alias Sacrum.Orchestrator.TaskRegistry
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.StepExecution
+  alias Sacrum.Repo.Schemas.{StepExecution, TaskRun}
 
   # ===== Setup helpers =====
 
@@ -431,6 +431,14 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
       assert retry.step_id == s1.id
       assert retry.id != first_exec.id
 
+      task_run = Repo.one!(from(run in TaskRun, where: run.task_id == ^task.id))
+      assert failed.task_run_id == task_run.id
+      assert retry.task_run_id == task_run.id
+      assert task_run.status == :executing
+      assert task_run.latest_step_execution_id == retry.id
+      assert task_run.outcome_kind == nil
+      assert task_run.outcome_context == %{}
+
       assert_run_step_for(retry.id, "step_1")
     end
 
@@ -453,7 +461,21 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
       executions = executions_for_task(task.id)
       assert length(executions) == 5
       assert Enum.all?(executions, &(&1.status in ["started", "failed"]))
-      assert List.last(executions).status == "failed"
+      failed_execution = List.last(executions)
+      assert failed_execution.status == "failed"
+
+      failed_run = Repo.one!(from(run in TaskRun, where: run.task_id == ^task.id))
+      assert failed_run.status == :failed
+      assert failed_run.latest_step_execution_id == failed_execution.id
+      assert failed_run.outcome_kind == "retry_exhausted"
+
+      assert failed_run.outcome_context["failed_execution_id"] == failed_execution.id
+      assert failed_run.outcome_context["current_step_id"] == failed_execution.step_id
+      assert failed_run.outcome_context["current_attempt"] == 5
+      assert failed_run.outcome_context["max_attempts"] == 5
+      assert failed_run.outcome_context["execution_found"]
+      refute Map.has_key?(failed_run.outcome_context, "output_preview")
+      refute Map.has_key?(failed_run.outcome_context, "logs")
 
       assert Repo.get!(Sacrum.Repo.Schemas.Task, task.id).completed_at == nil
 
