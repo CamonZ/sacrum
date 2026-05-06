@@ -43,6 +43,22 @@ defmodule Sacrum.Repo.TaskRuns do
     end
   end
 
+  @spec list_active_for_tasks(String.t(), [String.t()]) :: [TaskRun.t()]
+  def list_active_for_tasks(_user_id, []), do: []
+
+  def list_active_for_tasks(user_id, task_ids)
+      when is_binary(user_id) and is_list(task_ids) do
+    task_ids = Enum.uniq(task_ids)
+
+    TaskRun
+    |> where([tr], tr.user_id == ^user_id)
+    |> where([tr], tr.task_id in ^task_ids)
+    |> where([tr], tr.status in ^TaskRunStatus.active_statuses())
+    |> order_by([tr], desc: tr.inserted_at)
+    |> Repo.all()
+    |> Repo.preload(:latest_step_execution)
+  end
+
   @spec list_for_trace(String.t(), String.t()) :: [TaskRun.t()]
   def list_for_trace(user_id, root_task_run_id)
       when is_binary(user_id) and is_binary(root_task_run_id) do

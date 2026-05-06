@@ -73,6 +73,23 @@ defmodule Sacrum.Repo.TaskDependencies do
     )
   end
 
+  @spec incomplete_direct_blocker_task_ids([String.t()]) :: [String.t()]
+  def incomplete_direct_blocker_task_ids([]), do: []
+
+  def incomplete_direct_blocker_task_ids(task_ids) when is_list(task_ids) do
+    task_ids = Enum.uniq(task_ids)
+
+    Repo.all(
+      from(d in TaskDependency,
+        join: dep in Task,
+        on: dep.id == d.depends_on_id,
+        where: d.task_id in ^task_ids and is_nil(dep.completed_at),
+        select: d.task_id,
+        distinct: true
+      )
+    )
+  end
+
   @spec get_blockers(Task.t()) :: [Task.t()]
   def get_blockers(%Task{} = task) do
     # Build the recursive CTE query for transitive blockers

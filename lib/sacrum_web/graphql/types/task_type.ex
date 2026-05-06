@@ -12,7 +12,16 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
   alias Sacrum.Orchestrator.TaskRegistry
   alias Sacrum.Repo.TaskDependencies
   alias Sacrum.Repo.TaskWorkflows
+  alias Sacrum.TaskRuns.RunControls
   alias SacrumWeb.Graphql.ShortIdErrors
+
+  object :task_run_controls do
+    field :runnable, non_null(:boolean)
+    field :stoppable, non_null(:boolean)
+    field :disabled_reason_code, :string
+    field :disabled_reason, :string
+    field :active_run, :task_run
+  end
 
   object :task do
     field :id, :id
@@ -82,6 +91,14 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
 
     field :task_runs, list_of(:task_run) do
       resolve(dataloader(Accounts.TaskRuns))
+    end
+
+    field :run_controls, :task_run_controls do
+      resolve(fn task, _args, %{context: %{current_user: user}} ->
+        batch({RunControls, :for_tasks, user.id}, task, fn results ->
+          {:ok, Map.fetch!(results, task.id)}
+        end)
+      end)
     end
   end
 

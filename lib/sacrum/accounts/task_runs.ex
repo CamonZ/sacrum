@@ -32,6 +32,9 @@ defmodule Sacrum.Accounts.TaskRuns do
     TaskRunsRepo.fetch_active(conditions: [user_id: user_id, task_id: task_id])
   end
 
+  @spec list_active_for_tasks(String.t(), [String.t()]) :: [TaskRun.t()]
+  defdelegate list_active_for_tasks(user_id, task_ids), to: TaskRunsRepo
+
   @spec list_for_trace(String.t(), String.t()) :: [TaskRun.t()]
   defdelegate list_for_trace(user_id, root_task_run_id), to: TaskRunsRepo
 
