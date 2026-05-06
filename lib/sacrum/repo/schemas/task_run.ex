@@ -21,6 +21,10 @@ defmodule Sacrum.Repo.Schemas.TaskRun do
     failure_context outcome_kind outcome_context
   )a
 
+  @lineage_fields ~w(
+    parent_task_run_id root_task_run_id triggered_by_step_execution_id
+  )a
+
   schema "task_runs" do
     field :status, Ecto.Enum, values: @statuses, default: :executing
     field :started_at, :utc_datetime_usec
@@ -60,9 +64,7 @@ defmodule Sacrum.Repo.Schemas.TaskRun do
     |> foreign_key_constraint(:project_id)
     |> foreign_key_constraint(:user_id)
     |> foreign_key_constraint(:latest_step_execution_id)
-    |> foreign_key_constraint(:parent_task_run_id)
-    |> foreign_key_constraint(:root_task_run_id)
-    |> foreign_key_constraint(:triggered_by_step_execution_id)
+    |> put_lineage_constraints()
   end
 
   @spec update_changeset(t(), map()) :: Ecto.Changeset.t()
@@ -71,6 +73,20 @@ defmodule Sacrum.Repo.Schemas.TaskRun do
     |> cast(attrs, @update_fields)
     |> validate_required([:status])
     |> foreign_key_constraint(:latest_step_execution_id)
+  end
+
+  @spec lineage_changeset(t(), map()) :: Ecto.Changeset.t()
+  def lineage_changeset(task_run, attrs) do
+    task_run
+    |> cast(attrs, @lineage_fields)
+    |> put_lineage_constraints()
+  end
+
+  defp put_lineage_constraints(changeset) do
+    changeset
+    |> foreign_key_constraint(:parent_task_run_id)
+    |> foreign_key_constraint(:root_task_run_id)
+    |> foreign_key_constraint(:triggered_by_step_execution_id)
   end
 
   defp put_started_at(changeset) do

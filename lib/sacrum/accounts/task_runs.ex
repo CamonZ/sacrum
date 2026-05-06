@@ -9,7 +9,7 @@ defmodule Sacrum.Accounts.TaskRuns do
     default_order: [desc: :inserted_at]
 
   alias Sacrum.Accounts.StepExecutions
-  alias Sacrum.Repo.Schemas.TaskRun
+  alias Sacrum.Repo.Schemas.{SessionLog, StepExecution, TaskRun}
   alias Sacrum.Repo.TaskRuns, as: TaskRunsRepo
 
   @spec insert(String.t(), String.t(), String.t(), map()) ::
@@ -30,17 +30,20 @@ defmodule Sacrum.Accounts.TaskRuns do
   end
 
   @spec list_for_trace(String.t(), String.t()) :: [TaskRun.t()]
-  def list_for_trace(user_id, root_task_run_id)
-      when is_binary(user_id) and is_binary(root_task_run_id) do
-    TaskRunsRepo.list_for_trace(
-      conditions: [user_id: user_id],
-      root_task_run_id: root_task_run_id
-    )
-  end
+  defdelegate list_for_trace(user_id, root_task_run_id), to: TaskRunsRepo
 
-  @spec list_step_executions(String.t(), String.t()) :: [Sacrum.Repo.Schemas.StepExecution.t()]
+  @spec list_descendants_for_trace(String.t(), String.t()) :: [TaskRun.t()]
+  defdelegate list_descendants_for_trace(user_id, root_task_run_id), to: TaskRunsRepo
+
+  @spec list_step_executions(String.t(), String.t()) :: [StepExecution.t()]
   def list_step_executions(user_id, task_run_id)
       when is_binary(user_id) and is_binary(task_run_id) do
     StepExecutions.list_by(user_id, conditions: [task_run_id: task_run_id])
   end
+
+  @spec list_step_executions_for_trace(String.t(), String.t()) :: [StepExecution.t()]
+  defdelegate list_step_executions_for_trace(user_id, root_task_run_id), to: TaskRunsRepo
+
+  @spec list_session_logs_for_trace(String.t(), String.t()) :: [SessionLog.t()]
+  defdelegate list_session_logs_for_trace(user_id, root_task_run_id), to: TaskRunsRepo
 end

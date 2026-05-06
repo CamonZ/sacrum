@@ -2,6 +2,7 @@ defmodule Sacrum.Accounts.TaskRunsTest do
   use Sacrum.DataCase, async: true
 
   alias Sacrum.Accounts.Projects
+  alias Sacrum.Accounts.SessionLogs
   alias Sacrum.Accounts.StepExecutions
   alias Sacrum.Accounts.TaskRuns
   alias Sacrum.Accounts.Tasks
@@ -159,7 +160,7 @@ defmodule Sacrum.Accounts.TaskRunsTest do
   end
 
   describe "list_for_trace/2" do
-    test "lists root and child runs scoped to the user" do
+    test "lists root and descendant runs scoped to the user in deterministic order" do
       user = create_user()
       {project, task, _workflow} = create_task_with_workflow(user)
       {:ok, root} = TaskRuns.insert(user.id, project.id, task.id)
@@ -167,6 +168,12 @@ defmodule Sacrum.Accounts.TaskRunsTest do
       {:ok, child} =
         TaskRuns.insert(user.id, project.id, task.id, %{
           parent_task_run_id: root.id,
+          root_task_run_id: root.id
+        })
+
+      {:ok, grandchild} =
+        TaskRuns.insert(user.id, project.id, task.id, %{
+          parent_task_run_id: child.id,
           root_task_run_id: root.id
         })
 
@@ -182,9 +189,199 @@ defmodule Sacrum.Accounts.TaskRunsTest do
         })
 
       listed_ids = Enum.map(TaskRuns.list_for_trace(user.id, root.id), & &1.id)
+      descendant_ids = Enum.map(TaskRuns.list_descendants_for_trace(user.id, root.id), & &1.id)
 
-      assert listed_ids == [root.id, child.id]
+      assert listed_ids == [root.id, child.id, grandchild.id]
+      assert descendant_ids == [child.id, grandchild.id]
       refute out_of_scope.id in listed_ids
+      refute out_of_scope.id in descendant_ids
+    end
+
+    test "lists trace executions and session logs through task run joins" do
+      user = create_user()
+      {project, task, workflow} = create_task_with_workflow(user)
+      {:ok, root} = TaskRuns.insert(user.id, project.id, task.id)
+
+      {:ok, child} =
+        TaskRuns.insert(user.id, project.id, task.id, %{
+          parent_task_run_id: root.id,
+          root_task_run_id: root.id
+        })
+
+      {:ok, root_execution} =
+        StepExecutions.insert(user.id, %{
+          "task_id" => task.id,
+          "task_run_id" => root.id,
+          "project_id" => project.id,
+          "workflow_id" => workflow.id,
+          "step_name" => "root_step",
+          "status" => "completed"
+        })
+
+      {:ok, child_execution} =
+        StepExecutions.insert(user.id, %{
+          "task_id" => task.id,
+          "task_run_id" => child.id,
+          "project_id" => project.id,
+          "workflow_id" => workflow.id,
+          "step_name" => "child_step",
+          "status" => "completed"
+        })
+
+      other_user = create_user()
+
+      {:ok, mismatched_owner_execution} =
+        StepExecutions.insert(other_user.id, %{
+          "task_id" => task.id,
+          "task_run_id" => child.id,
+          "project_id" => project.id,
+          "workflow_id" => workflow.id,
+          "step_name" => "mismatched_owner_step",
+          "status" => "completed"
+        })
+
+      {:ok, root_log} =
+        SessionLogs.insert(user.id, %{
+          "project_id" => project.id,
+          "step_execution_id" => root_execution.id,
+          "content" => "root output"
+        })
+
+      {:ok, child_log} =
+        SessionLogs.insert(user.id, %{
+          "project_id" => project.id,
+          "step_execution_id" => child_execution.id,
+          "content" => "child output"
+        })
+
+      {:ok, mismatched_owner_log} =
+        SessionLogs.insert(other_user.id, %{
+          "project_id" => project.id,
+          "step_execution_id" => child_execution.id,
+          "content" => "mismatched owner output"
+        })
+
+      {other_project, other_task, other_workflow} = create_task_with_workflow(other_user)
+      {:ok, other_root} = TaskRuns.insert(other_user.id, other_project.id, other_task.id)
+
+      {:ok, other_execution} =
+        StepExecutions.insert(other_user.id, %{
+          "task_id" => other_task.id,
+          "task_run_id" => other_root.id,
+          "project_id" => other_project.id,
+          "workflow_id" => other_workflow.id,
+          "step_name" => "other_step",
+          "status" => "completed"
+        })
+
+      {:ok, other_log} =
+        SessionLogs.insert(other_user.id, %{
+          "project_id" => other_project.id,
+          "step_execution_id" => other_execution.id,
+          "content" => "other output"
+        })
+
+      trace_execution_ids =
+        user.id
+        |> TaskRuns.list_step_executions_for_trace(root.id)
+        |> Enum.map(& &1.id)
+
+      trace_log_ids =
+        user.id
+        |> TaskRuns.list_session_logs_for_trace(root.id)
+        |> Enum.map(& &1.id)
+
+      assert trace_execution_ids == [root_execution.id, child_execution.id]
+      assert trace_log_ids == [root_log.id, child_log.id]
+      refute mismatched_owner_execution.id in trace_execution_ids
+      refute mismatched_owner_log.id in trace_log_ids
+      refute other_execution.id in trace_execution_ids
+      refute other_log.id in trace_log_ids
+    end
+
+    test "does not attach an unrelated manual child run to a parent trace" do
+      user = create_user()
+      {project, parent_task, workflow} = create_task_with_workflow(user)
+      {:ok, child_task} = Tasks.insert(user.id, project.id, %{title: "Manual child"})
+      {:ok, child_task} = Sacrum.Repo.TaskHierarchy.set_parent(child_task, parent_task)
+
+      {:ok, parent_run} = TaskRuns.insert(user.id, project.id, parent_task.id)
+      {:ok, manual_child_run} = TaskRunLifecycle.create_root_run(child_task)
+
+      {:ok, waiting_execution} =
+        StepExecutions.insert(user.id, %{
+          "task_id" => parent_task.id,
+          "task_run_id" => parent_run.id,
+          "project_id" => project.id,
+          "workflow_id" => workflow.id,
+          "step_name" => "wait_children",
+          "status" => "waiting",
+          "handoff" => %{"child_ids" => [child_task.id]}
+        })
+
+      assert {:error, {:child_task_run_has_manual_root, manual_child_run_id}} =
+               TaskRunLifecycle.get_or_create_child_run(
+                 child_task,
+                 parent_run,
+                 waiting_execution.id
+               )
+
+      assert manual_child_run_id == manual_child_run.id
+
+      reloaded_manual_run = Repo.get!(TaskRun, manual_child_run.id)
+      assert reloaded_manual_run.parent_task_run_id == nil
+      assert reloaded_manual_run.root_task_run_id == nil
+      assert reloaded_manual_run.triggered_by_step_execution_id == nil
+
+      trace_ids = Enum.map(TaskRuns.list_for_trace(user.id, parent_run.id), & &1.id)
+      assert trace_ids == [parent_run.id]
+      refute manual_child_run.id in trace_ids
+    end
+
+    test "rejects an active child run with a stale triggering execution" do
+      user = create_user()
+      {project, parent_task, workflow} = create_task_with_workflow(user)
+      {:ok, child_task} = Tasks.insert(user.id, project.id, %{title: "Child with stale trigger"})
+      {:ok, _child_task} = Sacrum.Repo.TaskHierarchy.set_parent(child_task, parent_task)
+
+      {:ok, parent_run} = TaskRuns.insert(user.id, project.id, parent_task.id)
+
+      {:ok, old_waiting_execution} =
+        StepExecutions.insert(user.id, %{
+          "task_id" => parent_task.id,
+          "task_run_id" => parent_run.id,
+          "project_id" => project.id,
+          "workflow_id" => workflow.id,
+          "step_name" => "wait_children",
+          "status" => "waiting"
+        })
+
+      {:ok, current_waiting_execution} =
+        StepExecutions.insert(user.id, %{
+          "task_id" => parent_task.id,
+          "task_run_id" => parent_run.id,
+          "project_id" => project.id,
+          "workflow_id" => workflow.id,
+          "step_name" => "wait_children",
+          "status" => "waiting"
+        })
+
+      {:ok, stale_child_run} =
+        TaskRuns.insert(user.id, project.id, child_task.id, %{
+          status: :queued,
+          parent_task_run_id: parent_run.id,
+          root_task_run_id: parent_run.id,
+          triggered_by_step_execution_id: old_waiting_execution.id
+        })
+
+      assert {:error, {:child_task_run_lineage_conflict, stale_child_run_id}} =
+               TaskRunLifecycle.get_or_create_child_run(
+                 child_task,
+                 parent_run,
+                 current_waiting_execution.id
+               )
+
+      assert stale_child_run_id == stale_child_run.id
     end
   end
 
