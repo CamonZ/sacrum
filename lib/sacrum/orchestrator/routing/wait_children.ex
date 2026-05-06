@@ -14,9 +14,11 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
 
   import Ecto.Query
 
-  alias Sacrum.Orchestrator.{ExecutionPool, FSMData, Scheduler, TaskRunLifecycle}
+  alias Sacrum.Orchestrator.{ExecutionPool, FSMData, Scheduler}
+  alias Sacrum.Orchestrator.Routing.WaitChildren.ChildRuns
+  alias Sacrum.Orchestrator.TaskRuns.{Lookup, StateTransitions}
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.{StepExecution, Task, WorkflowStep}
+  alias Sacrum.Repo.Schemas.{StepExecution, Task, TaskRun, WorkflowStep}
   alias Sacrum.Repo.TaskHierarchy
   alias Sacrum.Tasks.Status
 
@@ -59,6 +61,7 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
     end
   end
 
+  @spec get_children(Task.t()) :: {:ok, [Task.t()]} | {:error, :no_children}
   defp get_children(task) do
     case TaskHierarchy.get_children(task) do
       [] -> {:error, :no_children}
@@ -66,12 +69,15 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
     end
   end
 
+  @spec ensure_children_have_workflows([Task.t()]) :: :ok | {:error, :child_missing_workflow}
   defp ensure_children_have_workflows(children) do
     if Enum.all?(children, & &1.workflow_id),
       do: :ok,
       else: {:error, :child_missing_workflow}
   end
 
+  @spec enter_waiting_state(FSMData.t(), [binary()], [Task.t()]) ::
+          {:ok, map()} | {:error, term()}
   defp enter_waiting_state(data, child_ids, children) do
     step_name =
       case data.steps[data.task.current_step_id] do
@@ -89,16 +95,17 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
       handoff: %{"child_ids" => child_ids}
     }
 
-    with {:ok, task_run} <- TaskRunLifecycle.fetch_task_run(data.task_run_id) do
+    with {:ok, task_run} <- Lookup.fetch(data.task_run_id) do
       Repo.transaction(fn -> commit_waiting_state(data, attrs, task_run, children) end)
     end
   end
 
+  @spec commit_waiting_state(FSMData.t(), map(), TaskRun.t(), [Task.t()]) :: map()
   defp commit_waiting_state(data, attrs, task_run, children) do
     with {:ok, execution} <- Repo.insert(waiting_step_execution_changeset(data, attrs)),
          {:ok, updated_task_run} <-
            task_run
-           |> TaskRunLifecycle.waiting_changeset(execution.id)
+           |> StateTransitions.waiting_changeset(execution.id)
            |> Repo.update(),
          {:ok, updated_task} <- Repo.update(task_status_changeset(data.task)),
          {:ok, child_runs} <- get_or_create_child_runs(children, updated_task_run, execution.id) do
@@ -113,6 +120,7 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
     end
   end
 
+  @spec waiting_step_execution_changeset(FSMData.t(), map()) :: Ecto.Changeset.t()
   defp waiting_step_execution_changeset(data, attrs) do
     StepExecution.create_changeset(
       %StepExecution{user_id: data.user_id, project_id: data.project_id},
@@ -120,16 +128,19 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
     )
   end
 
+  @spec task_status_changeset(Task.t()) :: Ecto.Changeset.t()
   defp task_status_changeset(task) do
     task
     |> Ecto.Changeset.change()
     |> Status.put_status()
   end
 
+  @spec get_or_create_child_runs([Task.t()], TaskRun.t(), binary()) ::
+          {:ok, [{Task.t(), TaskRun.t()}]} | {:error, term()}
   defp get_or_create_child_runs(children, parent_task_run, triggered_by_step_execution_id) do
     child_runs =
       Enum.reduce_while(children, {:ok, []}, fn child, {:ok, acc} ->
-        case TaskRunLifecycle.get_or_create_child_run(
+        case ChildRuns.get_or_create(
                child,
                parent_task_run,
                triggered_by_step_execution_id
@@ -145,6 +156,7 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
     end
   end
 
+  @spec schedule_all_children([{Task.t(), TaskRun.t()}]) :: :ok | {:error, term()}
   defp schedule_all_children(child_runs) do
     Enum.reduce_while(child_runs, :ok, fn {child, task_run}, _acc ->
       case start_child_orchestrator(child, task_run) do
@@ -154,6 +166,7 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
     end)
   end
 
+  @spec start_child_orchestrator(Task.t(), TaskRun.t()) :: :ok | {:error, term()}
   defp start_child_orchestrator(child, task_run) do
     case Registry.lookup(Sacrum.Orchestrator.TaskRegistry, child.id) do
       [_ | _] ->
@@ -168,6 +181,7 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
     end
   end
 
+  @spec log_child_start_failure(Task.t(), term()) :: {:error, term()}
   defp log_child_start_failure(child, reason) do
     Logger.error(
       "[WaitChildren] Failed to start child orchestrator for task #{child.id}: #{inspect(reason)}"
@@ -176,6 +190,8 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
     {:error, reason}
   end
 
+  @spec fetch_waiting_execution(binary()) ::
+          {:ok, StepExecution.t()} | {:error, :no_waiting_execution}
   defp fetch_waiting_execution(task_id) do
     query =
       from(e in StepExecution,
@@ -190,6 +206,8 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
     end
   end
 
+  @spec fetch_children([binary()] | term()) ::
+          {:ok, [Task.t()]} | {:error, :child_not_found | :invalid_child_ids}
   defp fetch_children([]), do: {:ok, []}
 
   defp fetch_children(child_ids) when is_list(child_ids) do
@@ -202,12 +220,14 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
 
   defp fetch_children(_), do: {:error, :invalid_child_ids}
 
+  @spec all_done_and_not_parked?([Task.t()]) :: boolean()
   defp all_done_and_not_parked?(children) do
     Enum.all?(children, fn task ->
       not is_nil(task.completed_at) and not has_waiting_execution?(task.id)
     end)
   end
 
+  @spec has_waiting_execution?(binary()) :: boolean()
   defp has_waiting_execution?(task_id) do
     Repo.exists?(from(e in StepExecution, where: e.task_id == ^task_id and e.status == "waiting"))
   end

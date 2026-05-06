@@ -10,7 +10,8 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
   import Absinthe.Resolution.Helpers
 
   alias Sacrum.Accounts
-  alias Sacrum.Orchestrator.{ExecutionDispatcher, Scheduler, TaskRunLifecycle}
+  alias Sacrum.Orchestrator.{ExecutionDispatcher, Scheduler}
+  alias Sacrum.Orchestrator.TaskRuns.Root
   alias Sacrum.Repo.Broadcaster
 
   object :step_execution do
@@ -195,13 +196,14 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
                  preloads: [:sections, :code_refs, :workflow, :current_step]
                ),
              :ok <- check_daemon_presence(task.project_id) do
-          with {:ok, task_run} <- TaskRunLifecycle.get_or_create_root_run(task) do
+          with {:ok, task_run} <- Root.get_or_create(task) do
             ExecutionDispatcher.create_and_dispatch(user.id, task, step_id, task_run)
           end
         end
       end)
     end
 
+    @spec check_daemon_presence(binary()) :: :ok | {:error, String.t()}
     defp check_daemon_presence(project_id) do
       daemon_presence_required = Application.get_env(:sacrum, :daemon_presence_required, false)
 

@@ -12,13 +12,12 @@ defmodule Sacrum.Repo.Schemas.TaskRun do
 
   @create_fields ~w(
     task_id project_id user_id status started_at ended_at stop_requested_at
-    latest_step_execution_id failure_kind failure_reason failure_context outcome_kind
-    outcome_context parent_task_run_id root_task_run_id triggered_by_step_execution_id
+    latest_step_execution_id outcome_kind outcome_context parent_task_run_id root_task_run_id
+    triggered_by_step_execution_id
   )a
 
   @update_fields ~w(
-    status ended_at stop_requested_at latest_step_execution_id failure_kind failure_reason
-    failure_context outcome_kind outcome_context
+    status ended_at stop_requested_at latest_step_execution_id outcome_kind outcome_context
   )a
 
   @lineage_fields ~w(
@@ -30,9 +29,6 @@ defmodule Sacrum.Repo.Schemas.TaskRun do
     field :started_at, :utc_datetime_usec
     field :ended_at, :utc_datetime_usec
     field :stop_requested_at, :utc_datetime_usec
-    field :failure_kind, :string
-    field :failure_reason, :string
-    field :failure_context, :map, default: %{}
     field :outcome_kind, :string
     field :outcome_context, :map, default: %{}
 
@@ -82,6 +78,7 @@ defmodule Sacrum.Repo.Schemas.TaskRun do
     |> put_lineage_constraints()
   end
 
+  @spec put_lineage_constraints(Ecto.Changeset.t()) :: Ecto.Changeset.t()
   defp put_lineage_constraints(changeset) do
     changeset
     |> foreign_key_constraint(:parent_task_run_id)
@@ -89,6 +86,7 @@ defmodule Sacrum.Repo.Schemas.TaskRun do
     |> foreign_key_constraint(:triggered_by_step_execution_id)
   end
 
+  @spec put_started_at(Ecto.Changeset.t()) :: Ecto.Changeset.t()
   defp put_started_at(changeset) do
     case get_field(changeset, :started_at) do
       nil -> put_change(changeset, :started_at, DateTime.utc_now())

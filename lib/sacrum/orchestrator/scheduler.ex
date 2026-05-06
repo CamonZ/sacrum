@@ -11,9 +11,10 @@ defmodule Sacrum.Orchestrator.Scheduler do
   require Logger
 
   alias Sacrum.Orchestrator.Routing.WaitChildren
-  alias Sacrum.Orchestrator.{TaskOrchestrator, TaskRegistry, TaskRunLifecycle}
+  alias Sacrum.Orchestrator.{TaskOrchestrator, TaskRegistry}
+  alias Sacrum.Orchestrator.TaskRuns.{Lookup, Root}
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.Task
+  alias Sacrum.Repo.Schemas.{Task, TaskRun}
   alias Sacrum.Repo.{TaskDependencies, TaskHierarchy}
 
   @spec start_link(keyword()) :: {:ok, pid()} | {:error, term()}
@@ -72,6 +73,7 @@ defmodule Sacrum.Orchestrator.Scheduler do
 
   # ===== PRIVATE HELPERS =====
 
+  @spec validate_and_schedule(map()) :: :ok | {:error, term()}
   defp validate_and_schedule(task) do
     Logger.info("[Scheduler] validate_and_schedule called with #{inspect(Map.keys(task))}")
 
@@ -80,7 +82,7 @@ defmodule Sacrum.Orchestrator.Scheduler do
          :ok <- validate_workflow(task_record),
          :ok <- validate_not_completed(task_record),
          :ok <- validate_no_active_fsm(task_id),
-         {:ok, task_run} <- TaskRunLifecycle.get_or_create_root_run(task_record) do
+         {:ok, task_run} <- Root.get_or_create(task_record) do
       Logger.info(
         "[Scheduler] All validations passed for task_id=#{task_id}, task_run_id=#{task_run.id}, starting orchestrator"
       )
@@ -93,14 +95,15 @@ defmodule Sacrum.Orchestrator.Scheduler do
     end
   end
 
+  @spec validate_and_schedule_existing_run(binary(), binary()) :: :ok | {:error, term()}
   defp validate_and_schedule_existing_run(task_id, task_run_id) do
     with {:ok, task_record} <- fetch_task(task_id),
          :ok <- validate_workflow(task_record),
          :ok <- validate_not_completed(task_record),
          :ok <- validate_no_active_fsm(task_id),
-         {:ok, task_run} <- TaskRunLifecycle.fetch_task_run(task_run_id),
+         {:ok, task_run} <- Lookup.fetch(task_run_id),
          :ok <- validate_task_run_matches(task_run, task_record),
-         {:ok, task_run} <- TaskRunLifecycle.validate_dispatchable(task_run) do
+         {:ok, task_run} <- Root.validate_dispatchable(task_run) do
       Logger.info(
         "[Scheduler] Starting existing TaskRun task_id=#{task_id}, task_run_id=#{task_run.id}"
       )
@@ -113,6 +116,7 @@ defmodule Sacrum.Orchestrator.Scheduler do
     end
   end
 
+  @spec extract_task_id(map()) :: {:ok, binary()} | {:error, :missing_task_id}
   defp extract_task_id(task) do
     case Map.fetch(task, :id) do
       {:ok, id} -> {:ok, id}
@@ -120,18 +124,22 @@ defmodule Sacrum.Orchestrator.Scheduler do
     end
   end
 
+  @spec validate_workflow(Task.t()) :: :ok | {:error, :no_workflow_assigned}
   defp validate_workflow(task) do
     if task.workflow_id, do: :ok, else: {:error, :no_workflow_assigned}
   end
 
+  @spec validate_not_completed(Task.t()) :: :ok | {:error, :task_already_completed}
   defp validate_not_completed(task) do
     if is_nil(task.completed_at), do: :ok, else: {:error, :task_already_completed}
   end
 
+  @spec validate_no_active_fsm(binary()) :: :ok | {:error, :orchestrator_already_running}
   defp validate_no_active_fsm(task_id) do
     if fsm_running?(task_id), do: {:error, :orchestrator_already_running}, else: :ok
   end
 
+  @spec validate_task_run_matches(TaskRun.t(), Task.t()) :: :ok | {:error, term()}
   defp validate_task_run_matches(task_run, task) do
     cond do
       task_run.user_id != task.user_id ->
@@ -148,6 +156,7 @@ defmodule Sacrum.Orchestrator.Scheduler do
     end
   end
 
+  @spec notify_dependents(binary()) :: :ok | {:error, term()}
   defp notify_dependents(task_id) do
     with {:ok, task} <- fetch_task(task_id) do
       task
@@ -159,6 +168,7 @@ defmodule Sacrum.Orchestrator.Scheduler do
     end
   end
 
+  @spec try_wake_parent(Task.t()) :: :ok | {:error, term()}
   defp try_wake_parent(task) do
     case TaskHierarchy.get_parent(task) do
       {:ok, parent} -> wake_parent_if_ready(parent)
@@ -166,6 +176,7 @@ defmodule Sacrum.Orchestrator.Scheduler do
     end
   end
 
+  @spec wake_parent_if_ready(Task.t()) :: :ok | {:error, term()}
   defp wake_parent_if_ready(parent) do
     case WaitChildren.should_wake_parent(parent) do
       :wake ->
@@ -181,6 +192,7 @@ defmodule Sacrum.Orchestrator.Scheduler do
     end
   end
 
+  @spec fetch_task(binary()) :: {:ok, Task.t()} | {:error, :task_not_found}
   defp fetch_task(task_id) do
     case Repo.get(Task, task_id) do
       nil -> {:error, :task_not_found}
@@ -188,6 +200,7 @@ defmodule Sacrum.Orchestrator.Scheduler do
     end
   end
 
+  @spec try_start_orchestrator_for_task(Task.t()) :: :ok | :skip | {:error, term()}
   defp try_start_orchestrator_for_task(dependent_task) do
     cond do
       dependent_task.completed_at ->
@@ -204,26 +217,30 @@ defmodule Sacrum.Orchestrator.Scheduler do
     end
   end
 
+  @spec all_blockers_complete?(Task.t()) :: boolean()
   defp all_blockers_complete?(task) do
     task
     |> TaskDependencies.get_direct_blockers()
     |> Enum.all?(&(not is_nil(&1.completed_at)))
   end
 
+  @spec start_orchestrator_if_not_running(Task.t()) :: :ok | {:error, term()}
   defp start_orchestrator_if_not_running(task) do
     if fsm_running?(task.id) do
       :ok
     else
-      with {:ok, task_run} <- TaskRunLifecycle.get_or_create_root_run(task) do
+      with {:ok, task_run} <- Root.get_or_create(task) do
         start_orchestrator(task.id, task.user_id, task_run.id)
       end
     end
   end
 
+  @spec fsm_running?(binary()) :: boolean()
   defp fsm_running?(task_id) do
     Registry.lookup(TaskRegistry, task_id) != []
   end
 
+  @spec start_orchestrator(binary(), binary(), binary()) :: :ok | {:error, term()}
   defp start_orchestrator(task_id, user_id, task_run_id) do
     alias Sacrum.Orchestrator.TaskFSMSupervisor
     child_opts = [task_id: task_id, user_id: user_id, task_run_id: task_run_id]

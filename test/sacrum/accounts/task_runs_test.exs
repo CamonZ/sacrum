@@ -7,7 +7,8 @@ defmodule Sacrum.Accounts.TaskRunsTest do
   alias Sacrum.Accounts.TaskRuns
   alias Sacrum.Accounts.Tasks
   alias Sacrum.Accounts.Workflows
-  alias Sacrum.Orchestrator.TaskRunLifecycle
+  alias Sacrum.Orchestrator.Routing.WaitChildren.ChildRuns
+  alias Sacrum.Orchestrator.TaskRuns.{Failure, RetryExhaustion, Root}
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.StepExecution
   alias Sacrum.Repo.Schemas.TaskRun
@@ -306,7 +307,7 @@ defmodule Sacrum.Accounts.TaskRunsTest do
       {:ok, child_task} = Sacrum.Repo.TaskHierarchy.set_parent(child_task, parent_task)
 
       {:ok, parent_run} = TaskRuns.insert(user.id, project.id, parent_task.id)
-      {:ok, manual_child_run} = TaskRunLifecycle.create_root_run(child_task)
+      {:ok, manual_child_run} = Root.get_or_create(child_task)
 
       {:ok, waiting_execution} =
         StepExecutions.insert(user.id, %{
@@ -320,7 +321,7 @@ defmodule Sacrum.Accounts.TaskRunsTest do
         })
 
       assert {:error, {:child_task_run_has_manual_root, manual_child_run_id}} =
-               TaskRunLifecycle.get_or_create_child_run(
+               ChildRuns.get_or_create(
                  child_task,
                  parent_run,
                  waiting_execution.id
@@ -375,7 +376,7 @@ defmodule Sacrum.Accounts.TaskRunsTest do
         })
 
       assert {:error, {:child_task_run_lineage_conflict, stale_child_run_id}} =
-               TaskRunLifecycle.get_or_create_child_run(
+               ChildRuns.get_or_create(
                  child_task,
                  parent_run,
                  current_waiting_execution.id
@@ -386,6 +387,145 @@ defmodule Sacrum.Accounts.TaskRunsTest do
   end
 
   describe "step execution association" do
+    test "retry exhausted changeset stores retry metadata and latest execution id" do
+      task_run = task_run_struct()
+      execution = failed_execution_struct(task_run, %{output: nil})
+
+      changed =
+        task_run
+        |> RetryExhaustion.changeset(execution, %{
+          failed_execution_id: execution.id,
+          task_id: task_run.task_id,
+          current_step_id: execution.step_id,
+          current_attempt: 5,
+          max_attempts: 5
+        })
+        |> Ecto.Changeset.apply_changes()
+
+      assert changed.status == :failed
+      assert changed.outcome_kind == "retry_exhausted"
+      assert changed.latest_step_execution_id == execution.id
+      assert changed.outcome_context["failed_execution_id"] == execution.id
+      assert changed.outcome_context["task_id"] == task_run.task_id
+      assert changed.outcome_context["current_step_id"] == execution.step_id
+      assert changed.outcome_context["current_attempt"] == 5
+      assert changed.outcome_context["max_attempts"] == 5
+      assert changed.outcome_context["execution_found"]
+      refute Map.has_key?(changed.outcome_context, "output_preview")
+      refute Map.has_key?(changed.outcome_context, "logs")
+    end
+
+    test "retry exhausted changeset does not duplicate execution output" do
+      task_run = task_run_struct()
+      long_output = String.duplicate("daemon error ", 400)
+      execution = failed_execution_struct(task_run, %{output: long_output})
+
+      changed =
+        task_run
+        |> RetryExhaustion.changeset(execution, %{
+          failed_execution_id: execution.id,
+          current_attempt: 5,
+          max_attempts: 5
+        })
+        |> Ecto.Changeset.apply_changes()
+
+      assert changed.outcome_kind == "retry_exhausted"
+      assert changed.latest_step_execution_id == execution.id
+      assert changed.outcome_context["failed_execution_id"] == execution.id
+      refute Map.has_key?(changed.outcome_context, "output_preview")
+      refute Map.has_key?(changed.outcome_context, "output_format")
+      refute Map.has_key?(changed.outcome_context, "logs")
+    end
+
+    test "retry exhausted changeset handles missing execution rows" do
+      task_run = task_run_struct()
+      missing_execution_id = Ecto.UUID.generate()
+
+      changed =
+        task_run
+        |> RetryExhaustion.changeset(nil, %{
+          failed_execution_id: missing_execution_id,
+          current_attempt: 5,
+          max_attempts: 5
+        })
+        |> Ecto.Changeset.apply_changes()
+
+      assert changed.status == :failed
+      assert changed.latest_step_execution_id == nil
+      assert changed.outcome_kind == "retry_exhausted"
+      assert changed.outcome_context["failed_execution_id"] == missing_execution_id
+      assert changed.outcome_context["current_attempt"] == 5
+      assert changed.outcome_context["max_attempts"] == 5
+      assert changed.outcome_context["execution_found"] == false
+      refute Map.has_key?(changed.outcome_context, "output_preview")
+      refute Map.has_key?(changed.outcome_context, "logs")
+    end
+
+    test "mark_retry_exhausted records retry outcome without copying trace details" do
+      user = create_user()
+      {project, task, workflow} = create_task_with_workflow(user)
+      {:ok, task_run} = TaskRuns.insert(user.id, project.id, task.id)
+
+      {:ok, failed_attempt} =
+        StepExecutions.insert(user.id, %{
+          "task_id" => task.id,
+          "task_run_id" => task_run.id,
+          "project_id" => project.id,
+          "workflow_id" => workflow.id,
+          "step_name" => "retryable_step",
+          "status" => "failed",
+          "output" => ~S({"error":"daemon timeout"})
+        })
+
+      assert {:ok, exhausted} =
+               RetryExhaustion.mark(task_run, failed_attempt.id, %{
+                 task_id: task.id,
+                 current_step_id: failed_attempt.step_id,
+                 current_attempt: 5,
+                 max_attempts: 5
+               })
+
+      assert exhausted.status == :failed
+      assert exhausted.latest_step_execution_id == failed_attempt.id
+      assert exhausted.outcome_kind == "retry_exhausted"
+      assert exhausted.outcome_context["failed_execution_id"] == failed_attempt.id
+      assert exhausted.outcome_context["current_step_id"] == failed_attempt.step_id
+      assert exhausted.outcome_context["execution_found"]
+      refute Map.has_key?(exhausted.outcome_context, "output_preview")
+      refute Map.has_key?(exhausted.outcome_context, "logs")
+    end
+
+    test "mark_retry_exhausted does not attach an execution from a different task run" do
+      user = create_user()
+      {project, task, workflow} = create_task_with_workflow(user)
+      {:ok, task_run} = TaskRuns.insert(user.id, project.id, task.id)
+      {:ok, other_task_run} = TaskRuns.insert(user.id, project.id, task.id)
+
+      {:ok, other_run_attempt} =
+        StepExecutions.insert(user.id, %{
+          "task_id" => task.id,
+          "task_run_id" => other_task_run.id,
+          "project_id" => project.id,
+          "workflow_id" => workflow.id,
+          "step_name" => "retryable_step",
+          "status" => "failed"
+        })
+
+      assert {:ok, exhausted} =
+               RetryExhaustion.mark(task_run, other_run_attempt.id, %{
+                 task_id: task.id,
+                 current_step_id: other_run_attempt.step_id,
+                 current_attempt: 5,
+                 max_attempts: 5
+               })
+
+      assert exhausted.status == :failed
+      assert exhausted.latest_step_execution_id == nil
+      assert exhausted.outcome_kind == "retry_exhausted"
+      assert exhausted.outcome_context["failed_execution_id"] == other_run_attempt.id
+      assert exhausted.outcome_context["execution_found"] == false
+    end
+
     test "failed step attempt does not make an active retrying TaskRun permanently failed" do
       user = create_user()
       {project, task, workflow} = create_task_with_workflow(user)
@@ -442,11 +582,12 @@ defmodule Sacrum.Accounts.TaskRunsTest do
         })
 
       assert {:ok, :unchanged} =
-               TaskRunLifecycle.mark_failed_if_active(task_run, :dispatch_failed)
+               Failure.mark_if_active(task_run, :dispatch_failed)
 
       reloaded = Repo.get!(TaskRun, task_run.id)
       assert reloaded.status == :stopping
-      assert reloaded.failure_kind == nil
+      assert reloaded.outcome_kind == nil
+      assert reloaded.outcome_context == %{}
       assert reloaded.ended_at == nil
     end
 
@@ -564,7 +705,7 @@ defmodule Sacrum.Accounts.TaskRunsTest do
       outcome_context = %{
         "kind" => "pull_request",
         "url" => "https://example.test/pull/123",
-        "needs_approval" => true
+        "source_step" => "open_pr"
       }
 
       assert {:ok, completed_run} =
@@ -577,8 +718,6 @@ defmodule Sacrum.Accounts.TaskRunsTest do
                })
 
       assert completed_run.status == :completed
-      assert completed_run.failure_kind == nil
-      assert completed_run.failure_reason == nil
       assert completed_run.outcome_kind == "pull_request_created"
       assert completed_run.outcome_context == outcome_context
 
@@ -627,5 +766,33 @@ defmodule Sacrum.Accounts.TaskRunsTest do
       assert {:ok, updated} = StepExecutions.update(execution, %{task_run_id: task_run.id})
       assert updated.task_run_id == task_run.id
     end
+  end
+
+  defp task_run_struct(attrs \\ %{}) do
+    Map.merge(
+      %TaskRun{
+        id: Ecto.UUID.generate(),
+        task_id: Ecto.UUID.generate(),
+        project_id: Ecto.UUID.generate(),
+        user_id: Ecto.UUID.generate(),
+        status: :executing
+      },
+      attrs
+    )
+  end
+
+  defp failed_execution_struct(task_run, attrs) do
+    Map.merge(
+      %StepExecution{
+        id: Ecto.UUID.generate(),
+        task_run_id: task_run.id,
+        task_id: task_run.task_id,
+        project_id: task_run.project_id,
+        step_id: Ecto.UUID.generate(),
+        step_name: "retryable_step",
+        status: "failed"
+      },
+      attrs
+    )
   end
 end
