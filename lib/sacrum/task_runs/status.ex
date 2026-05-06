@@ -39,4 +39,8 @@ defmodule Sacrum.TaskRuns.Status do
 
   @spec stoppable?(term()) :: boolean()
   def stoppable?(status), do: status in @stoppable_statuses
+
+  @spec wire_value(t() | String.t() | nil) :: String.t() | nil
+  def wire_value(status) when is_atom(status), do: Atom.to_string(status)
+  def wire_value(status), do: status
 end

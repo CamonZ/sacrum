@@ -17,6 +17,7 @@ defmodule Sacrum.Orchestrator do
   alias Sacrum.Repo
   alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.{StepExecution, TaskRun}
+  alias Sacrum.TaskRuns.Status, as: TaskRunStatus
 
   @typep active_task_run :: {:ok, TaskRun.t()} | {:error, :not_found}
   @typep in_flight_execution :: {:ok, StepExecution.t()} | :none
@@ -25,40 +26,77 @@ defmodule Sacrum.Orchestrator do
   def stop(task_id) when is_binary(task_id) do
     active_task_run = Lookup.fetch_active_for_task(task_id)
 
+    case stop_task_run_tuple(active_task_run, task_id, "[Orchestrator.stop]") do
+      {:ok, :not_running} -> {:ok, :not_running}
+      {:ok, _changes} -> {:ok, :stopped}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @spec stop_run(Ecto.UUID.t()) :: {:ok, :stopped | :not_running} | {:error, term()}
+  def stop_run(task_run_id) when is_binary(task_run_id) do
+    with {:ok, %TaskRun{} = task_run} <- Lookup.fetch(task_run_id) do
+      case stop_task_run(task_run) do
+        {:ok, :not_running} -> {:ok, :not_running}
+        {:ok, %TaskRun{}} -> {:ok, :stopped}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  @spec stop_task_run(TaskRun.t()) :: {:ok, TaskRun.t() | :not_running} | {:error, term()}
+  def stop_task_run(%TaskRun{} = task_run) do
+    if TaskRunStatus.active?(task_run.status) do
+      case stop_task_run_tuple({:ok, task_run}, task_run.task_id, "[Orchestrator.stop_run]") do
+        {:ok, %{task_run: updated_task_run}} -> {:ok, updated_task_run}
+        {:ok, :not_running} -> {:ok, :not_running}
+        {:ok, _changes} -> {:ok, task_run}
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      {:ok, :not_running}
+    end
+  end
+
+  @spec stop_task_run_tuple(active_task_run(), binary(), String.t()) ::
+          {:ok, map() | :not_running} | {:error, term()}
+  defp stop_task_run_tuple(active_task_run, task_id, log_prefix) do
     case Registry.lookup(TaskRegistry, task_id) do
       [{pid, _}] ->
         in_flight_execution = find_in_flight_execution(task_id, active_task_run)
 
         case commit_stop(active_task_run, in_flight_execution) do
           {:ok, changes} ->
+            broadcast_task_run_updated(changes)
             broadcast_cancelled_execution(changes)
             terminate_fsm_child(pid)
-            {:ok, :stopped}
+            {:ok, changes}
 
           {:error, reason} ->
-            Logger.error("[Orchestrator.stop] Failed to persist stop: #{inspect(reason)}")
+            Logger.error("#{log_prefix} Failed to persist stop: #{inspect(reason)}")
             {:error, reason}
         end
 
       [] ->
-        stop_durable_run_without_fsm(active_task_run)
+        stop_durable_run_without_fsm(active_task_run, log_prefix)
     end
   end
 
-  @spec stop_durable_run_without_fsm(active_task_run()) ::
-          {:ok, :stopped | :not_running} | {:error, term()}
-  defp stop_durable_run_without_fsm({:ok, _task_run} = active_task_run) do
+  @spec stop_durable_run_without_fsm(active_task_run(), String.t()) ::
+          {:ok, map() | :not_running} | {:error, term()}
+  defp stop_durable_run_without_fsm({:ok, _task_run} = active_task_run, log_prefix) do
     case commit_stop(active_task_run, :none) do
-      {:ok, _changes} ->
-        {:ok, :stopped}
+      {:ok, changes} ->
+        broadcast_task_run_updated(changes)
+        {:ok, changes}
 
       {:error, reason} ->
-        Logger.error("[Orchestrator.stop] Failed to persist durable stop: #{inspect(reason)}")
+        Logger.error("#{log_prefix} Failed to persist durable stop: #{inspect(reason)}")
         {:error, reason}
     end
   end
 
-  defp stop_durable_run_without_fsm({:error, :not_found}), do: {:ok, :not_running}
+  defp stop_durable_run_without_fsm({:error, :not_found}, _log_prefix), do: {:ok, :not_running}
 
   @spec commit_stop(active_task_run(), in_flight_execution()) :: {:ok, map()} | {:error, term()}
   defp commit_stop(active_task_run, in_flight_execution) do
@@ -137,6 +175,13 @@ defmodule Sacrum.Orchestrator do
   end
 
   defp broadcast_cancelled_execution(_changes), do: :ok
+
+  @spec broadcast_task_run_updated(map()) :: term()
+  defp broadcast_task_run_updated(%{task_run: task_run}) do
+    Broadcaster.broadcast_task_run({:ok, task_run}, :task_run_updated)
+  end
+
+  defp broadcast_task_run_updated(_changes), do: :ok
 
   @spec broadcast_cancel_step(StepExecution.t()) :: term()
   defp broadcast_cancel_step(execution) do

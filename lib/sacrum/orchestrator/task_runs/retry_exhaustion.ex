@@ -6,6 +6,7 @@ defmodule Sacrum.Orchestrator.TaskRuns.RetryExhaustion do
   alias Sacrum.Accounts.StepExecutions
   alias Sacrum.Orchestrator.TaskRuns.Lookup
   alias Sacrum.Repo
+  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.{StepExecution, TaskRun}
   alias Sacrum.TaskRuns.Status, as: TaskRunStatus
 
@@ -51,6 +52,7 @@ defmodule Sacrum.Orchestrator.TaskRuns.RetryExhaustion do
     task_run
     |> changeset(failed_execution, attrs)
     |> Repo.update()
+    |> Broadcaster.broadcast_task_run(:task_run_updated)
   end
 
   @spec get_task_run_execution(TaskRun.t(), binary() | nil | term()) :: StepExecution.t() | nil

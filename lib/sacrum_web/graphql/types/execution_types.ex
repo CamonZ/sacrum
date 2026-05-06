@@ -13,6 +13,65 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
   alias Sacrum.Orchestrator.{ExecutionDispatcher, Scheduler}
   alias Sacrum.Orchestrator.TaskRuns.Root
   alias Sacrum.Repo.Broadcaster
+  alias Sacrum.Repo.Schemas.TaskRun
+  alias Sacrum.TaskRuns.Status, as: TaskRunStatus
+
+  object :task_run do
+    field :id, :id
+    field :task_id, :id
+    field :project_id, :id
+    field :user_id, :id
+
+    field :status, :string do
+      resolve(fn task_run, _args, _resolution ->
+        {:ok, TaskRunStatus.wire_value(task_run.status)}
+      end)
+    end
+
+    field :started_at, :datetime
+    field :ended_at, :datetime
+    field :stop_requested_at, :datetime
+    field :latest_step_execution_id, :id
+    field :outcome_kind, :string
+    field :outcome_context, :json
+    field :parent_task_run_id, :id
+    field :root_task_run_id, :id
+    field :triggered_by_step_execution_id, :id
+    field :inserted_at, :datetime
+    field :updated_at, :datetime
+
+    field :task, :task do
+      resolve(dataloader(Accounts.Tasks))
+    end
+
+    field :project, :project do
+      resolve(dataloader(Accounts.Projects))
+    end
+
+    field :latest_step_execution, :step_execution do
+      resolve(dataloader(Accounts.StepExecutions))
+    end
+
+    field :parent_task_run, :task_run do
+      resolve(dataloader(Accounts.TaskRuns))
+    end
+
+    field :root_task_run, :task_run do
+      resolve(dataloader(Accounts.TaskRuns))
+    end
+
+    field :triggered_by_step_execution, :step_execution do
+      resolve(dataloader(Accounts.StepExecutions))
+    end
+
+    field :child_task_runs, list_of(:task_run) do
+      resolve(dataloader(Accounts.TaskRuns))
+    end
+
+    field :step_executions, list_of(:step_execution) do
+      resolve(dataloader(Accounts.StepExecutions))
+    end
+  end
 
   object :step_execution do
     field :id, :id
@@ -39,6 +98,10 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
 
     field :workflow, :workflow do
       resolve(dataloader(Accounts.Workflows))
+    end
+
+    field :task_run, :task_run do
+      resolve(dataloader(Accounts.TaskRuns))
     end
 
     field :project_id, :id
@@ -72,7 +135,63 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
     end
   end
 
+  object :task_run_trace do
+    field :root_task_run_id, :id
+    field :task_runs, list_of(:task_run)
+    field :step_executions, list_of(:step_execution)
+    field :session_logs, list_of(:session_log)
+  end
+
   object :execution_queries do
+    field :active_run, :task_run do
+      arg(:task_id, non_null(:uuid4))
+
+      resolve(fn %{task_id: task_id}, %{context: %{current_user: user}} ->
+        with {:ok, _task} <- Accounts.Tasks.find(user.id, task_id) do
+          case Accounts.TaskRuns.get_active_for_task(user.id, task_id) do
+            {:ok, task_run} -> {:ok, task_run}
+            {:error, :not_found} -> {:ok, nil}
+          end
+        end
+      end)
+    end
+
+    field :task_runs, list_of(:task_run) do
+      arg(:task_id, non_null(:uuid4))
+
+      resolve(fn %{task_id: task_id}, %{context: %{current_user: user}} ->
+        with {:ok, _task} <- Accounts.Tasks.find(user.id, task_id) do
+          {:ok, Accounts.TaskRuns.list_by(user.id, conditions: [task_id: task_id])}
+        end
+      end)
+    end
+
+    field :task_run, :task_run do
+      arg(:id, non_null(:uuid4))
+
+      resolve(fn %{id: id}, %{context: %{current_user: user}} ->
+        Accounts.TaskRuns.get_by(user.id, conditions: [id: id])
+      end)
+    end
+
+    field :task_run_trace, :task_run_trace do
+      arg(:root_task_run_id, non_null(:uuid4))
+
+      resolve(fn %{root_task_run_id: root_task_run_id}, %{context: %{current_user: user}} ->
+        with {:ok, root_run} <-
+               Accounts.TaskRuns.get_by(user.id, conditions: [id: root_task_run_id]) do
+          {:ok,
+           %{
+             root_task_run_id: root_run.id,
+             task_runs: Accounts.TaskRuns.list_for_trace(user.id, root_run.id),
+             step_executions:
+               Accounts.TaskRuns.list_step_executions_for_trace(user.id, root_run.id),
+             session_logs: Accounts.TaskRuns.list_session_logs_for_trace(user.id, root_run.id)
+           }}
+        end
+      end)
+    end
+
     field :step_executions, list_of(:step_execution) do
       arg(:task_id, non_null(:uuid4))
 
@@ -108,6 +227,25 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
   end
 
   object :execution_mutations do
+    field :run_workflow, :task_run do
+      arg(:task_id, non_null(:uuid4))
+
+      resolve(fn %{task_id: task_id}, %{context: %{current_user: user}} ->
+        with {:ok, _task} <- schedule_task_for_mutation(:run_workflow, task_id, user) do
+          Accounts.TaskRuns.get_active_for_task(user.id, task_id)
+        end
+      end)
+    end
+
+    field :stop_run, :task_run do
+      arg(:task_id, :uuid4)
+      arg(:task_run_id, :uuid4)
+
+      resolve(fn args, %{context: %{current_user: user}} ->
+        stop_run(args, user)
+      end)
+    end
+
     field :create_step_execution, :step_execution do
       arg(:task_id, non_null(:uuid4))
       arg(:workflow_id, non_null(:uuid4))
@@ -218,6 +356,43 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
       end
     end
 
+    defp stop_run(%{task_id: task_id, task_run_id: task_run_id}, _user)
+         when is_binary(task_id) and is_binary(task_run_id),
+         do: {:error, "Provide exactly one of taskId or taskRunId"}
+
+    defp stop_run(%{task_run_id: task_run_id}, user) when is_binary(task_run_id) do
+      with {:ok, task_run} <- Accounts.TaskRuns.get_by(user.id, conditions: [id: task_run_id]) do
+        stop_loaded_task_run(task_run)
+      end
+    end
+
+    defp stop_run(%{task_id: task_id}, user) when is_binary(task_id) do
+      with {:ok, _task} <- Accounts.Tasks.find(user.id, task_id),
+           {:ok, task_run} <- active_task_run_or_nil(user.id, task_id) do
+        stop_loaded_task_run(task_run)
+      end
+    end
+
+    defp stop_run(_args, _user), do: {:error, "Provide taskId or taskRunId"}
+
+    defp active_task_run_or_nil(user_id, task_id) do
+      case Accounts.TaskRuns.get_active_for_task(user_id, task_id) do
+        {:ok, task_run} -> {:ok, task_run}
+        {:error, :not_found} -> {:ok, nil}
+      end
+    end
+
+    defp stop_loaded_task_run(nil), do: {:ok, nil}
+
+    defp stop_loaded_task_run(%TaskRun{} = task_run) do
+      with {:ok, stopped_run} <- Sacrum.Orchestrator.stop_task_run(task_run) do
+        {:ok, stopped_task_run(stopped_run, task_run)}
+      end
+    end
+
+    defp stopped_task_run(%TaskRun{} = task_run, _fallback), do: task_run
+    defp stopped_task_run(:not_running, %TaskRun{} = task_run), do: task_run
+
     field :cancel_step_execution, :step_execution do
       arg(:step_execution_id, non_null(:uuid4))
 
@@ -247,38 +422,68 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
       arg(:task_id, non_null(:uuid4))
 
       resolve(fn %{task_id: task_id}, %{context: %{current_user: user}} ->
-        Logger.info("[orchestrateTask] Mutation called for task_id=#{task_id} user=#{user.id}")
-
-        with {:ok, task} <- Accounts.Tasks.get_by(user.id, conditions: [id: task_id]),
-             _ =
-               Logger.info(
-                 "[orchestrateTask] Task found, workflow_id=#{task.workflow_id}, current_step_id=#{task.current_step_id}"
-               ),
-             :ok <- Scheduler.schedule_task(%{id: task_id}) do
-          Logger.info("[orchestrateTask] Scheduler accepted task #{task_id}")
-          {:ok, task}
-        else
-          {:error, :not_found} ->
-            Logger.warning("[orchestrateTask] Task #{task_id} not found")
-            {:error, "Task not found"}
-
-          {:error, :no_workflow_assigned} ->
-            Logger.warning("[orchestrateTask] Task #{task_id} has no workflow")
-            {:error, "Task has no workflow assigned"}
-
-          {:error, :task_already_completed} ->
-            Logger.warning("[orchestrateTask] Task #{task_id} already completed")
-            {:error, "Cannot orchestrate a completed task"}
-
-          {:error, :orchestrator_already_running} ->
-            Logger.warning("[orchestrateTask] Task #{task_id} orchestrator already running")
-            {:error, "Orchestration is already running for this task"}
-
-          {:error, reason} ->
-            Logger.error("[orchestrateTask] Failed for task #{task_id}: #{inspect(reason)}")
-            {:error, "Failed to schedule task: #{inspect(reason)}"}
-        end
+        schedule_task_for_mutation(:orchestrate_task, task_id, user)
       end)
     end
+
+    defp schedule_task_for_mutation(operation, task_id, user) do
+      operation_name = operation_name(operation)
+      Logger.info("[#{operation_name}] Mutation called for task_id=#{task_id} user=#{user.id}")
+
+      with {:ok, task} <- Accounts.Tasks.get_by(user.id, conditions: [id: task_id]),
+           _ =
+             Logger.info(
+               "[#{operation_name}] Task found, workflow_id=#{task.workflow_id}, current_step_id=#{task.current_step_id}"
+             ),
+           :ok <- Scheduler.schedule_task(%{id: task_id}) do
+        Logger.info("[#{operation_name}] Scheduler accepted task #{task_id}")
+        {:ok, task}
+      else
+        {:error, reason} -> schedule_task_error(operation, task_id, reason)
+      end
+    end
+
+    defp schedule_task_error(operation, task_id, :not_found) do
+      Logger.warning("[#{operation_name(operation)}] Task #{task_id} not found")
+      {:error, "Task not found"}
+    end
+
+    defp schedule_task_error(operation, task_id, :no_workflow_assigned) do
+      Logger.warning("[#{operation_name(operation)}] Task #{task_id} has no workflow")
+      {:error, "Task has no workflow assigned"}
+    end
+
+    defp schedule_task_error(:run_workflow, task_id, :task_already_completed) do
+      Logger.warning("[runWorkflow] Task #{task_id} already completed")
+      {:error, "Cannot run a completed task"}
+    end
+
+    defp schedule_task_error(:orchestrate_task, task_id, :task_already_completed) do
+      Logger.warning("[orchestrateTask] Task #{task_id} already completed")
+      {:error, "Cannot orchestrate a completed task"}
+    end
+
+    defp schedule_task_error(:run_workflow, task_id, :orchestrator_already_running) do
+      Logger.warning("[runWorkflow] Task #{task_id} workflow run already running")
+      {:error, "Workflow run is already running for this task"}
+    end
+
+    defp schedule_task_error(:orchestrate_task, task_id, :orchestrator_already_running) do
+      Logger.warning("[orchestrateTask] Task #{task_id} orchestrator already running")
+      {:error, "Orchestration is already running for this task"}
+    end
+
+    defp schedule_task_error(:run_workflow, task_id, reason) do
+      Logger.error("[runWorkflow] Failed for task #{task_id}: #{inspect(reason)}")
+      {:error, "Failed to start workflow run: #{inspect(reason)}"}
+    end
+
+    defp schedule_task_error(:orchestrate_task, task_id, reason) do
+      Logger.error("[orchestrateTask] Failed for task #{task_id}: #{inspect(reason)}")
+      {:error, "Failed to schedule task: #{inspect(reason)}"}
+    end
+
+    defp operation_name(:run_workflow), do: "runWorkflow"
+    defp operation_name(:orchestrate_task), do: "orchestrateTask"
   end
 end

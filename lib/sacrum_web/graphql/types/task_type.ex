@@ -79,6 +79,10 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
     field :dependents, list_of(:task) do
       resolve(dataloader(Accounts.Tasks))
     end
+
+    field :task_runs, list_of(:task_run) do
+      resolve(dataloader(Accounts.TaskRuns))
+    end
   end
 
   object :task_queries do
