@@ -101,7 +101,7 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
            |> TaskRunLifecycle.waiting_changeset(execution.id)
            |> Repo.update(),
          {:ok, updated_task} <- Repo.update(task_status_changeset(data.task)),
-         {:ok, child_runs} <- get_or_create_child_runs(children) do
+         {:ok, child_runs} <- get_or_create_child_runs(children, updated_task_run, execution.id) do
       %{
         execution: execution,
         task_run: updated_task_run,
@@ -126,10 +126,14 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
     |> Status.put_status()
   end
 
-  defp get_or_create_child_runs(children) do
+  defp get_or_create_child_runs(children, parent_task_run, triggered_by_step_execution_id) do
     child_runs =
       Enum.reduce_while(children, {:ok, []}, fn child, {:ok, acc} ->
-        case TaskRunLifecycle.get_or_create_root_run(child) do
+        case TaskRunLifecycle.get_or_create_child_run(
+               child,
+               parent_task_run,
+               triggered_by_step_execution_id
+             ) do
           {:ok, task_run} -> {:cont, {:ok, [{child, task_run} | acc]}}
           {:error, reason} -> {:halt, {:error, reason}}
         end

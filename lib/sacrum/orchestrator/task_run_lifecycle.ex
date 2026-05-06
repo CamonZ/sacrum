@@ -24,6 +24,23 @@ defmodule Sacrum.Orchestrator.TaskRunLifecycle do
     TaskRuns.insert(task.user_id, task.project_id, task.id, %{status: :queued})
   end
 
+  @spec get_or_create_child_run(Task.t(), TaskRun.t(), String.t()) ::
+          {:ok, TaskRun.t()} | {:error, term()}
+  def get_or_create_child_run(
+        %Task{} = child,
+        %TaskRun{} = parent_task_run,
+        triggered_by_step_execution_id
+      )
+      when is_binary(triggered_by_step_execution_id) do
+    case TaskRuns.get_active_for_task(child.user_id, child.id) do
+      {:ok, %TaskRun{} = task_run} ->
+        reconcile_child_run(task_run, parent_task_run, triggered_by_step_execution_id)
+
+      {:error, :not_found} ->
+        create_child_run(child, parent_task_run, triggered_by_step_execution_id)
+    end
+  end
+
   @spec validate_dispatchable(TaskRun.t()) :: {:ok, TaskRun.t()} | {:error, term()}
   def validate_dispatchable(%TaskRun{} = task_run) do
     if TaskRunStatus.stoppable?(task_run.status),
@@ -165,4 +182,62 @@ defmodule Sacrum.Orchestrator.TaskRunLifecycle do
   defp stringify_context(context) do
     Map.new(context, fn {key, value} -> {to_string(key), value} end)
   end
+
+  defp create_child_run(%Task{} = child, %TaskRun{} = parent_task_run, trigger_id) do
+    TaskRuns.insert(child.user_id, child.project_id, child.id, %{
+      status: :queued,
+      parent_task_run_id: parent_task_run.id,
+      root_task_run_id: root_task_run_id(parent_task_run),
+      triggered_by_step_execution_id: trigger_id
+    })
+  end
+
+  defp reconcile_child_run(%TaskRun{} = task_run, %TaskRun{} = parent_task_run, trigger_id) do
+    if task_run.parent_task_run_id == parent_task_run.id and
+         task_run.root_task_run_id == root_task_run_id(parent_task_run) do
+      reconcile_child_run_trigger(task_run, trigger_id)
+    else
+      reject_child_run_lineage(task_run)
+    end
+  end
+
+  defp reconcile_child_run_trigger(
+         %TaskRun{triggered_by_step_execution_id: nil} = task_run,
+         trigger_id
+       ) do
+    stamp_trigger(task_run, trigger_id)
+  end
+
+  defp reconcile_child_run_trigger(
+         %TaskRun{triggered_by_step_execution_id: trigger_id} = task_run,
+         trigger_id
+       ) do
+    validate_dispatchable(task_run)
+  end
+
+  defp reconcile_child_run_trigger(%TaskRun{} = task_run, _trigger_id) do
+    {:error, {:child_task_run_lineage_conflict, task_run.id}}
+  end
+
+  defp reject_child_run_lineage(
+         %TaskRun{parent_task_run_id: nil, root_task_run_id: nil} = task_run
+       ) do
+    {:error, {:child_task_run_has_manual_root, task_run.id}}
+  end
+
+  defp reject_child_run_lineage(%TaskRun{} = task_run) do
+    {:error, {:child_task_run_lineage_conflict, task_run.id}}
+  end
+
+  defp stamp_trigger(%TaskRun{} = task_run, trigger_id) do
+    with {:ok, task_run} <-
+           task_run
+           |> TaskRun.lineage_changeset(%{triggered_by_step_execution_id: trigger_id})
+           |> Repo.update() do
+      validate_dispatchable(task_run)
+    end
+  end
+
+  defp root_task_run_id(%TaskRun{root_task_run_id: nil, id: id}), do: id
+  defp root_task_run_id(%TaskRun{root_task_run_id: root_task_run_id}), do: root_task_run_id
 end

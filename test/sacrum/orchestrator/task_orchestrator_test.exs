@@ -8,7 +8,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
   alias Sacrum.Orchestrator.FSMData
   alias Sacrum.Orchestrator.TaskOrchestrator
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.StepExecution
+  alias Sacrum.Repo.Schemas.{StepExecution, TaskRun}
 
   # ===== Setup helpers =====
 
@@ -264,6 +264,16 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
   defp reload_task(task) do
     Repo.get!(Sacrum.Repo.Schemas.Task, task.id)
+  end
+
+  defp latest_task_run(task_id) do
+    Repo.one!(
+      from(tr in TaskRun,
+        where: tr.task_id == ^task_id,
+        order_by: [desc: tr.inserted_at, desc: tr.id],
+        limit: 1
+      )
+    )
   end
 
   # ===== Tests =====
@@ -2278,6 +2288,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         )
 
       assert length(parent_waiting) == 1, "Parent should have a single waiting execution"
+      parent_waiting_exec = hd(parent_waiting)
 
       assert Enum.any?(1..50, fn _ ->
                child_waiting =
@@ -2295,6 +2306,44 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
                end
              end),
              "Middle child should have parked with its own waiting execution"
+
+      child_waiting_exec =
+        Repo.one!(
+          from(e in StepExecution,
+            where: e.task_id == ^child_task.id and e.status == "waiting",
+            order_by: [desc: e.inserted_at],
+            limit: 1
+          )
+        )
+
+      parent_run = latest_task_run(parent_task.id)
+      child_run = latest_task_run(child_task.id)
+      leaf_run = latest_task_run(leaf_task.id)
+
+      assert parent_run.parent_task_run_id == nil
+      assert parent_run.root_task_run_id == nil
+      assert parent_run.triggered_by_step_execution_id == nil
+
+      assert child_run.parent_task_run_id == parent_run.id
+      assert child_run.root_task_run_id == parent_run.id
+      assert child_run.triggered_by_step_execution_id == parent_waiting_exec.id
+
+      assert leaf_run.parent_task_run_id == child_run.id
+      assert leaf_run.root_task_run_id == parent_run.id
+      assert leaf_run.triggered_by_step_execution_id == child_waiting_exec.id
+
+      trace_ids =
+        parent_run.id
+        |> then(&Accounts.TaskRuns.list_for_trace(user.id, &1))
+        |> Enum.map(& &1.id)
+
+      descendant_ids =
+        parent_run.id
+        |> then(&Accounts.TaskRuns.list_descendants_for_trace(user.id, &1))
+        |> Enum.map(& &1.id)
+
+      assert trace_ids == [parent_run.id, child_run.id, leaf_run.id]
+      assert descendant_ids == [child_run.id, leaf_run.id]
 
       assert Registry.lookup(Sacrum.Orchestrator.TaskRegistry, parent_task.id) == [],
              "Parent orchestrator must exit (pause lives in DB)"
