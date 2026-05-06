@@ -30,6 +30,18 @@ When given a ticket to implement, you MUST follow this exact sequence:
 - Implement the changes incrementally, testing as you go
 - Follow existing code patterns and project conventions
 
+### Tidewave Verification Loop
+
+- When creating a new helper or changing meaningful function behavior, start with the function callable as public (`def`) long enough to verify it directly through Tidewave `project_eval`
+- Use representative inputs to confirm the return values, tagged tuples, errors, structs, and edge-case shapes match the intended contract
+- Once the function's behavior is confirmed, decide whether it is truly part of the module's public API. If it is only an implementation detail, convert it to private (`defp`) before finishing
+- After converting it to private, verify the behavior again through the nearest public caller and add or update ExUnit tests at that public boundary
+- Never leave a function public only because it was convenient to test through Tidewave
+- Treat Tidewave checks as development-time verification, not a substitute for ExUnit. Important cases must still be captured in tests before finishing
+- If Tidewave is unavailable, say so and continue with targeted `mix test` or equivalent project verification
+- When working from a Git worktree, make sure the stable Tidewave MCP proxy is pointed at that worktree's Phoenix server before using Tidewave
+- Start the app from the worktree on a free port, run `scripts/tidewave_mcp_proxy.py http://localhost:<port>`, and verify `File.cwd!()` through `project_eval` points to the active worktree before trusting Tidewave results
+
 ## Important Rules
 
 1. **Do not commit automatically** - Always show the user the changes using `git diff --color=always` and ask for approval before committing

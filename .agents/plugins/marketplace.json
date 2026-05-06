@@ -15,6 +15,18 @@
         "authentication": "ON_USE"
       },
       "category": "Coding"
+    },
+    {
+      "name": "codex-simplify",
+      "source": {
+        "source": "local",
+        "path": "./.agents/plugins/codex-simplify"
+      },
+      "policy": {
+        "installation": "INSTALLED_BY_DEFAULT",
+        "authentication": "ON_USE"
+      },
+      "category": "Coding"
     }
   ]
 }

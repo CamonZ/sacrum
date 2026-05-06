@@ -1,0 +1,31 @@
+{
+  "name": "codex-simplify",
+  "version": "0.1.0",
+  "description": "Codex-only cleanup review skill for changed code.",
+  "author": {
+    "name": "Camonz"
+  },
+  "license": "UNLICENSED",
+  "keywords": [
+    "codex",
+    "review",
+    "cleanup",
+    "simplify"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Codex Simplify",
+    "shortDescription": "Review changed code and clean it up",
+    "longDescription": "Provides a Codex-only workflow for reviewing changed files for reuse, code quality, and efficiency, then applying cleanup fixes directly.",
+    "developerName": "Camonz",
+    "category": "Coding",
+    "capabilities": [
+      "Read",
+      "Write",
+      "Review"
+    ],
+    "defaultPrompt": [
+      "Use $simplify to review my current diff and fix cleanup issues."
+    ]
+  }
+}

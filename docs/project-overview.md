@@ -21,6 +21,22 @@ mix format                         # Format code
 
 The `precommit` alias runs in the `:test` environment (configured in `cli/0`).
 
+## Worktree Tidewave MCP
+
+Codex is configured to use a stable Tidewave MCP proxy at `localhost:4499`. When
+working from a Git worktree, start the Phoenix server from that worktree on a
+free port and point the proxy at that app instance:
+
+```bash
+PORT=4101 mix phx.server
+scripts/tidewave_mcp_proxy.py http://localhost:4101
+```
+
+The proxy accepts either the app URL or the full MCP URL, such as
+`http://localhost:4101/tidewave/mcp`. Before trusting Tidewave output, verify the
+runtime is attached to the active worktree with a quick `project_eval` check such
+as `File.cwd!()`.
+
 ## Architecture
 
 The project uses a **three-layer architecture** (Accounts → Repo → Ecto) instead of Phoenix contexts. See [Repository & Accounts Pattern](patterns.md) for the full reference.
