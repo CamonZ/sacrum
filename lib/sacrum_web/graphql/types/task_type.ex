@@ -42,6 +42,10 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
     field :inserted_at, :datetime
     field :updated_at, :datetime
 
+    @desc """
+    Compatibility task queue status. New derivations write `ready` or `done`;
+    use `activeRun`, `taskRuns`, or `runControls.activeRun.status` for automation lifecycle.
+    """
     field :status, :string
 
     # Associations
@@ -108,6 +112,11 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
       arg(:level, :string)
       arg(:priority, :string)
       arg(:parent_id, :uuid4)
+
+      @desc """
+      Compatibility filter over persisted Task.status. Prefer TaskRun fields for
+      active run lifecycle and workflow/currentStep for workflow position.
+      """
       arg(:status, :string)
       arg(:step_id, :uuid4)
       arg(:tags, list_of(:string))

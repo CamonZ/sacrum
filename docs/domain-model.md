@@ -77,6 +77,10 @@ The API is exposed via **GraphQL** at `/graphql` (GraphiQL playground available 
 **`execution_types.ex`** — Execution queries
 | Query | Arguments | Description |
 |-------|-----------|-------------|
+| `activeRun` | `task_id!` | Current active `TaskRun` for a task, or null |
+| `taskRuns` | `task_id!` | List durable runs for a task |
+| `taskRun` | `id!` | Single durable run by ID |
+| `taskRunTrace` | `root_task_run_id!` | Full run trace with child runs, step attempts, and logs |
 | `stepExecutions` | `task_id!` | List executions for a task |
 | `stepExecution` | `id!` | Single execution by ID |
 | `sessionLogs` | `step_execution_id!` | List logs for an execution |
@@ -197,7 +201,7 @@ The codebase uses a **three-layer architecture** (Accounts → Repo → Ecto) in
 | WorkflowStep | `Schemas.WorkflowStep` | `Repo.WorkflowSteps` | `Accounts.WorkflowSteps` | `workflow_step_type.ex` |
 | Section | `Schemas.TaskSection` | `Repo.TaskSections` | `Accounts.Sections` | `section_types.ex` |
 | StepExecution | `Schemas.StepExecution` | `Repo.StepExecutions` | `Accounts.StepExecutions` | `execution_types.ex` |
-| TaskRun | `Schemas.TaskRun` | `Repo.TaskRuns` | `Accounts.TaskRuns` | Not exposed yet |
+| TaskRun | `Schemas.TaskRun` | `Repo.TaskRuns` | `Accounts.TaskRuns` | `execution_types.ex` |
 | Project | `Schemas.Project` | `Repo.Projects` | `Accounts.Projects` | `project_type.ex` |
 
 Complex operations (transition syncing, workflow assignment, step movement) use `Ecto.Multi` for transactional safety. Dependency management includes BFS shortest-path and DFS cycle-detection algorithms.
@@ -208,26 +212,25 @@ Sacrum has separate status fields for separate questions. Do not collapse them i
 
 | Field | Answers | Source of Truth |
 |-------|---------|-----------------|
-| `Task.status` | Where is the task in the human/workflow queue? | Derived task workflow position |
+| `Task.status` | Compatibility queue summary for task lists and filters | Derived durable task state |
 | `TaskRun.status` | What is the automation run doing now? | Durable run lifecycle |
 | `StepExecution.status` | What happened to one step attempt? | Daemon/orchestrator attempt updates |
 | `SessionLog` | What text/content was emitted during an attempt? | Append-only log content, no lifecycle status |
 
-Use `Task.status` for workflow filters such as ready, waiting, running, and done. Use `TaskRun.status` for automation controls such as whether a run is active or stoppable. Use `StepExecution.status` for attempt history, retry diagnostics, and LLM metadata. `SessionLog` has no state/status field; it records content attached to a `StepExecution` and must not be used to infer run state.
+Use `Task.status` only as a compatibility list/filter field for queue states that Sacrum still persists on `tasks`. New derivations write `ready` or `done`; historical `running` and `waiting` values remain valid database/filter values until clients finish migrating. Use `TaskRun.status` for automation controls such as whether a run is active or stoppable. Use `Task.workflow` and `Task.current_step` for workflow position. Use `StepExecution.status` for attempt history, retry diagnostics, and LLM metadata. `SessionLog` has no state/status field; it records content attached to a `StepExecution` and must not be used to infer run state.
 
 ### Task.status
 
-Task status is derived from orchestrator state by `Sacrum.Tasks.Status.derive/1` and persisted into the `tasks.status` column. The orchestrator (and any operation that mutates positional state or the dependency graph) is responsible for keeping the column in sync via `Sacrum.Tasks.Status.refresh/1`. Read paths (GraphQL, queries, filters) read the column directly.
+Task status is derived by `Sacrum.Tasks.Status.derive/1` and persisted into the `tasks.status` column. The field remains in GraphQL and repository filters for compatibility, but it is no longer the source of truth for active automation lifecycle. Read paths (GraphQL, queries, filters) read the column directly.
 
 Derivation rules are evaluated in order; the first match wins.
 
-- **`:running`** — Daemon is executing the current step
-  - Precondition: Latest StepExecution has status "started" or "in_progress"
-- **`:waiting`** — Parent waiting for its children (a `wait_children` step)
-  - Precondition: Latest StepExecution has status "waiting"
-- **`:done`** — Task completed at a terminal position
-  - Preconditions: latest StepExecution is "completed", `current_step.is_final == true`, the current step has no outgoing step transitions, and the workflow has no outgoing workflow transitions. (The `is_final` flag alone is not load-bearing — outgoing transitions disqualify regardless.)
-- **`:ready`** — `current_step_id` is set and none of the above apply
+- **`:done`** — Task completion has been stamped (`completed_at` is set).
+- **`:ready`** — The task is not completed.
+
+`Status.derive/1` does not inspect `StepExecution.status` for active states. A latest attempt with `"started"`, `"in_progress"`, `"waiting"`, `"cancelling"`, or `"failed"` does not make the task `running`, `waiting`, or failed. Those are run/attempt questions owned by `TaskRun.status` and `StepExecution.status`.
+
+The `tasks.status` database constraint still accepts `ready`, `running`, `waiting`, and `done` so older clients can continue filtering legacy rows. New refreshes only write `ready` or `done`. Clients that currently use `tasks(status: "running")` or `tasks(status: "waiting")` should migrate to `activeRun`, `taskRuns`, or `runControls.activeRun.status` for run lifecycle and to `workflow`/`currentStep` for workflow position.
 
 Task dependencies (blockers) are *not* part of status derivation. Blockers are an informational relationship; they do not move a task into `:waiting`. Read paths that need "actionable now" (e.g. `listReady`) filter dependents in the query layer, not via status.
 
@@ -293,15 +296,15 @@ Timestamps are stamped **exclusively by the orchestrator** (ExecutionDispatcher 
 
 Operations that change derivation inputs run the position update and the status refresh in the same `Ecto.Multi`/transaction, using `Status.changeset/1` as the second step:
 
-- `TaskWorkflows.assign_workflow / unassign_workflow / advance_to_step / move_to_step` — wraps the position update and status refresh in one transaction; broadcasts after commit
+- `TaskWorkflows.assign_workflow / unassign_workflow / advance_to_step / move_to_step` — wraps the position update and compatibility status refresh in one transaction; broadcasts after commit
 - `TaskCompletion.handle_completion/1` — wraps `completed_at` stamping and status refresh in one transaction
-- `ExecutionDispatcher.create_and_dispatch/4` — calls `Status.refresh/1` after the started execution is inserted
+- `ExecutionDispatcher.create_and_dispatch/4` — stamps `started_at` without deriving an active task status from the started attempt
 
 `TaskDependencies.add_dependency / remove_dependency` do not refresh status — dependencies are not derivation inputs.
 
 ### Example
 
 ```elixir
-status = Sacrum.Tasks.Status.derive(task)  # auto-preloads; => :ready | :running | :waiting | :done
+status = Sacrum.Tasks.Status.derive(task)  # => :ready | :done
 active = Sacrum.TaskRuns.Status.active?(task_run.status)
 ```
