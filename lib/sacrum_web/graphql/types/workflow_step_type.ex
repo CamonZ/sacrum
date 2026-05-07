@@ -7,6 +7,7 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
   import Absinthe.Resolution.Helpers
 
   alias Sacrum.Accounts
+  alias SacrumWeb.Graphql.ChangesetErrors
   alias SacrumWeb.Graphql.ShortIdErrors
 
   object :workflow_step do
@@ -132,7 +133,7 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
         with {:ok, workflow} <- Accounts.Workflows.get_by(user.id, conditions: [id: workflow_id]) do
           case Accounts.WorkflowSteps.insert(workflow, args) do
             {:ok, step} -> {:ok, step}
-            {:error, changeset} -> {:error, format_changeset_errors(changeset)}
+            {:error, changeset} -> {:error, ChangesetErrors.format(changeset)}
           end
         end
       end)
@@ -165,7 +166,7 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
 
           case Accounts.WorkflowSteps.update(step, attrs) do
             {:ok, step} -> {:ok, step}
-            {:error, changeset} -> {:error, format_changeset_errors(changeset)}
+            {:error, changeset} -> {:error, ChangesetErrors.format(changeset)}
           end
         end
       end)
@@ -198,18 +199,5 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
     field :label, :string
     field :from_step_id, :uuid4
     field :to_step_id, :uuid4
-  end
-
-  defp format_changeset_errors(changeset) do
-    changeset
-    |> Ecto.Changeset.traverse_errors(fn {msg, opts} ->
-      Enum.reduce(opts, msg, fn {key, value}, acc ->
-        String.replace(acc, "%{#{key}}", to_string(value))
-      end)
-    end)
-    |> Enum.flat_map(fn {field, errors} ->
-      Enum.map(errors, &"#{field}: #{&1}")
-    end)
-    |> Enum.join(", ")
   end
 end

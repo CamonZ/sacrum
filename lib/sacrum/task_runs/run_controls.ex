@@ -144,7 +144,7 @@ defmodule Sacrum.TaskRuns.RunControls do
 
   defp stale_active_run?(task, active_run, opts) do
     not orchestrator_running?(task.id, opts) and
-      normalize_status(active_run.status) in [:executing, :waiting] and
+      normalize_status(active_run.status) == :executing and
       in_flight_execution?(active_run, opts)
   end
 

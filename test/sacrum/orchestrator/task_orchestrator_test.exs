@@ -1931,6 +1931,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, child_workflow, %{
           name: "child_step",
           step_order: 1,
+          step_type: "human_input",
           is_final: true
         })
 
@@ -2127,7 +2128,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       child_task = create_child_task(user, project, parent_task)
       child_task = assign_workflow_to_task(child_task, child_workflow)
 
-      # Create a waiting execution for child (simulating Human Review)
       Repo.insert(%StepExecution{
         task_id: child_task.id,
         workflow_id: child_workflow.id,

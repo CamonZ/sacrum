@@ -47,7 +47,7 @@ vtb step add "Coding" -w <wf-id> \
 # With agents and skills
 vtb step add "Review" -w <wf-id> --agent .claude/agents/reviewer.md --skill review
 
-# Step types: execute (default), evaluate, route
+# Step types: execute (default), evaluate, route, wait_children, human_input
 vtb step add "Evaluate" -w <wf-id> --step-type evaluate \
   --output-schema '{"type":"object","required":["passed"],"properties":{"passed":{"type":"boolean"}}}'
 
@@ -72,7 +72,7 @@ vtb step delete <id>
 | `agents` | Agent file paths |
 | `skills` | Slash commands available during this step |
 | `transition-to` | Restrict which steps can follow |
-| `step-type` | `execute`, `evaluate`, or `route` |
+| `step-type` | `execute`, `evaluate`, `route`, `wait_children`, or `human_input` |
 | `output-schema` | JSON Schema for structured output |
 
 ## Step Types
@@ -82,6 +82,8 @@ vtb step delete <id>
 | `execute` | Default. Runs the step's prompt and produces output. |
 | `evaluate` | Assesses output of a previous step. Emits structured JSON matching `output_schema`. |
 | `route` | Terminal-of-workflow decision step. Emits `{ transition_to, transition_type, handoff }` to direct to the next workflow/step. |
+| `wait_children` | Parks the parent run while child tasks execute, then resumes when all children complete. |
+| `human_input` | Parks the run for generic human response. The submitted response is validated against `output_schema`, stored on the step execution, and then the same run resumes. |
 
 ## Prompt Templates
 

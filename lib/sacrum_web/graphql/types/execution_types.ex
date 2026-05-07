@@ -15,6 +15,7 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
   alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.TaskRun
   alias Sacrum.TaskRuns.Status, as: TaskRunStatus
+  alias SacrumWeb.Graphql.ChangesetErrors
 
   object :task_run do
     field :id, :id
@@ -301,7 +302,13 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
             "[updateStepExecution] Found execution: status=#{execution.status}, updating with #{inspect(attrs)}"
           )
 
-          Accounts.StepExecutions.update(execution, attrs)
+          case Accounts.StepExecutions.update(execution, attrs) do
+            {:error, %Ecto.Changeset{} = changeset} ->
+              {:error, ChangesetErrors.format(changeset)}
+
+            result ->
+              result
+          end
         end
       end)
     end

@@ -90,6 +90,22 @@ defmodule Sacrum.TaskRuns.RunControlsTest do
     assert controls.active_run.latest_step_execution_id == execution.id
   end
 
+  test "waiting run with waiting execution remains active and stoppable", %{
+    user: user,
+    project: project
+  } do
+    task = create_task(user, project, "Human input pause")
+    {:ok, run} = Accounts.TaskRuns.insert(user.id, project.id, task.id, %{status: :waiting})
+    {:ok, execution} = create_step_execution(user, task, run.id, "waiting")
+    {:ok, _run} = Accounts.TaskRuns.update(run, %{latest_step_execution_id: execution.id})
+
+    assert {:ok, controls} = RunControls.for_task(user.id, task.id)
+    assert controls.runnable == false
+    assert controls.stoppable == true
+    assert controls.disabled_reason_code == "active_run"
+    assert controls.active_run.latest_step_execution_id == execution.id
+  end
+
   test "stale active run with in-flight work is not advertised as safely stoppable", %{
     user: user,
     project: project
