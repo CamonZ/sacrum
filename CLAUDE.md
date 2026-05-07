@@ -17,6 +17,7 @@ Prefix every commit message with a ticket reference:
 | [Phoenix Guidelines](docs/phoenix-guidelines.md) | Elixir, Ecto, Mix, test, router conventions |
 | [Frontend Guidelines](docs/frontend-guidelines.md) | LiveView, HEEx, Tailwind, CSS (for future UI) |
 | [Domain Model](docs/domain-model.md) | Workflow engine, task management, API surface |
+| [GUI/CLI TaskRun Contract](docs/client-taskrun-contract.md) | Client-facing TaskRun state, GraphQL, WebSocket, and migration guidance |
 | [Repository Pattern](docs/patterns.md) | Three-layer architecture, GenericRepo, GenericResource, Accounts |
 | [Error Handling](docs/error-handling.md) | Error types, propagation, conventions |
 | [Testing Guide](docs/testing.md) | Test infrastructure, GraphQL, channels, patterns |
