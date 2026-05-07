@@ -60,19 +60,30 @@ defmodule Sacrum.Tasks.StatusTest do
     Repo.get!(Task, task.id)
   end
 
+  defp insert_execution(task, workflow, step, status, attrs \\ %{}) do
+    Accounts.StepExecutions.insert(
+      task.user_id,
+      Map.merge(
+        %{
+          task_id: task.id,
+          project_id: task.project_id,
+          workflow_id: workflow.id,
+          step_id: step.id,
+          step_name: step.name,
+          status: status
+        },
+        attrs
+      )
+    )
+  end
+
+  defp mark_completed(task) do
+    {:ok, completed} = Accounts.Tasks.update(task, %{completed_at: DateTime.utc_now()})
+    completed
+  end
+
   describe "derive/1 - ready state" do
-    test "returns :ready for task with current_step_id and no active StepExecution" do
-      user = create_user()
-      project = create_project(user)
-      workflow = create_workflow(user, project)
-      step = create_step(workflow)
-
-      task = create_task(user, project, workflow, step)
-
-      assert Status.derive(task) == :ready
-    end
-
-    test "returns :ready when task is on a step but no execution yet created" do
+    test "returns :ready for task with current_step_id and no StepExecution" do
       user = create_user()
       project = create_project(user)
       workflow = create_workflow(user, project)
@@ -92,287 +103,94 @@ defmodule Sacrum.Tasks.StatusTest do
     end
   end
 
-  describe "derive/1 - running state" do
-    test "returns :running when latest StepExecution is started" do
+  describe "derive/1 - automation lifecycle split" do
+    test "does not derive running or waiting task status from active StepExecution states" do
       user = create_user()
       project = create_project(user)
       workflow = create_workflow(user, project)
       step = create_step(workflow)
 
-      task = create_task(user, project, workflow, step)
+      for status <- ["started", "in_progress", "cancelling", "waiting"] do
+        task = create_task(user, project, workflow, step)
 
-      # Create a started execution
-      {:ok, _execution} =
-        Accounts.StepExecutions.insert(task.user_id, %{
-          task_id: task.id,
-          project_id: task.project_id,
-          workflow_id: workflow.id,
-          step_id: step.id,
-          step_name: step.name,
-          status: "started"
-        })
+        {:ok, execution} = insert_execution(task, workflow, step, status)
 
-      assert Status.derive(task) == :running
+        assert execution.status == status
+        assert Status.derive(task) == :ready
+      end
     end
 
-    test "returns :running when latest StepExecution is in_progress" do
+    test "keeps transient failed attempts out of durable task status" do
       user = create_user()
       project = create_project(user)
       workflow = create_workflow(user, project)
       step = create_step(workflow)
-
       task = create_task(user, project, workflow, step)
 
-      {:ok, _execution} =
-        Accounts.StepExecutions.insert(task.user_id, %{
-          task_id: task.id,
-          project_id: task.project_id,
-          workflow_id: workflow.id,
-          step_id: step.id,
-          step_name: step.name,
-          status: "in_progress"
-        })
+      {:ok, task_run} =
+        Accounts.TaskRuns.insert(user.id, project.id, task.id, %{status: :executing})
 
-      assert Status.derive(task) == :running
+      {:ok, failed_attempt} =
+        insert_execution(task, workflow, step, "failed", %{task_run_id: task_run.id})
+
+      assert failed_attempt.status == "failed"
+      assert task_run.status == :executing
+      assert Status.derive(task) == :ready
     end
 
-    test "returns :running when latest StepExecution is cancelling" do
+    test "does not infer task completion from a completed StepExecution alone" do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project)
-      step = create_step(workflow)
+      workflow = create_workflow(user, project, %{is_final: true})
+      final_step = create_step(workflow, %{is_final: true})
+      task = create_task(user, project, workflow, final_step)
 
-      task = create_task(user, project, workflow, step)
+      {:ok, completed_attempt} = insert_execution(task, workflow, final_step, "completed")
 
-      {:ok, _execution} =
-        Accounts.StepExecutions.insert(task.user_id, %{
-          task_id: task.id,
-          project_id: task.project_id,
-          workflow_id: workflow.id,
-          step_id: step.id,
-          step_name: step.name,
-          status: "cancelling"
-        })
-
-      assert Status.derive(task) == :running
-    end
-  end
-
-  describe "derive/1 - waiting state" do
-    test "returns :waiting when latest StepExecution is waiting" do
-      user = create_user()
-      project = create_project(user)
-      workflow = create_workflow(user, project)
-      step = create_step(workflow, %{step_type: "wait_children"})
-
-      task = create_task(user, project, workflow, step)
-
-      {:ok, _execution} =
-        Accounts.StepExecutions.insert(task.user_id, %{
-          task_id: task.id,
-          project_id: task.project_id,
-          workflow_id: workflow.id,
-          step_id: step.id,
-          step_name: step.name,
-          status: "waiting"
-        })
-
-      assert Status.derive(task) == :waiting
-    end
-
-    test "blockers do not affect status — task with running blocker remains :ready" do
-      user = create_user()
-      project = create_project(user)
-      workflow = create_workflow(user, project)
-      step = create_step(workflow)
-
-      task = create_task(user, project, workflow, step)
-      blocker_task = create_task(user, project, workflow, step)
-
-      {:ok, _dep} = Repo.TaskDependencies.add_dependency(task, blocker_task)
-
-      {:ok, _execution} =
-        Accounts.StepExecutions.insert(blocker_task.user_id, %{
-          task_id: blocker_task.id,
-          project_id: blocker_task.project_id,
-          workflow_id: workflow.id,
-          step_id: step.id,
-          step_name: step.name,
-          status: "started"
-        })
-
+      assert completed_attempt.status == "completed"
+      assert task.completed_at == nil
       assert Status.derive(task) == :ready
     end
   end
 
   describe "derive/1 - done state" do
-    test "returns :done when on final step of terminal workflow with completed execution" do
+    test "returns :done when task completion has been stamped" do
       user = create_user()
       project = create_project(user)
       workflow = create_workflow(user, project, %{is_final: true})
       final_step = create_step(workflow, %{is_final: true})
 
-      task = create_task(user, project, workflow, final_step)
+      task =
+        user
+        |> create_task(project, workflow, final_step)
+        |> mark_completed()
 
-      {:ok, _execution} =
-        Accounts.StepExecutions.insert(task.user_id, %{
-          task_id: task.id,
-          project_id: task.project_id,
-          workflow_id: workflow.id,
-          step_id: final_step.id,
-          step_name: final_step.name,
-          status: "completed"
-        })
-
+      assert task.completed_at != nil
       assert Status.derive(task) == :done
     end
 
-    test "does not return :done when not on final step despite completed execution" do
-      user = create_user()
-      project = create_project(user)
-      workflow = create_workflow(user, project)
-      non_final_step = create_step(workflow, %{is_final: false})
-
-      task = create_task(user, project, workflow, non_final_step)
-
-      {:ok, _execution} =
-        Accounts.StepExecutions.insert(task.user_id, %{
-          task_id: task.id,
-          project_id: task.project_id,
-          workflow_id: workflow.id,
-          step_id: non_final_step.id,
-          step_name: non_final_step.name,
-          status: "completed"
-        })
-
-      assert Status.derive(task) != :done
-    end
-
-    test "does not return :done when on final step but execution not completed" do
-      user = create_user()
-      project = create_project(user)
-      workflow = create_workflow(user, project)
-      final_step = create_step(workflow, %{is_final: true})
-
-      task = create_task(user, project, workflow, final_step)
-
-      {:ok, _execution} =
-        Accounts.StepExecutions.insert(task.user_id, %{
-          task_id: task.id,
-          project_id: task.project_id,
-          workflow_id: workflow.id,
-          step_id: final_step.id,
-          step_name: final_step.name,
-          status: "started"
-        })
-
-      assert Status.derive(task) != :done
-    end
-
-    test "does not return :done when on final step of non-terminal workflow" do
-      user = create_user()
-      project = create_project(user)
-      wf1 = create_workflow(user, project, %{name: "WF1", is_final: false})
-      wf2 = create_workflow(user, project, %{name: "WF2"})
-
-      final_step_wf1 = create_step(wf1, %{is_final: true})
-
-      {:ok, _transition} =
-        Accounts.WorkflowTransitions.insert(user.id, %{
-          from_workflow_id: wf1.id,
-          to_workflow_id: wf2.id,
-          project_id: project.id
-        })
-
-      task = create_task(user, project, wf1, final_step_wf1)
-
-      {:ok, _execution} =
-        Accounts.StepExecutions.insert(task.user_id, %{
-          task_id: task.id,
-          project_id: task.project_id,
-          workflow_id: wf1.id,
-          step_id: final_step_wf1.id,
-          step_name: final_step_wf1.name,
-          status: "completed"
-        })
-
-      assert Status.derive(task) != :done
-    end
-  end
-
-  describe "derive/1 - done state safety" do
-    test "returns :done even when current step has outgoing step transitions" do
+    test "stays :done when the latest historical StepExecution failed after completion" do
       user = create_user()
       project = create_project(user)
       workflow = create_workflow(user, project, %{is_final: true})
+      final_step = create_step(workflow, %{is_final: true})
 
-      mistakenly_final = create_step(workflow, %{is_final: true})
-      next_step = create_step(workflow)
+      task =
+        user
+        |> create_task(project, workflow, final_step)
+        |> mark_completed()
 
-      {:ok, _transition} =
-        Accounts.StepTransitions.insert(user.id, %{
-          from_step_id: mistakenly_final.id,
-          to_step_id: next_step.id,
-          project_id: project.id
-        })
+      {:ok, completed_attempt} = insert_execution(task, workflow, final_step, "completed")
+      {:ok, failed_attempt} = insert_execution(task, workflow, final_step, "failed")
 
-      task = create_task(user, project, workflow, mistakenly_final)
-
-      {:ok, _execution} =
-        Accounts.StepExecutions.insert(task.user_id, %{
-          task_id: task.id,
-          project_id: task.project_id,
-          workflow_id: workflow.id,
-          step_id: mistakenly_final.id,
-          step_name: mistakenly_final.name,
-          status: "completed"
-        })
-
+      assert completed_attempt.status == "completed"
+      assert failed_attempt.status == "failed"
       assert Status.derive(task) == :done
-    end
-  end
-
-  describe "multiple execution histories" do
-    test "uses the latest StepExecution when multiple exist" do
-      user = create_user()
-      project = create_project(user)
-      workflow = create_workflow(user, project)
-      step = create_step(workflow)
-
-      task = create_task(user, project, workflow, step)
-
-      # Create first execution (completed)
-      {:ok, _first} =
-        Accounts.StepExecutions.insert(task.user_id, %{
-          task_id: task.id,
-          project_id: task.project_id,
-          workflow_id: workflow.id,
-          step_id: step.id,
-          step_name: step.name,
-          status: "completed"
-        })
-
-      # Wait a moment to ensure different timestamps
-      Process.sleep(10)
-
-      # Create second execution (started) — this should be considered latest
-      {:ok, _second} =
-        Accounts.StepExecutions.insert(task.user_id, %{
-          task_id: task.id,
-          project_id: task.project_id,
-          workflow_id: workflow.id,
-          step_id: step.id,
-          step_name: step.name,
-          status: "started"
-        })
-
-      # Should be running (latest is started)
-      assert Status.derive(task) == :running
     end
   end
 
   describe "refresh/1" do
-    test "writes the derived status to the column" do
+    test "writes ready instead of running for a started StepExecution" do
       user = create_user()
       project = create_project(user)
       workflow = create_workflow(user, project)
@@ -380,19 +198,25 @@ defmodule Sacrum.Tasks.StatusTest do
 
       task = create_task(user, project, workflow, step)
 
-      {:ok, _} =
-        Accounts.StepExecutions.insert(task.user_id, %{
-          task_id: task.id,
-          project_id: task.project_id,
-          workflow_id: workflow.id,
-          step_id: step.id,
-          step_name: step.name,
-          status: "started"
-        })
+      {:ok, _} = insert_execution(task, workflow, step, "started")
 
       {:ok, refreshed} = Status.refresh(task)
-      assert refreshed.status == "running"
-      assert Repo.get!(Task, task.id).status == "running"
+      assert refreshed.status == "ready"
+      assert Repo.get!(Task, task.id).status == "ready"
+    end
+
+    test "writes done when task completion has been stamped" do
+      user = create_user()
+      project = create_project(user)
+
+      task =
+        user
+        |> create_task(project)
+        |> mark_completed()
+
+      {:ok, refreshed} = Status.refresh(task)
+      assert refreshed.status == "done"
+      assert Repo.get!(Task, task.id).status == "done"
     end
   end
 

@@ -387,11 +387,8 @@ defp apply_filter(query, :blocked, false) do
   )
 end
 
-defp apply_filter(query, :status, step_name) do
-  from(t in query,
-    join: ws in WorkflowStep, on: ws.id == t.current_step_id,
-    where: ws.name == ^step_name
-  )
+defp apply_filter(query, :status, status) do
+  from(t in query, where: t.status == ^status)
 end
 ```
 

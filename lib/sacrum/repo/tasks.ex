@@ -37,7 +37,8 @@ defmodule Sacrum.Repo.Tasks do
     - `:parent_id` - filter by parent task (via hierarchy)
     - `:blocked` - when false, exclude tasks with incomplete dependencies
     - `:search` - text search on title/description
-    - `:status` - filter by derived task status (`"ready" | "running" | "waiting" | "done"`)
+    - `:status` - compatibility filter over persisted task status. New derivations
+      write `"ready"` or `"done"`; use TaskRun queries for active run lifecycle.
     - `:step_id` - filter by workflow step ID
     - `:tags` - filter by tags (any match)
     - `:root_only` - when true, exclude tasks that have a parent

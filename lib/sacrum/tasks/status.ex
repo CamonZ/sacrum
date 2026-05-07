@@ -1,86 +1,31 @@
 defmodule Sacrum.Tasks.Status do
   @moduledoc """
-  Derives task status from orchestrator state (StepExecution + DAG position).
+  Derives the compatibility task queue status from durable task state.
 
-  Status values: `:ready`, `:running`, `:waiting`, `:done`.
+  New derivations return `:ready` or `:done`.
 
-  Derivation rules (evaluated in order):
-    * `:running` — latest StepExecution is `started`, `in_progress`, or
-      `cancelling` (an in-flight cancel that the daemon hasn't acked yet)
-    * `:waiting` — latest StepExecution is `waiting` (a parent waiting on its
-      children via a `wait_children` step)
-    * `:done`    — latest StepExecution is `completed`, the current step is
-      final (is_final=true), and the workflow is final (is_final=true)
-    * `:ready`   — none of the above apply
+  The `tasks.status` column still accepts historical `running` and `waiting`
+  values so existing filters and clients have a compatibility path, but this
+  module no longer writes active automation lifecycle states. Use
+  `TaskRun.status` for run lifecycle and `StepExecution.status` for individual
+  attempt history.
 
-  Tasks always have `workflow_id` and `current_step_id` set (NOT NULL,
-  defaulted to the project's Backlog workflow at creation time), so there is
-  no "unassigned" status.
+  Derivation rules:
+    * `:done`  — `completed_at` has been stamped by task completion
+    * `:ready` — all other task workflow positions
 
   Task dependencies (blockers) are *not* part of status derivation. Dependencies
   are an informational relationship; they do not move a task into `:waiting`.
   """
 
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.{StepExecution, Task, Workflow, WorkflowStep}
+  alias Sacrum.Repo.Schemas.Task
 
-  @type status :: :ready | :running | :waiting | :done
-
-  @preloads [
-    :step_executions,
-    :workflow,
-    :current_step
-  ]
+  @type status :: :ready | :done
 
   @spec derive(Task.t()) :: status()
-  def derive(%Task{} = task) do
-    task = Repo.preload(task, @preloads, force: true)
-    latest = latest_step_execution(task)
-
-    cond do
-      running?(latest) -> :running
-      waiting?(latest) -> :waiting
-      done?(task, latest) -> :done
-      ready?(task, latest) -> :ready
-    end
-  end
-
-  defp running?(%StepExecution{status: status})
-       when status in ["started", "in_progress", "cancelling"],
-       do: true
-
-  defp running?(_), do: false
-
-  defp waiting?(%StepExecution{status: "waiting"}), do: true
-  defp waiting?(_), do: false
-
-  defp done?(
-         %Task{
-           current_step: %WorkflowStep{is_final: true},
-           workflow: %Workflow{is_final: true}
-         },
-         %StepExecution{status: "completed"}
-       ) do
-    true
-  end
-
-  defp done?(_task, _latest), do: false
-
-  # No active execution. "completed" reaches here only when done?/2 returned
-  # false — i.e. more transitions remain — so the task is ready to advance.
-  # Active states ("started", "in_progress", "cancelling", "waiting") are
-  # handled by the earlier clauses in derive/1.
-  defp ready?(_task, nil), do: true
-
-  defp ready?(_task, %StepExecution{status: status})
-       when status in ["pending", "cancelled", "failed", "completed"],
-       do: true
-
-  defp ready?(_task, _latest), do: false
-
-  defp latest_step_execution(%Task{step_executions: executions}) do
-    Enum.max_by(executions, & &1.inserted_at, DateTime, fn -> nil end)
-  end
+  def derive(%Task{completed_at: completed_at}) when not is_nil(completed_at), do: :done
+  def derive(%Task{}), do: :ready
 
   @doc """
   Recompute and persist `task.status`. Returns `{:ok, task}` (unchanged if the

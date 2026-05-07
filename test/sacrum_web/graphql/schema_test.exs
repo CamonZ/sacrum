@@ -3312,17 +3312,27 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       refute "Parent" in titles
     end
 
-    test "filters by status (derived task status)", %{conn: conn, user: user, project: project} do
-      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-      {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "in_progress", step_order: 1})
-      {:ok, _} = Accounts.Workflows.update(wf, %{initial_step_id: step.id})
+    test "filters by compatibility task status", %{conn: conn, user: user, project: project} do
+      {:ok, ready_task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Ready"})
+      {:ok, done_task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Done"})
 
-      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Assigned"})
-      Sacrum.Repo.TaskWorkflows.assign_workflow(task, wf)
+      {:ok, legacy_running} =
+        Accounts.Tasks.insert(user.id, project.id, %{title: "Legacy Running"})
 
-      {:ok, _other} = Accounts.Tasks.insert(user.id, project.id, %{title: "Unassigned"})
+      {:ok, done_task} = Accounts.Tasks.update(done_task, %{completed_at: DateTime.utc_now()})
 
-      result =
+      {:ok, done_task} = Sacrum.Tasks.Status.refresh(done_task)
+
+      {:ok, legacy_running} =
+        legacy_running
+        |> Ecto.Changeset.change(%{status: "running"})
+        |> Sacrum.Repo.update()
+
+      assert ready_task.status == "ready"
+      assert done_task.status == "done"
+      assert legacy_running.status == "running"
+
+      ready_result =
         conn
         |> authenticate(user)
         |> graphql("""
@@ -3330,8 +3340,32 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         """)
         |> json_response(200)
 
-      titles = Enum.map(result["data"]["tasks"], & &1["title"])
-      assert "Assigned" in titles
+      ready_titles = Enum.map(ready_result["data"]["tasks"], & &1["title"])
+      assert "Ready" in ready_titles
+      refute "Done" in ready_titles
+      refute "Legacy Running" in ready_titles
+
+      done_result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          { tasks(projectId: "#{project.id}", status: "done") { title } }
+        """)
+        |> json_response(200)
+
+      done_titles = Enum.map(done_result["data"]["tasks"], & &1["title"])
+      assert done_titles == ["Done"]
+
+      legacy_result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          { tasks(projectId: "#{project.id}", status: "running") { title } }
+        """)
+        |> json_response(200)
+
+      legacy_titles = Enum.map(legacy_result["data"]["tasks"], & &1["title"])
+      assert legacy_titles == ["Legacy Running"]
     end
 
     test "filters by priority", %{conn: conn, user: user, project: project} do
