@@ -55,4 +55,11 @@ defmodule Sacrum.Tasks.Status do
     applied = Ecto.Changeset.apply_changes(changeset)
     Ecto.Changeset.put_change(changeset, :status, Atom.to_string(derive(applied)))
   end
+
+  @spec changeset(Task.t()) :: Ecto.Changeset.t()
+  def changeset(%Task{} = task) do
+    task
+    |> Ecto.Changeset.change()
+    |> put_status()
+  end
 end

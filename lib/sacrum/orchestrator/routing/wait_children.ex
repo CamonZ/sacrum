@@ -108,7 +108,7 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
            task_run
            |> StateTransitions.waiting_changeset(execution.id)
            |> Repo.update(),
-         {:ok, updated_task} <- Repo.update(task_status_changeset(data.task)),
+         {:ok, updated_task} <- Repo.update(Status.changeset(data.task)),
          {:ok, child_runs} <- get_or_create_child_runs(children, updated_task_run, execution.id) do
       Broadcaster.broadcast_task_run({:ok, updated_task_run}, :task_run_updated)
 
@@ -129,13 +129,6 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
       %StepExecution{user_id: data.user_id, project_id: data.project_id},
       attrs
     )
-  end
-
-  @spec task_status_changeset(Task.t()) :: Ecto.Changeset.t()
-  defp task_status_changeset(task) do
-    task
-    |> Ecto.Changeset.change()
-    |> Status.put_status()
   end
 
   @spec get_or_create_child_runs([Task.t()], TaskRun.t(), binary()) ::

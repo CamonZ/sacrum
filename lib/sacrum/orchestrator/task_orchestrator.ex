@@ -33,7 +33,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     WorkflowGraph
   }
 
-  alias Sacrum.Orchestrator.Routing.{RouteStep, WaitChildren}
+  alias Sacrum.Orchestrator.Routing.{HumanInput, RouteStep, WaitChildren}
   alias Sacrum.Orchestrator.TaskRuns.{Completion, Failure, Lookup, Root}
   alias Sacrum.Repo
   alias Sacrum.Repo.Broadcaster
@@ -176,10 +176,10 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
          {:ok, current_step} <- WorkflowGraph.get_current_step(data) do
       data = %{data | task: task}
 
-      if current_step.step_type == "wait_children" do
-        {:keep_state_and_data, [{:state_timeout, 0, :wait_children}]}
-      else
-        dispatch_execution(data, task, current_step)
+      case current_step.step_type do
+        "wait_children" -> {:keep_state_and_data, [{:state_timeout, 0, :wait_children}]}
+        "human_input" -> handle_human_input_entry(data, task, current_step)
+        _ -> dispatch_execution(data, task, current_step)
       end
     else
       {:error, reason} ->
@@ -241,14 +241,27 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   def handle_event(:state_timeout, :run, :awaiting_execution, data) do
     task_id = data.task.id
 
-    if resuming_from_wait_children?(data) do
-      Logger.info(
-        "[TaskOrchestrator:#{task_id}] Resuming from wait_children, transitioning directly"
-      )
+    case resume_reason(data) do
+      :wait_children ->
+        Logger.info(
+          "[TaskOrchestrator:#{task_id}] Resuming from wait_children, transitioning directly"
+        )
 
-      {:next_state, :transitioning, data}
-    else
-      request_execution_slot(task_id, data)
+        {:next_state, :transitioning, data}
+
+      :human_input_completed ->
+        Logger.info(
+          "[TaskOrchestrator:#{task_id}] Resuming from human_input, transitioning directly"
+        )
+
+        {:next_state, :transitioning, data}
+
+      :human_input_waiting ->
+        Logger.info("[TaskOrchestrator:#{task_id}] human_input is still waiting, stopping")
+        {:stop, :normal, data}
+
+      :fresh ->
+        request_execution_slot(task_id, data)
     end
   end
 
@@ -259,7 +272,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
       {:ok, %{step_type: "route"} = current_step} ->
         RouteStep.handle_route_step_transition(data, current_step)
 
-      {:ok, %{step_type: type} = current_step} when type in ["execute", "evaluate"] ->
+      {:ok, %{step_type: type} = current_step}
+      when type in ["execute", "evaluate", "human_input"] ->
         handle_single_transition_step(data, current_step)
 
       {:ok, %{step_type: "wait_children"} = current_step} ->
@@ -348,6 +362,14 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
 
         ExecutionPool.release_slot(data.slot_id)
         {:next_state, :failed, %{data | slot_id: nil}}
+    end
+  end
+
+  @spec handle_human_input_entry(FSMData.t(), Task.t(), struct()) :: fsm_transition()
+  defp handle_human_input_entry(data, task, current_step) do
+    case HumanInput.handle_entry(data, task, current_step) do
+      {:parked, new_data} -> {:stop, :normal, new_data}
+      {:error, new_data} -> {:next_state, :failed, new_data}
     end
   end
 
@@ -581,11 +603,34 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     end
   end
 
-  @spec resuming_from_wait_children?(FSMData.t()) :: boolean()
-  defp resuming_from_wait_children?(data) do
+  @spec resume_reason(FSMData.t()) ::
+          :wait_children | :human_input_completed | :human_input_waiting | :fresh
+  defp resume_reason(data) do
     case WorkflowGraph.get_current_step(data) do
-      {:ok, %{step_type: "wait_children"}} -> latest_waiting_execution(data.task.id) != nil
-      _ -> false
+      {:ok, %{step_type: "wait_children"}} ->
+        if latest_waiting_execution(data.task.id), do: :wait_children, else: :fresh
+
+      {:ok, %{step_type: "human_input"}} ->
+        case human_input_latest_execution_status(data) do
+          "completed" -> :human_input_completed
+          "waiting" -> :human_input_waiting
+          _ -> :fresh
+        end
+
+      _ ->
+        :fresh
+    end
+  end
+
+  @spec human_input_latest_execution_status(FSMData.t()) :: String.t() | nil
+  defp human_input_latest_execution_status(data) do
+    with {:ok, task_run} <- Lookup.fetch(data.task_run_id),
+         execution_id when is_binary(execution_id) <- task_run.latest_step_execution_id,
+         %StepExecution{status: status, step_id: step_id} <-
+           Repo.get(StepExecution, execution_id) do
+      if step_id == data.task.current_step_id, do: status
+    else
+      _ -> nil
     end
   end
 

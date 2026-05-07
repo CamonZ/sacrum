@@ -2,6 +2,8 @@ defmodule Sacrum.Accounts.StepExecutionsTest do
   use Sacrum.DataCase, async: true
 
   alias Sacrum.Accounts.StepExecutions
+  alias Sacrum.Accounts.TaskRuns
+  alias Sacrum.Accounts.WorkflowSteps
   alias Sacrum.Accounts.Workflows
   alias Sacrum.Accounts.Tasks
   alias Sacrum.Accounts.Projects
@@ -188,6 +190,112 @@ defmodule Sacrum.Accounts.StepExecutionsTest do
                StepExecutions.update(execution, %{"step_name" => nil})
 
       assert %{step_name: ["can't be blank"]} = errors_on(changeset)
+    end
+
+    test "rejects completing or filling a waiting human_input execution" do
+      user = create_user()
+      {project, task, workflow} = create_task_with_workflow(user)
+
+      {:ok, step} =
+        WorkflowSteps.insert(user.id, %{
+          "workflow_id" => workflow.id,
+          "project_id" => project.id,
+          "name" => "Human Input",
+          "step_type" => "human_input"
+        })
+
+      {:ok, execution} =
+        StepExecutions.insert(user.id, %{
+          "task_id" => task.id,
+          "project_id" => project.id,
+          "workflow_id" => workflow.id,
+          "step_id" => step.id,
+          "step_name" => step.name,
+          "status" => "waiting"
+        })
+
+      assert {:error, changeset} =
+               StepExecutions.update(execution, %{
+                 "status" => "completed",
+                 "output" => ~s({"approved":true})
+               })
+
+      assert %{
+               status: [
+                 "waiting human_input executions can only be completed by the human input resume operation"
+               ]
+             } = errors_on(changeset)
+
+      reloaded = Sacrum.Repo.get!(StepExecution, execution.id)
+      assert reloaded.status == "waiting"
+      assert reloaded.output == nil
+    end
+  end
+
+  describe "complete_waiting_human_input/3" do
+    test "consumes a waiting human_input execution once and leaves a recoverable queued run" do
+      user = create_user()
+      {project, task, workflow} = create_task_with_workflow(user)
+
+      {:ok, step} =
+        WorkflowSteps.insert(user.id, %{
+          "workflow_id" => workflow.id,
+          "project_id" => project.id,
+          "name" => "Human Input",
+          "step_type" => "human_input"
+        })
+
+      {:ok, task_run} =
+        TaskRuns.insert(user.id, project.id, task.id, %{status: :waiting})
+
+      {:ok, execution} =
+        StepExecutions.insert(user.id, %{
+          "task_id" => task.id,
+          "task_run_id" => task_run.id,
+          "project_id" => project.id,
+          "workflow_id" => workflow.id,
+          "step_id" => step.id,
+          "step_name" => step.name,
+          "status" => "waiting"
+        })
+
+      encoded_output = ~s({"approved":true})
+
+      assert {:ok, %{execution: completed, task_run: queued_run}} =
+               StepExecutions.complete_waiting_human_input(
+                 user.id,
+                 execution.id,
+                 encoded_output
+               )
+
+      assert completed.id == execution.id
+      assert completed.status == "completed"
+      assert completed.output == encoded_output
+      assert queued_run.id == task_run.id
+      assert queued_run.status == :queued
+      assert queued_run.latest_step_execution_id == execution.id
+
+      assert {:ok, %{execution: same_execution, task_run: same_run}} =
+               StepExecutions.complete_waiting_human_input(
+                 user.id,
+                 execution.id,
+                 encoded_output
+               )
+
+      assert same_execution.id == execution.id
+      assert same_execution.output == encoded_output
+      assert same_run.status == :queued
+
+      assert {:error, :human_input_execution_not_waiting} =
+               StepExecutions.complete_waiting_human_input(
+                 user.id,
+                 execution.id,
+                 ~s({"approved":false})
+               )
+
+      reloaded = Sacrum.Repo.get!(StepExecution, execution.id)
+      assert reloaded.status == "completed"
+      assert reloaded.output == encoded_output
     end
   end
 end

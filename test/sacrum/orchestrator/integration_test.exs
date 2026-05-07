@@ -15,6 +15,8 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
 
   alias Sacrum.Accounts
   alias Sacrum.Orchestrator
+  alias Sacrum.Orchestrator.ExecutionPool
+  alias Sacrum.Orchestrator.Routing.HumanInput
   alias Sacrum.Orchestrator.TaskFSMSupervisor
   alias Sacrum.Orchestrator.TaskOrchestrator
   alias Sacrum.Orchestrator.TaskRegistry
@@ -118,6 +120,58 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
     {:ok, task} = Sacrum.Repo.TaskWorkflows.assign_workflow(task, workflow)
 
     %{user: user, project: project, workflow: workflow, steps: steps, task: task}
+  end
+
+  defp setup_human_input_workflow(opts) do
+    auto_advance = Keyword.get(opts, :auto_advance, true)
+    next_final? = Keyword.get(opts, :next_final?, false)
+    next_prompt = Keyword.get(opts, :next_prompt, "After human input")
+
+    user = create_user()
+    project = create_project(user)
+    workflow = create_workflow(user, project, auto_advance: auto_advance)
+
+    schema = %{
+      "type" => "object",
+      "properties" => %{
+        "approved" => %{"type" => "boolean"}
+      },
+      "required" => ["approved"],
+      "additionalProperties" => false
+    }
+
+    human_step =
+      create_step(user, workflow, %{
+        name: "human_input",
+        step_order: 1,
+        step_type: "human_input",
+        output_schema: schema,
+        prompt: "Approve {{ task.title }}"
+      })
+
+    next_step =
+      create_step(user, workflow, %{
+        name: "after_human_input",
+        step_order: 2,
+        is_final: next_final?,
+        prompt: next_prompt
+      })
+
+    create_transition(user, human_step, next_step)
+    {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: human_step.id})
+
+    task = create_task(user, project)
+    {:ok, task} = Sacrum.Repo.TaskWorkflows.assign_workflow(task, workflow)
+
+    %{
+      user: user,
+      project: project,
+      workflow: workflow,
+      human_step: human_step,
+      next_step: next_step,
+      task: task,
+      schema: schema
+    }
   end
 
   # ===== Orchestration helpers =====
@@ -243,6 +297,11 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
     do_wait_for_execution_count(task_id, expected, deadline)
   end
 
+  defp wait_until(fun, description, timeout \\ 2000) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+    do_wait_until(fun, description, deadline)
+  end
+
   defp do_wait_for_execution_count(task_id, expected, deadline) do
     actual = length(executions_for_task(task_id))
 
@@ -256,6 +315,20 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
       true ->
         Process.sleep(10)
         do_wait_for_execution_count(task_id, expected, deadline)
+    end
+  end
+
+  defp do_wait_until(fun, description, deadline) do
+    cond do
+      fun.() ->
+        :ok
+
+      System.monotonic_time(:millisecond) > deadline ->
+        flunk("Timed out waiting for #{description}")
+
+      true ->
+        Process.sleep(10)
+        do_wait_until(fun, description, deadline)
     end
   end
 
@@ -315,6 +388,167 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
       assert step_id == s1.id
 
       assert_run_step_for(exec.id, "step_1")
+    end
+  end
+
+  describe "human_input orchestration" do
+    test "entering a human_input step parks the run without daemon dispatch" do
+      %{user: user, project: project, human_step: human_step, task: task} =
+        setup_human_input_workflow(next_final?: true)
+
+      available_before = ExecutionPool.pool_status().available_slots
+      subscribe_project(project.id)
+
+      pid = start_orchestrator(task, user)
+      wait_for_exit(pid)
+
+      assert ExecutionPool.pool_status().available_slots == available_before
+
+      assert [
+               %StepExecution{
+                 step_id: step_id,
+                 step_name: "human_input",
+                 status: "waiting",
+                 output: nil,
+                 prompt: "Approve Integration Task"
+               } = execution
+             ] = executions_for_task(task.id)
+
+      assert step_id == human_step.id
+
+      task_run = Repo.one!(from(run in TaskRun, where: run.task_id == ^task.id))
+      assert task_run.status == :waiting
+      assert task_run.latest_step_execution_id == execution.id
+
+      refute_receive %Phoenix.Socket.Broadcast{event: "run_step"}, 100
+    end
+
+    test "valid human output completes the waiting execution and resumes the same TaskRun" do
+      %{
+        user: user,
+        project: project,
+        next_step: next_step,
+        task: task
+      } =
+        setup_human_input_workflow(
+          next_prompt: "Approved: {{ execution.previous_output.approved }}"
+        )
+
+      subscribe_project(project.id)
+
+      pid = start_orchestrator(task, user)
+      wait_for_exit(pid)
+      [waiting_execution] = executions_for_task(task.id)
+      task_run = Repo.one!(from(run in TaskRun, where: run.task_id == ^task.id))
+      drain_run_step_broadcasts()
+
+      assert {:ok, %StepExecution{id: resumed_id}} =
+               HumanInput.resume(user.id, waiting_execution.id, %{approved: true})
+
+      assert resumed_id == waiting_execution.id
+      wait_for_execution_count(task.id, 2)
+
+      [completed_human, next_execution] = executions_for_task(task.id)
+      assert completed_human.id == waiting_execution.id
+      assert completed_human.status == "completed"
+      assert completed_human.output == ~s({"approved":true})
+      assert Jason.decode!(completed_human.output) == %{"approved" => true}
+
+      assert next_execution.step_id == next_step.id
+      assert next_execution.status == "started"
+      assert next_execution.task_run_id == task_run.id
+
+      assert [same_run] = Repo.all(from(run in TaskRun, where: run.task_id == ^task.id))
+      assert same_run.id == task_run.id
+      assert same_run.status == :executing
+      assert same_run.latest_step_execution_id == next_execution.id
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "run_step",
+                       payload: %{id: next_execution_id, prompt: "Approved: true"}
+                     },
+                     1500
+
+      assert next_execution_id == next_execution.id
+
+      assert {:ok, :stopped} = Orchestrator.stop(task.id)
+      wait_for_registry_clear(task.id)
+    end
+
+    test "invalid human output leaves the StepExecution and TaskRun waiting" do
+      %{user: user, project: project, task: task} =
+        setup_human_input_workflow(next_final?: true)
+
+      subscribe_project(project.id)
+
+      pid = start_orchestrator(task, user)
+      wait_for_exit(pid)
+      [waiting_execution] = executions_for_task(task.id)
+      drain_run_step_broadcasts()
+
+      assert {:error, {:invalid_human_input, {:validation_failed, errors}}} =
+               HumanInput.resume(user.id, waiting_execution.id, %{"approved" => "yes"})
+
+      assert [_ | _] = errors
+
+      reloaded_execution = Repo.get!(StepExecution, waiting_execution.id)
+      assert reloaded_execution.status == "waiting"
+      assert reloaded_execution.output == nil
+
+      task_run = Repo.one!(from(run in TaskRun, where: run.task_id == ^task.id))
+      assert task_run.status == :waiting
+      assert task_run.latest_step_execution_id == waiting_execution.id
+
+      assert Registry.lookup(TaskRegistry, task.id) == []
+      refute_receive %Phoenix.Socket.Broadcast{event: "run_step"}, 100
+    end
+
+    test "resume from another user is rejected and leaves the run waiting" do
+      %{user: user, task: task} = setup_human_input_workflow(next_final?: true)
+
+      suffix = System.unique_integer([:positive])
+
+      {:ok, other_user} =
+        Repo.Users.insert(%{
+          email: "human-input-other-#{suffix}@example.com",
+          username: "human_input_other_#{suffix}",
+          password: "password123"
+        })
+
+      pid = start_orchestrator(task, user)
+      wait_for_exit(pid)
+      [waiting_execution] = executions_for_task(task.id)
+
+      assert {:error, :not_found} =
+               HumanInput.resume(other_user.id, waiting_execution.id, %{"approved" => true})
+
+      reloaded_execution = Repo.get!(StepExecution, waiting_execution.id)
+      assert reloaded_execution.status == "waiting"
+      assert reloaded_execution.output == nil
+
+      task_run = Repo.one!(from(run in TaskRun, where: run.task_id == ^task.id))
+      assert task_run.status == :waiting
+      assert Registry.lookup(TaskRegistry, task.id) == []
+    end
+
+    test "valid human output can complete the workflow when the next step is final" do
+      %{user: user, task: task} = setup_human_input_workflow(next_final?: true)
+
+      pid = start_orchestrator(task, user)
+      wait_for_exit(pid)
+      [waiting_execution] = executions_for_task(task.id)
+
+      assert {:ok, _completed} =
+               HumanInput.resume(user.id, waiting_execution.id, %{"approved" => true})
+
+      wait_until(
+        fn -> Repo.get!(Sacrum.Repo.Schemas.Task, task.id).completed_at != nil end,
+        "task completion after human_input resume"
+      )
+
+      assert [task_run] = Repo.all(from(run in TaskRun, where: run.task_id == ^task.id))
+      assert task_run.status == :completed
+      assert task_run.outcome_kind == "completed"
     end
   end
 

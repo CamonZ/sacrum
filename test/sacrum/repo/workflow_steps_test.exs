@@ -64,7 +64,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
     test "creates step with explicit step_type" do
       workflow = create_workflow()
 
-      for type <- ~w(execute evaluate route) do
+      for type <- ~w(execute evaluate route wait_children human_input) do
         attrs = Map.put(@valid_attrs, :step_type, type)
         assert {:ok, %WorkflowStep{} = step} = WorkflowSteps.insert(workflow, attrs)
         assert step.step_type == type
