@@ -125,17 +125,19 @@ defmodule Sacrum.Repo.WorkflowsShortIdTest do
           w
         end)
 
-      {prefix, shared} =
+      {prefix, _} =
         workflows
         |> Enum.group_by(&String.slice(&1.id, 0, 1))
+        |> Enum.sort()
         |> Enum.find(fn {_p, ws} -> length(ws) >= 2 end)
 
       assert {:error, {:ambiguous, candidates}} =
                Workflows.find_by_uuid_prefix(prefix, project.id, user.id)
 
       assert length(candidates) >= 2
-      shared_ids = Enum.map(shared, & &1.id)
-      assert Enum.all?(candidates, &(&1 in shared_ids))
+      workflow_ids = Enum.map(workflows, & &1.id)
+      assert Enum.all?(candidates, &(&1 in workflow_ids))
+      assert Enum.all?(candidates, &String.starts_with?(&1, prefix))
     end
   end
 end
