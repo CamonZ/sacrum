@@ -1,9 +1,16 @@
 # Chat Runs Contract
 
-This document defines the MVP architecture for backend-owned chat runs. A
-`ChatRun` is the durable user-facing conversation/work container. It can answer
-questions, research, plan, propose artifacts, and create tasks. One `ChatRun`
-may contain multiple `ChatSession` records over time.
+This document defines the MVP architecture for backend-owned chat runs. The
+full target model uses `ChatRun` as the durable user-facing conversation/work
+container. It can answer questions, research, plan, propose artifacts, and
+create tasks. One `ChatRun` may contain multiple `ChatSession` records over
+time.
+
+V0 is deliberately smaller and session-first: Sacrum persists
+`chat_sessions`, `chat_messages`, and `chat_events` only. V0 does not require a
+`chat_runs` table, artifacts, task-origin links, history listing, archive, or
+delete behavior. `ChatRun` remains the planned higher-level container, not a
+prerequisite for the first durable live chat transcript spine.
 
 The intended mapping mirrors the existing execution model:
 
@@ -40,8 +47,8 @@ exists, so it needs its own persistence and visibility model.
 
 | Concept | Public Meaning | Internal Meaning |
 |---------|----------------|------------------|
-| `ChatRun` | User-facing conversation/work container | Stable owner for sessions, messages, events, artifacts, and created-task links |
-| `ChatSession` | One assistant/user interaction session inside a run | Backend execution/session attempt attached to a `ChatRun` |
+| `ChatRun` | Planned user-facing conversation/work container | Future stable owner for sessions, messages, events, artifacts, and created-task links |
+| `ChatSession` | V0 live chat session/attempt | Backend execution/session attempt; session-first in V0, later attachable to a `ChatRun` |
 | `ChatMessage` | Chat message visible to the user | Public transcript entry attached to a `ChatSession`; analogous to `SessionLog` |
 | `Artifact` | Durable output usable across Sacrum | Public or internal output linked to chat runs, chat sessions, task runs, step executions, or tasks |
 | `ArtifactLink` | Where an artifact came from or should be shown | Generic relationship between an artifact and another resource |
@@ -50,9 +57,9 @@ exists, so it needs its own persistence and visibility model.
 | `ChatInvestigationRequest` | Optional visible request to investigate something | Optional sub-work item for future decomposition |
 | `ChatRunTask` | Link between a chat run and a task it created or changed | First-class relationship used by clients and audits |
 
-The user-facing product surface should be a chat run with messages, artifacts,
-status updates, and task links. The backend may execute that work with hardcoded
-planner code today and a workflow/graph engine later.
+The full user-facing product surface should be a chat run with messages,
+artifacts, status updates, and task links. The V0 surface can start as a live
+chat session transcript while preserving the later ChatRun migration path.
 
 A chat run is not a single task or a single unit of work. One `ChatRun` can
 produce zero, one, or many tasks over time, across multiple `ChatSession`s and
@@ -100,9 +107,15 @@ at most one active session.
 Use UUID primary keys and `utc_datetime_usec` timestamps, matching the rest of
 the repo.
 
+V0 persists only the session-level spine. The V0 tables are scoped directly by
+`user_id` and `project_id`, with messages and events attached to
+`chat_session_id`. Future migrations can add `chat_runs` and backfill or link
+sessions without changing the V0 public transcript/event records.
+
 ### `chat_runs`
 
-Stable user-facing chat identity and durable work container.
+Planned stable user-facing chat identity and durable work container. This table
+is not required for the V0 transcript spine.
 
 | Column | Type | Notes |
 |--------|------|-------|
@@ -123,13 +136,14 @@ Stable user-facing chat identity and durable work container.
 
 ### `chat_sessions`
 
-Backend execution/session attempts attached to a chat run. This is the chat-side
-equivalent of `StepExecution`.
+Backend execution/session attempts. In V0, the session is the persisted live
+chat owner. In the fuller model, sessions attach to a chat run. This is the
+chat-side equivalent of `StepExecution`.
 
 | Column | Type | Notes |
 |--------|------|-------|
 | `id` | uuid | Primary key |
-| `chat_run_id` | uuid | Required |
+| `chat_run_id` | uuid | Planned with `ChatRun`; absent in V0 |
 | `project_id` | uuid | Denormalized for project channel and authorization |
 | `user_id` | uuid | Owner |
 | `status` | text | `queued`, `running`, `waiting`, `cancelling`, `cancelled`, `completed`, `failed` |
@@ -139,6 +153,7 @@ equivalent of `StepExecution`.
 | `engine_kind` | text | `native_planner` for MVP; future `workflow`, `jido`, `runic` |
 | `engine_session_ref` | text | Nullable internal reference to a future engine run/session |
 | `definition_ref` | text | Nullable internal reference to future app-owned definition |
+| `public_metadata` | jsonb | Client-safe metadata only |
 | `inserted_at` / `updated_at` | utc_datetime_usec | Standard timestamps |
 
 Do not put raw prompts, command output, full model traces, or Runic graph
@@ -152,7 +167,7 @@ Public transcript entries.
 | Column | Type | Notes |
 |--------|------|-------|
 | `id` | uuid | Primary key |
-| `chat_run_id` | uuid | Required |
+| `chat_run_id` | uuid | Planned with `ChatRun`; absent in V0 |
 | `chat_session_id` | uuid | Required |
 | `project_id` | uuid | Denormalized authorization/sorting |
 | `user_id` | uuid | Owner |
@@ -240,8 +255,8 @@ Append-only event stream for progress, audit, and operator diagnostics.
 | Column | Type | Notes |
 |--------|------|-------|
 | `id` | uuid | Primary key |
-| `chat_run_id` | uuid | Required |
-| `chat_session_id` | uuid | Nullable |
+| `chat_run_id` | uuid | Planned with `ChatRun`; absent in V0 |
+| `chat_session_id` | uuid | Required in V0; nullable later for run-level events |
 | `project_id` | uuid | Denormalized authorization/channel routing |
 | `user_id` | uuid | Owner |
 | `event_type` | text | Stable event name |
@@ -799,33 +814,44 @@ hardcoded planner logic to an app-owned graph runtime.
 
 ## Implementation Order
 
-1. Add migrations and schemas for `chat_runs`, `chat_sessions`,
-   `chat_messages`, `artifacts`, `artifact_links`, `artifact_decisions`,
-   `chat_events`, and `chat_run_tasks`.
-2. Add repository/account modules following the existing
-   Accounts -> Repo -> Ecto pattern.
-3. Add GraphQL public types, queries, and mutations.
-4. Add project channel broadcasts for public chat events.
-5. Add transactional task creation plus `chat_run_tasks` link creation.
-6. Add artifact approval/apply behavior for `task_draft` artifacts.
-7. Add tests for public visibility, internal payload exclusion, idempotent user
-   messages, artifact approval/apply, channel payload shapes, and task-origin
-   links.
-8. Add optional `chat_investigation_requests` only when durable sub-work is
+1. V0: add migrations, schemas, repository modules, account helpers, and tests
+   for `chat_sessions`, `chat_messages`, and `chat_events` only.
+2. Add GraphQL public types, queries, and mutations for the public V0 session
+   transcript and event stream.
+3. Add project channel broadcasts for public chat messages/events.
+4. Add `chat_runs` when the product needs a stable conversation/work container
+   above one or more sessions.
+5. Add artifacts, artifact links, artifact decisions, task-origin links,
+   archive/delete/history behavior, and task creation workflows after the
+   session-first spine is stable.
+6. Add optional `chat_investigation_requests` only when durable sub-work is
    needed.
 
 ## Acceptance Checks
 
-The first implementation should prove:
+The V0 persistence implementation should prove:
+
+- A user can create a project-scoped `ChatSession` without creating a
+  `ChatRun`, `TaskRun`, or `StepExecution`.
+- The chat session lifecycle accepts only the V0 chat status values and stamps
+  lifecycle timestamps for running, cancelling, and terminal states.
+- A user can append public `ChatMessage` records to a session they own in the
+  requested project.
+- A user can append public and internal `ChatEvent` records to a session they
+  own in the requested project.
+- Public event helpers return only public events and never expose
+  `internal_payload`.
+- Cross-user or cross-project appends are rejected.
+
+Later ChatRun/API implementations should also prove:
 
 - A user can create a chat run and send messages.
-- A chat session can update chat run state without creating a `TaskRun`.
 - Public GraphQL never returns internal event payloads.
 - Public channel events contain only public payload fields.
 - A task created by a chat run is linked to the originating chat run in the same
   transaction.
-- Approving and applying a `task_draft` artifact creates tasks through the
-  chat planning service, not through a client-side backfill.
-- `ChatRun.createdTasks` and `Task.chatOrigin` expose the relationship
-  through GraphQL.
+- Approving and applying a `task_draft` artifact creates tasks through the chat
+  planning service, not through a client-side backfill.
+- `ChatRun.createdTasks` and `Task.chatOrigin` expose the relationship through
+  GraphQL.
 - Historical `TaskRun` and `StepExecution` behavior is unchanged.

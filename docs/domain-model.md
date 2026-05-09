@@ -18,7 +18,7 @@ Sacrum is an API-only workflow engine and task management system built with Phoe
 
 **Execution tracking** — Durable `TaskRun` records track automation lifecycle for a task run. `StepExecution` records track individual step attempts inside a run, including the step name, attempt status, and optional LLM metadata (model, provider, token counts, cost, duration). Session logs attach free-text content to executions.
 
-**Chat runs contract** — Backend-owned chat work is modeled as user-facing runs that may span multiple chat sessions while researching, planning, and creating tasks. Chat runs have their own session, message, artifact-link, event, and task-origin-link contract. They do not replace `TaskRun` or `StepExecution`. See [Chat Runs Contract](chat-runs.md).
+**Chat runs contract** — Backend-owned chat work is modeled as user-facing runs that may span multiple chat sessions while researching, planning, and creating tasks. The V0 persistence slice is session-first and stores `ChatSession`, `ChatMessage`, and `ChatEvent` records before adding `ChatRun`, artifacts, or task-origin links. Chat persistence does not replace `TaskRun` or `StepExecution`. See [Chat Runs Contract](chat-runs.md).
 
 **Real-time updates** — State changes broadcast to a Phoenix channel (`ProjectChannel`) keyed by project ID (`project:<project_id>`), so connected clients receive live events for task, workflow, and step mutations.
 
@@ -33,10 +33,10 @@ User
       ├── Artifact (planned, generic)
       │    ├── ArtifactLink ──→ ChatRun / ChatSession / Task / TaskRun / StepExecution
       │    └── ArtifactDecision
+      ├── ChatSession (V0 persisted)
+      │    ├── ChatMessage
+      │    └── ChatEvent
       ├── ChatRun (planned)
-      │    ├── ChatSession
-      │    │    └── ChatMessage
-      │    ├── ChatEvent
       │    └── ChatRunTask ──→ Task
       └── Task
            ├── TaskSection ──→ CodeRef
