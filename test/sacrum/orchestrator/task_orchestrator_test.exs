@@ -1820,6 +1820,37 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       |> elem(1)
     end
 
+    defp setup_wait_children_parent do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project, auto_advance: false)
+
+      wait_step = create_wait_children_step(user, workflow)
+
+      final_step =
+        create_step(user, workflow, %{
+          name: "final_step",
+          step_order: 2,
+          is_final: true
+        })
+
+      create_transition(user, wait_step, final_step)
+
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: wait_step.id})
+
+      parent_task = create_task(user, project, %{title: "Parent Task"})
+      parent_task = assign_workflow_to_task(parent_task, workflow)
+
+      %{
+        user: user,
+        project: project,
+        workflow: workflow,
+        wait_step: wait_step,
+        final_step: final_step,
+        parent_task: parent_task
+      }
+    end
+
     test "on entry to wait_children, schedules all children and creates waiting execution" do
       user = create_user()
       project = create_project(user)
@@ -2721,6 +2752,79 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
       assert length(prior_executions) >= 1
       assert Enum.all?(prior_executions, &(&1.status == "invalidated"))
+    end
+
+    test "wait_children entry with no children advances through outgoing transition without failing the run" do
+      %{user: user, parent_task: parent_task, final_step: final_step} =
+        setup_wait_children_parent()
+
+      pid = start_orchestrator(parent_task, user)
+      wait_for_exit(pid)
+
+      reloaded_task = reload_task(parent_task)
+      assert reloaded_task.current_step_id == final_step.id
+
+      task_run = latest_task_run(parent_task.id)
+      refute task_run.status == :failed
+      assert is_nil(task_run.outcome_kind) or task_run.outcome_kind != :orchestrator_failed
+    end
+
+    test "wait_children entry with no children does not insert a waiting StepExecution" do
+      %{user: user, parent_task: parent_task} = setup_wait_children_parent()
+
+      pid = start_orchestrator(parent_task, user)
+      wait_for_exit(pid)
+
+      waiting_executions =
+        Repo.all(
+          from(e in StepExecution,
+            where: e.task_id == ^parent_task.id and e.status == "waiting"
+          )
+        )
+
+      assert waiting_executions == []
+    end
+
+    test "wait_children entry with one or more children still parks in waiting state" do
+      %{user: user, project: project, parent_task: parent_task, wait_step: wait_step} =
+        setup_wait_children_parent()
+
+      child_workflow = create_workflow(user, project, auto_advance: true)
+
+      child_step =
+        create_step(user, child_workflow, %{
+          name: "child_step",
+          step_order: 1,
+          is_final: true
+        })
+
+      {:ok, _} = Accounts.Workflows.update(child_workflow, %{initial_step_id: child_step.id})
+
+      child_task = create_child_task(user, project, parent_task)
+      child_task = assign_workflow_to_task(child_task, child_workflow)
+
+      pid = start_orchestrator(parent_task, user)
+      wait_for_exit(pid)
+
+      waiting_executions =
+        Repo.all(
+          from(e in StepExecution,
+            where: e.task_id == ^parent_task.id and e.status == "waiting"
+          )
+        )
+
+      assert length(waiting_executions) == 1
+      waiting_exec = hd(waiting_executions)
+      assert waiting_exec.handoff["child_ids"] == [child_task.id]
+
+      {:ok, parent_run} = Accounts.TaskRuns.get_active_for_task(user.id, parent_task.id)
+      assert parent_run.status == :waiting
+      assert parent_run.latest_step_execution_id == waiting_exec.id
+
+      reloaded_parent = reload_task(parent_task)
+      assert reloaded_parent.current_step_id == wait_step.id
+
+      cleanup_spawned_orchestrators([child_task.id])
     end
   end
 end
