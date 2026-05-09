@@ -216,6 +216,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   def handle_event(:state_timeout, :wait_children, :executing, data) do
     case WaitChildren.handle_wait_children_entry(data) do
       {:stop_parent, new_data} -> {:stop, :normal, new_data}
+      {:advance_parent, new_data} -> {:next_state, :transitioning, new_data}
       {:error_parent, new_data} -> {:next_state, :failed, new_data}
     end
   end

@@ -24,12 +24,31 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
   alias Sacrum.Tasks.Status
 
   @spec handle_wait_children_entry(FSMData.t()) ::
-          {:stop_parent, FSMData.t()} | {:error_parent, FSMData.t()}
+          {:stop_parent, FSMData.t()}
+          | {:advance_parent, FSMData.t()}
+          | {:error_parent, FSMData.t()}
   def handle_wait_children_entry(data) do
     task_id = data.task.id
 
-    with {:ok, children} <- get_children(data.task),
-         :ok <- ensure_children_have_workflows(children),
+    case TaskHierarchy.get_children(data.task) do
+      [] ->
+        Logger.info(
+          "[TaskOrchestrator:#{task_id}] wait_children entry with no children, advancing through outgoing transition"
+        )
+
+        {:advance_parent, data}
+
+      children ->
+        enter_with_children(data, children)
+    end
+  end
+
+  @spec enter_with_children(FSMData.t(), [Task.t()]) ::
+          {:stop_parent, FSMData.t()} | {:error_parent, FSMData.t()}
+  defp enter_with_children(data, children) do
+    task_id = data.task.id
+
+    with :ok <- ensure_children_have_workflows(children),
          child_ids = Enum.map(children, & &1.id),
          {:ok, %{child_runs: child_runs}} <- enter_waiting_state(data, child_ids, children),
          :ok <- schedule_all_children(child_runs) do
@@ -59,14 +78,6 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
     else
       {:error, :no_waiting_execution} -> :no_wake
       {:error, reason} -> {:error, reason}
-    end
-  end
-
-  @spec get_children(Task.t()) :: {:ok, [Task.t()]} | {:error, :no_children}
-  defp get_children(task) do
-    case TaskHierarchy.get_children(task) do
-      [] -> {:error, :no_children}
-      children -> {:ok, children}
     end
   end
 
