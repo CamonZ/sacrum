@@ -21,6 +21,12 @@ Sacrum now separates four different questions:
 
 `TaskRun` is not a replacement for `Task`. It is a run session for automation over a task. A task can have many historical TaskRuns, but should be represented with at most one active run in normal client state.
 
+Chat runs that create tasks use a separate `ChatRun` / `ChatSession`
+contract. Do not represent those conversations as `TaskRun`s. If a chat run
+creates tasks, clients should use each task's chat-origin link to navigate back
+to the run, with session detail available when a specific execution attempt
+matters. See [Chat Runs Contract](chat-runs.md).
+
 See [Domain Model: Status and Run State](domain-model.md#status-and-run-state) for the source-of-truth field ownership.
 
 ## Representing TaskRuns

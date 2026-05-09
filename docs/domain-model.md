@@ -18,6 +18,8 @@ Sacrum is an API-only workflow engine and task management system built with Phoe
 
 **Execution tracking** — Durable `TaskRun` records track automation lifecycle for a task run. `StepExecution` records track individual step attempts inside a run, including the step name, attempt status, and optional LLM metadata (model, provider, token counts, cost, duration). Session logs attach free-text content to executions.
 
+**Chat runs contract** — Backend-owned chat work is modeled as user-facing runs that may span multiple chat sessions while researching, planning, and creating tasks. Chat runs have their own session, message, artifact-link, event, and task-origin-link contract. They do not replace `TaskRun` or `StepExecution`. See [Chat Runs Contract](chat-runs.md).
+
 **Real-time updates** — State changes broadcast to a Phoenix channel (`ProjectChannel`) keyed by project ID (`project:<project_id>`), so connected clients receive live events for task, workflow, and step mutations.
 
 ## Domain Model
@@ -28,6 +30,14 @@ User
       ├── Workflow
       │    ├── WorkflowStep ──→ StepTransition (step-to-step edges)
       │    └── WorkflowTransition (workflow-to-workflow edges)
+      ├── Artifact (planned, generic)
+      │    ├── ArtifactLink ──→ ChatRun / ChatSession / Task / TaskRun / StepExecution
+      │    └── ArtifactDecision
+      ├── ChatRun (planned)
+      │    ├── ChatSession
+      │    │    └── ChatMessage
+      │    ├── ChatEvent
+      │    └── ChatRunTask ──→ Task
       └── Task
            ├── TaskSection ──→ CodeRef
            ├── CodeRef (direct)
@@ -216,8 +226,12 @@ Sacrum has separate status fields for separate questions. Do not collapse them i
 | `TaskRun.status` | What is the automation run doing now? | Durable run lifecycle |
 | `StepExecution.status` | What happened to one step attempt? | Daemon/orchestrator attempt updates |
 | `SessionLog` | What text/content was emitted during an attempt? | Append-only log content, no lifecycle status |
+| `ChatRun.status` (planned) | What is happening in a user-facing chat run? | Durable chat run lifecycle, separate from task automation |
+| `ChatSession.status` (planned) | What happened during one chat session attempt? | Chat session attempt state, separate from `StepExecution` |
 
 Use `Task.status` only as a compatibility list/filter field for queue states that Sacrum still persists on `tasks`. New derivations write `ready` or `done`; historical `running` and `waiting` values remain valid database/filter values until clients finish migrating. Use `TaskRun.status` for automation controls such as whether a run is active or stoppable. Use `Task.workflow` and `Task.current_step` for workflow position. Use `StepExecution.status` for attempt history, retry diagnostics, and LLM metadata. `SessionLog` has no state/status field; it records content attached to a `StepExecution` and must not be used to infer run state.
+
+Chat runs answer a different question: what happened in a user-facing conversation/work container that can span multiple chat sessions and produce zero, one, or many tasks. A `ChatRun` may create tasks, artifacts, and public chat messages, but it must not be treated as a `TaskRun` unless a created task later enters normal workflow execution. `ChatSession` is the chat-side execution-attempt layer, closer to `StepExecution` than to `TaskRun`.
 
 ### Task.status
 
