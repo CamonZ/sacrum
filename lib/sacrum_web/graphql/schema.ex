@@ -14,6 +14,7 @@ defmodule SacrumWeb.Graphql.Schema do
   import_types(SacrumWeb.Graphql.Types.SectionTypes)
   import_types(SacrumWeb.Graphql.Types.TransitionTypes)
   import_types(SacrumWeb.Graphql.Types.ExecutionTypes)
+  import_types(SacrumWeb.Graphql.Types.ChatTypes)
 
   query do
     import_fields(:project_queries)
@@ -21,6 +22,7 @@ defmodule SacrumWeb.Graphql.Schema do
     import_fields(:workflow_step_queries)
     import_fields(:task_queries)
     import_fields(:execution_queries)
+    import_fields(:chat_queries)
   end
 
   mutation do
@@ -31,6 +33,7 @@ defmodule SacrumWeb.Graphql.Schema do
     import_fields(:section_mutations)
     import_fields(:transition_mutations)
     import_fields(:execution_mutations)
+    import_fields(:chat_mutations)
   end
 
   @spec context(map()) :: map()

@@ -206,6 +206,28 @@ defmodule Sacrum.Repo.Broadcaster do
 
   def broadcast_section({:error, _} = error, _event), do: error
 
+  @doc """
+  Broadcast a persisted public chat event.
+
+  Internal chat events are deliberately ignored. ProjectChannel handles the
+  public payload projection from `chat_events.public_payload`.
+  """
+  @spec broadcast_chat_event({:ok, struct()} | {:error, term()}) ::
+          {:ok, struct()} | {:error, term()}
+  def broadcast_chat_event({:ok, event}) do
+    broadcast_chat_event(event)
+    {:ok, event}
+  end
+
+  def broadcast_chat_event({:error, _} = error), do: error
+
+  @spec broadcast_chat_event(struct() | map()) :: :ok | {:error, term()}
+  def broadcast_chat_event(event) do
+    event
+    |> Map.fetch!(:project_id)
+    |> SacrumWeb.ProjectChannel.broadcast_chat_event(event)
+  end
+
   # Private helper for step execution broadcast
   defp broadcast_step_execution_event(execution, event) do
     require Logger

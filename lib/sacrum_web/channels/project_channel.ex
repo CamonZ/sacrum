@@ -2,37 +2,41 @@ defmodule SacrumWeb.ProjectChannel do
   use Phoenix.Channel
 
   alias Sacrum.Accounts.Projects
+  alias Sacrum.Chat.PublicEvents
   alias Sacrum.TaskRuns.RunControls
   alias Sacrum.TaskRuns.Status, as: TaskRunStatus
 
   @valid_client_types ~w(default daemon)
   @daemon_events ~w(run_step cancel_step)
+  @chat_events PublicEvents.channel_event_names()
 
-  intercept([
-    "task_created",
-    "task_updated",
-    "task_deleted",
-    "workflow_created",
-    "workflow_updated",
-    "workflow_deleted",
-    "step_created",
-    "step_updated",
-    "step_deleted",
-    "step_transition_created",
-    "step_transition_deleted",
-    "workflow_transition_created",
-    "workflow_transition_deleted",
-    "step_execution_created",
-    "step_execution_status_changed",
-    "task_run_created",
-    "task_run_updated",
-    "session_log_created",
-    "section_created",
-    "section_updated",
-    "section_deleted",
-    "run_step",
-    "cancel_step"
-  ])
+  intercept(
+    [
+      "task_created",
+      "task_updated",
+      "task_deleted",
+      "workflow_created",
+      "workflow_updated",
+      "workflow_deleted",
+      "step_created",
+      "step_updated",
+      "step_deleted",
+      "step_transition_created",
+      "step_transition_deleted",
+      "workflow_transition_created",
+      "workflow_transition_deleted",
+      "step_execution_created",
+      "step_execution_status_changed",
+      "task_run_created",
+      "task_run_updated",
+      "session_log_created",
+      "section_created",
+      "section_updated",
+      "section_deleted",
+      "run_step",
+      "cancel_step"
+    ] ++ @chat_events
+  )
 
   @impl true
   def join("project:" <> project_id, params, socket) do
@@ -270,6 +274,19 @@ defmodule SacrumWeb.ProjectChannel do
       "session_log_created",
       session_log_payload(log)
     )
+  end
+
+  # Chat broadcasts
+
+  @spec broadcast_chat_event(String.t(), map()) :: :ok | {:error, term()}
+  def broadcast_chat_event(project_id, chat_event) do
+    case PublicEvents.channel_event(chat_event) do
+      {:ok, event, payload} ->
+        SacrumWeb.Endpoint.broadcast("project:#{project_id}", event, payload)
+
+      :ignore ->
+        :ok
+    end
   end
 
   # Section broadcasts

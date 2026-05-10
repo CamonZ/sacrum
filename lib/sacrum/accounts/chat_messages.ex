@@ -19,8 +19,15 @@ defmodule Sacrum.Accounts.ChatMessages do
   def append(user_id, project_id, chat_session_id, attrs)
       when is_session_scope(user_id, project_id, chat_session_id) and is_attrs(attrs) do
     with {:ok, chat_session} <- ChatSessions.get_session(user_id, project_id, chat_session_id) do
-      ChatMessagesRepo.insert(chat_session, attrs)
+      append_to_session(chat_session, attrs)
     end
+  end
+
+  @spec append_to_session(Sacrum.Repo.Schemas.ChatSession.t(), map()) ::
+          {:ok, ChatMessage.t()} | {:error, Ecto.Changeset.t()}
+  def append_to_session(%Sacrum.Repo.Schemas.ChatSession{} = chat_session, attrs)
+      when is_attrs(attrs) do
+    ChatMessagesRepo.insert(chat_session, attrs)
   end
 
   @spec list_for_session(String.t(), String.t(), String.t(), keyword()) ::
