@@ -45,6 +45,12 @@ defmodule Sacrum.Accounts.ChatSessions do
     end
   end
 
+  @spec update_session(ChatSession.t(), map()) ::
+          {:ok, ChatSession.t()} | {:error, Ecto.Changeset.t()}
+  def update_session(%ChatSession{} = chat_session, attrs) when is_attrs(attrs) do
+    ChatSessionsRepo.update(chat_session, attrs)
+  end
+
   @spec transition_status(String.t(), String.t(), String.t(), atom() | String.t()) ::
           {:ok, ChatSession.t()} | {:error, :not_found | Ecto.Changeset.t()}
   def transition_status(user_id, project_id, chat_session_id, status)

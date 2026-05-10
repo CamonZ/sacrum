@@ -8,13 +8,14 @@ defmodule Sacrum.Repo.Schemas.ChatMessage do
 
   @roles [:user, :assistant, :status]
   @content_formats [:plain, :markdown]
+  @default_content_format :plain
   @create_fields ~w(role content content_format client_message_id metadata)a
   @required_fields ~w(chat_session_id project_id user_id role content content_format)a
 
   schema "chat_messages" do
     field :role, Ecto.Enum, values: @roles
     field :content, :string
-    field :content_format, Ecto.Enum, values: @content_formats, default: :plain
+    field :content_format, Ecto.Enum, values: @content_formats, default: @default_content_format
     field :client_message_id, :string
     field :metadata, :map, default: %{}
 
@@ -30,6 +31,9 @@ defmodule Sacrum.Repo.Schemas.ChatMessage do
 
   @spec content_formats() :: [atom()]
   def content_formats, do: @content_formats
+
+  @spec default_content_format() :: atom()
+  def default_content_format, do: @default_content_format
 
   @spec create_changeset(t(), map()) :: Ecto.Changeset.t()
   def create_changeset(chat_message, attrs) do

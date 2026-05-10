@@ -4,7 +4,9 @@ defmodule SacrumWeb.ProjectChannelTest do
   import Phoenix.ChannelTest
 
   alias SacrumWeb.UserSocket
+  alias Sacrum.Accounts.{ChatEvents, LiveChat}
   alias Sacrum.Auth
+  alias Sacrum.Chat.PublicEvents
   alias Sacrum.Repo.Users
   alias Sacrum.Repo.Projects
 
@@ -467,6 +469,96 @@ defmodule SacrumWeb.ProjectChannelTest do
 
       refute_push "section_created", _payload
     end
+
+    test "daemon client does NOT receive public chat events" do
+      {user, project, socket} = setup_socket()
+
+      {:ok, _reply, _socket} =
+        subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
+
+      {:ok, _session} = LiveChat.create_session(user.id, project.id, %{})
+
+      refute_push "chat_session_created", _payload
+    end
+  end
+
+  describe "public chat event filtering" do
+    test "token for another user cannot subscribe to public chat events" do
+      {user, project, _socket} = setup_socket()
+
+      {:ok, other_user} =
+        Users.insert(%{
+          email: "other-token-chat@example.com",
+          username: "other_token_chat",
+          password: "password123"
+        })
+
+      {:ok, other_token, _api_token} =
+        Auth.create_api_token(other_user, %{name: "other token"})
+
+      {:ok, other_socket} = connect(UserSocket, %{"token" => other_token})
+
+      assert {:error, %{reason: "not found"}} =
+               subscribe_and_join(other_socket, "project:#{project.id}", %{})
+
+      {:ok, _session} = LiveChat.create_session(user.id, project.id, %{})
+
+      refute_push "chat_session_created", _payload
+    end
+
+    test "default client receives stable public session, message, and status payloads" do
+      {user, project, socket} = setup_socket()
+      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}", %{})
+
+      {:ok, session} =
+        LiveChat.create_session(user.id, project.id, %{
+          session_kind: "planning",
+          public_metadata: %{"surface" => "app"}
+        })
+
+      assert_push "chat_session_created", session_payload
+      assert session_payload == chat_session_payload(session)
+
+      {:ok, message} =
+        LiveChat.send_message(user.id, project.id, session.id, %{
+          content: "Draft a plan",
+          content_format: "markdown",
+          client_message_id: "client-channel-1",
+          metadata: %{"source" => "composer"}
+        })
+
+      assert_push "chat_message_created", message_payload
+      assert message_payload == chat_message_payload(message)
+
+      {:ok, cancelled} = LiveChat.cancel_session(user.id, project.id, session.id)
+
+      assert_push "chat_session_updated", status_payload
+      assert status_payload == chat_session_payload(cancelled, :session_updated)
+      assert status_payload.status == "cancelled"
+      assert is_binary(status_payload.stop_requested_at)
+      assert is_binary(status_payload.ended_at)
+    end
+
+    test "internal chat events are not pushed to default clients" do
+      {user, project, socket} = setup_socket()
+      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}", %{})
+
+      {:ok, session} = LiveChat.create_session(user.id, project.id, %{})
+      assert_push "chat_session_created", _payload
+
+      {:ok, internal_event} =
+        ChatEvents.append(user.id, project.id, session.id, %{
+          event_type: "runner.tool_trace",
+          visibility: :internal,
+          public_payload: %{},
+          internal_payload: %{"secret" => "hidden"}
+        })
+
+      SacrumWeb.ProjectChannel.broadcast_chat_event(project.id, internal_event)
+
+      refute_push "chat_event_created", _payload
+      refute_push "runner.tool_trace", _payload
+    end
   end
 
   describe "run_step_payload broadcast" do
@@ -659,5 +751,28 @@ defmodule SacrumWeb.ProjectChannelTest do
       inserted_at: now,
       updated_at: now
     }
+  end
+
+  defp chat_session_payload(session, event_type \\ :session_created) do
+    session
+    |> PublicEvents.session_payload()
+    |> channel_payload(PublicEvents.event_type(event_type))
+  end
+
+  defp chat_message_payload(message) do
+    message
+    |> PublicEvents.message_payload()
+    |> channel_payload(PublicEvents.event_type(:message_created))
+  end
+
+  defp channel_payload(public_payload, event_type) do
+    {:ok, ^event_type, payload} =
+      PublicEvents.channel_event(%{
+        visibility: :public,
+        event_type: event_type,
+        public_payload: public_payload
+      })
+
+    payload
   end
 end
