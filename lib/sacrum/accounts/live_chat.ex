@@ -8,7 +8,7 @@ defmodule Sacrum.Accounts.LiveChat do
   """
 
   alias Sacrum.Accounts.{ChatEvents, ChatMessages, ChatSessions}
-  alias Sacrum.Chat.PublicEvents
+  alias Sacrum.Chat.{Inference, PublicEvents}
   alias Sacrum.ChatSessions.Status, as: ChatSessionStatus
   alias Sacrum.Repo
   alias Sacrum.Repo.Broadcaster
@@ -52,6 +52,16 @@ defmodule Sacrum.Accounts.LiveChat do
         {:error, reason} -> Repo.rollback(reason)
       end
     end)
+  end
+
+  @spec run_inference(String.t(), String.t(), String.t(), keyword()) ::
+          {:ok, ChatMessage.t()} | {:error, term()}
+  def run_inference(user_id, project_id, chat_session_id, opts \\ []) when is_list(opts) do
+    with {:ok, session} <- ChatSessions.get_session(user_id, project_id, chat_session_id),
+         {:ok, messages} <- ChatMessages.list_for_session(session, []),
+         {:ok, inference_result} <- Inference.generate(messages, opts) do
+      persist_assistant_result(session, inference_result)
+    end
   end
 
   @spec cancel_session(String.t(), String.t(), String.t()) ::
@@ -104,6 +114,51 @@ defmodule Sacrum.Accounts.LiveChat do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  defp persist_assistant_result(%ChatSession{} = session, %Inference.Result{} = inference_result) do
+    transaction_result(fn ->
+      with {:ok, message} <-
+             ChatMessages.append_to_session(
+               session,
+               assistant_message_attrs(inference_result)
+             ),
+           {:ok, public_event} <-
+             ChatEvents.append_to_session(
+               session,
+               PublicEvents.message_created_attrs(message)
+             ),
+           {:ok, _internal_event} <-
+             ChatEvents.append_to_session(
+               session,
+               inference_completed_attrs(message, inference_result)
+             ) do
+        {message, public_event}
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp assistant_message_attrs(%Inference.Result{} = inference_result) do
+    %{
+      role: :assistant,
+      content: inference_result.content,
+      content_format: inference_result.content_format,
+      metadata: inference_result.public_metadata
+    }
+  end
+
+  defp inference_completed_attrs(%ChatMessage{} = message, %Inference.Result{} = inference_result) do
+    %{
+      event_type: "chat_inference.completed",
+      visibility: :internal,
+      public_payload: %{},
+      internal_payload: %{
+        "assistant_message_id" => message.id,
+        "metadata" => inference_result.internal_metadata
+      }
+    }
   end
 
   defp ensure_stoppable(%ChatSession{status: status}) do

@@ -12,7 +12,7 @@ defmodule Sacrum.Accounts.ChatMessages do
 
   alias Sacrum.Accounts.ChatSessions
   alias Sacrum.Repo.ChatMessages, as: ChatMessagesRepo
-  alias Sacrum.Repo.Schemas.ChatMessage
+  alias Sacrum.Repo.Schemas.{ChatMessage, ChatSession}
 
   @spec append(String.t(), String.t(), String.t(), map()) ::
           {:ok, ChatMessage.t()} | {:error, :not_found | Ecto.Changeset.t()}
@@ -23,9 +23,9 @@ defmodule Sacrum.Accounts.ChatMessages do
     end
   end
 
-  @spec append_to_session(Sacrum.Repo.Schemas.ChatSession.t(), map()) ::
+  @spec append_to_session(ChatSession.t(), map()) ::
           {:ok, ChatMessage.t()} | {:error, Ecto.Changeset.t()}
-  def append_to_session(%Sacrum.Repo.Schemas.ChatSession{} = chat_session, attrs)
+  def append_to_session(%ChatSession{} = chat_session, attrs)
       when is_attrs(attrs) do
     ChatMessagesRepo.insert(chat_session, attrs)
   end
@@ -35,7 +35,12 @@ defmodule Sacrum.Accounts.ChatMessages do
   def list_for_session(user_id, project_id, chat_session_id, opts \\ [])
       when is_session_scope(user_id, project_id, chat_session_id) and is_options(opts) do
     with {:ok, chat_session} <- ChatSessions.get_session(user_id, project_id, chat_session_id) do
-      {:ok, ChatMessagesRepo.list_for_session(chat_session, opts)}
+      list_for_session(chat_session, opts)
     end
+  end
+
+  @spec list_for_session(ChatSession.t(), keyword()) :: {:ok, [ChatMessage.t()]}
+  def list_for_session(%ChatSession{} = chat_session, opts) when is_options(opts) do
+    {:ok, ChatMessagesRepo.list_for_session(chat_session, opts)}
   end
 end
