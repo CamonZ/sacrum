@@ -43,4 +43,11 @@ defmodule Sacrum.Accounts.ChatMessages do
   def list_for_session(%ChatSession{} = chat_session, opts) when is_options(opts) do
     {:ok, ChatMessagesRepo.list_for_session(chat_session, opts)}
   end
+
+  @spec get_by_client_message_id(ChatSession.t(), String.t()) ::
+          {:ok, ChatMessage.t()} | {:error, :not_found}
+  def get_by_client_message_id(%ChatSession{} = chat_session, client_message_id)
+      when is_binary(client_message_id) do
+    ChatMessagesRepo.get_by_client_message_id(chat_session, client_message_id)
+  end
 end

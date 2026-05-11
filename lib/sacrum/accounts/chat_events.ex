@@ -15,7 +15,7 @@ defmodule Sacrum.Accounts.ChatEvents do
 
   alias Sacrum.Accounts.ChatSessions
   alias Sacrum.Repo.ChatEvents, as: ChatEventsRepo
-  alias Sacrum.Repo.Schemas.ChatEvent
+  alias Sacrum.Repo.Schemas.{ChatEvent, ChatSession}
 
   @spec append(String.t(), String.t(), String.t(), map()) ::
           {:ok, ChatEvent.t()} | {:error, :not_found | Ecto.Changeset.t()}
@@ -41,5 +41,19 @@ defmodule Sacrum.Accounts.ChatEvents do
       events = ChatEventsRepo.list_public_for_session(chat_session, opts)
       {:ok, events}
     end
+  end
+
+  @spec get_by_type(ChatSession.t(), String.t(), :public | :internal) ::
+          {:ok, ChatEvent.t()} | {:error, :not_found}
+  def get_by_type(%ChatSession{} = chat_session, event_type, visibility)
+      when is_binary(event_type) and visibility in [:public, :internal] do
+    ChatEventsRepo.get_by_type(chat_session, event_type, visibility)
+  end
+
+  @spec get_message_created_for_message(ChatSession.t(), String.t()) ::
+          {:ok, ChatEvent.t()} | {:error, :not_found}
+  def get_message_created_for_message(%ChatSession{} = chat_session, message_id)
+      when is_binary(message_id) do
+    ChatEventsRepo.get_message_created_for_message(chat_session, message_id)
   end
 end

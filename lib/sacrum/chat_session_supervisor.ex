@@ -1,0 +1,32 @@
+defmodule Sacrum.ChatSessionSupervisor do
+  @moduledoc """
+  Dynamic supervisor for one-turn chat session runners.
+  """
+
+  use DynamicSupervisor
+
+  @spec start_link(keyword()) :: Supervisor.on_start()
+  def start_link(opts) do
+    DynamicSupervisor.start_link(__MODULE__, opts, name: __MODULE__)
+  end
+
+  @impl true
+  def init(_opts) do
+    DynamicSupervisor.init(strategy: :one_for_one)
+  end
+
+  @spec start_runner(String.t(), keyword()) :: DynamicSupervisor.on_start_child()
+  def start_runner(chat_session_id, opts \\ [])
+      when is_binary(chat_session_id) and is_list(opts) do
+    child_opts = Keyword.put(opts, :chat_session_id, chat_session_id)
+    DynamicSupervisor.start_child(__MODULE__, {Sacrum.ChatSessionRunner, child_opts})
+  end
+
+  @spec terminate_runner(String.t()) :: :ok | {:error, :not_found}
+  def terminate_runner(chat_session_id) when is_binary(chat_session_id) do
+    case Sacrum.ChatSessionRegistry.lookup(chat_session_id) do
+      [{pid, _}] -> DynamicSupervisor.terminate_child(__MODULE__, pid)
+      [] -> {:error, :not_found}
+    end
+  end
+end

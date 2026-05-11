@@ -18,6 +18,9 @@ defmodule Sacrum.Application do
       SacrumWeb.Endpoint,
       # Absinthe subscriptions (must come after Endpoint)
       {Absinthe.Subscription, SacrumWeb.Endpoint},
+      # Chat session runner processes
+      {Registry, keys: :unique, name: Sacrum.ChatSessionRegistry},
+      Sacrum.ChatSessionSupervisor,
       # Task registry for orchestration
       {Registry, keys: :unique, name: Sacrum.Orchestrator.TaskRegistry},
       # Orchestrator supervision tree
