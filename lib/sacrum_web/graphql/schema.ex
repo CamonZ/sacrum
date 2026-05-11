@@ -62,4 +62,19 @@ defmodule SacrumWeb.Graphql.Schema do
   def plugins do
     [Absinthe.Middleware.Dataloader] ++ Absinthe.Plugin.defaults()
   end
+
+  # Mutations are the only resolvers that return changeset errors. Appending
+  # ChangesetErrors here converts a leaked {:error, %Ecto.Changeset{}} into a
+  # structured GraphQL error instead of crashing Absinthe.
+  @spec middleware(
+          [Absinthe.Middleware.spec()],
+          Absinthe.Type.Field.t(),
+          Absinthe.Type.Object.t()
+        ) ::
+          [Absinthe.Middleware.spec()]
+  def middleware(middleware, _field, %{identifier: :mutation}) do
+    Enum.concat(middleware, [SacrumWeb.Graphql.Middleware.ChangesetErrors])
+  end
+
+  def middleware(middleware, _field, _object), do: middleware
 end
