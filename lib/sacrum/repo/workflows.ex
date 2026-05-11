@@ -26,12 +26,13 @@ defmodule Sacrum.Repo.Workflows do
   alias Sacrum.Repo
   alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.Project
-  alias Sacrum.Repo.Schemas.StepExecution
   alias Sacrum.Repo.Schemas.Task
+  alias Sacrum.Repo.Schemas.TaskRun
   alias Sacrum.Repo.Schemas.Workflow
   alias Sacrum.Repo.Schemas.WorkflowTransition
   alias Sacrum.Repo.SyncHelper
   alias Sacrum.Repo.UuidPrefixResolver
+  alias Sacrum.TaskRuns.Status, as: TaskRunStatus
 
   @spec find_by_uuid_prefix(String.t(), String.t(), String.t()) ::
           {:ok, Workflow.t()}
@@ -173,10 +174,9 @@ defmodule Sacrum.Repo.Workflows do
   Returns all workflows in a project along with batched aggregates needed by the
   pipeline view.
 
-  Returns `{:ok, workflows, %{task_counts_by_step_id: ..., running_counts_by_step_id: ...}}`.
-  Aggregates are computed in two grouped queries (task counts by step and level,
-  running step-execution counts by step) regardless of how many workflows or steps
-  are returned.
+  Returns `{:ok, workflows, %{pipeline_counts_by_step_id: ...}}`.
+  Aggregates are computed in one grouped query across the full result set
+  regardless of how many workflows or steps are returned.
   """
   @spec pipeline_summary(String.t(), String.t()) ::
           {:ok, list(Workflow.t()), %{required(atom()) => map()}}
@@ -191,45 +191,68 @@ defmodule Sacrum.Repo.Workflows do
     all_step_ids = workflows |> Enum.flat_map(& &1.workflow_steps) |> Enum.map(& &1.id)
 
     if all_step_ids == [] do
-      {:ok, workflows, %{task_counts_by_step_id: %{}, running_counts_by_step_id: %{}}}
+      {:ok, workflows, %{pipeline_counts_by_step_id: %{}}}
     else
       {:ok, workflows,
-       %{
-         task_counts_by_step_id: task_counts_by_step(project_id, all_step_ids),
-         running_counts_by_step_id: running_counts_by_step(project_id, all_step_ids)
-       }}
+       %{pipeline_counts_by_step_id: pipeline_counts_by_step(user_id, project_id, all_step_ids)}}
     end
   end
 
   @level_atoms %{"epic" => :epic, "ticket" => :ticket, "task" => :task}
+  @active_bucket "active"
 
-  defp task_counts_by_step(project_id, step_ids) do
-    Task
-    |> where([t], t.project_id == ^project_id)
-    |> where([t], t.current_step_id in ^step_ids)
-    |> where([t], t.archived == false)
-    |> group_by([t], [t.current_step_id, t.level])
-    |> select([t], {t.current_step_id, t.level, count(t.id)})
+  defp pipeline_counts_by_step(user_id, project_id, step_ids)
+       when is_binary(user_id) and is_binary(project_id) and is_list(step_ids) do
+    step_ids = Enum.uniq(step_ids)
+
+    task_counts_query =
+      Task
+      |> where([t], t.user_id == ^user_id)
+      |> where([t], t.project_id == ^project_id)
+      |> where([t], t.current_step_id in ^step_ids)
+      |> where([t], t.archived == false)
+      |> where([t], t.level in ^Map.keys(@level_atoms))
+      |> group_by([t], [t.current_step_id, t.level])
+      |> select([t], %{
+        step_id: t.current_step_id,
+        bucket: t.level,
+        count: count()
+      })
+
+    active_counts_query =
+      TaskRun
+      |> join(:inner, [tr], t in Task,
+        on:
+          t.id == tr.task_id and t.user_id == ^user_id and t.project_id == ^project_id and
+            t.current_step_id in ^step_ids and t.archived == false
+      )
+      |> where([tr, _t], tr.user_id == ^user_id)
+      |> where([tr, _t], tr.project_id == ^project_id)
+      |> where([tr, _t], tr.status in ^TaskRunStatus.active_statuses())
+      |> group_by([_tr, t], t.current_step_id)
+      |> select([_tr, t], %{
+        step_id: t.current_step_id,
+        bucket: ^@active_bucket,
+        count: count()
+      })
+
+    task_counts_query
+    |> union_all(^active_counts_query)
+    |> subquery()
+    |> select([counts], {counts.step_id, counts.bucket, counts.count})
     |> Repo.all()
-    |> Enum.reduce(%{}, fn {step_id, level, count}, acc ->
-      case Map.get(@level_atoms, level) do
-        nil ->
-          acc
-
-        level_atom ->
-          Map.update(acc, step_id, %{level_atom => count}, &Map.put(&1, level_atom, count))
-      end
+    |> Enum.reduce(%{}, fn {step_id, bucket, count}, acc ->
+      bucket_atom = bucket_to_atom!(bucket)
+      Map.update(acc, step_id, %{bucket_atom => count}, &Map.put(&1, bucket_atom, count))
     end)
   end
 
-  defp running_counts_by_step(project_id, step_ids) do
-    StepExecution
-    |> where([se], se.project_id == ^project_id)
-    |> where([se], se.step_id in ^step_ids)
-    |> where([se], se.status == "started")
-    |> group_by([se], se.step_id)
-    |> select([se], {se.step_id, count(se.id)})
-    |> Repo.all()
-    |> Map.new()
+  defp bucket_to_atom!(@active_bucket), do: :active
+
+  defp bucket_to_atom!(bucket) do
+    case Map.fetch(@level_atoms, bucket) do
+      {:ok, bucket_atom} -> bucket_atom
+      :error -> raise ArgumentError, "unexpected pipeline count bucket: #{inspect(bucket)}"
+    end
   end
 end

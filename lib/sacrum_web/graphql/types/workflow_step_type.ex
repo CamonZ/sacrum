@@ -10,6 +10,9 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
   alias SacrumWeb.Graphql.ChangesetErrors
   alias SacrumWeb.Graphql.ShortIdErrors
 
+  @empty_task_counts %{epic: 0, ticket: 0, task: 0}
+  @empty_pipeline_counts Map.put(@empty_task_counts, :active, 0)
+
   object :workflow_step do
     field :id, :id
     field :name, :string
@@ -52,20 +55,47 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
     end
 
     field :task_counts, :pipeline_task_counts do
+      description("Compatibility task buckets for non-archived tasks at this step.")
+
       resolve(fn step, _args, _resolution ->
         counts =
           step
           |> Map.get(:__pipeline_aggregates, %{})
           |> Map.get(:task_counts, %{})
 
-        {:ok, Map.merge(%{epic: 0, ticket: 0, task: 0}, counts)}
+        {:ok, Map.merge(@empty_task_counts, counts)}
+      end)
+    end
+
+    field :pipeline_counts, :pipeline_step_counts do
+      description("Canonical per-step pipeline counts, including active TaskRun-backed work.")
+
+      resolve(fn step, _args, _resolution ->
+        counts =
+          step
+          |> Map.get(:__pipeline_aggregates, %{})
+          |> Map.get(:pipeline_counts, %{})
+
+        {:ok, Map.merge(@empty_pipeline_counts, counts)}
+      end)
+    end
+
+    field :active_count, :integer do
+      description("Convenience alias for pipelineCounts.active.")
+
+      resolve(fn step, _args, _resolution ->
+        aggregates = Map.get(step, :__pipeline_aggregates, %{})
+        {:ok, Map.get(aggregates, :active_count, 0)}
       end)
     end
 
     field :running_count, :integer do
+      description("Deprecated compatibility alias for activeCount.")
+      deprecate("Use activeCount or pipelineCounts.active.")
+
       resolve(fn step, _args, _resolution ->
         aggregates = Map.get(step, :__pipeline_aggregates, %{})
-        {:ok, Map.get(aggregates, :running_count, 0)}
+        {:ok, Map.get(aggregates, :active_count, 0)}
       end)
     end
   end

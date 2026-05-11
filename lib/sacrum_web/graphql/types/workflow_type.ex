@@ -53,6 +53,13 @@ defmodule SacrumWeb.Graphql.Types.WorkflowType do
     field :task, non_null(:integer)
   end
 
+  object :pipeline_step_counts do
+    field :epic, non_null(:integer)
+    field :ticket, non_null(:integer)
+    field :task, non_null(:integer)
+    field :active, non_null(:integer)
+  end
+
   object :workflow_queries do
     field :workflows, list_of(:workflow) do
       arg(:project_id, non_null(:uuid4))
@@ -79,8 +86,9 @@ defmodule SacrumWeb.Graphql.Types.WorkflowType do
     field :pipeline_summary, list_of(:workflow) do
       description("""
       All workflows in the project with steps, intra-workflow transitions, inter-workflow
-      transitions, per-step task counts grouped by level, and per-step running counts.
-      Aggregates are batched across the full result set — no N+1 over steps.
+      transitions, and per-step pipeline counts. Task buckets count non-archived
+      epic/ticket/task rows. Active buckets count active TaskRun rows. Aggregates
+      are batched across the full result set — no N+1 over steps.
       """)
 
       arg(:project_id, non_null(:uuid4))
@@ -185,17 +193,17 @@ defmodule SacrumWeb.Graphql.Types.WorkflowType do
     field :target_step_id, :uuid4
   end
 
-  @empty_task_counts %{epic: 0, ticket: 0, task: 0}
+  @empty_pipeline_counts %{epic: 0, ticket: 0, task: 0, active: 0}
 
-  defp attach_pipeline_aggregates(workflow, %{
-         task_counts_by_step_id: task_counts,
-         running_counts_by_step_id: running_counts
-       }) do
+  defp attach_pipeline_aggregates(workflow, %{pipeline_counts_by_step_id: pipeline_counts}) do
     enriched_steps =
       Enum.map(workflow.workflow_steps || [], fn step ->
+        counts = Map.merge(@empty_pipeline_counts, Map.get(pipeline_counts, step.id, %{}))
+
         Map.put(step, :__pipeline_aggregates, %{
-          task_counts: Map.get(task_counts, step.id, @empty_task_counts),
-          running_count: Map.get(running_counts, step.id, 0)
+          pipeline_counts: counts,
+          task_counts: Map.take(counts, [:epic, :ticket, :task]),
+          active_count: counts.active
         })
       end)
 
