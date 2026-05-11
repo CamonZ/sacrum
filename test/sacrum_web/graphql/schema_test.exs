@@ -1361,6 +1361,111 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
       assert result["data"]["deleteWorkflow"]["id"] == wf.id
     end
+
+    test "createWorkflow with isDefault: true demotes auto-Backlog default and succeeds",
+         %{conn: conn, user: user, project: project} do
+      [auto_backlog] =
+        Accounts.Workflows.list_by(user.id, conditions: [project_id: project.id])
+
+      assert auto_backlog.name == "Backlog"
+      assert auto_backlog.is_default == true
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createWorkflow(
+              projectId: "#{project.id}"
+              name: "New Default"
+              isDefault: true
+            ) { id name isDefault }
+          }
+        """)
+        |> json_response(200)
+
+      data = result["data"]["createWorkflow"]
+      assert data["name"] == "New Default"
+      assert data["isDefault"] == true
+      refute Map.has_key?(result, "errors")
+
+      {:ok, refreshed} =
+        Accounts.Workflows.get_by(user.id, conditions: [id: auto_backlog.id])
+
+      assert refreshed.is_default == false
+
+      defaults =
+        user.id
+        |> Accounts.Workflows.list_by(conditions: [project_id: project.id])
+        |> Enum.filter(& &1.is_default)
+
+      assert length(defaults) == 1
+      assert hd(defaults).id == data["id"]
+    end
+
+    test "createWorkflow with invalid attrs returns structured errors, not a 500",
+         %{conn: conn, user: user, project: project} do
+      conn = authenticate(conn, user)
+
+      result =
+        conn
+        |> graphql("""
+          mutation {
+            createWorkflow(projectId: "#{project.id}", name: "") {
+              id name
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["createWorkflow"] == nil
+      assert is_list(result["errors"])
+      assert length(result["errors"]) >= 1
+
+      messages = Enum.map(result["errors"], & &1["message"])
+      assert Enum.any?(messages, &String.contains?(&1, "name"))
+    end
+
+    test "concurrent createWorkflow with isDefault: true leaves exactly one default",
+         %{user: user, project: project} do
+      [_auto_backlog] =
+        Accounts.Workflows.list_by(user.id, conditions: [project_id: project.id])
+
+      parent = self()
+
+      results =
+        1..8
+        |> Task.async_stream(
+          fn i ->
+            Ecto.Adapters.SQL.Sandbox.allow(Sacrum.Repo, parent, self())
+
+            Accounts.Workflows.insert(user.id, project.id, %{
+              name: "Concurrent WF #{i}",
+              is_default: true
+            })
+          end,
+          max_concurrency: 8,
+          ordered: false,
+          timeout: 10_000
+        )
+        |> Enum.to_list()
+
+      successful_ids =
+        Enum.flat_map(results, fn
+          {:ok, {:ok, wf}} -> [wf.id]
+          _ -> []
+        end)
+
+      assert successful_ids != []
+
+      defaults =
+        user.id
+        |> Accounts.Workflows.list_by(conditions: [project_id: project.id])
+        |> Enum.filter(& &1.is_default)
+
+      assert [winner] = defaults
+      assert winner.id in successful_ids
+    end
   end
 
   describe "workflow step queries" do
