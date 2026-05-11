@@ -69,6 +69,7 @@ The API is exposed via **GraphQL** at `/graphql` (GraphiQL playground available 
 |-------|-----------|-------------|
 | `workflows` | `project_id!` | List workflows in a project |
 | `workflow` | `id!` | Single workflow by ID |
+| `pipelineSummary` | `project_id!` | Full workflow graph with per-step non-archived epic/ticket/task counts and active `TaskRun` counts |
 
 **`workflow_step_type.ex`** — WorkflowStep queries
 | Query | Arguments | Description |
@@ -271,6 +272,12 @@ Predicate semantics:
 - `stoppable?` is true for `:queued`, `:executing`, and `:waiting`; `:stopping` is still active but stop has already been requested.
 
 `StepExecution.status == "failed"` does not by itself mean the `TaskRun` failed. A failed step attempt can be retried while the enclosing `TaskRun.status` remains `:queued`, `:executing`, or `:waiting`. Set `TaskRun.status` to `:failed` only when retry/recovery is exhausted or the run has a permanent failure.
+
+Pipeline summaries follow the same boundary. `pipelineSummary.workflowSteps.activeCount`
+and `pipelineSummary.workflowSteps.pipelineCounts.active` count active
+`TaskRun.status` values (`queued`, `executing`, `waiting`, `stopping`) for
+non-archived tasks at the step. `runningCount` is retained as a compatibility
+alias for this active count and must not be derived from `StepExecution.status`.
 
 ### Waiting on Children
 

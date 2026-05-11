@@ -3,7 +3,10 @@ defmodule Sacrum.Repo.WorkflowsTest do
 
   alias Sacrum.Repo.Workflows
   alias Sacrum.Repo.Projects
+  alias Sacrum.Repo.TaskRuns
+  alias Sacrum.Repo.Tasks
   alias Sacrum.Repo.Users
+  alias Sacrum.Repo.WorkflowSteps
   alias Sacrum.Repo.Schemas.Workflow
 
   @valid_user_attrs %{
@@ -19,8 +22,8 @@ defmodule Sacrum.Repo.WorkflowsTest do
     description: "The default workflow"
   }
 
-  defp create_user do
-    {:ok, user} = Users.insert(@valid_user_attrs)
+  defp create_user(attrs \\ %{}) do
+    {:ok, user} = @valid_user_attrs |> Map.merge(attrs) |> Users.insert()
     user
   end
 
@@ -237,6 +240,49 @@ defmodule Sacrum.Repo.WorkflowsTest do
       {:ok, workflow} = Workflows.insert(project, @valid_attrs)
       assert {:ok, _} = Workflows.delete(workflow)
       assert {:error, :not_found} = Workflows.get(workflow.id)
+    end
+  end
+
+  describe "pipeline_summary/2" do
+    test "scopes task and active run counts by user, project, and step" do
+      project = create_project()
+      suffix = System.unique_integer([:positive])
+
+      other_user =
+        create_user(%{
+          email: "pipeline-other#{suffix}@example.com",
+          username: "pipelineother#{suffix}"
+        })
+
+      {:ok, workflow} = Workflows.insert(project, %{name: "Pipeline"})
+      {:ok, step} = WorkflowSteps.insert(workflow, %{name: "Review", step_order: 1})
+
+      {:ok, ticket} =
+        Tasks.insert(project.id, project.user_id, %{
+          title: "Visible ticket",
+          level: "ticket",
+          workflow_id: workflow.id,
+          current_step_id: step.id
+        })
+
+      {:ok, other_task} =
+        Tasks.insert(project.id, other_user.id, %{
+          title: "Other user task",
+          level: "epic",
+          workflow_id: workflow.id,
+          current_step_id: step.id
+        })
+
+      {:ok, _active_run} =
+        TaskRuns.insert(project.user_id, project.id, ticket.id, %{status: :queued})
+
+      {:ok, _other_run} =
+        TaskRuns.insert(other_user.id, project.id, other_task.id, %{status: :waiting})
+
+      {:ok, _workflows, %{pipeline_counts_by_step_id: counts_by_step}} =
+        Workflows.pipeline_summary(project.user_id, project.id)
+
+      assert counts_by_step[step.id] == %{ticket: 1, active: 1}
     end
   end
 end

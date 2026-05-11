@@ -790,8 +790,200 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert counts["task"] == 1
     end
 
-    # Testing Criterion 3: UNIT - running_count only counts 'started' status
-    test "running_count resolver returns only started executions, not other statuses", %{
+    test "pipelineSummary does not leak matching cross-user step counts", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      other_user = create_user(%{email: "pipeline-other@example.com", username: "pipelineother"})
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "Test WF"})
+      {:ok, step1} = Accounts.WorkflowSteps.insert(wf, %{name: "Step 1", step_order: 1})
+
+      {:ok, ticket} =
+        Accounts.Tasks.insert(user.id, project.id, %{
+          title: "Visible ticket",
+          level: "ticket",
+          workflow_id: wf.id,
+          current_step_id: step1.id
+        })
+
+      {:ok, other_task} =
+        Accounts.Tasks.insert(other_user.id, project.id, %{
+          title: "Other user epic",
+          level: "epic",
+          workflow_id: wf.id,
+          current_step_id: step1.id
+        })
+
+      {:ok, _run} = Accounts.TaskRuns.insert(user.id, project.id, ticket.id, %{status: :queued})
+
+      {:ok, _other_run} =
+        Accounts.TaskRuns.insert(other_user.id, project.id, other_task.id, %{status: :executing})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          {
+            pipelineSummary(projectId: "#{project.id}") {
+              id
+              workflowSteps {
+                id
+                pipelineCounts {
+                  epic
+                  ticket
+                  active
+                }
+              }
+            }
+          }
+        """)
+        |> json_response(200)
+
+      workflows = result["data"]["pipelineSummary"]
+      test_wf = Enum.find(workflows, &(&1["id"] == wf.id))
+      refute is_nil(test_wf)
+
+      step_data = Enum.find(test_wf["workflowSteps"], &(&1["id"] == step1.id))
+      refute is_nil(step_data)
+      assert step_data["pipelineCounts"] == %{"epic" => 0, "ticket" => 1, "active" => 1}
+    end
+
+    test "pipelineSummary exposes active TaskRun-backed counts and keeps runningCount compatible",
+         %{
+           conn: conn,
+           user: user,
+           project: project
+         } do
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "Test WF"})
+      {:ok, step1} = Accounts.WorkflowSteps.insert(wf, %{name: "Step 1", step_order: 1})
+
+      for status <- [:queued, :executing, :waiting, :stopping] do
+        {:ok, task} =
+          Accounts.Tasks.insert(user.id, project.id, %{
+            title: "Task #{status}",
+            level: "task",
+            workflow_id: wf.id,
+            current_step_id: step1.id
+          })
+
+        {:ok, _run} = Accounts.TaskRuns.insert(user.id, project.id, task.id, %{status: status})
+      end
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          {
+            pipelineSummary(projectId: "#{project.id}") {
+              id
+              name
+              workflowSteps {
+                name
+                activeCount
+                runningCount
+                pipelineCounts {
+                  active
+                  task
+                }
+              }
+            }
+          }
+        """)
+        |> json_response(200)
+
+      workflows = result["data"]["pipelineSummary"]
+      wf_data = Enum.find(workflows, &(&1["id"] == wf.id))
+      refute is_nil(wf_data)
+
+      steps = wf_data["workflowSteps"]
+      step_data = Enum.find(steps, &(&1["name"] == "Step 1"))
+      refute is_nil(step_data)
+
+      assert step_data["activeCount"] == 4
+      assert step_data["runningCount"] == 4
+      assert step_data["pipelineCounts"]["active"] == 4
+      assert step_data["pipelineCounts"]["task"] == 4
+    end
+
+    test "pipelineSummary excludes archived tasks and terminal TaskRuns from relevant buckets",
+         %{
+           conn: conn,
+           user: user,
+           project: project
+         } do
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "Test WF"})
+      {:ok, step1} = Accounts.WorkflowSteps.insert(wf, %{name: "Step 1", step_order: 1})
+
+      {:ok, active_task} =
+        Accounts.Tasks.insert(user.id, project.id, %{
+          title: "Active task",
+          level: "task",
+          workflow_id: wf.id,
+          current_step_id: step1.id
+        })
+
+      {:ok, terminal_task} =
+        Accounts.Tasks.insert(user.id, project.id, %{
+          title: "Terminal run task",
+          level: "task",
+          workflow_id: wf.id,
+          current_step_id: step1.id
+        })
+
+      {:ok, archived_task} =
+        Accounts.Tasks.insert(user.id, project.id, %{
+          title: "Archived task",
+          level: "task",
+          workflow_id: wf.id,
+          current_step_id: step1.id
+        })
+
+      {:ok, archived_task} = Accounts.Tasks.update(archived_task, %{archived: true})
+
+      {:ok, _active_run} =
+        Accounts.TaskRuns.insert(user.id, project.id, active_task.id, %{status: :executing})
+
+      {:ok, _terminal_run} =
+        Accounts.TaskRuns.insert(user.id, project.id, terminal_task.id, %{status: :completed})
+
+      {:ok, _archived_run} =
+        Accounts.TaskRuns.insert(user.id, project.id, archived_task.id, %{status: :waiting})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          {
+            pipelineSummary(projectId: "#{project.id}") {
+              id
+              workflowSteps {
+                id
+                taskCounts { task }
+                activeCount
+                pipelineCounts {
+                  task
+                  active
+                }
+              }
+            }
+          }
+        """)
+        |> json_response(200)
+
+      workflows = result["data"]["pipelineSummary"]
+      wf_data = Enum.find(workflows, &(&1["id"] == wf.id))
+      refute is_nil(wf_data)
+
+      step_data = Enum.find(wf_data["workflowSteps"], &(&1["id"] == step1.id))
+      refute is_nil(step_data)
+
+      assert step_data["taskCounts"]["task"] == 2
+      assert step_data["activeCount"] == 1
+      assert step_data["pipelineCounts"] == %{"task" => 2, "active" => 1}
+    end
+
+    test "pipelineSummary does not count started StepExecution rows without active TaskRuns", %{
       conn: conn,
       user: user,
       project: project
@@ -803,7 +995,6 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       Sacrum.Repo.TaskWorkflows.assign_workflow(task1, wf)
       {:ok, task1} = Sacrum.Repo.Tasks.get(task1.id)
 
-      # Create executions with different statuses
       Accounts.StepExecutions.insert(user.id, %{
         task_id: task1.id,
         workflow_id: wf.id,
@@ -811,24 +1002,6 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         project_id: project.id,
         step_name: "Step 1",
         status: "started"
-      })
-
-      Accounts.StepExecutions.insert(user.id, %{
-        task_id: task1.id,
-        workflow_id: wf.id,
-        step_id: step1.id,
-        project_id: project.id,
-        step_name: "Step 1",
-        status: "completed"
-      })
-
-      Accounts.StepExecutions.insert(user.id, %{
-        task_id: task1.id,
-        workflow_id: wf.id,
-        step_id: step1.id,
-        project_id: project.id,
-        step_name: "Step 1",
-        status: "invalidated"
       })
 
       result =
@@ -841,6 +1014,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
               name
               workflowSteps {
                 name
+                activeCount
                 runningCount
               }
             }
@@ -856,8 +1030,8 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       step_data = Enum.find(steps, &(&1["name"] == "Step 1"))
       refute is_nil(step_data)
 
-      # Should only count the 'started' execution
-      assert step_data["runningCount"] == 1
+      assert step_data["activeCount"] == 0
+      assert step_data["runningCount"] == 0
     end
 
     # Testing Criterion 4: UNIT - transitions_to returns only outgoing intra-workflow edges
@@ -1005,13 +1179,12 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert is_nil(transition["targetStepId"])
     end
 
-    # Testing Criterion 5: INTEGRATION - batched queries (no N+1)
-    test "pipelineSummary batches aggregates: all task/running counts fire once, no N+1", %{
+    # Testing Criterion 5: INTEGRATION - aggregate counts across workflows
+    test "pipelineSummary batches aggregate counts across workflows", %{
       conn: conn,
       user: user,
       project: project
     } do
-      # Create multiple workflows and steps
       {:ok, wf1} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF 1"})
       {:ok, wf2} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF 2"})
 
@@ -1019,36 +1192,17 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       {:ok, _step1_2} = Accounts.WorkflowSteps.insert(wf1, %{name: "Step 1.2", step_order: 2})
       {:ok, step2_1} = Accounts.WorkflowSteps.insert(wf2, %{name: "Step 2.1", step_order: 1})
 
-      # Create tasks with level set
       {:ok, task1} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task 1", level: "task"})
       {:ok, task2} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task 2", level: "task"})
 
       Sacrum.Repo.TaskWorkflows.assign_workflow(task1, wf1)
       Sacrum.Repo.TaskWorkflows.assign_workflow(task2, wf2)
 
-      # Tasks are now on step1_1 and step2_1 respectively (the first steps)
+      {:ok, _run1} =
+        Accounts.TaskRuns.insert(user.id, project.id, task1.id, %{status: :executing})
 
-      # Create step executions
-      Accounts.StepExecutions.insert(user.id, %{
-        task_id: task1.id,
-        workflow_id: wf1.id,
-        step_id: step1_1.id,
-        project_id: project.id,
-        step_name: "Step 1.1",
-        status: "started"
-      })
+      {:ok, _run2} = Accounts.TaskRuns.insert(user.id, project.id, task2.id, %{status: :waiting})
 
-      Accounts.StepExecutions.insert(user.id, %{
-        task_id: task2.id,
-        workflow_id: wf2.id,
-        step_id: step2_1.id,
-        project_id: project.id,
-        step_name: "Step 2.1",
-        status: "started"
-      })
-
-      # Use Ecto.Adapters.SQL.Sandbox to count queries
-      # For now, we just verify the query returns correct data
       result =
         conn
         |> authenticate(user)
@@ -1065,6 +1219,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
                   ticket
                   task
                 }
+                activeCount
                 runningCount
               }
             }
@@ -1085,12 +1240,14 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       step1_1_data = Enum.find(wf1_steps, fn s -> s["id"] == step1_1.id end)
 
       assert step1_1_data["taskCounts"]["task"] == 1
+      assert step1_1_data["activeCount"] == 1
       assert step1_1_data["runningCount"] == 1
 
       wf2_steps = wf2_data["workflowSteps"]
       step2_1_data = Enum.find(wf2_steps, fn s -> s["id"] == step2_1.id end)
 
       assert step2_1_data["taskCounts"]["task"] == 1
+      assert step2_1_data["activeCount"] == 1
       assert step2_1_data["runningCount"] == 1
     end
 

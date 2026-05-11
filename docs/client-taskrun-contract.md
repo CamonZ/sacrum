@@ -214,6 +214,44 @@ query TaskList($projectId: Uuid4!) {
 
 Use `runControls.runnable` and `runControls.stoppable` directly for Run/Stop button state. Do not recalculate these rules in the client.
 
+### Pipeline Summary
+
+Pipeline clients should use `pipelineCounts` as the canonical per-step summary.
+`activeCount` is a scalar convenience alias for `pipelineCounts.active`.
+`runningCount` remains available during client migration, but it is a
+compatibility alias for the same active `TaskRun.status` count; it is not based
+on `StepExecution.status`.
+
+```graphql
+query PipelineSummary($projectId: Uuid4!) {
+  pipelineSummary(projectId: $projectId) {
+    id
+    name
+    workflowSteps {
+      id
+      name
+      taskCounts {
+        epic
+        ticket
+        task
+      }
+      activeCount
+      runningCount
+      pipelineCounts {
+        epic
+        ticket
+        task
+        active
+      }
+    }
+  }
+}
+```
+
+Task buckets count non-archived tasks at each step. The active bucket counts
+active `TaskRun` rows for those tasks with statuses `queued`, `executing`,
+`waiting`, or `stopping`.
+
 ### Run Workflow
 
 ```graphql
