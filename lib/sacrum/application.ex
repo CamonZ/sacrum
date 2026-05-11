@@ -18,6 +18,10 @@ defmodule Sacrum.Application do
       SacrumWeb.Endpoint,
       # Absinthe subscriptions (must come after Endpoint)
       {Absinthe.Subscription, SacrumWeb.Endpoint},
+      # Chat inference coordination
+      {Registry, keys: :unique, name: Sacrum.Chat.InferenceRegistry},
+      {DynamicSupervisor, strategy: :one_for_one, name: Sacrum.Chat.InferenceSupervisor},
+      {Task.Supervisor, name: Sacrum.Chat.InferenceTaskSupervisor},
       # Task registry for orchestration
       {Registry, keys: :unique, name: Sacrum.Orchestrator.TaskRegistry},
       # Orchestrator supervision tree

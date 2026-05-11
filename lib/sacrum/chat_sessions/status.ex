@@ -15,6 +15,7 @@ defmodule Sacrum.ChatSessions.Status do
   @successful_statuses [:completed]
   @failed_statuses [:failed]
   @stoppable_statuses [:queued, :running, :waiting]
+  @runnable_statuses @stoppable_statuses
 
   @spec values() :: [t()]
   def values, do: @values
@@ -39,6 +40,9 @@ defmodule Sacrum.ChatSessions.Status do
 
   @spec stoppable?(term()) :: boolean()
   def stoppable?(status), do: status in @stoppable_statuses
+
+  @spec runnable?(term()) :: boolean()
+  def runnable?(status), do: status in @runnable_statuses
 
   @spec wire_value(t() | String.t() | nil) :: String.t() | nil
   def wire_value(status) when is_atom(status), do: Atom.to_string(status)

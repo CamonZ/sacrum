@@ -2,13 +2,14 @@ defmodule Sacrum.Accounts.LiveChat do
   @moduledoc """
   Public V0 live chat operations used by GraphQL.
 
-  This layer composes chat sessions, messages, and persisted public chat events.
-  It intentionally stays session-first and does not create chat runs, artifacts,
-  task links, or runner behavior.
+  This layer composes chat sessions, messages, persisted public chat events, and
+  the async inference trigger for user messages. Inference work is coordinated by
+  `Sacrum.Chat.InferenceCoordinator` so provider latency stays outside the
+  message mutation path.
   """
 
   alias Sacrum.Accounts.{ChatEvents, ChatMessages, ChatSessions}
-  alias Sacrum.Chat.{Inference, PublicEvents}
+  alias Sacrum.Chat.{Inference, InferenceCoordinator, InferenceEvents, PublicEvents}
   alias Sacrum.ChatSessions.Status, as: ChatSessionStatus
   alias Sacrum.Repo
   alias Sacrum.Repo.Broadcaster
@@ -39,25 +40,29 @@ defmodule Sacrum.Accounts.LiveChat do
       |> put_default(:role, "role", :user)
       |> put_default(:content_format, "content_format", ChatMessage.default_content_format())
 
-    transaction_result(fn ->
-      with {:ok, session} <- ChatSessions.get_session(user_id, project_id, chat_session_id),
-           {:ok, message} <- ChatMessages.append_to_session(session, attrs),
-           {:ok, event} <-
-             ChatEvents.append_to_session(
-               session,
-               PublicEvents.message_created_attrs(message)
-             ) do
-        {message, event}
-      else
-        {:error, reason} -> Repo.rollback(reason)
-      end
-    end)
+    case append_user_message(user_id, project_id, chat_session_id, attrs) do
+      {:ok, {%ChatMessage{} = message, %ChatSession{} = session}} ->
+        maybe_schedule_inference(message, session, user_id, project_id, chat_session_id)
+        {:ok, message}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   @spec run_inference(String.t(), String.t(), String.t(), keyword()) ::
           {:ok, ChatMessage.t()} | {:error, term()}
   def run_inference(user_id, project_id, chat_session_id, opts \\ []) when is_list(opts) do
-    with {:ok, session} <- ChatSessions.get_session(user_id, project_id, chat_session_id),
+    with {:ok, session} <- ChatSessions.get_session(user_id, project_id, chat_session_id) do
+      run_inference_for_session(session, opts)
+    end
+  end
+
+  @doc false
+  @spec run_inference_for_session(ChatSession.t(), keyword()) ::
+          {:ok, ChatMessage.t()} | {:error, term()}
+  def run_inference_for_session(%ChatSession{} = session, opts \\ []) when is_list(opts) do
+    with :ok <- ensure_runnable(session),
          {:ok, messages} <- ChatMessages.list_for_session(session, []),
          {:ok, inference_result} <- Inference.generate(messages, opts) do
       persist_assistant_result(session, inference_result)
@@ -116,6 +121,22 @@ defmodule Sacrum.Accounts.LiveChat do
     end
   end
 
+  defp append_user_message(user_id, project_id, chat_session_id, attrs) do
+    transaction_result(fn ->
+      with {:ok, session} <- ChatSessions.get_session(user_id, project_id, chat_session_id),
+           {:ok, message} <- ChatMessages.append_to_session(session, attrs),
+           {:ok, event} <-
+             ChatEvents.append_to_session(
+               session,
+               PublicEvents.message_created_attrs(message)
+             ) do
+        {{message, session}, event}
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
   defp persist_assistant_result(%ChatSession{} = session, %Inference.Result{} = inference_result) do
     transaction_result(fn ->
       with {:ok, message} <-
@@ -131,7 +152,7 @@ defmodule Sacrum.Accounts.LiveChat do
            {:ok, _internal_event} <-
              ChatEvents.append_to_session(
                session,
-               inference_completed_attrs(message, inference_result)
+               InferenceEvents.completed_attrs(message, inference_result)
              ) do
         {message, public_event}
       else
@@ -149,16 +170,32 @@ defmodule Sacrum.Accounts.LiveChat do
     }
   end
 
-  defp inference_completed_attrs(%ChatMessage{} = message, %Inference.Result{} = inference_result) do
-    %{
-      event_type: "chat_inference.completed",
-      visibility: :internal,
-      public_payload: %{},
-      internal_payload: %{
-        "assistant_message_id" => message.id,
-        "metadata" => inference_result.internal_metadata
-      }
-    }
+  defp maybe_schedule_inference(
+         %ChatMessage{role: :user},
+         %ChatSession{} = session,
+         user_id,
+         project_id,
+         chat_session_id
+       ) do
+    with true <- async_inference_enabled?(),
+         :ok <- ensure_runnable(session) do
+      InferenceCoordinator.enqueue(user_id, project_id, chat_session_id, async_inference_opts())
+    else
+      false -> :ok
+      {:error, {:chat_session_not_runnable, _status}} -> :ok
+      {:error, _reason} -> :ok
+    end
+  end
+
+  defp maybe_schedule_inference(_message, _session, _user_id, _project_id, _chat_session_id),
+    do: :ok
+
+  defp ensure_runnable(%ChatSession{status: status}) do
+    if ChatSessionStatus.runnable?(status) do
+      :ok
+    else
+      {:error, {:chat_session_not_runnable, ChatSessionStatus.wire_value(status)}}
+    end
   end
 
   defp ensure_stoppable(%ChatSession{status: status}) do
@@ -175,5 +212,17 @@ defmodule Sacrum.Accounts.LiveChat do
     else
       Map.put(attrs, atom_key, value)
     end
+  end
+
+  defp async_inference_opts do
+    Keyword.get(chat_inference_config(), :async_opts, [])
+  end
+
+  defp async_inference_enabled? do
+    Keyword.get(chat_inference_config(), :async, true)
+  end
+
+  defp chat_inference_config do
+    Application.get_env(:sacrum, :chat_inference, [])
   end
 end

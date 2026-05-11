@@ -1,8 +1,11 @@
 defmodule SacrumWeb.Graphql.ChatSessionApiTest do
   use SacrumWeb.ConnCase
 
+  import Sacrum.ChatInferenceCase
+
   alias Sacrum.Accounts
   alias Sacrum.Accounts.ChatEvents
+  alias Sacrum.ChatInferenceCase.BlockingProvider
 
   defp graphql(conn, query) do
     post(conn, "/graphql", %{"query" => query})
@@ -178,6 +181,109 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
 
       assert status_event["payload"]["status"] == "cancelled"
       assert status_event["payload"]["id"] == session["id"]
+    end
+
+    test "sendChatMessage triggers assistant inference without awaiting the provider", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      configure_async_inference(BlockingProvider,
+        test_pid: self(),
+        started_message: :graphql_blocking_provider_started,
+        release_message: :release_graphql_provider,
+        released_message: :graphql_blocking_provider_released,
+        content: "GraphQL assistant output",
+        public_metadata: %{"provider" => "graphql-blocking"},
+        internal_metadata: %{"trace_id" => "graphql-blocking-trace"}
+      )
+
+      Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
+
+      create_result =
+        graphql_result(conn, user, """
+        mutation {
+          createChatSession(projectId: "#{project.id}") {
+            id
+            projectId
+            status
+          }
+        }
+        """)
+
+      assert create_result["errors"] == nil
+      session = create_result["data"]["createChatSession"]
+      assert_receive %Phoenix.Socket.Broadcast{event: "chat_session_created"}
+
+      send_result =
+        graphql_result(conn, user, """
+        mutation {
+          sendChatMessage(
+            projectId: "#{project.id}"
+            chatSessionId: "#{session["id"]}"
+            content: "GraphQL async inference"
+            contentFormat: "markdown"
+            clientMessageId: "client-graphql-async-1"
+          ) {
+            id
+            role
+            content
+          }
+        }
+        """)
+
+      assert send_result["errors"] == nil
+      message = send_result["data"]["sendChatMessage"]
+      assert message["role"] == "user"
+      assert message["content"] == "GraphQL async inference"
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "chat_message_created",
+        payload: %{id: user_message_id, role: "user", content: "GraphQL async inference"}
+      }
+
+      assert user_message_id == message["id"]
+
+      assert_receive {:graphql_blocking_provider_started, provider_pid,
+                      [%{role: "user", content: "GraphQL async inference"}]}
+
+      refute_receive %Phoenix.Socket.Broadcast{
+                       event: "chat_message_created",
+                       payload: %{role: "assistant"}
+                     },
+                     100
+
+      send(provider_pid, :release_graphql_provider)
+      assert_receive {:graphql_blocking_provider_released, ^provider_pid}
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "chat_message_created",
+        payload: %{
+          role: "assistant",
+          content: "GraphQL assistant output",
+          chat_session_id: assistant_session_id
+        }
+      }
+
+      assert assistant_session_id == session["id"]
+
+      query_result =
+        graphql_result(conn, user, """
+        {
+          chatMessages(projectId: "#{project.id}", chatSessionId: "#{session["id"]}") {
+            id
+            content
+            role
+          }
+        }
+        """)
+
+      assert query_result["errors"] == nil
+
+      assert Enum.map(query_result["data"]["chatMessages"], & &1["role"]) == [
+               "user",
+               "assistant"
+             ]
     end
 
     test "rejects cross-user query and mutation access", %{

@@ -13,6 +13,9 @@ defmodule Sacrum.Chat.Inference do
   @supported_provider_roles ~w(system user assistant)
   @sensitive_key_names ~w(authorization bearer password credential credentials)
   @sensitive_key_suffixes ~w(api_key auth_token access_token refresh_token token secret private_key)
+  @max_error_depth 6
+  @max_error_collection_size 20
+  @max_error_string_length 500
 
   @spec generate([ChatMessage.t() | map()], keyword()) :: {:ok, Result.t()} | {:error, term()}
   def generate(messages, opts \\ []) when is_list(messages) do
@@ -51,6 +54,13 @@ defmodule Sacrum.Chat.Inference do
 
   def scrub_secrets(value) when is_list(value), do: Enum.map(value, &scrub_secrets/1)
   def scrub_secrets(value), do: value
+
+  @spec normalize_error(term()) :: term()
+  def normalize_error(reason) do
+    reason
+    |> json_safe_error(@max_error_depth)
+    |> scrub_secrets()
+  end
 
   defp normalize_message(%ChatMessage{role: role, content: content}) do
     normalize_message(%{role: role, content: content})
@@ -115,6 +125,93 @@ defmodule Sacrum.Chat.Inference do
   end
 
   defp normalize_result(result), do: {:error, {:invalid_inference_result, result}}
+
+  defp json_safe_error(value, depth) when depth <= 0 do
+    %{"type" => type_name(value), "truncated" => true}
+  end
+
+  defp json_safe_error(%Ecto.Changeset{} = changeset, _depth) do
+    %{
+      "type" => "Ecto.Changeset",
+      "errors" => inspect(changeset.errors)
+    }
+  end
+
+  defp json_safe_error(%{__exception__: true} = exception, _depth) do
+    %{
+      "type" => type_name(exception),
+      "message" => exception |> Exception.message() |> truncate_error_string()
+    }
+  end
+
+  defp json_safe_error(%_struct{} = value, _depth) do
+    %{"type" => type_name(value)}
+  end
+
+  defp json_safe_error(%{} = value, depth) do
+    entries = Enum.take(value, @max_error_collection_size)
+
+    normalized =
+      Map.new(entries, fn {key, nested_value} ->
+        {to_string(key), json_safe_error(nested_value, depth - 1)}
+      end)
+
+    maybe_put_truncated_count(normalized, map_size(value) - length(entries))
+  end
+
+  defp json_safe_error(value, depth) when is_list(value) do
+    items =
+      value
+      |> Enum.take(@max_error_collection_size)
+      |> Enum.map(&json_safe_error(&1, depth - 1))
+
+    if length(value) > @max_error_collection_size do
+      %{
+        "type" => "list",
+        "items" => items,
+        "truncated_count" => length(value) - @max_error_collection_size
+      }
+    else
+      items
+    end
+  end
+
+  defp json_safe_error(value, depth) when is_tuple(value) do
+    items =
+      value
+      |> Tuple.to_list()
+      |> Enum.take(@max_error_collection_size)
+      |> Enum.map(&json_safe_error(&1, depth - 1))
+
+    normalized = %{"type" => "tuple", "items" => items}
+    maybe_put_truncated_count(normalized, tuple_size(value) - length(items))
+  end
+
+  defp json_safe_error(value, _depth) when is_atom(value), do: Atom.to_string(value)
+  defp json_safe_error(value, _depth) when is_binary(value), do: truncate_error_string(value)
+  defp json_safe_error(value, _depth) when is_integer(value), do: value
+  defp json_safe_error(value, _depth) when is_float(value), do: value
+  defp json_safe_error(value, _depth) when is_boolean(value), do: value
+  defp json_safe_error(nil, _depth), do: nil
+  defp json_safe_error(value, _depth), do: value |> inspect() |> truncate_error_string()
+
+  defp maybe_put_truncated_count(map, count) when count > 0 do
+    Map.put(map, "truncated_count", count)
+  end
+
+  defp maybe_put_truncated_count(map, _count), do: map
+
+  defp truncate_error_string(value) when byte_size(value) > @max_error_string_length do
+    String.slice(value, 0, @max_error_string_length) <> "...[truncated]"
+  end
+
+  defp truncate_error_string(value), do: value
+
+  defp type_name(%{__struct__: struct}), do: inspect(struct)
+  defp type_name(value) when is_tuple(value), do: "tuple"
+  defp type_name(value) when is_map(value), do: "map"
+  defp type_name(value) when is_list(value), do: "list"
+  defp type_name(_value), do: "term"
 
   defp configured_provider do
     :sacrum
