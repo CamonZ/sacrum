@@ -98,7 +98,7 @@ defmodule Sacrum.ChatSessionRunnerTest do
                  inference_opts: [provider: BlockingProvider, test_pid: self()]
                )
 
-      assert_receive {:blocking_provider_started, ^pid,
+      assert_receive {:blocking_provider_started, provider_pid,
                       [%{role: "user", content: "Plan the next step"}]},
                      1_000
 
@@ -111,11 +111,11 @@ defmodule Sacrum.ChatSessionRunnerTest do
 
       completion =
         await_runner_completion(pid, fn ->
-          send(pid, {:release_blocking_provider, "Supervised assistant output"})
+          send(provider_pid, {:release_blocking_provider, "Supervised assistant output"})
         end)
 
       assert completion.status == :completed
-      assert completion.result.assistant_message.content == "Supervised assistant output"
+      assert completion.result.session.status == :completed
       assert_registry_empty(session.id)
 
       {:ok, completed_session} = ChatSessions.get_session(user.id, project.id, session.id)
@@ -155,7 +155,7 @@ defmodule Sacrum.ChatSessionRunnerTest do
                  inference_opts: [provider: BlockingProvider, test_pid: self()]
                )
 
-      assert_receive {:blocking_provider_started, ^pid,
+      assert_receive {:blocking_provider_started, provider_pid,
                       [%{role: "user", content: "Plan the next step"}]},
                      1_000
 
@@ -164,7 +164,7 @@ defmodule Sacrum.ChatSessionRunnerTest do
 
       completion =
         await_runner_completion(pid, fn ->
-          send(pid, {:release_blocking_provider, "Output after cancellation"})
+          send(provider_pid, {:release_blocking_provider, "Output after cancellation"})
         end)
 
       assert completion.status == :completed
@@ -267,6 +267,65 @@ defmodule Sacrum.ChatSessionRunnerTest do
                assistant_before_restart.id
 
       assert inference_completed_event.internal_payload["resumed"] == true
+    end
+
+    test "rerun after a fully completed session does not append duplicate output or events",
+         %{user: user, project: project, session: session} do
+      assert {:ok, first_pid} =
+               Sacrum.ChatSessionSupervisor.start_runner(session.id,
+                 inference_opts: [provider: BlockingProvider, test_pid: self()]
+               )
+
+      assert_receive {:blocking_provider_started, first_provider_pid,
+                      [%{role: "user", content: "Plan the next step"}]},
+                     1_000
+
+      completion =
+        await_runner_completion(first_pid, fn ->
+          send(first_provider_pid, {:release_blocking_provider, "Initial completion"})
+        end)
+
+      assert completion.status == :completed
+      assert_registry_empty(session.id)
+
+      {:ok, first_completion} = ChatSessions.get_session(user.id, project.id, session.id)
+      assert first_completion.status == :completed
+      stable_engine_session_ref = first_completion.engine_session_ref
+
+      {:ok, first_messages} = ChatMessages.list_for_session(first_completion, [])
+
+      first_event_count =
+        Repo.aggregate(
+          from(event in ChatEvent, where: event.chat_session_id == ^session.id),
+          :count
+        )
+
+      _second_pid =
+        start_runner_and_wait(session.id,
+          inference_opts: [provider: UnexpectedProvider, test_pid: self()]
+        )
+
+      refute_receive {:unexpected_provider_called, _messages}
+
+      {:ok, second_view} = ChatSessions.get_session(user.id, project.id, session.id)
+      assert second_view.status == :completed
+      assert second_view.engine_session_ref == stable_engine_session_ref
+
+      {:ok, second_messages} = ChatMessages.list_for_session(second_view, [])
+
+      assert Enum.map(second_messages, & &1.id) == Enum.map(first_messages, & &1.id)
+
+      assistant_messages = Enum.filter(second_messages, &(&1.role == :assistant))
+      assert length(assistant_messages) == 1
+      assert hd(assistant_messages).content == "Initial completion"
+
+      second_event_count =
+        Repo.aggregate(
+          from(event in ChatEvent, where: event.chat_session_id == ^session.id),
+          :count
+        )
+
+      assert second_event_count == first_event_count
     end
   end
 
