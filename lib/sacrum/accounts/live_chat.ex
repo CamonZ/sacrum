@@ -8,7 +8,7 @@ defmodule Sacrum.Accounts.LiveChat do
   """
 
   alias Sacrum.Accounts.{ChatEvents, ChatMessages, ChatSessions}
-  alias Sacrum.Chat.{Inference, PublicEvents}
+  alias Sacrum.Chat.{Inference, InferenceEvents, PublicEvents}
   alias Sacrum.ChatSessions.Status, as: ChatSessionStatus
   alias Sacrum.Repo
   alias Sacrum.Repo.Broadcaster
@@ -121,7 +121,7 @@ defmodule Sacrum.Accounts.LiveChat do
       with {:ok, message} <-
              ChatMessages.append_to_session(
                session,
-               assistant_message_attrs(inference_result)
+               InferenceEvents.assistant_message_attrs(inference_result)
              ),
            {:ok, public_event} <-
              ChatEvents.append_to_session(
@@ -131,34 +131,13 @@ defmodule Sacrum.Accounts.LiveChat do
            {:ok, _internal_event} <-
              ChatEvents.append_to_session(
                session,
-               inference_completed_attrs(message, inference_result)
+               InferenceEvents.inference_completed_attrs(message, inference_result)
              ) do
         {message, public_event}
       else
         {:error, reason} -> Repo.rollback(reason)
       end
     end)
-  end
-
-  defp assistant_message_attrs(%Inference.Result{} = inference_result) do
-    %{
-      role: :assistant,
-      content: inference_result.content,
-      content_format: inference_result.content_format,
-      metadata: inference_result.public_metadata
-    }
-  end
-
-  defp inference_completed_attrs(%ChatMessage{} = message, %Inference.Result{} = inference_result) do
-    %{
-      event_type: "chat_inference.completed",
-      visibility: :internal,
-      public_payload: %{},
-      internal_payload: %{
-        "assistant_message_id" => message.id,
-        "metadata" => inference_result.internal_metadata
-      }
-    }
   end
 
   defp ensure_stoppable(%ChatSession{status: status}) do

@@ -36,6 +36,20 @@ defmodule Sacrum.Repo.ChatMessages do
     |> Repo.all()
   end
 
+  @spec get_by_client_message_id(ChatSession.t(), String.t()) ::
+          {:ok, ChatMessage.t()} | {:error, :not_found}
+  def get_by_client_message_id(%ChatSession{} = chat_session, client_message_id)
+      when is_binary(client_message_id) do
+    get_by(
+      conditions: [
+        user_id: chat_session.user_id,
+        project_id: chat_session.project_id,
+        chat_session_id: chat_session.id,
+        client_message_id: client_message_id
+      ]
+    )
+  end
+
   defp maybe_after(query, nil), do: query
 
   defp maybe_after(query, %DateTime{} = after_inserted_at) do
