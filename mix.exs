@@ -77,7 +77,7 @@ defmodule Sacrum.MixProject do
       {:dataloader, "~> 2.0"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
-      {:muex, "~> 0.2.0", only: [:dev, :test], runtime: false},
+      {:muex, "~> 0.6.1", only: [:dev, :test], runtime: false},
       {:tidewave, "~> 0.5", only: :dev},
       {:ex_json_schema, "~> 0.10"},
       {:assent, "~> 0.2"}
