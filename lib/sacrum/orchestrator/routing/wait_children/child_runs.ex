@@ -4,7 +4,7 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren.ChildRuns do
   """
 
   alias Sacrum.Accounts.TaskRuns
-  alias Sacrum.Orchestrator.TaskRuns.Root
+  alias Sacrum.Orchestrator.TaskRuns.{Root, RunStart}
   alias Sacrum.Repo
   alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.{Task, TaskRun}
@@ -23,12 +23,19 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren.ChildRuns do
 
   @spec create(Task.t(), TaskRun.t(), binary()) :: {:ok, TaskRun.t()} | {:error, term()}
   defp create(%Task{} = child, %TaskRun{} = parent_task_run, trigger_id) do
-    TaskRuns.insert(child.user_id, child.project_id, child.id, %{
-      status: :queued,
-      parent_task_run_id: parent_task_run.id,
-      root_task_run_id: root_task_run_id(parent_task_run),
-      triggered_by_step_execution_id: trigger_id
-    })
+    case TaskRuns.insert(child.user_id, child.project_id, child.id, %{
+           status: :queued,
+           parent_task_run_id: parent_task_run.id,
+           root_task_run_id: root_task_run_id(parent_task_run),
+           triggered_by_step_execution_id: trigger_id
+         }) do
+      {:ok, %TaskRun{} = task_run} = result ->
+        RunStart.broadcast_step_position(task_run, child)
+        result
+
+      error ->
+        error
+    end
   end
 
   @spec reconcile(TaskRun.t(), TaskRun.t(), binary()) :: {:ok, TaskRun.t()} | {:error, term()}

@@ -318,8 +318,10 @@ test "deleting a task broadcasts task_deleted" do
   assert_broadcast "task_created", _
 
   {:ok, _} = Tasks.delete(task)
-  assert_broadcast "task_deleted", %{id: id}
-  assert id == task.id
+  assert_broadcast "task_deleted", payload
+  assert payload.id == task.id
+  assert payload.schema_version == 1
+  assert payload.current_step_id == task.current_step_id
 end
 ```
 

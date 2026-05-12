@@ -184,19 +184,24 @@ Connect to `project:<project_id>` via WebSocket to receive real-time updates. Th
 - **default** — Receives all entity change events (UI clients)
 - **daemon** — Receives only `run_step` and `cancel_step` commands (worker processes)
 
+The complete default-client WalEx CDC mapping, source-row requirements, payload
+completeness guarantees, daemon command exclusions, and snapshot/gap recovery
+rules are defined in
+[WalEx CDC GUI Projection Contract](walex-cdc-gui-projection-contract.md).
+
 ### Event Types
 
 | Event | Payload | Description |
 |-------|---------|-------------|
-| `task_created` / `task_updated` / `task_deleted` | Task fields (including `archived`) | Task lifecycle changes |
+| `task_created` / `task_updated` / `task_deleted` | Task fields (including `schema_version` and `archived`; delete includes before-image position fields) | Task lifecycle changes |
 | `workflow_created` / `workflow_updated` / `workflow_deleted` | Workflow fields | Workflow lifecycle |
 | `step_created` / `step_updated` / `step_deleted` | Step fields | WorkflowStep lifecycle |
 | `step_transition_created` / `step_transition_deleted` | Transition fields | Step-to-step edges |
 | `step_execution_created` | Execution fields | New execution started |
 | `step_execution_status_changed` | Execution fields | Status update (entered, completed, etc.) |
 | `task_run_created` / `task_run_updated` | TaskRun fields | TaskRun lifecycle changes |
-| `task_run_step_changed` | `{task_run_id, task_id, from_step_id, to_step_id, status, level}` | Emitted whenever a task's `current_step_id` changes while a TaskRun exists, and at run-end paths (`to_step_id` is `nil`). Lets pipeline views decrement the source step bucket and increment the destination bucket without refetching. |
-| `task_step_changed` | `{task_id, from_step_id, to_step_id, workflow_id, level}` | Emitted when `current_step_id` changes outside orchestrator execution (`assign_workflow`, `advance_to_step`, `move_to_step`). Mirrors `task_run_step_changed` for the manual-move case where no TaskRun exists; only fires when `from != to`. |
+| `task_run_step_changed` | `{schema_version, task_run_id, task_id, from_step_id, to_step_id, status, level}` | Emitted at root or child run start, whenever a task's `current_step_id` changes while a TaskRun exists, and at run-end paths (`to_step_id` is `nil`). Lets pipeline views decrement the source step bucket and increment the destination bucket without refetching. |
+| `task_step_changed` | `{schema_version, task_id, from_step_id, to_step_id, workflow_id, level}` | Emitted when `current_step_id` changes outside orchestrator execution (`assign_workflow`, `advance_to_step`, `move_to_step`). Mirrors `task_run_step_changed` for the manual-move case where no TaskRun exists; only fires when `from != to`. |
 | `session_log_created` | Log fields | New log entry attached |
 | `section_created` / `section_updated` / `section_deleted` | Section fields | Task section changes |
 | `run_step` | Execution + step config | **Daemon only** — Run a step |
@@ -288,20 +293,24 @@ The relevant signals are:
 - `task_created` / `task_updated` / `task_deleted` — track which step a task
   lives at and whether it is archived. The `task_updated` payload includes
   `archived`, so archive/unarchive flips immediately move the task in or out of
-  pipeline buckets without a refetch.
+  pipeline buckets without a refetch. The `task_deleted` payload includes
+  before-image `current_step_id`, `workflow_id`, `level`, and `archived`, so
+  deletes can decrement pipeline buckets without a client-side position cache.
 - `task_run_created` and `task_run_updated` — track run-level status for the
   active bucket.
-- `task_run_step_changed` — a dedicated event emitted whenever a task's
-  `current_step_id` changes while a TaskRun exists, including at run-end paths
-  (completion, retry exhaustion, stop). The payload is
-  `{task_run_id, task_id, from_step_id, to_step_id, status, level}` and
-  carries the wire status from `Sacrum.TaskRuns.Status.wire_value/1`.
+- `task_run_step_changed` — a dedicated event emitted at root or child run
+  start, whenever a task's `current_step_id` changes while a TaskRun exists, and
+  at run-end paths (completion, retry exhaustion, stop). At run start it follows
+  `task_run_created` and precedes the first `task_run_updated`, with
+  `from_step_id: nil` and `to_step_id` set to the current task step. The payload
+  is `{schema_version, task_run_id, task_id, from_step_id, to_step_id, status, level}`
+  and carries the wire status from `Sacrum.TaskRuns.Status.wire_value/1`.
   `to_step_id` is `nil` at run-end paths so clients can decrement the active
   bucket of the run's last step.
 - `task_step_changed` — the parallel signal for manual moves outside the
   orchestrator (`Repo.TaskWorkflows.assign_workflow/2`, `advance_to_step/2`,
   `move_to_step/2`). Payload is
-  `{task_id, from_step_id, to_step_id, workflow_id, level}`. No `task_run_id`
+  `{schema_version, task_id, from_step_id, to_step_id, workflow_id, level}`. No `task_run_id`
   or `status` because manual moves block when an orchestrator is active, so no
   TaskRun exists. Only fires when `from != to`.
 

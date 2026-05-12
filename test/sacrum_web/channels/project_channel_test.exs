@@ -7,6 +7,7 @@ defmodule SacrumWeb.ProjectChannelTest do
   alias Sacrum.Accounts.{ChatEvents, LiveChat}
   alias Sacrum.Auth
   alias Sacrum.Chat.PublicEvents
+  alias Sacrum.Realtime.ProjectChannelCdcContract
   alias Sacrum.Repo.Users
   alias Sacrum.Repo.Projects
   alias Sacrum.Accounts.Tasks, as: AccountsTasks
@@ -180,16 +181,45 @@ defmodule SacrumWeb.ProjectChannelTest do
       assert payload.id == task.id
     end
 
-    test "broadcast_task_deleted sends task_deleted event with id only" do
+    test "broadcast_task_deleted sends task_deleted event with position before-image" do
       {_user, project, socket} = setup_socket()
       {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}")
 
-      task = build_task(project)
+      task =
+        project
+        |> build_task()
+        |> Map.put(:workflow_id, Ecto.UUID.generate())
+        |> Map.put(:current_step_id, Ecto.UUID.generate())
+        |> Map.put(:level, "ticket")
+        |> Map.put(:archived, true)
 
       SacrumWeb.ProjectChannel.broadcast_task_deleted(project.id, task)
 
-      assert_broadcast "task_deleted", %{id: id}
-      assert id == task.id
+      assert_broadcast "task_deleted", payload
+      assert_contract_payload_keys("task_deleted", payload)
+      assert payload.schema_version == 1
+      assert payload.id == task.id
+      assert payload.current_step_id == task.current_step_id
+      assert payload.workflow_id == task.workflow_id
+      assert payload.level == "ticket"
+      assert payload.archived == true
+    end
+
+    test "broadcast_step_transition_deleted sends relation before-image" do
+      {_user, project, socket} = setup_socket()
+      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}")
+
+      transition = build_step_transition(project)
+
+      SacrumWeb.ProjectChannel.broadcast_step_transition_deleted(project.id, transition)
+
+      assert_broadcast "step_transition_deleted", payload
+      assert_contract_payload_keys("step_transition_deleted", payload)
+      assert payload.schema_version == 1
+      assert payload.id == transition.id
+      assert payload.from_step_id == transition.from_step_id
+      assert payload.to_step_id == transition.to_step_id
+      assert payload.project_id == project.id
     end
 
     test "broadcast_task_run_step_changed pushes payload with wire status to default client" do
@@ -318,16 +348,142 @@ defmodule SacrumWeb.ProjectChannelTest do
       refute_push "task_step_changed", _payload
     end
 
-    test "task_payload includes archived flag" do
+    test "task_payload includes complete task row fields needed by GUI stores" do
       {_user, project, socket} = setup_socket()
       {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}", %{})
 
-      task = project |> build_task() |> Map.put(:archived, true)
+      task =
+        project
+        |> build_task()
+        |> Map.put(:archived, true)
+        |> Map.put(:parent_id, Ecto.UUID.generate())
+        |> Map.put(:status, "done")
 
       SacrumWeb.ProjectChannel.broadcast_task_updated(project.id, task)
 
       assert_push "task_updated", payload
       assert payload.archived == true
+      assert payload.parent_id == task.parent_id
+      assert payload.status == "done"
+      assert payload.current_step_id == task.current_step_id
+      assert payload.workflow_id == task.workflow_id
+    end
+
+    test "runtime payload keys match CDC contract for regular broadcast helpers" do
+      {_user, project, socket} = setup_socket()
+      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}", %{})
+
+      task = build_task(project)
+      workflow = build_workflow(project)
+      step = build_workflow_step(project)
+      step_transition = build_step_transition(project)
+      workflow_transition = build_workflow_transition(project)
+      execution = build_step_execution(project)
+      session_log = build_session_log(project)
+      section = build_section(project)
+
+      assert_broadcast_payload_keys("task_created", fn ->
+        SacrumWeb.ProjectChannel.broadcast_task_created(project.id, task)
+      end)
+
+      assert_broadcast_payload_keys("task_updated", fn ->
+        SacrumWeb.ProjectChannel.broadcast_task_updated(project.id, task)
+      end)
+
+      assert_broadcast_payload_keys("task_deleted", fn ->
+        SacrumWeb.ProjectChannel.broadcast_task_deleted(project.id, task)
+      end)
+
+      assert_broadcast_payload_keys("workflow_created", fn ->
+        SacrumWeb.ProjectChannel.broadcast_workflow_created(project.id, workflow)
+      end)
+
+      assert_broadcast_payload_keys("workflow_updated", fn ->
+        SacrumWeb.ProjectChannel.broadcast_workflow_updated(project.id, workflow)
+      end)
+
+      assert_broadcast_payload_keys("workflow_deleted", fn ->
+        SacrumWeb.ProjectChannel.broadcast_workflow_deleted(project.id, workflow)
+      end)
+
+      assert_broadcast_payload_keys("step_created", fn ->
+        SacrumWeb.ProjectChannel.broadcast_step_created(project.id, step)
+      end)
+
+      assert_broadcast_payload_keys("step_updated", fn ->
+        SacrumWeb.ProjectChannel.broadcast_step_updated(project.id, step)
+      end)
+
+      assert_broadcast_payload_keys("step_deleted", fn ->
+        SacrumWeb.ProjectChannel.broadcast_step_deleted(project.id, step)
+      end)
+
+      assert_broadcast_payload_keys("step_transition_created", fn ->
+        SacrumWeb.ProjectChannel.broadcast_step_transition_created(project.id, step_transition)
+      end)
+
+      assert_broadcast_payload_keys("step_transition_deleted", fn ->
+        SacrumWeb.ProjectChannel.broadcast_step_transition_deleted(project.id, step_transition)
+      end)
+
+      assert_broadcast_payload_keys("workflow_transition_created", fn ->
+        SacrumWeb.ProjectChannel.broadcast_workflow_transition_created(
+          project.id,
+          workflow_transition
+        )
+      end)
+
+      assert_broadcast_payload_keys("workflow_transition_deleted", fn ->
+        SacrumWeb.ProjectChannel.broadcast_workflow_transition_deleted(
+          project.id,
+          workflow_transition
+        )
+      end)
+
+      assert_broadcast_payload_keys("step_execution_created", fn ->
+        SacrumWeb.ProjectChannel.broadcast_step_execution_created(project.id, execution)
+      end)
+
+      assert_broadcast_payload_keys("step_execution_status_changed", fn ->
+        SacrumWeb.ProjectChannel.broadcast_step_execution_status_changed(project.id, execution)
+      end)
+
+      assert_broadcast_payload_keys("task_run_step_changed", fn ->
+        SacrumWeb.ProjectChannel.broadcast_task_run_step_changed(project.id, %{
+          task_run_id: Ecto.UUID.generate(),
+          task_id: task.id,
+          from_step_id: Ecto.UUID.generate(),
+          to_step_id: Ecto.UUID.generate(),
+          status: :executing,
+          level: "ticket"
+        })
+      end)
+
+      assert_broadcast_payload_keys("task_step_changed", fn ->
+        SacrumWeb.ProjectChannel.broadcast_task_step_changed(project.id, %{
+          task_id: task.id,
+          from_step_id: Ecto.UUID.generate(),
+          to_step_id: Ecto.UUID.generate(),
+          workflow_id: workflow.id,
+          level: "ticket"
+        })
+      end)
+
+      assert_broadcast_payload_keys("session_log_created", fn ->
+        SacrumWeb.ProjectChannel.broadcast_session_log_created(project.id, session_log)
+      end)
+
+      assert_broadcast_payload_keys("section_created", fn ->
+        SacrumWeb.ProjectChannel.broadcast_section_created(project.id, section)
+      end)
+
+      assert_broadcast_payload_keys("section_updated", fn ->
+        SacrumWeb.ProjectChannel.broadcast_section_updated(project.id, section)
+      end)
+
+      assert_broadcast_payload_keys("section_deleted", fn ->
+        SacrumWeb.ProjectChannel.broadcast_section_deleted(project.id, section)
+      end)
     end
 
     test "archiving a task pushes task_updated with archived=true and unarchive pushes archived=false" do
@@ -352,6 +508,102 @@ defmodule SacrumWeb.ProjectChannelTest do
       assert_push "task_updated", unarchived_payload
       assert unarchived_payload.id == task.id
       assert unarchived_payload.archived == false
+    end
+
+    test "step payload includes editor and daemon configuration fields" do
+      {_user, project, socket} = setup_socket()
+      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}", %{})
+
+      output_schema = %{
+        "type" => "object",
+        "properties" => %{"approved" => %{"type" => "boolean"}},
+        "required" => ["approved"]
+      }
+
+      step =
+        project
+        |> build_workflow_step()
+        |> Map.put(:output_schema, output_schema)
+        |> Map.put(:verbose_daemon_logging, true)
+
+      SacrumWeb.ProjectChannel.broadcast_step_updated(project.id, step)
+
+      assert_push "step_updated", payload
+      assert payload.id == step.id
+      assert payload.project_id == project.id
+      assert payload.prompt == step.prompt
+      assert payload.output_schema == output_schema
+      assert payload.verbose_daemon_logging == true
+    end
+
+    test "step execution payload includes project, step, run, and handoff fields" do
+      {_user, project, socket} = setup_socket()
+      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}", %{})
+
+      execution =
+        project
+        |> build_step_execution()
+        |> Map.put(:status, "waiting")
+        |> Map.put(:handoff, %{"kind" => "human_input", "schema" => %{"type" => "object"}})
+
+      SacrumWeb.ProjectChannel.broadcast_step_execution_status_changed(project.id, execution)
+
+      assert_push "step_execution_status_changed", payload
+      assert payload.id == execution.id
+      assert payload.project_id == project.id
+      assert payload.task_run_id == execution.task_run_id
+      assert payload.step_id == execution.step_id
+      assert payload.handoff == execution.handoff
+      assert payload.status == "waiting"
+    end
+
+    test "task_run payload includes replacement run_controls" do
+      {user, project, socket} = setup_socket()
+      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}", %{})
+
+      {:ok, task} =
+        AccountsTasks.insert(user.id, project.id, %{
+          title: "Run controls over CDC",
+          description: "row controls should not require refetch",
+          level: "ticket"
+        })
+
+      assert_push "task_created", %{id: task_id}
+      assert task_id == task.id
+
+      {:ok, task_run} =
+        Sacrum.Accounts.TaskRuns.insert(user.id, project.id, task.id, %{
+          status: :queued,
+          outcome_context: %{"phase" => "created"}
+        })
+
+      assert_push "task_run_created", created_payload
+      assert_contract_payload_keys("task_run_created", created_payload)
+      assert_run_control_contract_keys(created_payload.run_controls)
+      assert created_payload.run_controls.active_run.id == task_run.id
+
+      {:ok, updated_run} =
+        Sacrum.Accounts.TaskRuns.update(task_run, %{
+          status: :waiting,
+          outcome_kind: "human_input",
+          outcome_context: %{"gate" => "review"}
+        })
+
+      assert_push "task_run_updated", payload
+      assert_contract_payload_keys("task_run_updated", payload)
+      assert_run_control_contract_keys(payload.run_controls)
+      assert payload.id == updated_run.id
+      assert payload.task_id == task.id
+      assert payload.project_id == project.id
+      assert payload.status == "waiting"
+      assert payload.outcome_kind == "human_input"
+      assert payload.outcome_context == %{"gate" => "review"}
+
+      assert payload.run_controls.runnable == false
+      assert payload.run_controls.stoppable == true
+      assert payload.run_controls.disabled_reason_code == "active_run"
+      assert payload.run_controls.active_run.id == updated_run.id
+      assert payload.run_controls.active_run.status == "waiting"
     end
   end
 
@@ -680,6 +932,7 @@ defmodule SacrumWeb.ProjectChannelTest do
         })
 
       assert_push "chat_session_created", session_payload
+      assert_contract_payload_keys("chat_session_created", session_payload)
       assert session_payload == chat_session_payload(session)
 
       {:ok, message} =
@@ -691,15 +944,31 @@ defmodule SacrumWeb.ProjectChannelTest do
         })
 
       assert_push "chat_message_created", message_payload
+      assert_contract_payload_keys("chat_message_created", message_payload)
       assert message_payload == chat_message_payload(message)
 
       {:ok, cancelled} = LiveChat.cancel_session(user.id, project.id, session.id)
 
       assert_push "chat_session_updated", status_payload
+      assert_contract_payload_keys("chat_session_updated", status_payload)
       assert status_payload == chat_session_payload(cancelled, :session_updated)
       assert status_payload.status == "cancelled"
       assert is_binary(status_payload.stop_requested_at)
       assert is_binary(status_payload.ended_at)
+
+      {:ok, public_event} =
+        ChatEvents.append(user.id, project.id, session.id, %{
+          event_type: "runner.progress",
+          visibility: :public,
+          public_payload: %{"message" => "working"},
+          internal_payload: %{}
+        })
+
+      SacrumWeb.ProjectChannel.broadcast_chat_event(project.id, public_event)
+
+      assert_push "chat_event_created", event_payload
+      assert_contract_payload_keys("chat_event_created", event_payload)
+      assert event_payload.payload == %{"message" => "working"}
     end
 
     test "internal chat events are not pushed to default clients" do
@@ -828,6 +1097,8 @@ defmodule SacrumWeb.ProjectChannelTest do
       project_id: project.id,
       workflow_id: nil,
       current_step_id: nil,
+      parent_id: nil,
+      status: "ready",
       archived: false,
       worktree: nil,
       inserted_at: now,
@@ -855,13 +1126,45 @@ defmodule SacrumWeb.ProjectChannelTest do
     }
   end
 
-  defp build_step_execution(_project) do
+  defp build_step_transition(project) do
+    now = DateTime.utc_now()
+
+    %{
+      id: Ecto.UUID.generate(),
+      from_step_id: Ecto.UUID.generate(),
+      to_step_id: Ecto.UUID.generate(),
+      label: "next",
+      project_id: project.id,
+      inserted_at: now,
+      updated_at: now
+    }
+  end
+
+  defp build_workflow_transition(project) do
+    now = DateTime.utc_now()
+
+    %{
+      id: Ecto.UUID.generate(),
+      from_workflow_id: Ecto.UUID.generate(),
+      to_workflow_id: Ecto.UUID.generate(),
+      target_step_id: Ecto.UUID.generate(),
+      label: "promote",
+      project_id: project.id,
+      inserted_at: now,
+      updated_at: now
+    }
+  end
+
+  defp build_step_execution(project) do
     now = DateTime.utc_now()
 
     %{
       id: Ecto.UUID.generate(),
       task_id: Ecto.UUID.generate(),
+      task_run_id: Ecto.UUID.generate(),
       workflow_id: Ecto.UUID.generate(),
+      step_id: Ecto.UUID.generate(),
+      project_id: project.id,
       step_name: "Test Step",
       status: "pending",
       context: nil,
@@ -874,12 +1177,26 @@ defmodule SacrumWeb.ProjectChannelTest do
       output_tokens: nil,
       cost: nil,
       duration_ms: nil,
+      handoff: nil,
       inserted_at: now,
       updated_at: now
     }
   end
 
-  defp build_workflow_step(_project) do
+  defp build_session_log(project) do
+    now = DateTime.utc_now()
+
+    %{
+      id: Ecto.UUID.generate(),
+      step_execution_id: Ecto.UUID.generate(),
+      project_id: project.id,
+      content: "session log",
+      inserted_at: now,
+      updated_at: now
+    }
+  end
+
+  defp build_workflow_step(project) do
     now = DateTime.utc_now()
 
     %{
@@ -893,6 +1210,7 @@ defmodule SacrumWeb.ProjectChannelTest do
       step_order: 1,
       step_type: "execute",
       workflow_id: Ecto.UUID.generate(),
+      project_id: project.id,
       prompt: "Execute the test step",
       output_schema: nil,
       verbose_daemon_logging: false,
@@ -901,12 +1219,13 @@ defmodule SacrumWeb.ProjectChannelTest do
     }
   end
 
-  defp build_section(_project) do
+  defp build_section(project) do
     now = DateTime.utc_now()
 
     %{
       id: Ecto.UUID.generate(),
       task_id: Ecto.UUID.generate(),
+      project_id: project.id,
       section_type: "context",
       content: "Test content",
       section_order: 1,
@@ -937,6 +1256,29 @@ defmodule SacrumWeb.ProjectChannelTest do
         public_payload: public_payload
       })
 
-    payload
+    Map.put(payload, :schema_version, 1)
+  end
+
+  defp assert_broadcast_payload_keys(event, broadcast_fun) do
+    broadcast_fun.()
+    assert_broadcast ^event, payload
+    assert_contract_payload_keys(event, payload)
+  end
+
+  defp assert_contract_payload_keys(event, payload) do
+    assert {:ok, contract} = ProjectChannelCdcContract.contract_for(event)
+    assert Enum.sort(Map.keys(payload)) == Enum.sort(contract.payload_keys)
+  end
+
+  defp assert_run_control_contract_keys(run_controls) do
+    assert {:ok, contract} = ProjectChannelCdcContract.contract_for("task_run_updated")
+
+    assert Enum.sort(Map.keys(run_controls)) ==
+             Enum.sort(Map.fetch!(contract.nested_payload_keys, :run_controls))
+
+    if run_controls.active_run do
+      assert Enum.sort(Map.keys(run_controls.active_run)) ==
+               Enum.sort(Map.fetch!(contract.nested_payload_keys, :"run_controls.active_run"))
+    end
   end
 end

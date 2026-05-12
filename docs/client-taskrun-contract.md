@@ -355,6 +355,10 @@ query TaskRunTrace($rootTaskRunId: Uuid4!) {
 
 ## WebSocket Contract
 
+For the complete WalEx CDC mapping, payload completeness rules, daemon-event
+exclusions, and snapshot/reconnect recovery contract, see
+[WalEx CDC GUI Projection Contract](walex-cdc-gui-projection-contract.md).
+
 Connect with the API token, then join:
 
 ```text
@@ -367,7 +371,7 @@ Handle these events for run-aware GUI/CLI state:
 
 | Event | Client action |
 |-------|---------------|
-| `task_created` / `task_updated` / `task_deleted` | Upsert/remove task row. The `task_updated` payload carries `archived` so archive/unarchive toggles can immediately move the row in or out of pipeline buckets without a refetch. |
+| `task_created` / `task_updated` / `task_deleted` | Upsert/remove task row. The `task_updated` payload carries `archived` so archive/unarchive toggles can immediately move the row in or out of pipeline buckets without a refetch. `task_deleted` carries before-image `current_step_id`, `workflow_id`, `level`, and `archived` so clients can remove the task from pipeline buckets without a position cache. |
 | `step_execution_created` | Append attempt history; update latest execution view if it belongs to the active run. Do **not** use this as a from/to step signal for pipeline counts; not every step transition dispatches a new execution. |
 | `step_execution_status_changed` | Update attempt history. Do not infer run terminal state from this alone. |
 | `task_run_created` | Upsert TaskRun; set `task.runControls.activeRun` from payload if present. |
@@ -377,6 +381,8 @@ Handle these events for run-aware GUI/CLI state:
 | `session_log_created` | Append log to the matching step execution. |
 
 Channel payloads are snake_case. GraphQL fields are camelCase.
+Default-client channel payloads include `schema_version: 1`; clients should
+reject unknown versions as a binding/contract mismatch.
 
 `task_run_created` and `task_run_updated` payloads include:
 
@@ -400,6 +406,7 @@ type TaskRunChannelBase = {
 };
 
 type TaskRunChannelPayload = TaskRunChannelBase & {
+  schema_version: 1;
   run_controls: {
     runnable: boolean;
     stoppable: boolean;
@@ -418,6 +425,7 @@ task and run state. The payload shape is:
 
 ```ts
 type TaskRunStepChangedPayload = {
+  schema_version: 1;
   task_run_id: string;
   task_id: string;
   from_step_id: string | null;
@@ -431,6 +439,9 @@ type TaskRunStepChangedPayload = {
 - `to_step_id` is the task's new `current_step_id`, or `null` when the event
   fires at a run-end path (completion, retry exhaustion, stop) because the run
   is leaving active statuses.
+- At root or child run start, the server emits `task_run_step_changed`
+  immediately after `task_run_created` and before the first `task_run_updated`, with
+  `from_step_id: null` and `to_step_id` set to the task's current step.
 - `status` is the wire-form `TaskRun.status` after the transition.
 - `level` mirrors `Task.level`, matching the per-level pipeline buckets.
 
@@ -438,6 +449,7 @@ type TaskRunStepChangedPayload = {
 
 ```ts
 type TaskStepChangedPayload = {
+  schema_version: 1;
   task_id: string;
   from_step_id: string | null;
   to_step_id: string | null;
