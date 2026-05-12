@@ -228,6 +228,26 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
     end
   end
 
+  defp wait_for_orchestrator(task_id, timeout \\ 2000) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+    do_wait_for_orchestrator(task_id, deadline)
+  end
+
+  defp do_wait_for_orchestrator(task_id, deadline) do
+    case Registry.lookup(TaskRegistry, task_id) do
+      [{pid, _}] ->
+        pid
+
+      [] ->
+        if System.monotonic_time(:millisecond) > deadline do
+          flunk("Timed out waiting for orchestrator for task #{task_id}")
+        end
+
+        Process.sleep(10)
+        do_wait_for_orchestrator(task_id, deadline)
+    end
+  end
+
   defp wait_for_registry_clear(task_id, timeout \\ 1000) do
     deadline = System.monotonic_time(:millisecond) + timeout
 
@@ -532,7 +552,8 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
     end
 
     test "valid human output can complete the workflow when the next step is final" do
-      %{user: user, task: task} = setup_human_input_workflow(next_final?: true)
+      %{user: user, project: project, task: task} =
+        setup_human_input_workflow(next_final?: true)
 
       pid = start_orchestrator(task, user)
       wait_for_exit(pid)
@@ -540,6 +561,10 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
 
       assert {:ok, _completed} =
                HumanInput.resume(user.id, waiting_execution.id, %{"approved" => true})
+
+      resumed_pid = wait_for_orchestrator(task.id)
+      wait_for_state(resumed_pid, :executing)
+      simulate_daemon_completion(task.id, project.id, "final step done")
 
       wait_until(
         fn -> Repo.get!(Sacrum.Repo.Schemas.Task, task.id).completed_at != nil end,
@@ -743,6 +768,9 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
       assert {:executing, _} = :sys.get_state(pid)
 
       simulate_daemon_completion(task.id, project.id, "step_2 done")
+
+      wait_for_state(pid, :executing)
+      simulate_daemon_completion(task.id, project.id, "step_3 done")
       wait_for_exit(pid)
 
       assert Repo.get!(Sacrum.Repo.Schemas.Task, task.id).completed_at != nil

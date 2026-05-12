@@ -144,10 +144,10 @@ defmodule Sacrum.Orchestrator.TaskCompletionTest do
       assert result == {:next_state, :failed, data}
     end
 
-    test "transitions to completing when next step is final" do
+    test "dispatches final auto_advance step instead of skipping to completing" do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project)
+      workflow = create_workflow(user, project, auto_advance: true)
       final_step = create_step(user, workflow, %{"is_final" => true})
       task = create_task(user, project, workflow)
 
@@ -157,9 +157,32 @@ defmodule Sacrum.Orchestrator.TaskCompletionTest do
         workflow: workflow
       }
 
-      result = TaskCompletion.determine_next_state(final_step.id, data)
+      assert TaskCompletion.determine_next_state(final_step.id, data) ==
+               {:next_state, :awaiting_execution, data}
+    end
 
-      assert result == {:next_state, :completing, data}
+    test "stops final non-auto_advance step so manual operator can run it" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project, auto_advance: false)
+      final_step = create_step(user, workflow, %{"is_final" => true})
+      task = create_task(user, project, workflow)
+      task_run = create_task_run(user, project, task)
+
+      data = %{
+        task: task,
+        task_run_id: task_run.id,
+        steps: %{final_step.id => final_step},
+        workflow: workflow
+      }
+
+      assert TaskCompletion.determine_next_state(final_step.id, data) ==
+               {:stop, :normal, data}
+
+      assert {:stop, :normal, attrs} = TaskCompletion.next_state_decision(final_step.id, data)
+      assert attrs.outcome_kind == "step_completed"
+      assert attrs.outcome_context["reason"] == "auto_advance_disabled"
+      assert attrs.outcome_context["current_step_id"] == final_step.id
     end
 
     test "transitions to awaiting_execution when auto_advance is enabled" do
