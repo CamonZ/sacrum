@@ -66,10 +66,13 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
   Determine the next FSM state based on the step and workflow configuration.
 
   Returns gen_statem tuples:
-  - `{:next_state, :completing, data}` if the step is final
   - `{:next_state, :awaiting_execution, data}` if auto-advance is enabled
   - `{:stop, :normal, data}` if no auto-advance
   - `{:next_state, :failed, data}` on error (nil step_id / not found)
+
+  `:completing` is reached only after the executed step's StepExecution reports
+  completed and the orchestrator finds no outgoing transitions; it is not a
+  shortcut for final steps at this decision point.
   """
   @spec determine_next_state(binary() | nil, FSMData.t()) ::
           {:next_state, atom(), FSMData.t()} | {:stop, atom(), FSMData.t()}
@@ -85,7 +88,7 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
   end
 
   @spec next_state_decision(binary() | nil, FSMData.t()) ::
-          {:next_state, :completing | :awaiting_execution}
+          {:next_state, :awaiting_execution}
           | {:stop, :normal, map()}
           | {:failed, term()}
   def next_state_decision(nil, _data), do: {:failed, :no_current_step}
@@ -94,9 +97,6 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
     case data.steps[next_step_id] do
       nil ->
         {:failed, {:step_not_found, next_step_id}}
-
-      %{is_final: true} ->
-        {:next_state, :completing}
 
       _step ->
         if data.workflow.auto_advance do

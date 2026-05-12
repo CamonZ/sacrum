@@ -309,7 +309,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
   describe "multi-step auto-advance workflow" do
     test "advances through all steps to completion" do
-      %{user: user, project: project, steps: [s1, s2, _s3], task: task} =
+      %{user: user, project: project, steps: [s1, s2, s3], task: task} =
         setup_linear_workflow(auto_advance: true, step_count: 3)
 
       pid = start_orchestrator(task, user)
@@ -324,18 +324,24 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       assert reload_task(task).current_step_id == s2.id
       simulate_daemon_completion(task.id, project.id, "step 2 done")
 
-      # Step 3 is final -> completing -> completed -> process exits
+      wait_for_state(pid, :executing)
+      assert reload_task(task).current_step_id == s3.id
+      simulate_daemon_completion(task.id, project.id, "step 3 done")
+
       wait_for_exit(pid)
 
       task = reload_task(task)
       assert task.completed_at != nil
     end
 
-    test "creates step executions for each step" do
+    test "creates step executions for each step including the final one" do
       %{user: user, project: project, task: task} =
         setup_linear_workflow(auto_advance: true, step_count: 3)
 
       pid = start_orchestrator(task, user)
+
+      wait_for_state(pid, :executing)
+      simulate_daemon_completion(task.id, project.id)
 
       wait_for_state(pid, :executing)
       simulate_daemon_completion(task.id, project.id)
@@ -350,11 +356,12 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
       assert "step_1" in step_names
       assert "step_2" in step_names
-      assert "step_3" not in step_names
+      assert "step_3" in step_names
+      assert Enum.all?(executions, &(&1.status == "completed"))
     end
 
     test "updates task current_step_id at each transition" do
-      %{user: user, project: project, steps: [s1, s2, _s3], task: task} =
+      %{user: user, project: project, steps: [s1, s2, s3], task: task} =
         setup_linear_workflow(auto_advance: true, step_count: 3)
 
       pid = start_orchestrator(task, user)
@@ -367,7 +374,94 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       assert reload_task(task).current_step_id == s2.id
 
       simulate_daemon_completion(task.id, project.id)
+      wait_for_state(pid, :executing)
+      assert reload_task(task).current_step_id == s3.id
+
+      simulate_daemon_completion(task.id, project.id)
       wait_for_exit(pid)
+    end
+  end
+
+  describe "final step dispatch" do
+    test "auto_advance workflow dispatches the final step and only completes after its StepExecution finishes" do
+      %{user: user, project: project, steps: [s1, _s2, s3], task: task} =
+        setup_linear_workflow(auto_advance: true, step_count: 3)
+
+      pid = start_orchestrator(task, user)
+
+      wait_for_state(pid, :executing)
+      assert reload_task(task).current_step_id == s1.id
+      simulate_daemon_completion(task.id, project.id, "s1 done")
+
+      wait_for_state(pid, :executing)
+      simulate_daemon_completion(task.id, project.id, "s2 done")
+
+      wait_for_state(pid, :executing)
+      reloaded = reload_task(task)
+      assert reloaded.current_step_id == s3.id
+      assert reloaded.completed_at == nil
+
+      final_started = get_latest_started_execution(task.id)
+      assert final_started.step_id == s3.id
+      assert final_started.step_name == "step_3"
+
+      simulate_daemon_completion(task.id, project.id, "s3 done")
+      wait_for_exit(pid)
+
+      completed = reload_task(task)
+      assert completed.completed_at != nil
+
+      executions = get_all_executions(task.id)
+      assert Enum.map(executions, & &1.step_name) == ["step_1", "step_2", "step_3"]
+      assert Enum.all?(executions, &(&1.status == "completed"))
+    end
+
+    test "wait_children with no children advances and dispatches the final step under auto_advance" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project, auto_advance: true)
+
+      wait_step =
+        create_step(user, workflow, %{
+          name: "wait_step",
+          step_order: 1,
+          is_final: false,
+          step_type: "wait_children"
+        })
+
+      final_step =
+        create_step(user, workflow, %{
+          name: "final_step",
+          step_order: 2,
+          is_final: true,
+          step_type: "execute"
+        })
+
+      create_transition(user, wait_step, final_step)
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: wait_step.id})
+
+      parent_task = create_task(user, project, %{title: "Parent w/ wait_children"})
+      parent_task = assign_workflow_to_task(parent_task, workflow)
+
+      pid = start_orchestrator(parent_task, user)
+
+      wait_for_state(pid, :executing)
+      reloaded = reload_task(parent_task)
+      assert reloaded.current_step_id == final_step.id
+      assert reloaded.completed_at == nil
+
+      final_started = get_latest_started_execution(parent_task.id)
+      assert final_started.step_id == final_step.id
+      assert final_started.step_name == "final_step"
+
+      simulate_daemon_completion(parent_task.id, project.id, "final done")
+      wait_for_exit(pid)
+
+      completed = reload_task(parent_task)
+      assert completed.completed_at != nil
+
+      final_exec = Repo.get!(StepExecution, final_started.id)
+      assert final_exec.status == "completed"
     end
   end
 
@@ -667,11 +761,12 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
       wait_for_exit(pid)
 
-      # Task should now be in workflow2, at the target step
+      # workflow2 has auto_advance=false, so the orchestrator stops at the
+      # final step instead of dispatching it; completed_at stays nil.
       task = reload_task(task)
       assert task.workflow_id == workflow2.id
       assert task.current_step_id == step2_2.id
-      assert task.completed_at != nil
+      assert task.completed_at == nil
     end
 
     test "fails when route output references workflow in different project" do
@@ -1159,10 +1254,12 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       # Verify the handoff appears in the rendered prompt
       assert String.contains?(dest_exec.prompt, "approved_by")
 
-      # Now complete the destination step to move to final step
       simulate_daemon_completion(task.id, project.id, "dest step done")
 
-      # With auto_advance and final step coming next, FSM goes directly to completing
+      wait_for_state(pid, :executing)
+      assert reload_task(task).current_step_id == final_step.id
+
+      simulate_daemon_completion(task.id, project.id, "final step done")
       wait_for_exit(pid)
 
       # Task completed
@@ -1226,10 +1323,12 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       assert dest_exec != nil
       assert dest_exec.handoff == nil
 
-      # Now complete the destination step to move to final step
       simulate_daemon_completion(task.id, project.id, "dest step done")
 
-      # With auto_advance and final step coming next, FSM goes directly to completing
+      wait_for_state(pid, :executing)
+      assert reload_task(task).current_step_id == final_step.id
+
+      simulate_daemon_completion(task.id, project.id, "final step done")
       wait_for_exit(pid)
 
       # Task completed
@@ -1311,9 +1410,12 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       assert task.workflow_id == workflow2.id
       assert task.current_step_id == dest_step.id
 
-      # Complete dest_step, which auto-advances to final_step and completes task
       simulate_daemon_completion(task.id, project.id, "dest_step done")
 
+      wait_for_state(pid, :executing)
+      assert reload_task(task).current_step_id == final_step.id
+
+      simulate_daemon_completion(task.id, project.id, "final step done")
       wait_for_exit(pid)
 
       # Verify handoff persisted across workflow boundary
@@ -1404,9 +1506,12 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       # Should go to target_step (step2_2) not initial step
       assert task.current_step_id == step2_2.id
 
-      # Complete step2_2, which auto-advances to step2_3 (final) and completes task
       simulate_daemon_completion(task.id, project.id, "step2_2 done")
 
+      wait_for_state(pid, :executing)
+      assert reload_task(task).current_step_id == step2_3.id
+
+      simulate_daemon_completion(task.id, project.id, "final step done")
       wait_for_exit(pid)
 
       executions = get_all_executions(task.id)
@@ -1821,9 +1926,17 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     end
 
     defp setup_wait_children_parent do
+      build_wait_children_parent(auto_advance: false)
+    end
+
+    defp setup_wait_children_parent_auto_advance do
+      build_wait_children_parent(auto_advance: true)
+    end
+
+    defp build_wait_children_parent(opts) do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, auto_advance: false)
+      workflow = create_workflow(user, project, auto_advance: Keyword.fetch!(opts, :auto_advance))
 
       wait_step = create_wait_children_step(user, workflow)
 
@@ -2830,7 +2943,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
   describe "task_run_step_changed broadcasts" do
     test "single-transition step move emits task_run_step_changed with from=A to=B status=executing" do
-      %{user: user, project: project, steps: [s1, s2, _s3], task: task} =
+      %{user: user, project: project, steps: [s1, s2, s3], task: task} =
         setup_linear_workflow(auto_advance: true, step_count: 3)
 
       :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
@@ -2843,6 +2956,10 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       simulate_daemon_completion(task.id, project.id)
       wait_for_state(pid, :executing)
       assert reload_task(task).current_step_id == s2.id
+
+      simulate_daemon_completion(task.id, project.id)
+      wait_for_state(pid, :executing)
+      assert reload_task(task).current_step_id == s3.id
 
       simulate_daemon_completion(task.id, project.id)
       wait_for_exit(pid)
@@ -2875,7 +2992,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
              "Expected at least one step_execution_created during the transition"
     end
 
-    test "wait_children transition into final step emits task_run_step_changed with to=final and no new step_execution_created" do
+    test "wait_children transition into final step dispatches the final step and emits its step_execution_created" do
       %{
         user: user,
         project: project,
@@ -2883,15 +3000,20 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         wait_step: wait_step,
         final_step: final_step
       } =
-        setup_wait_children_parent()
+        setup_wait_children_parent_auto_advance()
 
       :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
 
       pid = start_orchestrator(parent_task, user)
-      wait_for_exit(pid)
 
-      reloaded_parent = reload_task(parent_task)
-      assert reloaded_parent.current_step_id == final_step.id
+      # After wait_children advances to the (now auto-dispatched) final step,
+      # the orchestrator must enter :executing for that step. Complete it so
+      # the run finishes and we can collect the run-end broadcast.
+      wait_for_state(pid, :executing)
+      assert reload_task(parent_task).current_step_id == final_step.id
+
+      simulate_daemon_completion(parent_task.id, project.id, "final step done")
+      wait_for_exit(pid)
 
       transition_events =
         collect_broadcasts("task_run_step_changed", [])
@@ -2910,10 +3032,10 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
       execution_events = collect_broadcasts("step_execution_created", [])
 
-      refute Enum.any?(execution_events, fn payload ->
+      assert Enum.any?(execution_events, fn payload ->
                payload.task_id == parent_task.id and payload.step_name == "final_step"
              end),
-             "Expected no step_execution_created for the wait_children -> final transition"
+             "Expected a step_execution_created for the final step after wait_children transition"
     end
 
     test "TaskRun completion emits task_run_step_changed with from=last_step, to=nil, status=completed" do
@@ -2923,6 +3045,9 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
 
       pid = start_orchestrator(task, user)
+
+      wait_for_state(pid, :executing)
+      simulate_daemon_completion(task.id, project.id)
 
       wait_for_state(pid, :executing)
       simulate_daemon_completion(task.id, project.id)
