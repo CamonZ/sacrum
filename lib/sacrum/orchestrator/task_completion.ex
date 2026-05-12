@@ -10,7 +10,7 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
   alias Sacrum.Orchestrator.TaskRuns.{Completion, Lookup}
   alias Sacrum.Repo
   alias Sacrum.Repo.Broadcaster
-  alias Sacrum.Repo.Schemas.TaskRun
+  alias Sacrum.Repo.Schemas.{Task, TaskRun}
   alias Sacrum.Tasks.Status
 
   @doc """
@@ -21,10 +21,11 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
   """
   @spec handle_completion(FSMData.t()) ::
           {:ok, :completed, FSMData.t()} | {:error, term()}
-  def handle_completion(%{task: _task} = data) do
+  def handle_completion(%FSMData{} = data) do
     case commit_completion(data) do
-      {:ok, %{task: refreshed}} ->
+      {:ok, %{task: refreshed} = changes} ->
         Broadcaster.broadcast({:ok, refreshed}, :task_updated, :project)
+        broadcast_run_end_step_changed(data, refreshed, changes)
         {:ok, :completed, %{data | task: refreshed}}
 
       {:error, reason} ->
@@ -32,10 +33,23 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
     end
   end
 
+  @spec broadcast_run_end_step_changed(FSMData.t(), Task.t(), map()) :: :ok
+  defp broadcast_run_end_step_changed(%FSMData{task_run_id: nil}, _task, _changes), do: :ok
+
+  defp broadcast_run_end_step_changed(%FSMData{task_run_id: task_run_id}, task, changes) do
+    case Lookup.from_changes_or_fetch(task_run_id, changes) do
+      %TaskRun{} = task_run ->
+        Broadcaster.broadcast_task_run_step_changed(task_run, task, task.current_step_id, nil)
+
+      _ ->
+        :ok
+    end
+  end
+
   @spec commit_completion(FSMData.t()) :: {:ok, map()} | {:error, term()}
-  defp commit_completion(%{task: task} = data) do
+  defp commit_completion(%FSMData{task: task, task_run_id: task_run_id}) do
     Repo.transaction(fn ->
-      with {:ok, task_run} <- fetch_optional_task_run(Map.get(data, :task_run_id)),
+      with {:ok, task_run} <- fetch_optional_task_run(task_run_id),
            {:ok, refreshed} <- Repo.update(completion_changeset(task)),
            {:ok, changes} <-
              maybe_mark_task_run_completed(task_run, %{outcome_kind: "completed"}, %{

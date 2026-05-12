@@ -9,6 +9,7 @@ defmodule SacrumWeb.ProjectChannelTest do
   alias Sacrum.Chat.PublicEvents
   alias Sacrum.Repo.Users
   alias Sacrum.Repo.Projects
+  alias Sacrum.Accounts.Tasks, as: AccountsTasks
 
   @endpoint SacrumWeb.Endpoint
 
@@ -189,6 +190,106 @@ defmodule SacrumWeb.ProjectChannelTest do
 
       assert_broadcast "task_deleted", %{id: id}
       assert id == task.id
+    end
+
+    test "broadcast_task_run_step_changed pushes payload with wire status to default client" do
+      {_user, project, socket} = setup_socket()
+      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}", %{})
+
+      payload = %{
+        task_run_id: Ecto.UUID.generate(),
+        task_id: Ecto.UUID.generate(),
+        from_step_id: Ecto.UUID.generate(),
+        to_step_id: Ecto.UUID.generate(),
+        status: :executing,
+        level: "ticket"
+      }
+
+      SacrumWeb.ProjectChannel.broadcast_task_run_step_changed(project.id, payload)
+
+      assert_push "task_run_step_changed", pushed
+      assert pushed.task_run_id == payload.task_run_id
+      assert pushed.task_id == payload.task_id
+      assert pushed.from_step_id == payload.from_step_id
+      assert pushed.to_step_id == payload.to_step_id
+      assert pushed.status == "executing"
+      assert pushed.level == "ticket"
+    end
+
+    test "broadcast_task_run_step_changed encodes terminal status via wire_value" do
+      {_user, project, socket} = setup_socket()
+      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}", %{})
+
+      payload = %{
+        task_run_id: Ecto.UUID.generate(),
+        task_id: Ecto.UUID.generate(),
+        from_step_id: Ecto.UUID.generate(),
+        to_step_id: nil,
+        status: :completed,
+        level: "task"
+      }
+
+      SacrumWeb.ProjectChannel.broadcast_task_run_step_changed(project.id, payload)
+
+      assert_push "task_run_step_changed", pushed
+      assert pushed.to_step_id == nil
+      assert pushed.status == "completed"
+    end
+
+    test "daemon client does NOT receive task_run_step_changed" do
+      {_user, project, socket} = setup_socket()
+
+      {:ok, _reply, _socket} =
+        subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
+
+      payload = %{
+        task_run_id: Ecto.UUID.generate(),
+        task_id: Ecto.UUID.generate(),
+        from_step_id: Ecto.UUID.generate(),
+        to_step_id: Ecto.UUID.generate(),
+        status: :executing,
+        level: "ticket"
+      }
+
+      SacrumWeb.ProjectChannel.broadcast_task_run_step_changed(project.id, payload)
+
+      refute_push "task_run_step_changed", _payload
+    end
+
+    test "task_payload includes archived flag" do
+      {_user, project, socket} = setup_socket()
+      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}", %{})
+
+      task = project |> build_task() |> Map.put(:archived, true)
+
+      SacrumWeb.ProjectChannel.broadcast_task_updated(project.id, task)
+
+      assert_push "task_updated", payload
+      assert payload.archived == true
+    end
+
+    test "archiving a task pushes task_updated with archived=true and unarchive pushes archived=false" do
+      {user, project, socket} = setup_socket()
+      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}", %{})
+
+      {:ok, task} =
+        AccountsTasks.insert(user.id, project.id, %{
+          title: "Archive me",
+          description: "to be archived",
+          level: "ticket"
+        })
+
+      {:ok, archived} = AccountsTasks.update(task, %{archived: true})
+      assert archived.archived == true
+      assert_push "task_updated", archived_payload
+      assert archived_payload.id == task.id
+      assert archived_payload.archived == true
+
+      {:ok, unarchived} = AccountsTasks.update(archived, %{archived: false})
+      assert unarchived.archived == false
+      assert_push "task_updated", unarchived_payload
+      assert unarchived_payload.id == task.id
+      assert unarchived_payload.archived == false
     end
   end
 
@@ -665,6 +766,7 @@ defmodule SacrumWeb.ProjectChannelTest do
       project_id: project.id,
       workflow_id: nil,
       current_step_id: nil,
+      archived: false,
       worktree: nil,
       inserted_at: now,
       updated_at: now

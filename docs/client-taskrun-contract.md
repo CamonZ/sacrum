@@ -367,11 +367,12 @@ Handle these events for run-aware GUI/CLI state:
 
 | Event | Client action |
 |-------|---------------|
-| `task_created` / `task_updated` / `task_deleted` | Upsert/remove task row. |
-| `step_execution_created` | Append attempt history; update latest execution view if it belongs to the active run. |
+| `task_created` / `task_updated` / `task_deleted` | Upsert/remove task row. The `task_updated` payload carries `archived` so archive/unarchive toggles can immediately move the row in or out of pipeline buckets without a refetch. |
+| `step_execution_created` | Append attempt history; update latest execution view if it belongs to the active run. Do **not** use this as a from/to step signal for pipeline counts; not every step transition dispatches a new execution. |
 | `step_execution_status_changed` | Update attempt history. Do not infer run terminal state from this alone. |
 | `task_run_created` | Upsert TaskRun; set `task.runControls.activeRun` from payload if present. |
 | `task_run_updated` | Upsert TaskRun; replace row controls with payload `run_controls`. |
+| `task_run_step_changed` | Emitted whenever a task's `current_step_id` changes while a TaskRun exists, and at run-end paths (completion, retry exhaustion, stop). Lets pipeline views decrement the `from_step_id` bucket and increment the `to_step_id` bucket without refetching. |
 | `session_log_created` | Append log to the matching step execution. |
 
 Channel payloads are snake_case. GraphQL fields are camelCase.
@@ -409,6 +410,28 @@ type TaskRunChannelPayload = TaskRunChannelBase & {
 ```
 
 When applying a `task_run_updated` event, prefer the included `run_controls` over local recomputation.
+
+`task_run_step_changed` is an additive pipeline-oriented signal. It does not
+replace `task_updated` or `task_run_updated`; clients still need those for full
+task and run state. The payload shape is:
+
+```ts
+type TaskRunStepChangedPayload = {
+  task_run_id: string;
+  task_id: string;
+  from_step_id: string | null;
+  to_step_id: string | null;
+  status: TaskRunStatus;
+  level: "epic" | "ticket" | "task";
+};
+```
+
+- `from_step_id` is the task's `current_step_id` before the transition.
+- `to_step_id` is the task's new `current_step_id`, or `null` when the event
+  fires at a run-end path (completion, retry exhaustion, stop) because the run
+  is leaving active statuses.
+- `status` is the wire-form `TaskRun.status` after the transition.
+- `level` mirrors `Task.level`, matching the per-level pipeline buckets.
 
 ## Human Input
 

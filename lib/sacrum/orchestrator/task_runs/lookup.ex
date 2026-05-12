@@ -21,4 +21,20 @@ defmodule Sacrum.Orchestrator.TaskRuns.Lookup do
       task_run -> {:ok, task_run}
     end
   end
+
+  @doc """
+  Return the post-commit `%TaskRun{}` for a transaction's `changes` map.
+
+  Prefers the `:task_run` change set by the same transaction; otherwise reads
+  the row by id. Returns `nil` only if the run id is unknown to the DB.
+  """
+  @spec from_changes_or_fetch(binary(), map()) :: TaskRun.t() | nil
+  def from_changes_or_fetch(_task_run_id, %{task_run: %TaskRun{} = task_run}), do: task_run
+
+  def from_changes_or_fetch(task_run_id, _changes) when is_binary(task_run_id) do
+    case fetch(task_run_id) do
+      {:ok, %TaskRun{} = task_run} -> task_run
+      _ -> nil
+    end
+  end
 end
