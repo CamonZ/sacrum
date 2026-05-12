@@ -37,7 +37,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   alias Sacrum.Orchestrator.TaskRuns.{Completion, Failure, Lookup, Root}
   alias Sacrum.Repo
   alias Sacrum.Repo.Broadcaster
-  alias Sacrum.Repo.Schemas.{StepExecution, Task}
+  alias Sacrum.Repo.Schemas.{StepExecution, Task, TaskRun}
   alias Sacrum.Repo.TaskWorkflows
 
   @typep fsm_transition ::
@@ -338,9 +338,11 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     next_transitions = WorkflowGraph.get_outgoing_transitions(data, current_step.id)
 
     with {:ok, next_step_id} <- WorkflowGraph.select_single_transition(next_transitions),
-         {:ok, %{task: updated_task}} <- commit_wait_children_transition(data, next_step_id) do
+         {:ok, %{task: updated_task} = changes} <-
+           commit_wait_children_transition(data, next_step_id) do
       ExecutionPool.release_slot(data.slot_id)
       Broadcaster.broadcast({:ok, updated_task}, :task_updated, :project)
+      broadcast_task_run_step_changed(data, updated_task, current_step.id, next_step_id, changes)
 
       TaskCompletion.determine_next_state(next_step_id, %{
         data
@@ -380,9 +382,10 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     next_transitions = WorkflowGraph.get_outgoing_transitions(data, current_step.id)
 
     with {:ok, next_step_id} <- WorkflowGraph.select_single_transition(next_transitions),
-         {:ok, %{task: updated_task}} <- commit_task_step_transition(data, next_step_id) do
+         {:ok, %{task: updated_task} = changes} <- commit_task_step_transition(data, next_step_id) do
       ExecutionPool.release_slot(data.slot_id)
       Broadcaster.broadcast({:ok, updated_task}, :task_updated, :project)
+      broadcast_task_run_step_changed(data, updated_task, current_step.id, next_step_id, changes)
 
       TaskCompletion.determine_next_state(next_step_id, %{
         data
@@ -402,6 +405,25 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
 
         ExecutionPool.release_slot(data.slot_id)
         {:next_state, :failed, %{data | slot_id: nil}}
+    end
+  end
+
+  @spec broadcast_task_run_step_changed(
+          FSMData.t(),
+          Task.t(),
+          binary() | nil,
+          binary() | nil,
+          map()
+        ) :: :ok
+  defp broadcast_task_run_step_changed(%{task_run_id: nil}, _task, _from, _to, _changes), do: :ok
+
+  defp broadcast_task_run_step_changed(%{task_run_id: task_run_id}, task, from, to, changes) do
+    case Lookup.from_changes_or_fetch(task_run_id, changes) do
+      %TaskRun{} = task_run ->
+        Broadcaster.broadcast_task_run_step_changed(task_run, task, from, to)
+
+      _ ->
+        :ok
     end
   end
 

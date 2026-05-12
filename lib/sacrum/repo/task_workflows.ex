@@ -36,6 +36,7 @@ defmodule Sacrum.Repo.TaskWorkflows do
 
   import Ecto.Query
   alias Sacrum.Repo
+  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.Project
   alias Sacrum.Repo.Schemas.{StepTransition, Task, Workflow, WorkflowStep}
   alias Sacrum.Tasks.Status
@@ -61,7 +62,7 @@ defmodule Sacrum.Repo.TaskWorkflows do
         |> task_workflow_changeset(workflow.id, initial_step.id)
         |> Status.put_status()
         |> Repo.update()
-        |> broadcast_on_success()
+        |> broadcast_on_success(task.current_step_id)
       end
     end
   end
@@ -114,7 +115,7 @@ defmodule Sacrum.Repo.TaskWorkflows do
     with {:ok, changeset} <- change_step_changeset(task, step_id, opts, mode) do
       changeset
       |> Repo.update()
-      |> broadcast_on_success()
+      |> broadcast_on_success(task.current_step_id)
     end
   end
 
@@ -228,9 +229,11 @@ defmodule Sacrum.Repo.TaskWorkflows do
     end
   end
 
-  @spec broadcast_on_success({:ok, Task.t()} | {:error, Ecto.Changeset.t()}) ::
-          {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
-  defp broadcast_on_success({:ok, %Task{} = task} = ok) do
+  @spec broadcast_on_success(
+          {:ok, Task.t()} | {:error, Ecto.Changeset.t()},
+          binary() | nil
+        ) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
+  defp broadcast_on_success({:ok, %Task{} = task} = ok, from_step_id) do
     require Logger
     task = Repo.preload(task, :project)
 
@@ -238,6 +241,7 @@ defmodule Sacrum.Repo.TaskWorkflows do
       %Project{id: project_id} ->
         Logger.info("[Broadcast] task_updated for project #{project_id}")
         SacrumWeb.ProjectChannel.broadcast_task_updated(project_id, task)
+        maybe_broadcast_step_changed(task, from_step_id)
 
       _ ->
         Logger.warning("[Broadcast] task_updated failed to extract project_id")
@@ -246,7 +250,12 @@ defmodule Sacrum.Repo.TaskWorkflows do
     ok
   end
 
-  defp broadcast_on_success({:error, _changeset} = error), do: error
+  defp broadcast_on_success({:error, _changeset} = error, _from_step_id), do: error
+
+  defp maybe_broadcast_step_changed(%Task{current_step_id: to}, from) when from == to, do: :ok
+
+  defp maybe_broadcast_step_changed(%Task{current_step_id: to} = task, from),
+    do: Broadcaster.broadcast_task_step_changed(task, from, to)
 
   @spec already_assigned?(Task.t(), Workflow.t(), WorkflowStep.t()) :: boolean()
   defp already_assigned?(task, workflow, initial_step) do

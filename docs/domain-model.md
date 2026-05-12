@@ -188,12 +188,15 @@ Connect to `project:<project_id>` via WebSocket to receive real-time updates. Th
 
 | Event | Payload | Description |
 |-------|---------|-------------|
-| `task_created` / `task_updated` / `task_deleted` | Task fields | Task lifecycle changes |
+| `task_created` / `task_updated` / `task_deleted` | Task fields (including `archived`) | Task lifecycle changes |
 | `workflow_created` / `workflow_updated` / `workflow_deleted` | Workflow fields | Workflow lifecycle |
 | `step_created` / `step_updated` / `step_deleted` | Step fields | WorkflowStep lifecycle |
 | `step_transition_created` / `step_transition_deleted` | Transition fields | Step-to-step edges |
 | `step_execution_created` | Execution fields | New execution started |
 | `step_execution_status_changed` | Execution fields | Status update (entered, completed, etc.) |
+| `task_run_created` / `task_run_updated` | TaskRun fields | TaskRun lifecycle changes |
+| `task_run_step_changed` | `{task_run_id, task_id, from_step_id, to_step_id, status, level}` | Emitted whenever a task's `current_step_id` changes while a TaskRun exists, and at run-end paths (`to_step_id` is `nil`). Lets pipeline views decrement the source step bucket and increment the destination bucket without refetching. |
+| `task_step_changed` | `{task_id, from_step_id, to_step_id, workflow_id, level}` | Emitted when `current_step_id` changes outside orchestrator execution (`assign_workflow`, `advance_to_step`, `move_to_step`). Mirrors `task_run_step_changed` for the manual-move case where no TaskRun exists; only fires when `from != to`. |
 | `session_log_created` | Log fields | New log entry attached |
 | `section_created` / `section_updated` / `section_deleted` | Section fields | Task section changes |
 | `run_step` | Execution + step config | **Daemon only** — Run a step |
@@ -278,6 +281,34 @@ and `pipelineSummary.workflowSteps.pipelineCounts.active` count active
 `TaskRun.status` values (`queued`, `executing`, `waiting`, `stopping`) for
 non-archived tasks at the step. `runningCount` is retained as a compatibility
 alias for this active count and must not be derived from `StepExecution.status`.
+
+Pipeline views can stay in sync incrementally from the event stream alone.
+The relevant signals are:
+
+- `task_created` / `task_updated` / `task_deleted` — track which step a task
+  lives at and whether it is archived. The `task_updated` payload includes
+  `archived`, so archive/unarchive flips immediately move the task in or out of
+  pipeline buckets without a refetch.
+- `task_run_created` and `task_run_updated` — track run-level status for the
+  active bucket.
+- `task_run_step_changed` — a dedicated event emitted whenever a task's
+  `current_step_id` changes while a TaskRun exists, including at run-end paths
+  (completion, retry exhaustion, stop). The payload is
+  `{task_run_id, task_id, from_step_id, to_step_id, status, level}` and
+  carries the wire status from `Sacrum.TaskRuns.Status.wire_value/1`.
+  `to_step_id` is `nil` at run-end paths so clients can decrement the active
+  bucket of the run's last step.
+- `task_step_changed` — the parallel signal for manual moves outside the
+  orchestrator (`Repo.TaskWorkflows.assign_workflow/2`, `advance_to_step/2`,
+  `move_to_step/2`). Payload is
+  `{task_id, from_step_id, to_step_id, workflow_id, level}`. No `task_run_id`
+  or `status` because manual moves block when an orchestrator is active, so no
+  TaskRun exists. Only fires when `from != to`.
+
+Not every step transition dispatches a new `step_execution_created`, so
+`step_execution_created` is **not** a reliable from/to signal for pipeline
+counts. Use `task_run_step_changed` (orchestrator path) and
+`task_step_changed` (manual path) instead.
 
 ### Waiting on Children
 

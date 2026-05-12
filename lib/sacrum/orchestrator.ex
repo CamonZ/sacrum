@@ -16,7 +16,7 @@ defmodule Sacrum.Orchestrator do
   alias Sacrum.Orchestrator.TaskRuns.{Lookup, StateTransitions}
   alias Sacrum.Repo
   alias Sacrum.Repo.Broadcaster
-  alias Sacrum.Repo.Schemas.{StepExecution, TaskRun}
+  alias Sacrum.Repo.Schemas.{StepExecution, Task, TaskRun}
   alias Sacrum.TaskRuns.Status, as: TaskRunStatus
 
   @typep active_task_run :: {:ok, TaskRun.t()} | {:error, :not_found}
@@ -68,6 +68,7 @@ defmodule Sacrum.Orchestrator do
         case commit_stop(active_task_run, in_flight_execution) do
           {:ok, changes} ->
             broadcast_task_run_updated(changes)
+            broadcast_task_run_step_changed(changes)
             broadcast_cancelled_execution(changes)
             terminate_fsm_child(pid)
             {:ok, changes}
@@ -88,6 +89,7 @@ defmodule Sacrum.Orchestrator do
     case commit_stop(active_task_run, :none) do
       {:ok, changes} ->
         broadcast_task_run_updated(changes)
+        broadcast_task_run_step_changed(changes)
         {:ok, changes}
 
       {:error, reason} ->
@@ -182,6 +184,19 @@ defmodule Sacrum.Orchestrator do
   end
 
   defp broadcast_task_run_updated(_changes), do: :ok
+
+  @spec broadcast_task_run_step_changed(map()) :: term()
+  defp broadcast_task_run_step_changed(%{task_run: %TaskRun{} = task_run}) do
+    case Repo.get(Task, task_run.task_id) do
+      %Task{} = task ->
+        Broadcaster.broadcast_task_run_step_changed(task_run, task, task.current_step_id, nil)
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp broadcast_task_run_step_changed(_changes), do: :ok
 
   @spec broadcast_cancel_step(StepExecution.t()) :: term()
   defp broadcast_cancel_step(execution) do

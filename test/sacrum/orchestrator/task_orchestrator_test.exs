@@ -2827,4 +2827,180 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       cleanup_spawned_orchestrators([child_task.id])
     end
   end
+
+  describe "task_run_step_changed broadcasts" do
+    test "single-transition step move emits task_run_step_changed with from=A to=B status=executing" do
+      %{user: user, project: project, steps: [s1, s2, _s3], task: task} =
+        setup_linear_workflow(auto_advance: true, step_count: 3)
+
+      :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
+
+      pid = start_orchestrator(task, user)
+
+      wait_for_state(pid, :executing)
+      assert reload_task(task).current_step_id == s1.id
+
+      simulate_daemon_completion(task.id, project.id)
+      wait_for_state(pid, :executing)
+      assert reload_task(task).current_step_id == s2.id
+
+      simulate_daemon_completion(task.id, project.id)
+      wait_for_exit(pid)
+
+      step_changed =
+        collect_broadcasts("task_run_step_changed", [])
+        |> Enum.filter(&(&1.task_id == task.id))
+
+      transition_event =
+        Enum.find(step_changed, fn payload ->
+          payload.from_step_id == s1.id and payload.to_step_id == s2.id
+        end)
+
+      assert transition_event,
+             "Expected a task_run_step_changed event from=s1 to=s2, got: #{inspect(step_changed)}"
+
+      assert transition_event.status == "executing"
+      assert transition_event.level == task.level
+
+      task_updated_events =
+        collect_broadcasts("task_updated", [])
+        |> Enum.filter(&(&1.id == task.id))
+
+      assert Enum.any?(task_updated_events, fn payload -> payload.current_step_id == s2.id end),
+             "Expected a task_updated for the s1->s2 transition"
+
+      exec_created_events = collect_broadcasts("step_execution_created", [])
+
+      assert Enum.any?(exec_created_events, fn payload -> payload.task_id == task.id end),
+             "Expected at least one step_execution_created during the transition"
+    end
+
+    test "wait_children transition into final step emits task_run_step_changed with to=final and no new step_execution_created" do
+      %{
+        user: user,
+        project: project,
+        parent_task: parent_task,
+        wait_step: wait_step,
+        final_step: final_step
+      } =
+        setup_wait_children_parent()
+
+      :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
+
+      pid = start_orchestrator(parent_task, user)
+      wait_for_exit(pid)
+
+      reloaded_parent = reload_task(parent_task)
+      assert reloaded_parent.current_step_id == final_step.id
+
+      transition_events =
+        collect_broadcasts("task_run_step_changed", [])
+        |> Enum.filter(&(&1.task_id == parent_task.id))
+
+      assert Enum.any?(transition_events, fn payload ->
+               payload.from_step_id == wait_step.id and payload.to_step_id == final_step.id
+             end),
+             "Expected a task_run_step_changed event with from=wait_step to=final_step, got: #{inspect(transition_events)}"
+
+      assert Enum.any?(transition_events, fn payload ->
+               payload.from_step_id == final_step.id and payload.to_step_id == nil and
+                 payload.status == "completed"
+             end),
+             "Expected a run-end task_run_step_changed with to_step_id=nil and terminal status, got: #{inspect(transition_events)}"
+
+      execution_events = collect_broadcasts("step_execution_created", [])
+
+      refute Enum.any?(execution_events, fn payload ->
+               payload.task_id == parent_task.id and payload.step_name == "final_step"
+             end),
+             "Expected no step_execution_created for the wait_children -> final transition"
+    end
+
+    test "TaskRun completion emits task_run_step_changed with from=last_step, to=nil, status=completed" do
+      %{user: user, project: project, steps: [_s1, _s2, s3], task: task} =
+        setup_linear_workflow(auto_advance: true, step_count: 3)
+
+      :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
+
+      pid = start_orchestrator(task, user)
+
+      wait_for_state(pid, :executing)
+      simulate_daemon_completion(task.id, project.id)
+
+      wait_for_state(pid, :executing)
+      simulate_daemon_completion(task.id, project.id)
+
+      wait_for_exit(pid)
+
+      run_end_events =
+        collect_broadcasts("task_run_step_changed", [])
+        |> Enum.filter(&(&1.task_id == task.id and &1.to_step_id == nil))
+
+      assert Enum.any?(run_end_events, fn payload ->
+               payload.from_step_id == s3.id and payload.status == "completed"
+             end),
+             "Expected a run-end task_run_step_changed with from=last_step to=nil status=completed, got: #{inspect(run_end_events)}"
+    end
+
+    test "stop emits task_run_step_changed with from=last_step, to=nil, status=stopped" do
+      %{user: user, project: project, steps: [s1, _s2, _s3], task: task} =
+        setup_linear_workflow(auto_advance: false, step_count: 3)
+
+      :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
+
+      child_spec = {TaskOrchestrator, task_id: task.id, user_id: user.id}
+      {:ok, pid} = Sacrum.Orchestrator.TaskFSMSupervisor.start_child(child_spec)
+
+      wait_for_state(pid, :executing)
+      assert reload_task(task).current_step_id == s1.id
+
+      {:ok, :stopped} = Sacrum.Orchestrator.stop(task.id)
+      wait_for_exit(pid)
+
+      stop_events =
+        collect_broadcasts("task_run_step_changed", [])
+        |> Enum.filter(&(&1.task_id == task.id and &1.to_step_id == nil))
+
+      assert Enum.any?(stop_events, fn payload ->
+               payload.from_step_id == s1.id and payload.status == "stopped"
+             end),
+             "Expected a stop task_run_step_changed with from=last_step to=nil status=stopped, got: #{inspect(stop_events)}"
+    end
+
+    test "retry exhaustion emits task_run_step_changed with from=current_step, to=nil, status=failed" do
+      %{user: user, project: project, steps: [s1, _s2, _s3], task: task} =
+        setup_linear_workflow(auto_advance: true, step_count: 3)
+
+      :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
+
+      pid = start_orchestrator(task, user)
+
+      max_retries = Sacrum.Orchestrator.Retry.max_retries()
+
+      Enum.each(1..max_retries, fn _ ->
+        wait_for_state(pid, :executing)
+        simulate_daemon_failure(task.id, project.id)
+      end)
+
+      wait_for_exit(pid)
+
+      exhaust_events =
+        collect_broadcasts("task_run_step_changed", [])
+        |> Enum.filter(&(&1.task_id == task.id and &1.to_step_id == nil))
+
+      assert Enum.any?(exhaust_events, fn payload ->
+               payload.from_step_id == s1.id and payload.status == "failed"
+             end),
+             "Expected a retry-exhaust task_run_step_changed with to=nil status=failed, got: #{inspect(exhaust_events)}"
+    end
+  end
+
+  defp collect_broadcasts(event, acc) do
+    receive do
+      %Phoenix.Socket.Broadcast{event: ^event, payload: payload} ->
+        collect_broadcasts(event, [payload | acc])
+    after
+      0 -> Enum.reverse(acc)
+    end
+  end
 end

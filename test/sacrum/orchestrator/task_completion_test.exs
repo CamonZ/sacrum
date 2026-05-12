@@ -2,7 +2,7 @@ defmodule Sacrum.Orchestrator.TaskCompletionTest do
   use Sacrum.DataCase
 
   alias Sacrum.Accounts
-  alias Sacrum.Orchestrator.TaskCompletion
+  alias Sacrum.Orchestrator.{FSMData, TaskCompletion}
   alias Sacrum.Repo
 
   # ===== Setup helpers =====
@@ -80,7 +80,7 @@ defmodule Sacrum.Orchestrator.TaskCompletionTest do
 
       assert task.completed_at == nil
 
-      data = %{task: task}
+      data = %FSMData{user_id: user.id, project_id: project.id, task: task}
 
       {:ok, :completed, new_data} = TaskCompletion.handle_completion(data)
 
@@ -95,7 +95,12 @@ defmodule Sacrum.Orchestrator.TaskCompletionTest do
       _step = create_step(user, workflow, %{})
       task = create_task(user, project, workflow)
 
-      data = %{task: task, task_run_id: Ecto.UUID.generate()}
+      data = %FSMData{
+        user_id: user.id,
+        project_id: project.id,
+        task: task,
+        task_run_id: Ecto.UUID.generate()
+      }
 
       assert {:error, :task_run_not_found} = TaskCompletion.handle_completion(data)
       assert Repo.get!(Sacrum.Repo.Schemas.Task, task.id).completed_at == nil
