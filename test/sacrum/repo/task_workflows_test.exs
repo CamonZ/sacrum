@@ -494,4 +494,76 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
       Registry.unregister(Sacrum.Orchestrator.TaskRegistry, task.id)
     end
   end
+
+  describe "task_step_changed broadcasts" do
+    test "assign_workflow to a new workflow emits task_step_changed with old and new step ids" do
+      %{project: project, workflow: workflow, steps: steps, task: task} =
+        setup_workflow_with_steps()
+
+      :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
+
+      {:ok, _assigned} = TaskWorkflows.assign_workflow(task, workflow)
+
+      events = collect_broadcasts("task_step_changed")
+      assert [event] = Enum.filter(events, &(&1.task_id == task.id))
+      assert event.from_step_id == task.current_step_id
+      assert event.to_step_id == steps.backlog.id
+      assert event.workflow_id == workflow.id
+      assert event.level == task.level
+    end
+
+    test "idempotent re-assign does not emit task_step_changed" do
+      %{project: project, workflow: workflow, task: task} = setup_workflow_with_steps()
+
+      {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
+
+      :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
+
+      {:ok, _again} = TaskWorkflows.assign_workflow(assigned, workflow)
+
+      assert collect_broadcasts("task_step_changed") == []
+    end
+
+    test "move_to_step emits task_step_changed with old and new step ids" do
+      %{project: project, workflow: workflow, steps: steps, task: task} =
+        setup_workflow_with_steps()
+
+      {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
+
+      :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
+
+      {:ok, _moved} = TaskWorkflows.move_to_step(assigned, steps.in_progress.id)
+
+      events = collect_broadcasts("task_step_changed")
+      assert [event] = Enum.filter(events, &(&1.task_id == task.id))
+      assert event.from_step_id == steps.backlog.id
+      assert event.to_step_id == steps.in_progress.id
+      assert event.workflow_id == workflow.id
+    end
+
+    test "advance_to_step emits task_step_changed" do
+      %{project: project, workflow: workflow, steps: steps, task: task} =
+        setup_workflow_with_steps()
+
+      {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
+
+      :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
+
+      {:ok, _advanced} = TaskWorkflows.advance_to_step(assigned, steps.done.id)
+
+      events = collect_broadcasts("task_step_changed")
+      assert [event] = Enum.filter(events, &(&1.task_id == task.id))
+      assert event.from_step_id == steps.backlog.id
+      assert event.to_step_id == steps.done.id
+    end
+  end
+
+  defp collect_broadcasts(event) do
+    receive do
+      %Phoenix.Socket.Broadcast{event: ^event, payload: payload} ->
+        [payload | collect_broadcasts(event)]
+    after
+      50 -> []
+    end
+  end
 end

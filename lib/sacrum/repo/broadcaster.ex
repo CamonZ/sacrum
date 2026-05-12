@@ -29,6 +29,7 @@ defmodule Sacrum.Repo.Broadcaster do
     task_run_created: :broadcast_task_run_created,
     task_run_updated: :broadcast_task_run_updated,
     task_run_step_changed: :broadcast_task_run_step_changed,
+    task_step_changed: :broadcast_task_step_changed,
     session_log_created: :broadcast_session_log_created,
     section_created: :broadcast_section_created,
     section_updated: :broadcast_section_updated,
@@ -199,6 +200,38 @@ defmodule Sacrum.Repo.Broadcaster do
       from_step_id: from_step_id,
       to_step_id: to_step_id,
       status: task_run.status,
+      level: task.level
+    })
+  end
+
+  @doc """
+  Broadcast a `task_step_changed` event when a task's `current_step_id` changes
+  outside of orchestrator execution (manual `assign_workflow`, `advance_to_step`,
+  `move_to_step`). The payload carries from/to step ids, workflow id, and task
+  level so pipeline clients can update per-step counts without refetching.
+
+  No `task_run_id` or `status` — manual moves don't have an associated run.
+  Caller is responsible for skipping the call when `from_step_id == to_step_id`.
+  """
+  @spec broadcast_task_step_changed(binary(), map()) :: :ok
+  def broadcast_task_step_changed(project_id, %{} = payload) when is_binary(project_id) do
+    require Logger
+    Logger.info("[Broadcast] task_step_changed for project #{project_id}")
+    SacrumWeb.ProjectChannel.broadcast_task_step_changed(project_id, payload)
+    :ok
+  end
+
+  @doc """
+  Build the canonical `task_step_changed` payload from a Task and broadcast it
+  to the project channel.
+  """
+  @spec broadcast_task_step_changed(Task.t(), binary() | nil, binary() | nil) :: :ok
+  def broadcast_task_step_changed(%Task{} = task, from_step_id, to_step_id) do
+    broadcast_task_step_changed(task.project_id, %{
+      task_id: task.id,
+      from_step_id: from_step_id,
+      to_step_id: to_step_id,
+      workflow_id: task.workflow_id,
       level: task.level
     })
   end

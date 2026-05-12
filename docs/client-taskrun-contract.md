@@ -373,6 +373,7 @@ Handle these events for run-aware GUI/CLI state:
 | `task_run_created` | Upsert TaskRun; set `task.runControls.activeRun` from payload if present. |
 | `task_run_updated` | Upsert TaskRun; replace row controls with payload `run_controls`. |
 | `task_run_step_changed` | Emitted whenever a task's `current_step_id` changes while a TaskRun exists, and at run-end paths (completion, retry exhaustion, stop). Lets pipeline views decrement the `from_step_id` bucket and increment the `to_step_id` bucket without refetching. |
+| `task_step_changed` | Emitted whenever a task's `current_step_id` changes outside orchestrator execution (manual `assign_workflow`, `advance_to_step`, `move_to_step`). Same pipeline use as `task_run_step_changed`, without `task_run_id` / `status` since no run is involved. |
 | `session_log_created` | Append log to the matching step execution. |
 
 Channel payloads are snake_case. GraphQL fields are camelCase.
@@ -432,6 +433,28 @@ type TaskRunStepChangedPayload = {
   is leaving active statuses.
 - `status` is the wire-form `TaskRun.status` after the transition.
 - `level` mirrors `Task.level`, matching the per-level pipeline buckets.
+
+`task_step_changed` is the parallel signal for manual moves (no TaskRun involved):
+
+```ts
+type TaskStepChangedPayload = {
+  task_id: string;
+  from_step_id: string | null;
+  to_step_id: string | null;
+  workflow_id: string;
+  level: "epic" | "ticket" | "task";
+};
+```
+
+- Fires from `assign_workflow` (initial assignment to a workflow's first step),
+  `advance_to_step` (server-allowed step change), and `move_to_step` (step change
+  requiring a transition edge).
+- Only emitted when `from_step_id != to_step_id`. Idempotent re-assigns to the
+  same step do not emit.
+- `from_step_id` may be `null` for the first workflow assignment.
+- Manual moves are blocked when an orchestrator is running for the task, so a
+  client never receives both `task_run_step_changed` and `task_step_changed` for
+  the same transition.
 
 ## Human Input
 

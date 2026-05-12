@@ -256,6 +256,68 @@ defmodule SacrumWeb.ProjectChannelTest do
       refute_push "task_run_step_changed", _payload
     end
 
+    test "broadcast_task_step_changed pushes payload to default client" do
+      {_user, project, socket} = setup_socket()
+      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}", %{})
+
+      payload = %{
+        task_id: Ecto.UUID.generate(),
+        from_step_id: Ecto.UUID.generate(),
+        to_step_id: Ecto.UUID.generate(),
+        workflow_id: Ecto.UUID.generate(),
+        level: "ticket"
+      }
+
+      SacrumWeb.ProjectChannel.broadcast_task_step_changed(project.id, payload)
+
+      assert_push "task_step_changed", pushed
+      assert pushed.task_id == payload.task_id
+      assert pushed.from_step_id == payload.from_step_id
+      assert pushed.to_step_id == payload.to_step_id
+      assert pushed.workflow_id == payload.workflow_id
+      assert pushed.level == "ticket"
+      refute Map.has_key?(pushed, :task_run_id)
+      refute Map.has_key?(pushed, :status)
+    end
+
+    test "broadcast_task_step_changed allows nil from_step_id for initial assignment" do
+      {_user, project, socket} = setup_socket()
+      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}", %{})
+
+      payload = %{
+        task_id: Ecto.UUID.generate(),
+        from_step_id: nil,
+        to_step_id: Ecto.UUID.generate(),
+        workflow_id: Ecto.UUID.generate(),
+        level: "epic"
+      }
+
+      SacrumWeb.ProjectChannel.broadcast_task_step_changed(project.id, payload)
+
+      assert_push "task_step_changed", pushed
+      assert pushed.from_step_id == nil
+      assert pushed.level == "epic"
+    end
+
+    test "daemon client does NOT receive task_step_changed" do
+      {_user, project, socket} = setup_socket()
+
+      {:ok, _reply, _socket} =
+        subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
+
+      payload = %{
+        task_id: Ecto.UUID.generate(),
+        from_step_id: Ecto.UUID.generate(),
+        to_step_id: Ecto.UUID.generate(),
+        workflow_id: Ecto.UUID.generate(),
+        level: "ticket"
+      }
+
+      SacrumWeb.ProjectChannel.broadcast_task_step_changed(project.id, payload)
+
+      refute_push "task_step_changed", _payload
+    end
+
     test "task_payload includes archived flag" do
       {_user, project, socket} = setup_socket()
       {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}", %{})

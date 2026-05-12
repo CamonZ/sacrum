@@ -30,6 +30,7 @@ defmodule SacrumWeb.ProjectChannel do
       "task_run_created",
       "task_run_updated",
       "task_run_step_changed",
+      "task_step_changed",
       "session_log_created",
       "section_created",
       "section_updated",
@@ -255,6 +256,15 @@ defmodule SacrumWeb.ProjectChannel do
     )
   end
 
+  @spec broadcast_task_step_changed(String.t(), map()) :: :ok | {:error, term()}
+  def broadcast_task_step_changed(project_id, payload) do
+    SacrumWeb.Endpoint.broadcast(
+      "project:#{project_id}",
+      "task_step_changed",
+      task_step_changed_payload(payload)
+    )
+  end
+
   # Daemon broadcasts
 
   @spec broadcast_run_step(String.t(), map()) :: :ok | {:error, term()}
@@ -369,6 +379,22 @@ defmodule SacrumWeb.ProjectChannel do
       from_step_id: from_step_id,
       to_step_id: to_step_id,
       status: TaskRunStatus.wire_value(status),
+      level: level
+    }
+  end
+
+  defp task_step_changed_payload(%{
+         task_id: task_id,
+         from_step_id: from_step_id,
+         to_step_id: to_step_id,
+         workflow_id: workflow_id,
+         level: level
+       }) do
+    %{
+      task_id: task_id,
+      from_step_id: from_step_id,
+      to_step_id: to_step_id,
+      workflow_id: workflow_id,
       level: level
     }
   end
