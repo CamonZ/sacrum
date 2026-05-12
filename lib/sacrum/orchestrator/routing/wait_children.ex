@@ -20,7 +20,7 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
   alias Sacrum.Repo
   alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.{StepExecution, Task, TaskRun, WorkflowStep}
-  alias Sacrum.Repo.TaskHierarchy
+  alias Sacrum.Repo.{TaskDependencies, TaskHierarchy}
   alias Sacrum.Tasks.Status
 
   @spec handle_wait_children_entry(FSMData.t()) ::
@@ -165,7 +165,15 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
 
   @spec schedule_all_children([{Task.t(), TaskRun.t()}]) :: :ok | {:error, term()}
   defp schedule_all_children(child_runs) do
-    Enum.reduce_while(child_runs, :ok, fn {child, task_run}, _acc ->
+    blocked =
+      child_runs
+      |> Enum.map(fn {child, _} -> child.id end)
+      |> TaskDependencies.incomplete_direct_blocker_task_ids()
+      |> MapSet.new()
+
+    child_runs
+    |> Enum.reject(fn {child, _} -> MapSet.member?(blocked, child.id) end)
+    |> Enum.reduce_while(:ok, fn {child, task_run}, _acc ->
       case start_child_orchestrator(child, task_run) do
         :ok -> {:cont, :ok}
         err -> {:halt, err}
