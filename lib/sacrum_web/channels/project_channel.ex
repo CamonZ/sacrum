@@ -3,42 +3,25 @@ defmodule SacrumWeb.ProjectChannel do
 
   alias Sacrum.Accounts.Projects
   alias Sacrum.Chat.PublicEvents
+  alias Sacrum.Realtime.ProjectChannelCdcContract
   alias Sacrum.TaskRuns.RunControls
   alias Sacrum.TaskRuns.Status, as: TaskRunStatus
 
   @valid_client_types ~w(default daemon)
-  @daemon_events ~w(run_step cancel_step)
-  @chat_events PublicEvents.channel_event_names()
+  @daemon_events ProjectChannelCdcContract.daemon_event_names()
+  @default_events ProjectChannelCdcContract.regular_event_names()
+  @schema_version 1
 
-  intercept(
-    [
-      "task_created",
-      "task_updated",
-      "task_deleted",
-      "workflow_created",
-      "workflow_updated",
-      "workflow_deleted",
-      "step_created",
-      "step_updated",
-      "step_deleted",
-      "step_transition_created",
-      "step_transition_deleted",
-      "workflow_transition_created",
-      "workflow_transition_deleted",
-      "step_execution_created",
-      "step_execution_status_changed",
-      "task_run_created",
-      "task_run_updated",
-      "task_run_step_changed",
-      "task_step_changed",
-      "session_log_created",
-      "section_created",
-      "section_updated",
-      "section_deleted",
-      "run_step",
-      "cancel_step"
-    ] ++ @chat_events
-  )
+  intercept(@default_events ++ @daemon_events)
+
+  @spec default_client_event_names() :: [String.t()]
+  def default_client_event_names, do: @default_events
+
+  @spec daemon_event_names() :: [String.t()]
+  def daemon_event_names, do: @daemon_events
+
+  @spec intercepted_event_names() :: [String.t()]
+  def intercepted_event_names, do: @default_events ++ @daemon_events
 
   @impl true
   def join("project:" <> project_id, params, socket) do
@@ -106,7 +89,11 @@ defmodule SacrumWeb.ProjectChannel do
 
   @spec broadcast_task_deleted(String.t(), map()) :: :ok | {:error, term()}
   def broadcast_task_deleted(project_id, task) do
-    SacrumWeb.Endpoint.broadcast("project:#{project_id}", "task_deleted", %{id: task.id})
+    SacrumWeb.Endpoint.broadcast(
+      "project:#{project_id}",
+      "task_deleted",
+      task_deleted_payload(task)
+    )
   end
 
   # Workflow broadcasts
@@ -134,7 +121,7 @@ defmodule SacrumWeb.ProjectChannel do
     SacrumWeb.Endpoint.broadcast(
       "project:#{project_id}",
       "workflow_deleted",
-      %{id: workflow.id}
+      version_payload(%{id: workflow.id})
     )
   end
 
@@ -163,7 +150,7 @@ defmodule SacrumWeb.ProjectChannel do
     SacrumWeb.Endpoint.broadcast(
       "project:#{project_id}",
       "step_deleted",
-      %{id: step.id, workflow_id: step.workflow_id}
+      version_payload(%{id: step.id, workflow_id: step.workflow_id})
     )
   end
 
@@ -183,7 +170,7 @@ defmodule SacrumWeb.ProjectChannel do
     SacrumWeb.Endpoint.broadcast(
       "project:#{project_id}",
       "step_transition_deleted",
-      %{id: transition.id}
+      step_transition_payload(transition)
     )
   end
 
@@ -302,7 +289,7 @@ defmodule SacrumWeb.ProjectChannel do
   def broadcast_chat_event(project_id, chat_event) do
     case PublicEvents.channel_event(chat_event) do
       {:ok, event, payload} ->
-        SacrumWeb.Endpoint.broadcast("project:#{project_id}", event, payload)
+        SacrumWeb.Endpoint.broadcast("project:#{project_id}", event, version_payload(payload))
 
       :ignore ->
         :ok
@@ -334,14 +321,16 @@ defmodule SacrumWeb.ProjectChannel do
     SacrumWeb.Endpoint.broadcast(
       "project:#{project_id}",
       "section_deleted",
-      %{id: section.id, task_id: section.task_id}
+      version_payload(%{id: section.id, task_id: section.task_id})
     )
   end
 
   # Payload helpers
 
+  defp version_payload(payload), do: Map.put(payload, :schema_version, @schema_version)
+
   defp task_payload(task) do
-    %{
+    version_payload(%{
       id: task.id,
       short_id: task.short_id,
       title: task.title,
@@ -358,11 +347,23 @@ defmodule SacrumWeb.ProjectChannel do
       project_id: task.project_id,
       workflow_id: task.workflow_id,
       current_step_id: task.current_step_id,
+      parent_id: task.parent_id,
+      status: task.status,
       archived: task.archived,
       worktree: task.worktree,
       inserted_at: task.inserted_at,
       updated_at: task.updated_at
-    }
+    })
+  end
+
+  defp task_deleted_payload(task) do
+    version_payload(%{
+      id: task.id,
+      current_step_id: task.current_step_id,
+      workflow_id: task.workflow_id,
+      level: task.level,
+      archived: task.archived
+    })
   end
 
   defp task_run_step_changed_payload(%{
@@ -373,14 +374,14 @@ defmodule SacrumWeb.ProjectChannel do
          status: status,
          level: level
        }) do
-    %{
+    version_payload(%{
       task_run_id: task_run_id,
       task_id: task_id,
       from_step_id: from_step_id,
       to_step_id: to_step_id,
       status: TaskRunStatus.wire_value(status),
       level: level
-    }
+    })
   end
 
   defp task_step_changed_payload(%{
@@ -390,17 +391,17 @@ defmodule SacrumWeb.ProjectChannel do
          workflow_id: workflow_id,
          level: level
        }) do
-    %{
+    version_payload(%{
       task_id: task_id,
       from_step_id: from_step_id,
       to_step_id: to_step_id,
       workflow_id: workflow_id,
       level: level
-    }
+    })
   end
 
   defp workflow_entity_payload(workflow) do
-    %{
+    version_payload(%{
       id: workflow.id,
       name: workflow.name,
       description: workflow.description,
@@ -414,11 +415,11 @@ defmodule SacrumWeb.ProjectChannel do
       project_id: workflow.project_id,
       inserted_at: workflow.inserted_at,
       updated_at: workflow.updated_at
-    }
+    })
   end
 
   defp step_payload(step) do
-    %{
+    version_payload(%{
       id: step.id,
       name: step.name,
       goal: step.goal,
@@ -428,41 +429,49 @@ defmodule SacrumWeb.ProjectChannel do
       is_final: step.is_final,
       step_order: step.step_order,
       step_type: step.step_type,
+      prompt: step.prompt,
+      output_schema: step.output_schema,
+      verbose_daemon_logging: step.verbose_daemon_logging,
       workflow_id: step.workflow_id,
+      project_id: step.project_id,
       inserted_at: step.inserted_at,
       updated_at: step.updated_at
-    }
+    })
   end
 
   defp step_transition_payload(transition) do
-    %{
+    version_payload(%{
       id: transition.id,
       from_step_id: transition.from_step_id,
       to_step_id: transition.to_step_id,
       label: transition.label,
+      project_id: transition.project_id,
       inserted_at: transition.inserted_at,
       updated_at: transition.updated_at
-    }
+    })
   end
 
   defp workflow_transition_payload(transition) do
-    %{
+    version_payload(%{
       id: transition.id,
       from_workflow_id: transition.from_workflow_id,
       to_workflow_id: transition.to_workflow_id,
       target_step_id: transition.target_step_id,
       label: transition.label,
+      project_id: transition.project_id,
       inserted_at: transition.inserted_at,
       updated_at: transition.updated_at
-    }
+    })
   end
 
   defp step_execution_payload(execution) do
-    %{
+    version_payload(%{
       id: execution.id,
       task_id: execution.task_id,
       task_run_id: execution.task_run_id,
       workflow_id: execution.workflow_id,
+      step_id: execution.step_id,
+      project_id: execution.project_id,
       step_name: execution.step_name,
       status: execution.status,
       context: execution.context,
@@ -478,13 +487,14 @@ defmodule SacrumWeb.ProjectChannel do
       handoff: execution.handoff,
       inserted_at: execution.inserted_at,
       updated_at: execution.updated_at
-    }
+    })
   end
 
   defp task_run_payload(task_run) do
     task_run
     |> task_run_base_payload()
     |> Map.put(:run_controls, task_run_controls_payload(task_run))
+    |> version_payload()
   end
 
   defp task_run_base_payload(nil), do: nil
@@ -522,19 +532,21 @@ defmodule SacrumWeb.ProjectChannel do
   end
 
   defp session_log_payload(log) do
-    %{
+    version_payload(%{
       id: log.id,
       step_execution_id: log.step_execution_id,
+      project_id: log.project_id,
       content: log.content,
       inserted_at: log.inserted_at,
       updated_at: log.updated_at
-    }
+    })
   end
 
   defp section_payload(section) do
-    %{
+    version_payload(%{
       id: section.id,
       task_id: section.task_id,
+      project_id: section.project_id,
       section_type: section.section_type,
       content: section.content,
       section_order: section.section_order,
@@ -542,7 +554,7 @@ defmodule SacrumWeb.ProjectChannel do
       done_at: section.done_at,
       inserted_at: section.inserted_at,
       updated_at: section.updated_at
-    }
+    })
   end
 
   defp run_step_payload(data) do

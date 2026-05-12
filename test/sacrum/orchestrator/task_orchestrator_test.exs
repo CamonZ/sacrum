@@ -2942,6 +2942,41 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
   end
 
   describe "task_run_step_changed broadcasts" do
+    test "run start emits task_run_step_changed after task_run_created and before first task_run_updated" do
+      %{user: user, project: project, steps: [first_step], task: task} =
+        setup_linear_workflow(auto_advance: true, step_count: 1)
+
+      :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
+
+      pid = start_orchestrator(task, user)
+
+      wait_for_state(pid, :executing)
+
+      events =
+        collect_project_broadcasts([])
+        |> Enum.filter(&(&1.payload[:task_id] == task.id or &1.payload[:id] == task.id))
+
+      created_index = event_index(events, "task_run_created")
+      run_start_index = event_index(events, "task_run_step_changed")
+      updated_index = event_index(events, "task_run_updated")
+
+      assert created_index != nil, "Expected task_run_created, got: #{inspect(events)}"
+      assert run_start_index != nil, "Expected task_run_step_changed, got: #{inspect(events)}"
+      assert updated_index != nil, "Expected task_run_updated, got: #{inspect(events)}"
+
+      assert created_index < run_start_index
+      assert run_start_index < updated_index
+
+      run_start = Enum.at(events, run_start_index).payload
+      assert run_start.from_step_id == nil
+      assert run_start.to_step_id == first_step.id
+      assert run_start.status == "queued"
+      assert run_start.level == task.level
+
+      simulate_daemon_completion(task.id, project.id)
+      wait_for_exit(pid)
+    end
+
     test "single-transition step move emits task_run_step_changed with from=A to=B status=executing" do
       %{user: user, project: project, steps: [s1, s2, s3], task: task} =
         setup_linear_workflow(auto_advance: true, step_count: 3)
@@ -3127,5 +3162,18 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     after
       0 -> Enum.reverse(acc)
     end
+  end
+
+  defp collect_project_broadcasts(acc) do
+    receive do
+      %Phoenix.Socket.Broadcast{} = broadcast ->
+        collect_project_broadcasts([broadcast | acc])
+    after
+      0 -> Enum.reverse(acc)
+    end
+  end
+
+  defp event_index(events, event) do
+    Enum.find_index(events, &(&1.event == event))
   end
 end

@@ -23,6 +23,47 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren.ChildRunsTest do
     assert child_run.triggered_by_step_execution_id == trigger_execution.id
   end
 
+  test "get_or_create emits child run start step position after task_run_created" do
+    user = create_user()
+    {project, parent_task, workflow} = create_task_with_workflow(user)
+    {:ok, child_task} = Tasks.insert(user.id, project.id, %{title: "Child Task"})
+    {:ok, parent_run} = TaskRuns.insert(user.id, project.id, parent_task.id)
+    {:ok, trigger_execution} = waiting_execution(user, project, workflow, parent_task, parent_run)
+
+    assert is_binary(child_task.current_step_id)
+
+    :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
+
+    assert {:ok, child_run} =
+             ChildRuns.get_or_create(child_task, parent_run, trigger_execution.id)
+
+    assert_receive %Phoenix.Socket.Broadcast{
+      event: "task_run_created",
+      payload: %{id: child_run_id, task_id: task_id}
+    }
+
+    assert child_run_id == child_run.id
+    assert task_id == child_task.id
+
+    assert_receive %Phoenix.Socket.Broadcast{
+      event: "task_run_step_changed",
+      payload: %{
+        task_run_id: step_task_run_id,
+        task_id: step_task_id,
+        from_step_id: nil,
+        to_step_id: to_step_id,
+        status: "queued",
+        level: level,
+        schema_version: 1
+      }
+    }
+
+    assert step_task_run_id == child_run.id
+    assert step_task_id == child_task.id
+    assert to_step_id == child_task.current_step_id
+    assert level == child_task.level
+  end
+
   test "get_or_create rejects a manual child root run" do
     user = create_user()
     {project, parent_task, workflow} = create_task_with_workflow(user)

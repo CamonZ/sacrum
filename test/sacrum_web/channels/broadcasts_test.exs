@@ -91,8 +91,13 @@ defmodule SacrumWeb.BroadcastsTest do
 
       {:ok, _} = Tasks.delete(task)
 
-      assert_broadcast "task_deleted", %{id: id}
-      assert id == task.id
+      assert_broadcast "task_deleted", payload
+      assert payload.schema_version == 1
+      assert payload.id == task.id
+      assert payload.current_step_id == task.current_step_id
+      assert payload.workflow_id == task.workflow_id
+      assert payload.level == task.level
+      assert payload.archived == task.archived
     end
   end
 
