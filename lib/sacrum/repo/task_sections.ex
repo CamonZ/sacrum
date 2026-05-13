@@ -21,7 +21,6 @@ defmodule Sacrum.Repo.TaskSections do
 
   import Ecto.Query
   alias Sacrum.Repo
-  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.Schemas.TaskSection
 
@@ -30,7 +29,6 @@ defmodule Sacrum.Repo.TaskSections do
     %TaskSection{task_id: task_id, project_id: project_id, user_id: user_id}
     |> TaskSection.changeset(attrs)
     |> Repo.insert()
-    |> Broadcaster.broadcast_section(:section_created)
   end
 
   @spec update(TaskSection.t(), map()) :: {:ok, TaskSection.t()} | {:error, Ecto.Changeset.t()}
@@ -38,13 +36,10 @@ defmodule Sacrum.Repo.TaskSections do
     section
     |> TaskSection.changeset(attrs)
     |> Repo.update()
-    |> Broadcaster.broadcast_section(:section_updated)
   end
 
   @spec delete(TaskSection.t()) :: {:ok, TaskSection.t()} | {:error, Ecto.Changeset.t()}
   def delete(%TaskSection{} = section) do
-    section
-    |> Repo.delete()
-    |> Broadcaster.broadcast_section(:section_deleted)
+    Repo.delete(section)
   end
 end

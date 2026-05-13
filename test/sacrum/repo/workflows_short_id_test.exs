@@ -135,7 +135,11 @@ defmodule Sacrum.Repo.WorkflowsShortIdTest do
                Workflows.find_by_uuid_prefix(prefix, project.id, user.id)
 
       assert length(candidates) >= 2
-      workflow_ids = Enum.map(workflows, & &1.id)
+
+      workflow_ids =
+        Workflows.all(conditions: [project_id: project.id, user_id: user.id])
+        |> Enum.map(& &1.id)
+
       assert Enum.all?(candidates, &(&1 in workflow_ids))
       assert Enum.all?(candidates, &String.starts_with?(&1, prefix))
     end

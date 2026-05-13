@@ -24,7 +24,6 @@ defmodule Sacrum.Repo.Workflows do
 
   import Ecto.Query
   alias Sacrum.Repo
-  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.Project
   alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.Schemas.TaskRun
@@ -56,7 +55,6 @@ defmodule Sacrum.Repo.Workflows do
     %Workflow{project_id: project_id}
     |> Workflow.create_changeset(attrs)
     |> Repo.insert()
-    |> Broadcaster.broadcast(:workflow_created, :project)
   end
 
   defoverridable insert: 2
@@ -67,7 +65,6 @@ defmodule Sacrum.Repo.Workflows do
     %Workflow{project_id: project_id, user_id: user_id}
     |> Workflow.create_changeset(attrs)
     |> Repo.insert()
-    |> Broadcaster.broadcast(:workflow_created, :project)
   end
 
   @spec update(Workflow.t(), map()) :: {:ok, Workflow.t()} | {:error, Ecto.Changeset.t()}
@@ -75,7 +72,6 @@ defmodule Sacrum.Repo.Workflows do
     workflow
     |> Workflow.update_changeset(attrs)
     |> Repo.update()
-    |> Broadcaster.broadcast(:workflow_updated, :project)
   end
 
   @doc """
@@ -147,8 +143,6 @@ defmodule Sacrum.Repo.Workflows do
         })
       end,
       fetch_final_fn: fn ->
-        Broadcaster.broadcast_event(workflow, :workflow_updated, :project)
-
         {:ok,
          Repo.WorkflowTransitions.all(
            conditions: [from_workflow_id: workflow.id],
@@ -160,14 +154,7 @@ defmodule Sacrum.Repo.Workflows do
 
   @spec delete(Workflow.t()) :: {:ok, Workflow.t()} | {:error, Ecto.Changeset.t()}
   def delete(%Workflow{} = workflow) do
-    case Repo.delete(workflow) do
-      {:ok, deleted} ->
-        Broadcaster.broadcast_event(deleted, :workflow_deleted, :project)
-        {:ok, deleted}
-
-      error ->
-        error
-    end
+    Repo.delete(workflow)
   end
 
   @doc """

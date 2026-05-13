@@ -12,7 +12,6 @@ defmodule Sacrum.Accounts.Tasks do
     default_order: [asc: :inserted_at]
 
   alias Sacrum.Repo
-  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.TaskDependencies
   alias Sacrum.Repo.TaskHierarchy
@@ -99,7 +98,7 @@ defmodule Sacrum.Accounts.Tasks do
          {:ok, updated_task} <- do_update_task(task, attrs),
          {:ok, updated_task} <- maybe_update_parent(updated_task, attrs),
          :ok <- maybe_update_dependencies(updated_task, attrs) do
-      Broadcaster.broadcast({:ok, updated_task}, :task_updated, :project)
+      {:ok, updated_task}
     end
   end
 

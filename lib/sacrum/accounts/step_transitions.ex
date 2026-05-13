@@ -10,7 +10,6 @@ defmodule Sacrum.Accounts.StepTransitions do
     preloads: [],
     default_order: [asc: :inserted_at]
 
-  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.StepTransition
   alias Sacrum.Repo.StepTransitions, as: StepTransitionsRepo
 
@@ -32,7 +31,6 @@ defmodule Sacrum.Accounts.StepTransitions do
     }
     |> StepTransition.create_changeset(attrs)
     |> StepTransitionsRepo.insert()
-    |> Broadcaster.broadcast(:step_transition_created, from_step: [workflow: :project])
   end
 
   @doc """
@@ -40,16 +38,6 @@ defmodule Sacrum.Accounts.StepTransitions do
   """
   @spec delete(StepTransition.t()) :: {:ok, StepTransition.t()} | {:error, Ecto.Changeset.t()}
   def delete(%StepTransition{} = transition) do
-    case StepTransitionsRepo.delete(transition) do
-      {:ok, deleted} ->
-        Broadcaster.broadcast_event(deleted, :step_transition_deleted,
-          from_step: [workflow: :project]
-        )
-
-        {:ok, deleted}
-
-      error ->
-        error
-    end
+    StepTransitionsRepo.delete(transition)
   end
 end

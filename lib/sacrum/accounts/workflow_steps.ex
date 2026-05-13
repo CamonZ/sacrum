@@ -2,8 +2,7 @@ defmodule Sacrum.Accounts.WorkflowSteps do
   @moduledoc """
   User-scoped workflow step operations with business logic.
 
-  All operations are scoped to a specific user. Includes transition syncing
-  and broadcast support.
+  All operations are scoped to a specific user. Includes transition syncing.
   """
 
   use Sacrum.GenericResource,
@@ -11,7 +10,6 @@ defmodule Sacrum.Accounts.WorkflowSteps do
     preloads: [],
     default_order: [asc: :step_order, asc: :inserted_at]
 
-  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.WorkflowStep
   alias Sacrum.Repo.WorkflowSteps, as: WorkflowStepsRepo
 
@@ -46,7 +44,6 @@ defmodule Sacrum.Accounts.WorkflowSteps do
     %WorkflowStep{workflow_id: workflow_id, project_id: project_id, user_id: user_id}
     |> WorkflowStep.create_changeset(attrs)
     |> WorkflowStepsRepo.insert()
-    |> Broadcaster.broadcast(:step_created, workflow: :project)
   end
 
   @doc """
@@ -57,7 +54,6 @@ defmodule Sacrum.Accounts.WorkflowSteps do
     step
     |> WorkflowStep.update_changeset(attrs)
     |> WorkflowStepsRepo.update()
-    |> Broadcaster.broadcast(:step_updated, workflow: :project)
   end
 
   @doc """
