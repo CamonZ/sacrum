@@ -39,7 +39,7 @@ defmodule Sacrum.Repo.Schemas.Task do
     field :short_id, :string
     field :title, :string
     field :description, :string
-    field :level, :string
+    field :level, :string, default: "task"
     field :priority, :string
     field :tags, {:array, :string}, default: []
     field :needs_human_review, :boolean, default: false

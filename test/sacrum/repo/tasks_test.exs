@@ -58,6 +58,33 @@ defmodule Sacrum.Repo.TasksTest do
       {:error, changeset} = Tasks.insert(project, %{})
       assert %{title: ["can't be blank"]} = errors_on(changeset)
     end
+
+    test "defaults level to \"task\" when not provided" do
+      user = create_user()
+      project = create_project(user)
+
+      {:ok, task} = Tasks.insert(project, %{title: "Default Level"})
+
+      assert task.level == "task"
+
+      {:ok, reloaded} = Tasks.get(task.id)
+      assert reloaded.level == "task"
+    end
+
+    for level <- ["epic", "ticket", "task"] do
+      test "preserves explicit level #{inspect(level)}" do
+        user = create_user()
+        project = create_project(user)
+
+        {:ok, task} =
+          Tasks.insert(project, %{title: "Explicit #{unquote(level)}", level: unquote(level)})
+
+        assert task.level == unquote(level)
+
+        {:ok, reloaded} = Tasks.get(task.id)
+        assert reloaded.level == unquote(level)
+      end
+    end
   end
 
   describe "get/1 and get_by_short_id/1" do
