@@ -254,8 +254,16 @@ defmodule Sacrum.Repo.WorkflowsTest do
           username: "pipelineother#{suffix}"
         })
 
+      {:ok, other_project} =
+        Sacrum.Repo.Projects.insert(other_user.id, %{name: "Other Pipeline Project"})
+
       {:ok, workflow} = Workflows.insert(project, %{name: "Pipeline"})
       {:ok, step} = WorkflowSteps.insert(workflow, %{name: "Review", step_order: 1})
+
+      {:ok, other_workflow} = Workflows.insert(other_project, %{name: "Pipeline"})
+
+      {:ok, other_step} =
+        WorkflowSteps.insert(other_workflow, %{name: "Review", step_order: 1})
 
       {:ok, ticket} =
         Tasks.insert(project.id, project.user_id, %{
@@ -266,18 +274,18 @@ defmodule Sacrum.Repo.WorkflowsTest do
         })
 
       {:ok, other_task} =
-        Tasks.insert(project.id, other_user.id, %{
+        Tasks.insert(other_project.id, other_user.id, %{
           title: "Other user task",
           level: "epic",
-          workflow_id: workflow.id,
-          current_step_id: step.id
+          workflow_id: other_workflow.id,
+          current_step_id: other_step.id
         })
 
       {:ok, _active_run} =
         TaskRuns.insert(project.user_id, project.id, ticket.id, %{status: :queued})
 
       {:ok, _other_run} =
-        TaskRuns.insert(other_user.id, project.id, other_task.id, %{status: :waiting})
+        TaskRuns.insert(other_user.id, other_project.id, other_task.id, %{status: :waiting})
 
       {:ok, _workflows, %{pipeline_counts_by_step_id: counts_by_step}} =
         Workflows.pipeline_summary(project.user_id, project.id)

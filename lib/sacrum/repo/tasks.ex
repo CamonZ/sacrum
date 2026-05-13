@@ -221,22 +221,53 @@ defmodule Sacrum.Repo.Tasks do
 
   @spec insert(String.t(), map()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
   def insert(project_id, attrs) when is_binary(project_id) and is_map(attrs) do
-    %Task{project_id: project_id}
-    |> Task.create_changeset(assign_default_workflow_attrs(attrs, project_id))
-    |> Repo.insert()
-    |> preload_sections()
-    |> Broadcaster.broadcast(:task_created, :project)
+    do_insert(%Task{project_id: project_id}, project_id, nil, attrs)
   end
 
   defoverridable insert: 2
 
   @spec insert(String.t(), String.t(), map()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
   def insert(project_id, user_id, attrs) when is_binary(project_id) and is_binary(user_id) do
-    %Task{project_id: project_id, user_id: user_id}
-    |> Task.create_changeset(assign_default_workflow_attrs(attrs, project_id))
-    |> Repo.insert()
-    |> preload_sections()
-    |> Broadcaster.broadcast(:task_created, :project)
+    do_insert(%Task{project_id: project_id, user_id: user_id}, project_id, user_id, attrs)
+  end
+
+  defp do_insert(%Task{} = task, project_id, user_id, attrs) do
+    with {:ok, prepared_attrs} <- prepare_workflow_attrs(attrs, project_id, user_id) do
+      task
+      |> Task.create_changeset(prepared_attrs)
+      |> Repo.insert()
+      |> preload_sections()
+      |> Broadcaster.broadcast(:task_created, :project)
+    end
+  end
+
+  defp prepare_workflow_attrs(attrs, project_id, user_id) do
+    case Map.fetch(attrs, :workflow_id) do
+      :error ->
+        {:ok, assign_default_workflow_attrs(attrs, project_id)}
+
+      {:ok, workflow_id} ->
+        seed_provided_workflow(attrs, project_id, user_id, workflow_id)
+    end
+  end
+
+  defp seed_provided_workflow(attrs, project_id, user_id, workflow_id) do
+    conditions = [id: workflow_id, project_id: project_id]
+    conditions = if user_id, do: Keyword.put(conditions, :user_id, user_id), else: conditions
+
+    case Repo.get_by(Sacrum.Repo.Schemas.Workflow, conditions) do
+      nil ->
+        changeset =
+          %Task{}
+          |> Ecto.Changeset.change()
+          |> Ecto.Changeset.add_error(:workflow_id, "does not exist in this project")
+
+        {:error, changeset}
+
+      workflow ->
+        step = resolve_initial_step(workflow)
+        {:ok, Map.put_new(attrs, :current_step_id, step.id)}
+    end
   end
 
   @doc """

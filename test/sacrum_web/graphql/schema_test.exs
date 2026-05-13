@@ -287,6 +287,159 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["parent"]["title"] == "Parent Task"
     end
 
+    test "createTask with explicit workflow_id assigns that workflow and seeds initial step", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, workflow} = Accounts.Workflows.insert(user.id, project.id, %{name: "Custom WF"})
+      {:ok, step1} = Accounts.WorkflowSteps.insert(workflow, %{name: "S1", step_order: 1})
+      {:ok, _step2} = Accounts.WorkflowSteps.insert(workflow, %{name: "S2", step_order: 2})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createTask(
+              projectId: "#{project.id}"
+              title: "Custom Workflow Task"
+              workflowId: "#{workflow.id}"
+            ) { id title workflowId currentStepId }
+          }
+        """)
+        |> json_response(200)
+
+      data = result["data"]["createTask"]
+      assert data["workflowId"] == workflow.id
+      assert data["currentStepId"] == step1.id
+    end
+
+    test "createTask without workflow_id falls back to project's default Backlog workflow", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      default_workflow =
+        Sacrum.Repo.get_by(Sacrum.Repo.Schemas.Workflow,
+          project_id: project.id,
+          is_default: true
+        )
+
+      assert default_workflow != nil
+      assert default_workflow.initial_step_id != nil
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createTask(projectId: "#{project.id}", title: "Default WF Task") {
+              id workflowId currentStepId
+            }
+          }
+        """)
+        |> json_response(200)
+
+      data = result["data"]["createTask"]
+      assert data["workflowId"] == default_workflow.id
+      assert data["currentStepId"] == default_workflow.initial_step_id
+    end
+
+    test "createTask with workflow_id from a different project returns a validation error", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, other_project} = Accounts.Projects.insert(user.id, %{name: "Other Project"})
+      {:ok, other_workflow} = Accounts.Workflows.insert(user.id, other_project.id, %{name: "X"})
+      {:ok, _} = Accounts.WorkflowSteps.insert(other_workflow, %{name: "S1", step_order: 1})
+
+      tasks_before = Accounts.Tasks.list_tasks(user.id, conditions: [project_id: project.id])
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createTask(
+              projectId: "#{project.id}"
+              title: "Cross Project WF"
+              workflowId: "#{other_workflow.id}"
+            ) { id }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["createTask"] == nil
+      assert [%{"message" => message}] = result["errors"]
+      assert message =~ "workflow"
+
+      tasks_after = Accounts.Tasks.list_tasks(user.id, conditions: [project_id: project.id])
+      assert length(tasks_after) == length(tasks_before)
+    end
+
+    test "createTask with another user's workflow_id returns a validation error", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      other_user =
+        create_user(%{email: "cross-user-wf@example.com", username: "crossuserwf"})
+
+      {:ok, other_project} =
+        Accounts.Projects.insert(other_user.id, %{name: "Other User Project"})
+
+      {:ok, other_workflow} =
+        Accounts.Workflows.insert(other_user.id, other_project.id, %{name: "X"})
+
+      {:ok, _} = Accounts.WorkflowSteps.insert(other_workflow, %{name: "S1", step_order: 1})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createTask(
+              projectId: "#{project.id}"
+              title: "Cross User WF"
+              workflowId: "#{other_workflow.id}"
+            ) { id }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["createTask"] == nil
+      assert [%{"message" => message}] = result["errors"]
+      assert message =~ "workflow"
+    end
+
+    test "createTask with a non-existent workflow_id returns a clean error (not a 500)", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      fake_workflow_id = Ecto.UUID.generate()
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createTask(
+              projectId: "#{project.id}"
+              title: "Missing WF"
+              workflowId: "#{fake_workflow_id}"
+            ) { id }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["createTask"] == nil
+      assert [%{"message" => message}] = result["errors"]
+      assert message =~ "workflow"
+    end
+
     test "updates a task", %{conn: conn, user: user, project: project} do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Original"})
 
@@ -796,8 +949,18 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       project: project
     } do
       other_user = create_user(%{email: "pipeline-other@example.com", username: "pipelineother"})
+
+      {:ok, other_project} =
+        Accounts.Projects.insert(other_user.id, %{name: "Other User Project"})
+
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "Test WF"})
       {:ok, step1} = Accounts.WorkflowSteps.insert(wf, %{name: "Step 1", step_order: 1})
+
+      {:ok, other_wf} =
+        Accounts.Workflows.insert(other_user.id, other_project.id, %{name: "Test WF"})
+
+      {:ok, other_step1} =
+        Accounts.WorkflowSteps.insert(other_wf, %{name: "Step 1", step_order: 1})
 
       {:ok, ticket} =
         Accounts.Tasks.insert(user.id, project.id, %{
@@ -808,17 +971,19 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         })
 
       {:ok, other_task} =
-        Accounts.Tasks.insert(other_user.id, project.id, %{
+        Accounts.Tasks.insert(other_user.id, other_project.id, %{
           title: "Other user epic",
           level: "epic",
-          workflow_id: wf.id,
-          current_step_id: step1.id
+          workflow_id: other_wf.id,
+          current_step_id: other_step1.id
         })
 
       {:ok, _run} = Accounts.TaskRuns.insert(user.id, project.id, ticket.id, %{status: :queued})
 
       {:ok, _other_run} =
-        Accounts.TaskRuns.insert(other_user.id, project.id, other_task.id, %{status: :executing})
+        Accounts.TaskRuns.insert(other_user.id, other_project.id, other_task.id, %{
+          status: :executing
+        })
 
       result =
         conn
