@@ -92,6 +92,11 @@ defmodule Sacrum.Accounts.LiveChat do
     ChatSessions.get_session(user_id, project_id, chat_session_id)
   end
 
+  @spec list_sessions(String.t(), String.t(), keyword()) :: [ChatSession.t()]
+  def list_sessions(user_id, project_id, opts \\ []) do
+    ChatSessions.list_sessions(user_id, project_id, opts)
+  end
+
   @spec list_messages(String.t(), String.t(), String.t(), keyword()) ::
           {:ok, [ChatMessage.t()]} | {:error, term()}
   def list_messages(user_id, project_id, chat_session_id, opts \\ []) do

@@ -2,7 +2,8 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
   use SacrumWeb.ConnCase
 
   alias Sacrum.Accounts
-  alias Sacrum.Accounts.ChatEvents
+  alias Sacrum.Accounts.{ChatEvents, ChatSessions, LiveChat}
+  alias Sacrum.Repo
 
   defp graphql(conn, query) do
     post(conn, "/graphql", %{"query" => query})
@@ -19,6 +20,12 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
     user = create_user()
     {:ok, project} = Accounts.Projects.insert(user.id, %{name: "Chat API Project"})
     %{user: user, project: project}
+  end
+
+  defp set_inserted_at!(session, inserted_at) do
+    session
+    |> Ecto.Changeset.change(inserted_at: inserted_at)
+    |> Repo.update!()
   end
 
   describe "live chat session GraphQL API" do
@@ -243,6 +250,129 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
 
       assert events_result["data"]["chatEvents"] == nil
       assert [%{"message" => _}] = events_result["errors"]
+    end
+
+    test "lists project chat sessions newest first with existing session fields", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, older_session} =
+        ChatSessions.insert(user.id, project.id, %{
+          session_kind: "planning",
+          public_metadata: %{"label" => "older"}
+        })
+
+      {:ok, newer_session} =
+        ChatSessions.insert(user.id, project.id, %{
+          session_kind: "investigation",
+          public_metadata: %{"label" => "newer"}
+        })
+
+      now = DateTime.utc_now()
+      older_session = set_inserted_at!(older_session, DateTime.add(now, -1, :second))
+      newer_session = set_inserted_at!(newer_session, now)
+
+      {:ok, other_project} =
+        Accounts.Projects.insert(user.id, %{name: "Other Chat API Project"})
+
+      {:ok, other_project_session} = ChatSessions.insert(user.id, other_project.id, %{})
+
+      other_user = create_user(%{email: "other-list@example.com", username: "other_list"})
+      {:ok, other_user_project} = Accounts.Projects.insert(other_user.id, %{name: "Other User"})
+      {:ok, other_user_session} = ChatSessions.insert(other_user.id, other_user_project.id, %{})
+
+      result =
+        graphql_result(conn, user, """
+        {
+          chatSessions(projectId: "#{project.id}") {
+            id
+            projectId
+            status
+            sessionKind
+            publicMetadata
+            insertedAt
+            updatedAt
+            messages { id }
+            events { eventType }
+          }
+        }
+        """)
+
+      assert result["errors"] == nil
+      sessions = result["data"]["chatSessions"]
+
+      assert Enum.map(sessions, & &1["id"]) == [newer_session.id, older_session.id]
+      refute other_project_session.id in Enum.map(sessions, & &1["id"])
+      refute other_user_session.id in Enum.map(sessions, & &1["id"])
+
+      assert [newer, older] = sessions
+      assert newer["projectId"] == project.id
+      assert newer["status"] == "queued"
+      assert newer["sessionKind"] == "investigation"
+      assert newer["publicMetadata"] == %{"label" => "newer"}
+      assert is_binary(newer["insertedAt"])
+      assert is_binary(newer["updatedAt"])
+      assert newer["messages"] == []
+      assert newer["events"] == []
+
+      assert older["sessionKind"] == "planning"
+      assert older["publicMetadata"] == %{"label" => "older"}
+    end
+
+    test "chatSessions respects and clamps limit through LiveChat", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      for index <- 1..55 do
+        {:ok, _session} =
+          ChatSessions.insert(user.id, project.id, %{
+            public_metadata: %{"index" => index}
+          })
+      end
+
+      limited_result =
+        graphql_result(conn, user, """
+        {
+          chatSessions(projectId: "#{project.id}", limit: 2) {
+            id
+          }
+        }
+        """)
+
+      assert limited_result["errors"] == nil
+      assert length(limited_result["data"]["chatSessions"]) == 2
+
+      clamped_result =
+        graphql_result(conn, user, """
+        {
+          chatSessions(projectId: "#{project.id}", limit: 999) {
+            id
+          }
+        }
+        """)
+
+      assert clamped_result["errors"] == nil
+      assert length(clamped_result["data"]["chatSessions"]) == 50
+    end
+
+    test "LiveChat list_sessions preserves Accounts scoping for unauthorized projects", %{
+      user: user,
+      project: project
+    } do
+      {:ok, session} = ChatSessions.insert(user.id, project.id, %{})
+
+      other_user = create_user(%{email: "other-scope@example.com", username: "other_scope"})
+      {:ok, other_project} = Accounts.Projects.insert(other_user.id, %{name: "Other Scope"})
+      {:ok, other_session} = ChatSessions.insert(other_user.id, other_project.id, %{})
+
+      assert Enum.map(LiveChat.list_sessions(user.id, project.id), & &1.id) == [session.id]
+      assert LiveChat.list_sessions(user.id, other_project.id) == []
+
+      assert Enum.map(LiveChat.list_sessions(other_user.id, other_project.id), & &1.id) == [
+               other_session.id
+             ]
     end
   end
 end
