@@ -167,20 +167,20 @@ defmodule SacrumWeb.Graphql.SchemaTest do
     end
 
     test "filters tasks by level", %{conn: conn, user: user, project: project} do
-      {:ok, _} = Accounts.Tasks.insert(user.id, project.id, %{title: "High", level: "high"})
-      {:ok, _} = Accounts.Tasks.insert(user.id, project.id, %{title: "Low", level: "low"})
+      {:ok, _} = Accounts.Tasks.insert(user.id, project.id, %{title: "Epic", level: "epic"})
+      {:ok, _} = Accounts.Tasks.insert(user.id, project.id, %{title: "Ticket", level: "ticket"})
 
       result =
         conn
         |> authenticate(user)
         |> graphql("""
-          { tasks(projectId: "#{project.id}", level: "high") { id title } }
+          { tasks(projectId: "#{project.id}", level: "epic") { id title } }
         """)
         |> json_response(200)
 
       tasks = result["data"]["tasks"]
       assert length(tasks) == 1
-      assert hd(tasks)["title"] == "High"
+      assert hd(tasks)["title"] == "Epic"
     end
 
     test "gets a single task by id", %{conn: conn, user: user, project: project} do
@@ -188,7 +188,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         Accounts.Tasks.insert(user.id, project.id, %{
           title: "My Task",
           description: "Details",
-          level: "medium",
+          level: "task",
           priority: "normal",
           tags: ["backend"]
         })
@@ -204,7 +204,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       data = result["data"]["task"]
       assert data["title"] == "My Task"
       assert data["description"] == "Details"
-      assert data["level"] == "medium"
+      assert data["level"] == "task"
       assert data["priority"] == "normal"
       assert data["tags"] == ["backend"]
     end
@@ -223,7 +223,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
               projectId: "#{project.id}"
               title: "New Task"
               description: "Task desc"
-              level: "high"
+              level: "epic"
               priority: "urgent"
               tags: ["bug", "critical"]
             ) { id title description level priority tags shortId }
@@ -234,7 +234,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       data = result["data"]["createTask"]
       assert data["title"] == "New Task"
       assert data["description"] == "Task desc"
-      assert data["level"] == "high"
+      assert data["level"] == "epic"
       assert data["priority"] == "urgent"
       assert data["tags"] == ["bug", "critical"]
       assert data["shortId"] != nil

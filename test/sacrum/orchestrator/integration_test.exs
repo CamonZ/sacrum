@@ -84,7 +84,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
       Accounts.Tasks.insert(user.id, project.id, %{
         title: "Integration Task",
         description: "test",
-        level: "medium",
+        level: "task",
         priority: "normal",
         tags: ["test"]
       })

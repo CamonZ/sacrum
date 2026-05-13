@@ -85,6 +85,18 @@ defmodule Sacrum.Repo.TasksTest do
         assert reloaded.level == unquote(level)
       end
     end
+
+    for invalid_level <- ["high", "medium", "low", "story"] do
+      test "rejects invalid level #{inspect(invalid_level)} on insert" do
+        user = create_user()
+        project = create_project(user)
+
+        {:error, changeset} =
+          Tasks.insert(project, %{title: "Bad Level", level: unquote(invalid_level)})
+
+        assert %{level: ["is invalid"]} = errors_on(changeset)
+      end
+    end
   end
 
   describe "get/1 and get_by_short_id/1" do
@@ -120,6 +132,28 @@ defmodule Sacrum.Repo.TasksTest do
       {:ok, updated} = Tasks.update(task, %{title: "Updated", description: "New desc"})
       assert updated.title == "Updated"
       assert updated.description == "New desc"
+    end
+
+    for valid_level <- ["epic", "ticket", "task"] do
+      test "accepts valid level #{inspect(valid_level)} on update" do
+        user = create_user()
+        project = create_project(user)
+        {:ok, task} = Tasks.insert(project, %{title: "Level Update"})
+
+        {:ok, updated} = Tasks.update(task, %{level: unquote(valid_level)})
+        assert updated.level == unquote(valid_level)
+      end
+    end
+
+    for invalid_level <- ["high", "medium", "low", "story"] do
+      test "rejects invalid level #{inspect(invalid_level)} on update" do
+        user = create_user()
+        project = create_project(user)
+        {:ok, task} = Tasks.insert(project, %{title: "Bad Update"})
+
+        {:error, changeset} = Tasks.update(task, %{level: unquote(invalid_level)})
+        assert %{level: ["is invalid"]} = errors_on(changeset)
+      end
     end
   end
 

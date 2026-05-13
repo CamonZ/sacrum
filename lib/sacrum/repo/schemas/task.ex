@@ -9,6 +9,8 @@ defmodule Sacrum.Repo.Schemas.Task do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
+  @valid_levels ["epic", "ticket", "task"]
+
   @create_fields [
     :title,
     :description,
@@ -87,6 +89,7 @@ defmodule Sacrum.Repo.Schemas.Task do
     task
     |> cast(attrs, @create_fields)
     |> validate_required([:title])
+    |> validate_inclusion(:level, @valid_levels)
     |> cast_assoc(:sections,
       with: fn section, section_attrs ->
         section
@@ -111,6 +114,7 @@ defmodule Sacrum.Repo.Schemas.Task do
     task
     |> cast(attrs, @update_fields)
     |> validate_required([:title])
+    |> validate_inclusion(:level, @valid_levels)
     |> cast_assoc(:sections,
       with: fn section, section_attrs ->
         section
