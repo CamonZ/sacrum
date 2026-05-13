@@ -14,8 +14,8 @@ defmodule Sacrum.Orchestrator do
 
   alias Sacrum.Orchestrator.{TaskFSMSupervisor, TaskRegistry}
   alias Sacrum.Orchestrator.TaskRuns.{Lookup, StateTransitions}
+  alias Sacrum.Realtime.CommandBroadcaster
   alias Sacrum.Repo
-  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.{StepExecution, TaskRun}
   alias Sacrum.TaskRuns.Status, as: TaskRunStatus
 
@@ -184,7 +184,7 @@ defmodule Sacrum.Orchestrator do
       task = Repo.preload(task, :project)
 
       case task.project do
-        %{id: project_id} -> Broadcaster.broadcast_cancel_step(execution, project_id)
+        %{id: project_id} -> CommandBroadcaster.broadcast_cancel_step(execution, project_id)
         _ -> :ok
       end
     end

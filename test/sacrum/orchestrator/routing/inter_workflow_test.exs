@@ -441,8 +441,8 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflowTest do
     end
   end
 
-  describe "broadcast on inter-workflow routing" do
-    test "broadcasts task_updated on successful routing (no step_execution_created)" do
+  describe "inter-workflow routing broadcasts" do
+    test "does not emit inline broadcasts after successful routing" do
       user = create_user()
       project = create_project(user)
 
@@ -469,16 +469,14 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflowTest do
         user_id: user.id
       }
 
-      assert {:ok, _} = InterWorkflow.handle_inter_workflow_routing(data, to_workflow.id, nil)
+      assert {:ok, updated_task} =
+               InterWorkflow.handle_inter_workflow_routing(data, to_workflow.id, nil)
 
       # Per ticket constraint, routing helpers do NOT create StepExecution rows.
-      # Only task_updated is broadcast.
-      assert_broadcast "task_updated", task_payload
-      assert task_payload.id == task.id
-      assert task_payload.workflow_id == to_workflow.id
-      assert task_payload.current_step_id == to_step.id
-
-      # Verify no step_execution_created is broadcast
+      assert updated_task.workflow_id == to_workflow.id
+      assert updated_task.current_step_id == to_step.id
+      refute_broadcast "task_updated", _
+      refute_broadcast "task_step_changed", _
       refute_broadcast "step_execution_created", _execution_payload
     end
 

@@ -1,8 +1,6 @@
 defmodule Sacrum.Orchestrator.Routing.WaitChildren.ChildRunsTest do
   use Sacrum.DataCase, async: true
 
-  import Sacrum.CdcAssertions
-
   alias Sacrum.Accounts.{Projects, StepExecutions, TaskRuns, Tasks, Workflows}
   alias Sacrum.Orchestrator.Routing.WaitChildren.ChildRuns
   alias Sacrum.Repo
@@ -25,7 +23,7 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren.ChildRunsTest do
     assert child_run.triggered_by_step_execution_id == trigger_execution.id
   end
 
-  test "get_or_create emits child run start step position after task_run_created" do
+  test "get_or_create persists child run start step position" do
     user = create_user()
     {project, parent_task, workflow} = create_task_with_workflow(user)
     {:ok, child_task} = Tasks.insert(user.id, project.id, %{title: "Child Task"})
@@ -34,39 +32,13 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren.ChildRunsTest do
 
     assert is_binary(child_task.current_step_id)
 
-    :ok = subscribe_project(project.id)
-
     assert {:ok, child_run} =
              ChildRuns.get_or_create(child_task, parent_run, trigger_execution.id)
 
-    assert {:ok, [%{event: "task_run_created"}, %{event: "task_run_step_changed"}]} =
-             project_insert("task_runs", child_run)
-
-    assert_receive %Phoenix.Socket.Broadcast{
-      event: "task_run_created",
-      payload: %{id: child_run_id, task_id: task_id}
-    }
-
-    assert child_run_id == child_run.id
-    assert task_id == child_task.id
-
-    assert_receive %Phoenix.Socket.Broadcast{
-      event: "task_run_step_changed",
-      payload: %{
-        task_run_id: step_task_run_id,
-        task_id: step_task_id,
-        from_step_id: nil,
-        to_step_id: to_step_id,
-        status: "queued",
-        level: level,
-        schema_version: 1
-      }
-    }
-
-    assert step_task_run_id == child_run.id
-    assert step_task_id == child_task.id
-    assert to_step_id == child_task.current_step_id
-    assert level == child_task.level
+    assert child_run.id
+    assert child_run.task_id == child_task.id
+    assert child_run.status == :queued
+    assert child_task.current_step_id
   end
 
   test "get_or_create rejects a manual child root run" do

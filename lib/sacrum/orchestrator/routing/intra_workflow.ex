@@ -13,7 +13,6 @@ defmodule Sacrum.Orchestrator.Routing.IntraWorkflow do
 
   alias Sacrum.Orchestrator.{FSMData, TaskCompletion}
   alias Sacrum.Repo
-  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.{StepTransition, WorkflowStep}
   alias Sacrum.Repo.TaskWorkflows
 
@@ -37,7 +36,6 @@ defmodule Sacrum.Orchestrator.Routing.IntraWorkflow do
         "[TaskOrchestrator:#{task_id}] Route step routed intra_workflow from #{data.task.current_step_id} to #{dest_step_id} handoff=#{inspect(handoff != nil)}"
       )
 
-      Broadcaster.broadcast({:ok, updated_task}, :task_updated, :project)
       {:ok, updated_task}
     else
       {:error, reason} ->

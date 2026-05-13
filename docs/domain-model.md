@@ -211,7 +211,7 @@ rules are defined in
 | `run_step` | Execution + step config | **Daemon only** — Run a step |
 | `cancel_step` | Execution ID, task ID | **Daemon only** — Cancel running step |
 
-> **Implementation:** See `SacrumWeb.ProjectChannel` and `Sacrum.Repo.Broadcaster`.
+> **Implementation:** See `Sacrum.Realtime.Cdc.Projector`, `SacrumWeb.ProjectChannel`, and `Sacrum.Realtime.CommandBroadcaster` for daemon-only commands.
 
 ## Architecture Pattern
 

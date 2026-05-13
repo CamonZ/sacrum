@@ -16,7 +16,6 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflow do
 
   alias Sacrum.Orchestrator.{FSMData, TaskCompletion, WorkflowGraph}
   alias Sacrum.Repo
-  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.{Task, Workflow, WorkflowStep, WorkflowTransition}
 
   @doc """
@@ -190,8 +189,6 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflow do
           "[TaskOrchestrator:#{task.id}] Assigned destination workflow=#{dest_workflow.id} " <>
             "target_step=#{target_step.id} (#{target_step.name}) handoff=#{inspect(handoff != nil)}"
         )
-
-        Broadcaster.broadcast({:ok, updated_task}, :task_updated, :project)
 
         {:ok, updated_task}
 

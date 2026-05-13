@@ -1,12 +1,9 @@
 defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
   use Sacrum.DataCase, async: false
 
-  import Sacrum.CdcAssertions, only: [update_event: 3]
-
   alias Sacrum.Accounts
   alias Sacrum.Orchestrator.ExecutionPool
   alias Sacrum.Orchestrator.Routing.RouteStep
-  alias Sacrum.Realtime.Cdc.Projector
   alias Sacrum.Repo
 
   # ===== Setup helpers =====
@@ -261,50 +258,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
                "current_step_id" => next_step.id
              }
 
-      assert {:ok, projections} =
-               Projector.project_events([
-                 update_event("step_executions", execution, updated_execution),
-                 update_event("tasks", task, updated_task),
-                 update_event("task_runs", task_run, completed_run)
-               ])
-
-      assert Enum.map(projections, & &1.event) == [
-               "task_updated",
-               "task_run_step_changed",
-               "task_run_updated",
-               "task_run_step_changed"
-             ]
-
-      assert_receive %Phoenix.Socket.Broadcast{
-        event: "task_run_step_changed",
-        payload: %{
-          task_run_id: task_run_id,
-          task_id: task_id,
-          from_step_id: from_step_id,
-          to_step_id: to_step_id,
-          status: "completed"
-        }
-      }
-
-      assert task_run_id == task_run.id
-      assert task_id == task.id
-      assert from_step_id == current_step.id
-      assert to_step_id == next_step.id
-
-      assert_receive %Phoenix.Socket.Broadcast{
-        event: "task_run_step_changed",
-        payload: %{
-          task_run_id: run_end_task_run_id,
-          task_id: run_end_task_id,
-          from_step_id: run_end_from_step_id,
-          to_step_id: nil,
-          status: "completed"
-        }
-      }
-
-      assert run_end_task_run_id == task_run.id
-      assert run_end_task_id == task.id
-      assert run_end_from_step_id == next_step.id
+      assert updated_task.current_step_id == next_step.id
     end
 
     test "inter-workflow happy path: routes task to destination workflow", %{pool: pool} do

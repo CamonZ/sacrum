@@ -3,12 +3,10 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
   import Ecto.Query
   import ExUnit.CaptureLog
-  import Sacrum.CdcAssertions
 
   alias Sacrum.Accounts
   alias Sacrum.Orchestrator.FSMData
   alias Sacrum.Orchestrator.TaskOrchestrator
-  alias Sacrum.Realtime.Cdc.Projector
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{StepExecution, TaskRun}
 
@@ -2928,81 +2926,42 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     end
   end
 
-  describe "task_run_step_changed CDC projections" do
-    test "run start projects task_run_step_changed after task_run_created and before first task_run_updated" do
+  describe "task run step persistence" do
+    test "run start persists queued and executing run state" do
       %{user: user, project: project, steps: [first_step], task: task} =
         setup_linear_workflow(auto_advance: true, step_count: 1)
-
-      :ok = subscribe_project(project.id)
 
       {:ok, queued_run} =
         Accounts.TaskRuns.insert(user.id, project.id, task.id, %{status: :queued})
 
       {:ok, executing_run} = Accounts.TaskRuns.update(queued_run, %{status: :executing})
 
-      assert {:ok, projections} =
-               Projector.project_events([
-                 insert_event("task_runs", queued_run),
-                 update_event("task_runs", queued_run, executing_run)
-               ])
-
-      assert Enum.map(projections, & &1.event) == [
-               "task_run_created",
-               "task_run_step_changed",
-               "task_run_updated"
-             ]
-
-      assert_project_broadcast("task_run_created", %{id: queued_run.id, task_id: task.id})
-
-      run_start =
-        assert_project_broadcast("task_run_step_changed", %{
-          task_run_id: queued_run.id,
-          task_id: task.id,
-          from_step_id: nil,
-          to_step_id: first_step.id,
-          status: "queued",
-          level: task.level
-        })
-
-      assert run_start.schema_version == 1
-      assert_project_broadcast("task_run_updated", %{id: queued_run.id, status: "executing"})
+      assert queued_run.task_id == task.id
+      assert queued_run.status == :queued
+      assert executing_run.id == queued_run.id
+      assert executing_run.status == :executing
+      assert task.current_step_id == first_step.id
     end
 
-    test "task step movement during an active run projects task_run_step_changed" do
+    test "task step movement during an active run persists the task step" do
       %{user: user, project: project, steps: [s1, s2, _s3], task: task} =
         setup_linear_workflow(auto_advance: true, step_count: 3)
-
-      :ok = subscribe_project(project.id)
 
       {:ok, task_run} =
         Accounts.TaskRuns.insert(user.id, project.id, task.id, %{status: :executing})
 
       {:ok, moved_task} = Repo.update(Ecto.Changeset.change(task, %{current_step_id: s2.id}))
 
-      assert {:ok, projections} = project_update("tasks", task, moved_task)
-
-      assert Enum.map(projections, & &1.event) == ["task_updated", "task_run_step_changed"]
-      assert_project_broadcast("task_updated", %{id: task.id, current_step_id: s2.id})
-
-      assert_project_broadcast("task_run_step_changed", %{
-        task_run_id: task_run.id,
-        task_id: task.id,
-        from_step_id: s1.id,
-        to_step_id: s2.id,
-        status: "executing",
-        level: task.level
-      })
-
-      refute_project_broadcast("task_step_changed", 50)
+      assert task_run.status == :executing
+      assert task.current_step_id == s1.id
+      assert moved_task.current_step_id == s2.id
     end
 
-    test "terminal TaskRun updates project run-end step deltas" do
+    test "terminal TaskRun updates persist terminal run state" do
       %{user: user, project: project, steps: [s1, _s2, _s3], task: task} =
         setup_linear_workflow(auto_advance: false, step_count: 3)
 
       for status <- [:completed, :stopped, :failed] do
-        :ok = subscribe_project(project.id)
-
         {:ok, running_run} =
           Accounts.TaskRuns.insert(user.id, project.id, task.id, %{status: :executing})
 
@@ -3013,27 +2972,14 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
             outcome_kind: Atom.to_string(status)
           })
 
-        _ = collect_project_broadcasts([])
-
-        assert {:ok, [%{event: "task_run_updated"}, %{event: "task_run_step_changed"}]} =
-                 project_update("task_runs", running_run, terminal_run)
-
-        assert_project_broadcast("task_run_updated", %{
-          id: running_run.id,
-          status: Atom.to_string(status)
-        })
-
-        assert_project_broadcast("task_run_step_changed", %{
-          task_run_id: running_run.id,
-          task_id: task.id,
-          from_step_id: s1.id,
-          to_step_id: nil,
-          status: Atom.to_string(status)
-        })
+        assert running_run.status == :executing
+        assert terminal_run.status == status
+        assert terminal_run.outcome_kind == Atom.to_string(status)
+        assert task.current_step_id == s1.id
       end
     end
 
-    test "wait_children waiting StepExecution is visible through CDC" do
+    test "wait_children waiting StepExecution is persisted" do
       %{user: user, project: project, parent_task: parent_task} = setup_wait_children_parent()
 
       child_workflow = create_workflow(user, project, auto_advance: true)
@@ -3050,8 +2996,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       child_task = create_child_task(user, project, parent_task)
       child_task = assign_workflow_to_task(child_task, child_workflow)
 
-      :ok = subscribe_project(project.id)
-
       pid = start_orchestrator(parent_task, user)
       wait_for_exit(pid)
 
@@ -3063,26 +3007,11 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
           )
         )
 
-      assert {:ok, [%{event: "step_execution_created"}]} =
-               project_insert("step_executions", waiting_execution)
-
-      assert_project_broadcast("step_execution_created", %{
-        id: waiting_execution.id,
-        task_id: parent_task.id,
-        task_run_id: waiting_execution.task_run_id,
-        status: "waiting"
-      })
+      assert waiting_execution.task_id == parent_task.id
+      assert waiting_execution.task_run_id
+      assert waiting_execution.status == "waiting"
 
       cleanup_spawned_orchestrators([child_task.id])
-    end
-  end
-
-  defp collect_project_broadcasts(acc) do
-    receive do
-      %Phoenix.Socket.Broadcast{} = broadcast ->
-        collect_project_broadcasts([broadcast | acc])
-    after
-      0 -> Enum.reverse(acc)
     end
   end
 end

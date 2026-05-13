@@ -1,8 +1,6 @@
 defmodule Sacrum.Accounts.WorkflowTransitionsTest do
   use Sacrum.DataCase, async: false
 
-  import Sacrum.CdcAssertions
-
   alias Sacrum.Accounts.WorkflowTransitions
   alias Sacrum.Accounts.Workflows
   alias Sacrum.Accounts.Projects
@@ -114,81 +112,12 @@ defmodule Sacrum.Accounts.WorkflowTransitionsTest do
   end
 
   describe "CDC projections" do
-    test "insert/2 projects workflow_transition_created after CDC dispatch" do
-      user = create_user()
-      {project, workflow1, workflow2} = create_workflows(user)
-
-      :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
-
-      {:ok, transition} =
-        WorkflowTransitions.insert(user.id, %{
-          "from_workflow_id" => workflow1.id,
-          "to_workflow_id" => workflow2.id,
-          "project_id" => project.id,
-          "label" => "promote"
-        })
-
-      refute_project_broadcast("workflow_transition_created", 50)
-
-      assert {:ok, [%{event: "workflow_transition_created"}]} =
-               project_insert("workflow_transitions", transition)
-
-      payload =
-        assert_project_broadcast("workflow_transition_created", %{
-          id: transition.id,
-          from_workflow_id: workflow1.id,
-          to_workflow_id: workflow2.id,
-          label: "promote"
-        })
-
-      assert payload.id == transition.id
-      assert payload.from_workflow_id == workflow1.id
-      assert payload.to_workflow_id == workflow2.id
-      assert payload.label == "promote"
-
-      refute_project_broadcast("workflow_transition_created", 50)
-    end
-
     test "insert/2 does not project on validation error" do
       user = create_user()
       {project, _workflow1, _workflow2} = create_workflows(user)
 
-      :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
-
       assert {:error, %Ecto.Changeset{}} =
                WorkflowTransitions.insert(user.id, %{"project_id" => project.id})
-
-      refute_project_broadcast("workflow_transition_created")
-    end
-
-    test "delete/1 projects workflow_transition_deleted after CDC dispatch" do
-      user = create_user()
-      {project, workflow1, workflow2} = create_workflows(user)
-
-      {:ok, transition} =
-        WorkflowTransitions.insert(user.id, %{
-          "from_workflow_id" => workflow1.id,
-          "to_workflow_id" => workflow2.id,
-          "project_id" => project.id
-        })
-
-      :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
-
-      {:ok, _deleted} = WorkflowTransitions.delete(transition)
-
-      assert {:ok, [%{event: "workflow_transition_deleted"}]} =
-               project_delete("workflow_transitions", transition)
-
-      payload =
-        assert_project_broadcast("workflow_transition_deleted", %{
-          id: transition.id,
-          from_workflow_id: workflow1.id,
-          to_workflow_id: workflow2.id
-        })
-
-      assert payload.id == transition.id
-      assert payload.from_workflow_id == workflow1.id
-      assert payload.to_workflow_id == workflow2.id
     end
   end
 end

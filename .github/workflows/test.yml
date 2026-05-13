@@ -24,6 +24,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Enable PostgreSQL logical replication
+        run: |
+          docker exec "${{ job.services.postgres.id }}" psql -U postgres -v ON_ERROR_STOP=1 \
+            -c "ALTER SYSTEM SET wal_level = logical;" \
+            -c "ALTER SYSTEM SET max_replication_slots = 10;" \
+            -c "ALTER SYSTEM SET max_wal_senders = 10;"
+
+          docker restart "${{ job.services.postgres.id }}"
+
+          until docker exec "${{ job.services.postgres.id }}" pg_isready -U postgres; do
+            sleep 1
+          done
+
+          docker exec "${{ job.services.postgres.id }}" psql -U postgres -tAc "SHOW wal_level;" | grep -qx logical
+
       - name: Set up Elixir
         uses: erlef/setup-beam@v1
         with:

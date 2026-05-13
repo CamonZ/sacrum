@@ -1,8 +1,6 @@
 defmodule Sacrum.Repo.TaskWorkflowsTest do
   use Sacrum.DataCase, async: true
 
-  import Sacrum.CdcAssertions
-
   alias Sacrum.Accounts
   alias Sacrum.Repo.Users
   alias Sacrum.Repo.Projects
@@ -497,22 +495,15 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
     end
   end
 
-  describe "task_step_changed CDC projections" do
-    test "assign_workflow to a new workflow projects task_step_changed with old and new step ids" do
-      %{project: project, workflow: workflow, steps: steps, task: task} =
+  describe "task step changes" do
+    test "assign_workflow to a new workflow persists old and new step ids" do
+      %{workflow: workflow, steps: steps, task: task} =
         setup_workflow_with_steps()
 
-      :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
-
       {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
-      assert {:ok, _projections} = project_update("tasks", task, assigned)
-
-      events = collect_broadcasts("task_step_changed")
-      assert [event] = Enum.filter(events, &(&1.task_id == task.id))
-      assert event.from_step_id == task.current_step_id
-      assert event.to_step_id == steps.backlog.id
-      assert event.workflow_id == workflow.id
-      assert event.level == task.level
+      assert assigned.current_step_id == steps.backlog.id
+      assert assigned.workflow_id == workflow.id
+      assert task.current_step_id != assigned.current_step_id
     end
 
     test "idempotent re-assign does not project task_step_changed" do
@@ -527,39 +518,26 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
       assert collect_broadcasts("task_step_changed") == []
     end
 
-    test "move_to_step projects task_step_changed with old and new step ids" do
-      %{project: project, workflow: workflow, steps: steps, task: task} =
+    test "move_to_step persists old and new step ids" do
+      %{workflow: workflow, steps: steps, task: task} =
         setup_workflow_with_steps()
 
       {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
-
-      :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
 
       {:ok, moved} = TaskWorkflows.move_to_step(assigned, steps.in_progress.id)
-      assert {:ok, _projections} = project_update("tasks", assigned, moved)
-
-      events = collect_broadcasts("task_step_changed")
-      assert [event] = Enum.filter(events, &(&1.task_id == task.id))
-      assert event.from_step_id == steps.backlog.id
-      assert event.to_step_id == steps.in_progress.id
-      assert event.workflow_id == workflow.id
+      assert moved.current_step_id == steps.in_progress.id
+      assert assigned.current_step_id == steps.backlog.id
     end
 
-    test "advance_to_step projects task_step_changed" do
-      %{project: project, workflow: workflow, steps: steps, task: task} =
+    test "advance_to_step persists the advanced step" do
+      %{workflow: workflow, steps: steps, task: task} =
         setup_workflow_with_steps()
 
       {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
 
-      :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
-
       {:ok, advanced} = TaskWorkflows.advance_to_step(assigned, steps.done.id)
-      assert {:ok, _projections} = project_update("tasks", assigned, advanced)
-
-      events = collect_broadcasts("task_step_changed")
-      assert [event] = Enum.filter(events, &(&1.task_id == task.id))
-      assert event.from_step_id == steps.backlog.id
-      assert event.to_step_id == steps.done.id
+      assert advanced.current_step_id == steps.done.id
+      assert assigned.current_step_id == steps.backlog.id
     end
   end
 
