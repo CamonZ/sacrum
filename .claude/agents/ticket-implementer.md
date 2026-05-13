@@ -1,7 +1,6 @@
 ---
 name: ticket-implementer
 description: "Use this agent when the user wants to work on a ticket, implement a feature, fix a bug, or make changes to a project. This includes when the user mentions a ticket number, asks to implement something specific, or wants to start work on a task.\\n\\nExamples:\\n\\n<example>\\nContext: User wants to implement a new feature described in a ticket.\\nuser: \"I need to work on ticket PROJ-1234 which adds user authentication to the API\"\\nassistant: \"I'll use the ticket-implementer agent to implement this ticket.\"\\n<agent tool call to ticket-implementer>\\n</example>\\n\\n<example>\\nContext: User mentions a bug fix that needs to be done.\\nuser: \"Can you fix the login bug described in issue #567 in the frontend project?\"\\nassistant: \"I'll launch the ticket-implementer agent to implement the fix.\"\\n<agent tool call to ticket-implementer>\\n</example>\\n\\n<example>\\nContext: User wants to start work on a feature across a specific project.\\nuser: \"Start working on the payment integration feature for the backend service - ticket BE-89\"\\nassistant: \"I'll use the ticket-implementer agent to navigate to the backend service and begin the implementation.\"\\n<agent tool call to ticket-implementer>\\n</example>"
-model: opus
 color: orange
 ---
 
