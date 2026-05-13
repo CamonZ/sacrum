@@ -581,10 +581,16 @@ defmodule SacrumWeb.ProjectChannelTest do
           outcome_context: %{"phase" => "created"}
         })
 
+      assert {:ok, [%{event: "task_run_created"}, %{event: "task_run_step_changed"}]} =
+               project_insert("task_runs", task_run)
+
       assert_push "task_run_created", created_payload
       assert_contract_payload_keys("task_run_created", created_payload)
       assert_run_control_contract_keys(created_payload.run_controls)
       assert created_payload.run_controls.active_run.id == task_run.id
+
+      assert_push "task_run_step_changed", %{task_run_id: task_run_id}
+      assert task_run_id == task_run.id
 
       {:ok, updated_run} =
         Sacrum.Accounts.TaskRuns.update(task_run, %{
@@ -592,6 +598,9 @@ defmodule SacrumWeb.ProjectChannelTest do
           outcome_kind: "human_input",
           outcome_context: %{"gate" => "review"}
         })
+
+      assert {:ok, [%{event: "task_run_updated"}]} =
+               project_update("task_runs", task_run, updated_run)
 
       assert_push "task_run_updated", payload
       assert_contract_payload_keys("task_run_updated", payload)

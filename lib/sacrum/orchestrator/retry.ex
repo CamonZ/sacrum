@@ -10,9 +10,8 @@ defmodule Sacrum.Orchestrator.Retry do
 
   require Logger
 
-  alias Sacrum.Orchestrator.{ExecutionDispatcher, FSMData, WorkflowGraph}
+  alias Sacrum.Orchestrator.{ExecutionDispatcher, ExecutionEvents, FSMData, WorkflowGraph}
   alias Sacrum.Orchestrator.TaskRuns.RetryExhaustion
-  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.TaskRun
 
   @max_retries 5
@@ -52,6 +51,8 @@ defmodule Sacrum.Orchestrator.Retry do
              current_step.id,
              data.task_run_id
            ) do
+      :ok = ExecutionEvents.subscribe(execution.id)
+
       new_data = %{data | current_execution_id: execution.id, run_retry_attempt: attempt}
 
       Logger.info(
@@ -82,8 +83,8 @@ defmodule Sacrum.Orchestrator.Retry do
            current_attempt: attempt,
            max_attempts: @max_retries
          }) do
-      {:ok, %TaskRun{} = task_run} ->
-        broadcast_run_end_step_changed(data, task_run)
+      {:ok, %TaskRun{}} ->
+        :ok
 
       {:ok, _unchanged} ->
         :ok
@@ -95,10 +96,5 @@ defmodule Sacrum.Orchestrator.Retry do
     end
 
     {:next_state, :failed, %{data | run_retry_attempt: attempt}}
-  end
-
-  @spec broadcast_run_end_step_changed(FSMData.t(), TaskRun.t()) :: :ok
-  defp broadcast_run_end_step_changed(%FSMData{task: task}, %TaskRun{} = task_run) do
-    Broadcaster.broadcast_task_run_step_changed(task_run, task, task.current_step_id, nil)
   end
 end

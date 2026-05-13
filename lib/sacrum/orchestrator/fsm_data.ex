@@ -19,7 +19,6 @@ defmodule Sacrum.Orchestrator.FSMData do
     :pending_handoff,
     steps: %{},
     transitions: %{},
-    subscribed: false,
     run_retry_attempt: 0
   ]
 
@@ -34,7 +33,6 @@ defmodule Sacrum.Orchestrator.FSMData do
           current_execution_id: binary() | nil,
           slot_id: integer() | nil,
           pending_handoff: map() | nil,
-          subscribed: boolean(),
           run_retry_attempt: non_neg_integer()
         }
 end

@@ -199,9 +199,6 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
       task.project_id
     )
 
-    Broadcaster.broadcast_task_run({:ok, task_run}, :task_run_updated)
-    Broadcaster.broadcast_step_execution({:ok, execution}, :step_execution_created)
-
     {:ok, execution}
   end
 

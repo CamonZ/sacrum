@@ -1,6 +1,8 @@
 defmodule SacrumWeb.Graphql.TaskRunApiTest do
   use SacrumWeb.ConnCase
 
+  import Sacrum.CdcAssertions
+
   alias Sacrum.Accounts
   alias Sacrum.Repo.TaskDependencies
 
@@ -580,6 +582,9 @@ defmodule SacrumWeb.Graphql.TaskRunApiTest do
 
       {:ok, run} = Accounts.TaskRuns.insert(user.id, project.id, task.id, %{status: :queued})
 
+      assert {:ok, [%{event: "task_run_created"}, %{event: "task_run_step_changed"}]} =
+               project_insert("task_runs", run)
+
       assert_receive %Phoenix.Socket.Broadcast{
         event: "task_run_created",
         payload: %{
@@ -593,8 +598,12 @@ defmodule SacrumWeb.Graphql.TaskRunApiTest do
       assert id == run.id
       assert task_id == task.id
       assert_channel_controls_converge(created_controls, run_controls_result(conn, user, task.id))
+      assert_receive %Phoenix.Socket.Broadcast{event: "task_run_step_changed"}
 
       {:ok, updated} = Accounts.TaskRuns.update(run, %{status: :waiting})
+
+      assert {:ok, [%{event: "task_run_updated"}]} =
+               project_update("task_runs", run, updated)
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "task_run_updated",

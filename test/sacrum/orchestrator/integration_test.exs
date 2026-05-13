@@ -278,7 +278,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
     end
   end
 
-  defp simulate_daemon_completion(task_id, project_id, output) do
+  defp simulate_daemon_completion(task_id, _project_id, output) do
     execution = latest_started_execution(task_id)
 
     {:ok, updated} =
@@ -286,16 +286,12 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
       |> StepExecution.update_changeset(%{status: "completed", output: output})
       |> Repo.update()
 
-    SacrumWeb.Endpoint.broadcast(
-      "project:#{project_id}",
-      "step_execution_status_changed",
-      %{id: updated.id, status: "completed", output: output}
-    )
+    Sacrum.Orchestrator.ExecutionEvents.broadcast_status_changed(updated)
 
     updated
   end
 
-  defp simulate_daemon_failure(task_id, project_id) do
+  defp simulate_daemon_failure(task_id, _project_id) do
     execution = latest_started_execution(task_id)
 
     {:ok, updated} =
@@ -303,11 +299,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
       |> StepExecution.update_changeset(%{status: "failed", output: "daemon error"})
       |> Repo.update()
 
-    SacrumWeb.Endpoint.broadcast(
-      "project:#{project_id}",
-      "step_execution_status_changed",
-      %{id: updated.id, status: "failed", output: "daemon error"}
-    )
+    Sacrum.Orchestrator.ExecutionEvents.broadcast_status_changed(updated)
 
     updated
   end
