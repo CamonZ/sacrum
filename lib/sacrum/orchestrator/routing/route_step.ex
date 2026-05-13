@@ -22,7 +22,6 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
   alias Sacrum.Orchestrator.Routing.{InterWorkflow, IntraWorkflow, RouteDecision}
   alias Sacrum.Orchestrator.TaskRuns.{Completion, Lookup}
   alias Sacrum.Repo
-  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.StepExecution
   alias Sacrum.Repo.TaskWorkflows
 
@@ -45,7 +44,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
          {:ok, %{dest_id: dest_id, transition_type: transition_type, handoff: handoff}} <-
            RouteDecision.extract_routing_data(decoded),
          {:ok, route_plan} <- prepare_route_plan(data, dest_id, transition_type, handoff),
-         {:ok, %{task: updated_task, route_execution: route_execution}} <-
+         {:ok, %{task: updated_task}} <-
            commit_route_transition(data, execution, dest_id, transition_type, route_plan) do
       RouteDecision.log_route_decision(
         task_id,
@@ -57,8 +56,6 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
 
       ExecutionPool.release_slot(data.slot_id)
       new_data = %{data | slot_id: nil, pending_handoff: handoff}
-      Broadcaster.broadcast_step_execution({:ok, route_execution}, :step_execution_status_changed)
-      Broadcaster.broadcast({:ok, updated_task}, :task_updated, :project)
 
       case transition_type do
         "intra_workflow" ->
@@ -162,7 +159,6 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
            task_run
            |> Completion.changeset(attrs)
            |> Repo.update() do
-      Broadcaster.broadcast_task_run({:ok, task_run}, :task_run_updated)
       {:ok, Map.put(changes, :task_run, task_run)}
     end
   end

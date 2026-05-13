@@ -4,7 +4,6 @@ defmodule Sacrum.Orchestrator.TaskRuns.Root do
   """
 
   alias Sacrum.Accounts.TaskRuns
-  alias Sacrum.Orchestrator.TaskRuns.RunStart
   alias Sacrum.Repo.Schemas.{Task, TaskRun}
   alias Sacrum.TaskRuns.Status, as: TaskRunStatus
 
@@ -25,13 +24,6 @@ defmodule Sacrum.Orchestrator.TaskRuns.Root do
 
   @spec create(Task.t()) :: {:ok, TaskRun.t()} | {:error, term()}
   defp create(%Task{} = task) do
-    case TaskRuns.insert(task.user_id, task.project_id, task.id, %{status: :queued}) do
-      {:ok, %TaskRun{} = task_run} = result ->
-        RunStart.broadcast_step_position(task_run, task)
-        result
-
-      error ->
-        error
-    end
+    TaskRuns.insert(task.user_id, task.project_id, task.id, %{status: :queued})
   end
 end

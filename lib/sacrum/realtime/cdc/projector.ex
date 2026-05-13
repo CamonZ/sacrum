@@ -90,10 +90,11 @@ defmodule Sacrum.Realtime.Cdc.Projector do
 
   @spec project_events([WalEx.Event.t()] | WalEx.Event.t()) :: {:ok, [dispatch_result()]}
   def project_events(events) do
+    events = List.wrap(events)
+    context = projection_context(events)
+
     events
-    |> List.wrap()
-    |> Enum.with_index()
-    |> Enum.flat_map(fn {event, source_index} -> project_event(event, source_index) end)
+    |> Enum.flat_map(&project_event(&1, context))
     |> then(&{:ok, &1})
   end
 
@@ -105,23 +106,45 @@ defmodule Sacrum.Realtime.Cdc.Projector do
     {:reply, project_events(events), state}
   end
 
-  defp project_event(%WalEx.Event{} = event, _source_index) do
+  defp project_event(%WalEx.Event{} = event, context) do
     event
-    |> projections()
-    |> Enum.with_index()
-    |> Enum.map(&dispatch_projection(&1))
+    |> projections(context)
+    |> Enum.map(&dispatch_projection/1)
   end
+
+  defp projections(%WalEx.Event{source: %{table: "tasks"}, type: :update} = event, context) do
+    task = record_to_struct!("tasks", event.new_record)
+    base_projection = projection("task_updated", task.project_id, task)
+
+    [base_projection | task_step_projections(event, task, context)]
+  end
+
+  defp projections(
+         %WalEx.Event{source: %{table: "task_runs"}, type: :insert, new_record: record},
+         context
+       ) do
+    task_run = record_to_struct!("task_runs", record)
+
+    [
+      projection("task_run_created", task_run.project_id, task_run)
+      | task_run_start_projections(task_run, context)
+    ]
+  end
+
+  defp projections(%WalEx.Event{source: %{table: "task_runs"}, type: :update} = event, context) do
+    task_run = record_to_struct!("task_runs", event.new_record)
+
+    [
+      projection("task_run_updated", task_run.project_id, task_run)
+      | task_run_end_projections(event, task_run, context)
+    ]
+  end
+
+  defp projections(%WalEx.Event{} = event, _context), do: projections(event)
 
   defp projections(%WalEx.Event{source: %{table: "tasks"}, type: :insert, new_record: record}) do
     task = record_to_struct!("tasks", record)
     [projection("task_created", task.project_id, task)]
-  end
-
-  defp projections(%WalEx.Event{source: %{table: "tasks"}, type: :update} = event) do
-    task = record_to_struct!("tasks", event.new_record)
-    base_projection = projection("task_updated", task.project_id, task)
-
-    [base_projection | task_step_projections(event, task)]
   end
 
   defp projections(%WalEx.Event{source: %{table: "tasks"}, type: :delete, old_record: record}) do
@@ -225,24 +248,6 @@ defmodule Sacrum.Realtime.Cdc.Projector do
     end
   end
 
-  defp projections(%WalEx.Event{source: %{table: "task_runs"}, type: :insert, new_record: record}) do
-    task_run = record_to_struct!("task_runs", record)
-
-    [
-      projection("task_run_created", task_run.project_id, task_run)
-      | task_run_start_projections(task_run)
-    ]
-  end
-
-  defp projections(%WalEx.Event{source: %{table: "task_runs"}, type: :update} = event) do
-    task_run = record_to_struct!("task_runs", event.new_record)
-
-    [
-      projection("task_run_updated", task_run.project_id, task_run)
-      | task_run_end_projections(event, task_run)
-    ]
-  end
-
   defp projections(%WalEx.Event{
          source: %{table: "session_logs"},
          type: :insert,
@@ -297,15 +302,45 @@ defmodule Sacrum.Realtime.Cdc.Projector do
 
   defp projections(%WalEx.Event{}), do: []
 
-  defp task_step_projections(%WalEx.Event{} = event, %Task{} = task) do
+  defp projection_context(events) do
+    Enum.reduce(events, %{task_runs_by_task_id: %{}, tasks_by_id: %{}}, fn event, acc ->
+      acc
+      |> put_task_context(event)
+      |> put_task_run_context(event)
+    end)
+  end
+
+  defp put_task_context(acc, %WalEx.Event{source: %{table: "tasks"}, type: type} = event)
+       when type in [:insert, :update] do
+    task = record_to_struct!("tasks", event.new_record)
+    put_in(acc, [:tasks_by_id, task.id], task)
+  end
+
+  defp put_task_context(acc, _event), do: acc
+
+  defp put_task_run_context(acc, %WalEx.Event{source: %{table: "task_runs"}, type: type} = event)
+       when type in [:insert, :update] do
+    task_run = record_to_struct!("task_runs", event.new_record)
+
+    context = %{
+      task_run: task_run,
+      left_active?: type == :update and status_left_active?(event)
+    }
+
+    put_in(acc, [:task_runs_by_task_id, task_run.task_id], context)
+  end
+
+  defp put_task_run_context(acc, _event), do: acc
+
+  defp task_step_projections(%WalEx.Event{} = event, %Task{} = task, context) do
     if changed?(event, :current_step_id) do
-      do_task_step_projections(event, task)
+      do_task_step_projections(event, task, context)
     else
       []
     end
   end
 
-  defp do_task_step_projections(%WalEx.Event{} = event, %Task{} = task) do
+  defp do_task_step_projections(%WalEx.Event{} = event, %Task{} = task, context) do
     from_step_id = old_value(event, :current_step_id)
     to_step_id = task.current_step_id
 
@@ -313,14 +348,14 @@ defmodule Sacrum.Realtime.Cdc.Projector do
       from_step_id == to_step_id ->
         []
 
-      active_run = active_task_run(task.id) ->
+      task_run = task_run_for_step_change(task.id, context) ->
         [
           projection("task_run_step_changed", task.project_id, %{
-            task_run_id: active_run.id,
+            task_run_id: task_run.id,
             task_id: task.id,
             from_step_id: from_step_id,
             to_step_id: to_step_id,
-            status: active_run.status,
+            status: task_run.status,
             level: task.level
           })
         ]
@@ -338,8 +373,8 @@ defmodule Sacrum.Realtime.Cdc.Projector do
     end
   end
 
-  defp task_run_start_projections(%TaskRun{} = task_run) do
-    case Repo.get(Task, task_run.task_id) do
+  defp task_run_start_projections(%TaskRun{} = task_run, context) do
+    case task_for_task_run(task_run, context) do
       %Task{} = task ->
         [
           projection("task_run_step_changed", task_run.project_id, %{
@@ -357,9 +392,9 @@ defmodule Sacrum.Realtime.Cdc.Projector do
     end
   end
 
-  defp task_run_end_projections(%WalEx.Event{} = event, %TaskRun{} = task_run) do
+  defp task_run_end_projections(%WalEx.Event{} = event, %TaskRun{} = task_run, context) do
     if status_left_active?(event) do
-      case Repo.get(Task, task_run.task_id) do
+      case task_for_task_run(task_run, context) do
         %Task{} = task ->
           [
             projection("task_run_step_changed", task_run.project_id, %{
@@ -380,7 +415,26 @@ defmodule Sacrum.Realtime.Cdc.Projector do
     end
   end
 
-  defp dispatch_projection({projection, _output_index}) do
+  defp task_run_for_step_change(task_id, context) do
+    case get_in(context, [:task_runs_by_task_id, task_id]) do
+      %{task_run: %TaskRun{} = task_run, left_active?: true} ->
+        task_run
+
+      %{task_run: %TaskRun{} = task_run} ->
+        if TaskRunStatus.active?(normalize_task_run_status(task_run.status)) do
+          task_run
+        end
+
+      _ ->
+        active_task_run(task_id)
+    end
+  end
+
+  defp task_for_task_run(%TaskRun{task_id: task_id}, context) do
+    Map.get(context.tasks_by_id, task_id) || Repo.get(Task, task_id)
+  end
+
+  defp dispatch_projection(projection) do
     emit(projection)
     %{event: projection.event, project_id: projection.project_id, status: :dispatched}
   rescue

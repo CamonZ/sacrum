@@ -24,7 +24,6 @@ defmodule Sacrum.Orchestrator.Routing.HumanInput do
 
   alias Sacrum.Orchestrator.TaskRuns.{Lookup, StateTransitions}
   alias Sacrum.Repo
-  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.{StepExecution, Task, TaskRun, WorkflowStep}
   alias Sacrum.Tasks.Status
 
@@ -39,14 +38,11 @@ defmodule Sacrum.Orchestrator.Routing.HumanInput do
     with {:ok, task_run} <- Lookup.fetch(data.task_run_id),
          {:ok, rendered_prompt} <-
            render_human_prompt(task, step, task_run, data.pending_handoff),
-         {:ok, %{execution: execution, task_run: updated_task_run}} <-
+         {:ok, %{execution: execution}} <-
            enter_waiting_state(data, task, step, task_run, rendered_prompt) do
       Logger.info(
         "[TaskOrchestrator:#{task_id}] Entered human_input step=#{step.id} execution=#{execution.id}"
       )
-
-      Broadcaster.broadcast_step_execution({:ok, execution}, :step_execution_created)
-      Broadcaster.broadcast_task_run({:ok, updated_task_run}, :task_run_updated)
 
       ExecutionPool.release_slot(data.slot_id)
       {:parked, %{data | current_execution_id: execution.id, slot_id: nil, pending_handoff: nil}}

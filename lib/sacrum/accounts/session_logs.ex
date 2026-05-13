@@ -11,7 +11,6 @@ defmodule Sacrum.Accounts.SessionLogs do
     default_order: [asc: :inserted_at]
 
   alias Sacrum.Repo
-  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.SessionLog
 
   @doc """
@@ -26,6 +25,5 @@ defmodule Sacrum.Accounts.SessionLogs do
     %SessionLog{user_id: user_id, step_execution_id: step_execution_id, project_id: project_id}
     |> SessionLog.create_changeset(attrs)
     |> Repo.insert()
-    |> Broadcaster.broadcast_session_log(:session_log_created)
   end
 end

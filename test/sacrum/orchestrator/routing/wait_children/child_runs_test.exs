@@ -1,6 +1,8 @@
 defmodule Sacrum.Orchestrator.Routing.WaitChildren.ChildRunsTest do
   use Sacrum.DataCase, async: true
 
+  import Sacrum.CdcAssertions
+
   alias Sacrum.Accounts.{Projects, StepExecutions, TaskRuns, Tasks, Workflows}
   alias Sacrum.Orchestrator.Routing.WaitChildren.ChildRuns
   alias Sacrum.Repo
@@ -32,10 +34,13 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren.ChildRunsTest do
 
     assert is_binary(child_task.current_step_id)
 
-    :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
+    :ok = subscribe_project(project.id)
 
     assert {:ok, child_run} =
              ChildRuns.get_or_create(child_task, parent_run, trigger_execution.id)
+
+    assert {:ok, [%{event: "task_run_created"}, %{event: "task_run_step_changed"}]} =
+             project_insert("task_runs", child_run)
 
     assert_receive %Phoenix.Socket.Broadcast{
       event: "task_run_created",

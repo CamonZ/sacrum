@@ -12,8 +12,8 @@ defmodule Sacrum.Accounts.StepExecutions do
     preloads: [],
     default_order: [asc: :inserted_at]
 
+  alias Sacrum.Orchestrator.ExecutionEvents
   alias Sacrum.Repo
-  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.{StepExecution, TaskRun, WorkflowStep}
 
   defguardp human_input_resume_args(user_id, execution_id, encoded_output)
@@ -31,12 +31,10 @@ defmodule Sacrum.Accounts.StepExecutions do
     %StepExecution{user_id: user_id, task_id: task_id, project_id: project_id}
     |> StepExecution.create_changeset(attrs)
     |> Repo.insert()
-    |> Broadcaster.broadcast_step_execution(:step_execution_created)
   end
 
   @doc """
   Update an existing step execution.
-  Applies the update_changeset and broadcasts the status change event.
   """
   @spec update(StepExecution.t(), map()) ::
           {:ok, StepExecution.t()} | {:error, Ecto.Changeset.t()}
@@ -52,11 +50,14 @@ defmodule Sacrum.Accounts.StepExecutions do
         execution
         |> StepExecution.update_changeset(attrs)
         |> Repo.update()
-        |> Broadcaster.broadcast_step_execution(:step_execution_status_changed)
       end
 
     case result do
       {:ok, updated} ->
+        if updated.status != execution.status do
+          ExecutionEvents.broadcast_status_changed(updated)
+        end
+
         Logger.info(
           "[StepExecutions.update] Success: exec=#{updated.id} new_status=#{updated.status}"
         )
@@ -91,18 +92,7 @@ defmodule Sacrum.Accounts.StepExecutions do
         end
       end)
 
-    case result do
-      {:ok, %{execution: execution, task_run: task_run, broadcast?: true}} ->
-        Broadcaster.broadcast_step_execution({:ok, execution}, :step_execution_status_changed)
-        Broadcaster.broadcast_task_run({:ok, task_run}, :task_run_updated)
-        {:ok, %{execution: execution, task_run: task_run}}
-
-      {:ok, %{execution: execution, task_run: task_run}} ->
-        {:ok, %{execution: execution, task_run: task_run}}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
+    result
   end
 
   @spec prevent_human_input_resume_bypass(StepExecution.t(), map()) ::
@@ -195,7 +185,7 @@ defmodule Sacrum.Accounts.StepExecutions do
        ) do
     with {:ok, completed} <- complete_human_input_execution(execution, encoded_output),
          {:ok, task_run} <- queue_human_input_task_run(completed) do
-      {:ok, %{execution: completed, task_run: task_run, broadcast?: true}}
+      {:ok, %{execution: completed, task_run: task_run}}
     end
   end
 
@@ -208,7 +198,7 @@ defmodule Sacrum.Accounts.StepExecutions do
          } = execution,
          output
        ) do
-    {:ok, %{execution: execution, task_run: task_run, broadcast?: false}}
+    {:ok, %{execution: execution, task_run: task_run}}
   end
 
   defp consume_or_retry_completed_human_input(%StepExecution{}, _encoded_output),

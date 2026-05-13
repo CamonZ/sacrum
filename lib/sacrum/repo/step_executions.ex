@@ -19,7 +19,6 @@ defmodule Sacrum.Repo.StepExecutions do
 
   import Ecto.Query
   alias Sacrum.Repo
-  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.StepExecution
 
   @doc """
@@ -34,7 +33,6 @@ defmodule Sacrum.Repo.StepExecutions do
     %StepExecution{user_id: user_id, task_id: task_id, project_id: project_id}
     |> StepExecution.create_changeset(attrs)
     |> Repo.insert()
-    |> Broadcaster.broadcast_step_execution(:step_execution_created)
   end
 
   defoverridable insert: 2

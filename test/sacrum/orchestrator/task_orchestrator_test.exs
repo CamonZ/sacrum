@@ -3,10 +3,12 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
   import Ecto.Query
   import ExUnit.CaptureLog
+  import Sacrum.CdcAssertions
 
   alias Sacrum.Accounts
   alias Sacrum.Orchestrator.FSMData
   alias Sacrum.Orchestrator.TaskOrchestrator
+  alias Sacrum.Realtime.Cdc.Projector
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{StepExecution, TaskRun}
 
@@ -187,7 +189,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     end)
   end
 
-  defp simulate_daemon_completion(task_id, project_id, output \\ "step completed") do
+  defp simulate_daemon_completion(task_id, _project_id, output \\ "step completed") do
     execution = get_latest_started_execution(task_id)
 
     # Simulate what the daemon does: update status to "completed" with output
@@ -196,18 +198,12 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       |> StepExecution.update_changeset(%{status: "completed", output: output})
       |> Repo.update()
 
-    # The update broadcasts via Broadcaster -> ProjectChannel, but the orchestrator
-    # subscribes via Phoenix.PubSub. Broadcast directly to ensure delivery.
-    SacrumWeb.Endpoint.broadcast(
-      "project:#{project_id}",
-      "step_execution_status_changed",
-      %{id: updated.id, status: "completed", output: output}
-    )
+    Sacrum.Orchestrator.ExecutionEvents.broadcast_status_changed(updated)
 
     updated
   end
 
-  defp simulate_daemon_failure(task_id, project_id) do
+  defp simulate_daemon_failure(task_id, _project_id) do
     execution = get_latest_started_execution(task_id)
 
     {:ok, updated} =
@@ -215,11 +211,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       |> StepExecution.update_changeset(%{status: "failed", output: "daemon error"})
       |> Repo.update()
 
-    SacrumWeb.Endpoint.broadcast(
-      "project:#{project_id}",
-      "step_execution_status_changed",
-      %{id: updated.id, status: "failed", output: "daemon error"}
-    )
+    Sacrum.Orchestrator.ExecutionEvents.broadcast_status_changed(updated)
 
     updated
   end
@@ -492,10 +484,9 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       wait_for_state(pid, :executing)
 
       # Send a completion for a different execution ID
-      SacrumWeb.Endpoint.broadcast(
-        "project:#{project.id}",
-        "step_execution_status_changed",
-        %{id: Ecto.UUID.generate(), status: "completed", output: "wrong exec"}
+      Sacrum.Orchestrator.ExecutionEvents.broadcast_status_changed(
+        Ecto.UUID.generate(),
+        "completed"
       )
 
       # FSM should still be in :executing (it ignored the message)
@@ -1929,10 +1920,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       build_wait_children_parent(auto_advance: false)
     end
 
-    defp setup_wait_children_parent_auto_advance do
-      build_wait_children_parent(auto_advance: true)
-    end
-
     defp build_wait_children_parent(opts) do
       user = create_user()
       project = create_project(user)
@@ -2941,226 +2928,152 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     end
   end
 
-  describe "task_run_step_changed broadcasts" do
-    test "run start emits task_run_step_changed after task_run_created and before first task_run_updated" do
+  describe "task_run_step_changed CDC projections" do
+    test "run start projects task_run_step_changed after task_run_created and before first task_run_updated" do
       %{user: user, project: project, steps: [first_step], task: task} =
         setup_linear_workflow(auto_advance: true, step_count: 1)
 
-      :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
+      :ok = subscribe_project(project.id)
 
-      pid = start_orchestrator(task, user)
+      {:ok, queued_run} =
+        Accounts.TaskRuns.insert(user.id, project.id, task.id, %{status: :queued})
 
-      wait_for_state(pid, :executing)
+      {:ok, executing_run} = Accounts.TaskRuns.update(queued_run, %{status: :executing})
 
-      events =
-        collect_project_broadcasts([])
-        |> Enum.filter(&(&1.payload[:task_id] == task.id or &1.payload[:id] == task.id))
+      assert {:ok, projections} =
+               Projector.project_events([
+                 insert_event("task_runs", queued_run),
+                 update_event("task_runs", queued_run, executing_run)
+               ])
 
-      created_index = event_index(events, "task_run_created")
-      run_start_index = event_index(events, "task_run_step_changed")
-      updated_index = event_index(events, "task_run_updated")
+      assert Enum.map(projections, & &1.event) == [
+               "task_run_created",
+               "task_run_step_changed",
+               "task_run_updated"
+             ]
 
-      assert created_index != nil, "Expected task_run_created, got: #{inspect(events)}"
-      assert run_start_index != nil, "Expected task_run_step_changed, got: #{inspect(events)}"
-      assert updated_index != nil, "Expected task_run_updated, got: #{inspect(events)}"
+      assert_project_broadcast("task_run_created", %{id: queued_run.id, task_id: task.id})
 
-      assert created_index < run_start_index
-      assert run_start_index < updated_index
+      run_start =
+        assert_project_broadcast("task_run_step_changed", %{
+          task_run_id: queued_run.id,
+          task_id: task.id,
+          from_step_id: nil,
+          to_step_id: first_step.id,
+          status: "queued",
+          level: task.level
+        })
 
-      run_start = Enum.at(events, run_start_index).payload
-      assert run_start.from_step_id == nil
-      assert run_start.to_step_id == first_step.id
-      assert run_start.status == "queued"
-      assert run_start.level == task.level
-
-      simulate_daemon_completion(task.id, project.id)
-      wait_for_exit(pid)
+      assert run_start.schema_version == 1
+      assert_project_broadcast("task_run_updated", %{id: queued_run.id, status: "executing"})
     end
 
-    test "single-transition step move emits task_run_step_changed with from=A to=B status=executing" do
-      %{user: user, project: project, steps: [s1, s2, s3], task: task} =
+    test "task step movement during an active run projects task_run_step_changed" do
+      %{user: user, project: project, steps: [s1, s2, _s3], task: task} =
         setup_linear_workflow(auto_advance: true, step_count: 3)
 
-      :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
+      :ok = subscribe_project(project.id)
 
-      pid = start_orchestrator(task, user)
+      {:ok, task_run} =
+        Accounts.TaskRuns.insert(user.id, project.id, task.id, %{status: :executing})
 
-      wait_for_state(pid, :executing)
-      assert reload_task(task).current_step_id == s1.id
+      {:ok, moved_task} = Repo.update(Ecto.Changeset.change(task, %{current_step_id: s2.id}))
 
-      simulate_daemon_completion(task.id, project.id)
-      wait_for_state(pid, :executing)
-      assert reload_task(task).current_step_id == s2.id
+      assert {:ok, projections} = project_update("tasks", task, moved_task)
 
-      simulate_daemon_completion(task.id, project.id)
-      wait_for_state(pid, :executing)
-      assert reload_task(task).current_step_id == s3.id
+      assert Enum.map(projections, & &1.event) == ["task_updated", "task_run_step_changed"]
+      assert_project_broadcast("task_updated", %{id: task.id, current_step_id: s2.id})
 
-      simulate_daemon_completion(task.id, project.id)
-      wait_for_exit(pid)
+      assert_project_broadcast("task_run_step_changed", %{
+        task_run_id: task_run.id,
+        task_id: task.id,
+        from_step_id: s1.id,
+        to_step_id: s2.id,
+        status: "executing",
+        level: task.level
+      })
 
-      step_changed =
-        collect_broadcasts("task_run_step_changed", [])
-        |> Enum.filter(&(&1.task_id == task.id))
-
-      transition_event =
-        Enum.find(step_changed, fn payload ->
-          payload.from_step_id == s1.id and payload.to_step_id == s2.id
-        end)
-
-      assert transition_event,
-             "Expected a task_run_step_changed event from=s1 to=s2, got: #{inspect(step_changed)}"
-
-      assert transition_event.status == "executing"
-      assert transition_event.level == task.level
-
-      task_updated_events =
-        collect_broadcasts("task_updated", [])
-        |> Enum.filter(&(&1.id == task.id))
-
-      assert Enum.any?(task_updated_events, fn payload -> payload.current_step_id == s2.id end),
-             "Expected a task_updated for the s1->s2 transition"
-
-      exec_created_events = collect_broadcasts("step_execution_created", [])
-
-      assert Enum.any?(exec_created_events, fn payload -> payload.task_id == task.id end),
-             "Expected at least one step_execution_created during the transition"
+      refute_project_broadcast("task_step_changed", 50)
     end
 
-    test "wait_children transition into final step dispatches the final step and emits its step_execution_created" do
-      %{
-        user: user,
-        project: project,
-        parent_task: parent_task,
-        wait_step: wait_step,
-        final_step: final_step
-      } =
-        setup_wait_children_parent_auto_advance()
-
-      :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
-
-      pid = start_orchestrator(parent_task, user)
-
-      # After wait_children advances to the (now auto-dispatched) final step,
-      # the orchestrator must enter :executing for that step. Complete it so
-      # the run finishes and we can collect the run-end broadcast.
-      wait_for_state(pid, :executing)
-      assert reload_task(parent_task).current_step_id == final_step.id
-
-      simulate_daemon_completion(parent_task.id, project.id, "final step done")
-      wait_for_exit(pid)
-
-      transition_events =
-        collect_broadcasts("task_run_step_changed", [])
-        |> Enum.filter(&(&1.task_id == parent_task.id))
-
-      assert Enum.any?(transition_events, fn payload ->
-               payload.from_step_id == wait_step.id and payload.to_step_id == final_step.id
-             end),
-             "Expected a task_run_step_changed event with from=wait_step to=final_step, got: #{inspect(transition_events)}"
-
-      assert Enum.any?(transition_events, fn payload ->
-               payload.from_step_id == final_step.id and payload.to_step_id == nil and
-                 payload.status == "completed"
-             end),
-             "Expected a run-end task_run_step_changed with to_step_id=nil and terminal status, got: #{inspect(transition_events)}"
-
-      execution_events = collect_broadcasts("step_execution_created", [])
-
-      assert Enum.any?(execution_events, fn payload ->
-               payload.task_id == parent_task.id and payload.step_name == "final_step"
-             end),
-             "Expected a step_execution_created for the final step after wait_children transition"
-    end
-
-    test "TaskRun completion emits task_run_step_changed with from=last_step, to=nil, status=completed" do
-      %{user: user, project: project, steps: [_s1, _s2, s3], task: task} =
-        setup_linear_workflow(auto_advance: true, step_count: 3)
-
-      :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
-
-      pid = start_orchestrator(task, user)
-
-      wait_for_state(pid, :executing)
-      simulate_daemon_completion(task.id, project.id)
-
-      wait_for_state(pid, :executing)
-      simulate_daemon_completion(task.id, project.id)
-
-      wait_for_state(pid, :executing)
-      simulate_daemon_completion(task.id, project.id)
-
-      wait_for_exit(pid)
-
-      run_end_events =
-        collect_broadcasts("task_run_step_changed", [])
-        |> Enum.filter(&(&1.task_id == task.id and &1.to_step_id == nil))
-
-      assert Enum.any?(run_end_events, fn payload ->
-               payload.from_step_id == s3.id and payload.status == "completed"
-             end),
-             "Expected a run-end task_run_step_changed with from=last_step to=nil status=completed, got: #{inspect(run_end_events)}"
-    end
-
-    test "stop emits task_run_step_changed with from=last_step, to=nil, status=stopped" do
+    test "terminal TaskRun updates project run-end step deltas" do
       %{user: user, project: project, steps: [s1, _s2, _s3], task: task} =
         setup_linear_workflow(auto_advance: false, step_count: 3)
 
-      :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
+      for status <- [:completed, :stopped, :failed] do
+        :ok = subscribe_project(project.id)
 
-      child_spec = {TaskOrchestrator, task_id: task.id, user_id: user.id}
-      {:ok, pid} = Sacrum.Orchestrator.TaskFSMSupervisor.start_child(child_spec)
+        {:ok, running_run} =
+          Accounts.TaskRuns.insert(user.id, project.id, task.id, %{status: :executing})
 
-      wait_for_state(pid, :executing)
-      assert reload_task(task).current_step_id == s1.id
+        {:ok, terminal_run} =
+          Accounts.TaskRuns.update(running_run, %{
+            status: status,
+            ended_at: DateTime.utc_now(),
+            outcome_kind: Atom.to_string(status)
+          })
 
-      {:ok, :stopped} = Sacrum.Orchestrator.stop(task.id)
-      wait_for_exit(pid)
+        _ = collect_project_broadcasts([])
 
-      stop_events =
-        collect_broadcasts("task_run_step_changed", [])
-        |> Enum.filter(&(&1.task_id == task.id and &1.to_step_id == nil))
+        assert {:ok, [%{event: "task_run_updated"}, %{event: "task_run_step_changed"}]} =
+                 project_update("task_runs", running_run, terminal_run)
 
-      assert Enum.any?(stop_events, fn payload ->
-               payload.from_step_id == s1.id and payload.status == "stopped"
-             end),
-             "Expected a stop task_run_step_changed with from=last_step to=nil status=stopped, got: #{inspect(stop_events)}"
+        assert_project_broadcast("task_run_updated", %{
+          id: running_run.id,
+          status: Atom.to_string(status)
+        })
+
+        assert_project_broadcast("task_run_step_changed", %{
+          task_run_id: running_run.id,
+          task_id: task.id,
+          from_step_id: s1.id,
+          to_step_id: nil,
+          status: Atom.to_string(status)
+        })
+      end
     end
 
-    test "retry exhaustion emits task_run_step_changed with from=current_step, to=nil, status=failed" do
-      %{user: user, project: project, steps: [s1, _s2, _s3], task: task} =
-        setup_linear_workflow(auto_advance: true, step_count: 3)
+    test "wait_children waiting StepExecution is visible through CDC" do
+      %{user: user, project: project, parent_task: parent_task} = setup_wait_children_parent()
 
-      :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
+      child_workflow = create_workflow(user, project, auto_advance: true)
 
-      pid = start_orchestrator(task, user)
+      child_step =
+        create_step(user, child_workflow, %{
+          name: "child_step",
+          step_order: 1,
+          is_final: true
+        })
 
-      max_retries = Sacrum.Orchestrator.Retry.max_retries()
+      {:ok, _} = Accounts.Workflows.update(child_workflow, %{initial_step_id: child_step.id})
 
-      Enum.each(1..max_retries, fn _ ->
-        wait_for_state(pid, :executing)
-        simulate_daemon_failure(task.id, project.id)
-      end)
+      child_task = create_child_task(user, project, parent_task)
+      child_task = assign_workflow_to_task(child_task, child_workflow)
 
+      :ok = subscribe_project(project.id)
+
+      pid = start_orchestrator(parent_task, user)
       wait_for_exit(pid)
 
-      exhaust_events =
-        collect_broadcasts("task_run_step_changed", [])
-        |> Enum.filter(&(&1.task_id == task.id and &1.to_step_id == nil))
+      waiting_execution =
+        Repo.one!(
+          from(e in StepExecution,
+            where: e.task_id == ^parent_task.id and e.status == "waiting",
+            limit: 1
+          )
+        )
 
-      assert Enum.any?(exhaust_events, fn payload ->
-               payload.from_step_id == s1.id and payload.status == "failed"
-             end),
-             "Expected a retry-exhaust task_run_step_changed with to=nil status=failed, got: #{inspect(exhaust_events)}"
-    end
-  end
+      assert {:ok, [%{event: "step_execution_created"}]} =
+               project_insert("step_executions", waiting_execution)
 
-  defp collect_broadcasts(event, acc) do
-    receive do
-      %Phoenix.Socket.Broadcast{event: ^event, payload: payload} ->
-        collect_broadcasts(event, [payload | acc])
-    after
-      0 -> Enum.reverse(acc)
+      assert_project_broadcast("step_execution_created", %{
+        id: waiting_execution.id,
+        task_id: parent_task.id,
+        task_run_id: waiting_execution.task_run_id,
+        status: "waiting"
+      })
+
+      cleanup_spawned_orchestrators([child_task.id])
     end
   end
 
@@ -3171,9 +3084,5 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     after
       0 -> Enum.reverse(acc)
     end
-  end
-
-  defp event_index(events, event) do
-    Enum.find_index(events, &(&1.event == event))
   end
 end

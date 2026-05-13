@@ -9,7 +9,6 @@ defmodule Sacrum.Accounts.TaskRuns do
     default_order: [desc: :inserted_at]
 
   alias Sacrum.Accounts.StepExecutions
-  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.{SessionLog, StepExecution, TaskRun}
   alias Sacrum.Repo.TaskRuns, as: TaskRunsRepo
 
@@ -17,14 +16,12 @@ defmodule Sacrum.Accounts.TaskRuns do
           {:ok, TaskRun.t()} | {:error, Ecto.Changeset.t()}
   def insert(user_id, project_id, task_id, attrs \\ %{})
       when is_binary(user_id) and is_binary(project_id) and is_binary(task_id) and is_map(attrs) do
-    result = TaskRunsRepo.insert(user_id, project_id, task_id, attrs)
-    Broadcaster.broadcast_task_run(result, :task_run_created)
+    TaskRunsRepo.insert(user_id, project_id, task_id, attrs)
   end
 
   @spec update(TaskRun.t(), map()) :: {:ok, TaskRun.t()} | {:error, Ecto.Changeset.t()}
   def update(%TaskRun{} = task_run, attrs) do
-    result = TaskRunsRepo.update(task_run, attrs)
-    Broadcaster.broadcast_task_run(result, :task_run_updated)
+    TaskRunsRepo.update(task_run, attrs)
   end
 
   @spec get_active_for_task(String.t(), String.t()) :: {:ok, TaskRun.t()} | {:error, :not_found}

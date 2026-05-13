@@ -9,8 +9,7 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
   alias Sacrum.Orchestrator.FSMData
   alias Sacrum.Orchestrator.TaskRuns.{Completion, Lookup}
   alias Sacrum.Repo
-  alias Sacrum.Repo.Broadcaster
-  alias Sacrum.Repo.Schemas.{Task, TaskRun}
+  alias Sacrum.Repo.Schemas.TaskRun
   alias Sacrum.Tasks.Status
 
   @doc """
@@ -23,26 +22,11 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
           {:ok, :completed, FSMData.t()} | {:error, term()}
   def handle_completion(%FSMData{} = data) do
     case commit_completion(data) do
-      {:ok, %{task: refreshed} = changes} ->
-        Broadcaster.broadcast({:ok, refreshed}, :task_updated, :project)
-        broadcast_run_end_step_changed(data, refreshed, changes)
+      {:ok, %{task: refreshed}} ->
         {:ok, :completed, %{data | task: refreshed}}
 
       {:error, reason} ->
         {:error, reason}
-    end
-  end
-
-  @spec broadcast_run_end_step_changed(FSMData.t(), Task.t(), map()) :: :ok
-  defp broadcast_run_end_step_changed(%FSMData{task_run_id: nil}, _task, _changes), do: :ok
-
-  defp broadcast_run_end_step_changed(%FSMData{task_run_id: task_run_id}, task, changes) do
-    case Lookup.from_changes_or_fetch(task_run_id, changes) do
-      %TaskRun{} = task_run ->
-        Broadcaster.broadcast_task_run_step_changed(task_run, task, task.current_step_id, nil)
-
-      _ ->
-        :ok
     end
   end
 
@@ -166,7 +150,6 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
     |> Repo.update()
     |> case do
       {:ok, task_run} ->
-        Broadcaster.broadcast_task_run({:ok, task_run}, :task_run_updated)
         {:ok, Map.put(changes, :task_run, task_run)}
 
       {:error, reason} ->
