@@ -904,7 +904,12 @@ defmodule SacrumWeb.ProjectChannelTest do
       {:ok, _reply, _socket} =
         subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
 
-      {:ok, _session} = LiveChat.create_session(user.id, project.id, %{})
+      {:ok, session} = LiveChat.create_session(user.id, project.id, %{})
+
+      {:ok, event} =
+        ChatEvents.get_by_type(session, PublicEvents.event_type(:session_created), :public)
+
+      assert {:ok, [%{event: "chat_session_created"}]} = project_insert("chat_events", event)
 
       refute_push "chat_session_created", _payload
     end
@@ -929,12 +934,17 @@ defmodule SacrumWeb.ProjectChannelTest do
       assert {:error, %{reason: "not found"}} =
                subscribe_and_join(other_socket, "project:#{project.id}", %{})
 
-      {:ok, _session} = LiveChat.create_session(user.id, project.id, %{})
+      {:ok, session} = LiveChat.create_session(user.id, project.id, %{})
+
+      {:ok, event} =
+        ChatEvents.get_by_type(session, PublicEvents.event_type(:session_created), :public)
+
+      assert {:ok, [%{event: "chat_session_created"}]} = project_insert("chat_events", event)
 
       refute_push "chat_session_created", _payload
     end
 
-    test "default client receives stable public session, message, and status payloads" do
+    test "default client receives stable CDC-projected public session, message, and status payloads" do
       {user, project, socket} = setup_socket()
       {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}", %{})
 
@@ -943,6 +953,12 @@ defmodule SacrumWeb.ProjectChannelTest do
           session_kind: "planning",
           public_metadata: %{"surface" => "app"}
         })
+
+      {:ok, session_event} =
+        ChatEvents.get_by_type(session, PublicEvents.event_type(:session_created), :public)
+
+      assert {:ok, [%{event: "chat_session_created"}]} =
+               project_insert("chat_events", session_event)
 
       assert_push "chat_session_created", session_payload
       assert_contract_payload_keys("chat_session_created", session_payload)
@@ -956,11 +972,22 @@ defmodule SacrumWeb.ProjectChannelTest do
           metadata: %{"source" => "composer"}
         })
 
+      {:ok, message_event} = ChatEvents.get_message_created_for_message(session, message.id)
+
+      assert {:ok, [%{event: "chat_message_created"}]} =
+               project_insert("chat_events", message_event)
+
       assert_push "chat_message_created", message_payload
       assert_contract_payload_keys("chat_message_created", message_payload)
       assert message_payload == chat_message_payload(message)
 
       {:ok, cancelled} = LiveChat.cancel_session(user.id, project.id, session.id)
+
+      {:ok, status_event} =
+        ChatEvents.get_by_type(cancelled, PublicEvents.event_type(:session_updated), :public)
+
+      assert {:ok, [%{event: "chat_session_updated"}]} =
+               project_insert("chat_events", status_event)
 
       assert_push "chat_session_updated", status_payload
       assert_contract_payload_keys("chat_session_updated", status_payload)
@@ -977,7 +1004,7 @@ defmodule SacrumWeb.ProjectChannelTest do
           internal_payload: %{}
         })
 
-      SacrumWeb.ProjectChannel.broadcast_chat_event(project.id, public_event)
+      assert {:ok, [%{event: "chat_event_created"}]} = project_insert("chat_events", public_event)
 
       assert_push "chat_event_created", event_payload
       assert_contract_payload_keys("chat_event_created", event_payload)
@@ -989,6 +1016,13 @@ defmodule SacrumWeb.ProjectChannelTest do
       {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}", %{})
 
       {:ok, session} = LiveChat.create_session(user.id, project.id, %{})
+
+      {:ok, session_event} =
+        ChatEvents.get_by_type(session, PublicEvents.event_type(:session_created), :public)
+
+      assert {:ok, [%{event: "chat_session_created"}]} =
+               project_insert("chat_events", session_event)
+
       assert_push "chat_session_created", _payload
 
       {:ok, internal_event} =
@@ -999,7 +1033,7 @@ defmodule SacrumWeb.ProjectChannelTest do
           internal_payload: %{"secret" => "hidden"}
         })
 
-      SacrumWeb.ProjectChannel.broadcast_chat_event(project.id, internal_event)
+      assert {:ok, []} = project_insert("chat_events", internal_event)
 
       refute_push "chat_event_created", _payload
       refute_push "runner.tool_trace", _payload

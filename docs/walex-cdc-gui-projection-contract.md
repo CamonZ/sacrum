@@ -40,6 +40,9 @@ instead of silently applying a payload with an unsupported shape.
 | `task_created` | Entity projection | `tasks` insert after image. | Full task row: identity, title/body, level/priority/tags, review fields, timestamps, `project_id`, `workflow_id`, `current_step_id`, `parent_id`, `status`, `archived`, `worktree`. |
 | `task_updated` | Entity projection | `tasks` update after image, with before `id`. | Same full task row; clients upsert task state and update local hierarchy/archive/status/workflow placement. |
 | `task_deleted` | Entity projection | `tasks` delete before image. | Tombstone with `id`, `current_step_id`, `workflow_id`, `level`, and `archived` from the before image so clients can remove the row and update pipeline buckets without a task-position cache. |
+| `task_parent_changed` | Semantic delta | `tasks` update with before/after `parent_id`. | `{task_id, project_id, from_parent_id, to_parent_id, level}`. Gives tree stores the exact parent move while `task_updated` carries the full task row. |
+| `task_dependency_created` | Relation change | `task_dependencies` insert after image. | Full dependency edge row: `id`, `task_id`, `depends_on_id`, `project_id`, timestamps. |
+| `task_dependency_deleted` | Relation change | `task_dependencies` delete before image. | Full dependency edge tombstone with `id`, `task_id`, `depends_on_id`, `project_id`, timestamps. |
 | `workflow_created` | Entity projection | `workflows` insert after image. | Full workflow row including default/final flags, ordering, metadata, `initial_step_id`, `kanban_column`, and `project_id`. |
 | `workflow_updated` | Entity projection | `workflows` update after image. | Same full workflow row for graph/list replacement. |
 | `workflow_deleted` | Entity projection | `workflows` delete before image. | `{id}` tombstone scoped by the project channel. |
@@ -60,6 +63,9 @@ instead of silently applying a payload with an unsupported shape.
 | `section_created` | Entity projection | `task_sections` insert after image. | Full section row: `id`, `task_id`, `project_id`, type/content/order/done fields, timestamps. |
 | `section_updated` | Entity projection | `task_sections` update after image. | Same full section row. |
 | `section_deleted` | Entity projection | `task_sections` delete before image. | `{id, task_id}` tombstone. |
+| `code_ref_created` | Relation change | `code_refs` insert after image. | Full code reference row: `id`, `task_id`, `section_id`, `project_id`, file path, line range, name, description, timestamps. |
+| `code_ref_updated` | Relation change | `code_refs` update after image. | Same full code reference row for detail/evidence replacement. |
+| `code_ref_deleted` | Relation change | `code_refs` delete before image. | Full code reference tombstone so clients can remove by id without refetching. |
 | `chat_session_created` | Public chat projection | Public `chat_events` insert carrying `chat_sessions` public payload. | Public chat session payload from `chat_events.public_payload`. |
 | `chat_session_updated` | Public chat projection | Public `chat_events` insert carrying `chat_sessions` status payload. | Public chat session payload from `chat_events.public_payload`. |
 | `chat_message_created` | Public chat projection | Public `chat_events` insert carrying `chat_messages` public payload. | Public chat message payload from `chat_events.public_payload`. |
@@ -96,6 +102,23 @@ delta derived from persisted task and run rows:
 - Emit only when `from_step_id != to_step_id`.
 - Manual moves are blocked while an orchestrator owns the task, so this event
   must not be emitted for the same transition as `task_run_step_changed`.
+
+## Hierarchy And Relation Events
+
+`task_parent_changed` is emitted for `tasks.parent_id` updates where the parent
+actually changes. It is paired with the ordinary `task_updated` projection:
+clients should replace the task row from `task_updated` and use
+`task_parent_changed` to move the task between tree buckets without comparing
+against stale local hierarchy state.
+
+`task_dependency_created` and `task_dependency_deleted` are complete edge
+projections from `task_dependencies`. Dependency/blocker views should apply
+these edge events directly. They are not invalidation hints and should not cause
+routine task-list refetches.
+
+`code_ref_created`, `code_ref_updated`, and `code_ref_deleted` are complete
+`code_refs` projections. Task detail, section detail, and evidence views should
+upsert or remove the reference by id using these events.
 
 ## Run Control Enrichment
 
@@ -140,6 +163,8 @@ Snapshot source tables are:
 - `step_executions`
 - `session_logs`
 - `task_sections`
+- `task_dependencies`
+- `code_refs`
 - `chat_sessions`
 - `chat_messages`
 - `chat_events`

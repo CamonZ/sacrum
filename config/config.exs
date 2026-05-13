@@ -31,6 +31,7 @@ config :sacrum, :cdc,
     "session_logs",
     "task_sections",
     "task_dependencies",
+    "code_refs",
     "chat_sessions",
     "chat_messages",
     "chat_events"

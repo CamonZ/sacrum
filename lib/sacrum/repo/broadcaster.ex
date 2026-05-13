@@ -14,6 +14,9 @@ defmodule Sacrum.Repo.Broadcaster do
     task_created: :broadcast_task_created,
     task_updated: :broadcast_task_updated,
     task_deleted: :broadcast_task_deleted,
+    task_parent_changed: :broadcast_task_parent_changed,
+    task_dependency_created: :broadcast_task_dependency_created,
+    task_dependency_deleted: :broadcast_task_dependency_deleted,
     workflow_created: :broadcast_workflow_created,
     workflow_updated: :broadcast_workflow_updated,
     workflow_deleted: :broadcast_workflow_deleted,
@@ -33,7 +36,10 @@ defmodule Sacrum.Repo.Broadcaster do
     session_log_created: :broadcast_session_log_created,
     section_created: :broadcast_section_created,
     section_updated: :broadcast_section_updated,
-    section_deleted: :broadcast_section_deleted
+    section_deleted: :broadcast_section_deleted,
+    code_ref_created: :broadcast_code_ref_created,
+    code_ref_updated: :broadcast_code_ref_updated,
+    code_ref_deleted: :broadcast_code_ref_deleted
   }
 
   @doc """

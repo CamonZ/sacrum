@@ -96,6 +96,35 @@ defmodule SacrumWeb.ProjectChannel do
     )
   end
 
+  @spec broadcast_task_parent_changed(String.t(), map()) :: :ok | {:error, term()}
+  def broadcast_task_parent_changed(project_id, payload) do
+    SacrumWeb.Endpoint.broadcast(
+      "project:#{project_id}",
+      "task_parent_changed",
+      task_parent_changed_payload(payload)
+    )
+  end
+
+  # Task dependency broadcasts
+
+  @spec broadcast_task_dependency_created(String.t(), map()) :: :ok | {:error, term()}
+  def broadcast_task_dependency_created(project_id, dependency) do
+    SacrumWeb.Endpoint.broadcast(
+      "project:#{project_id}",
+      "task_dependency_created",
+      task_dependency_payload(dependency)
+    )
+  end
+
+  @spec broadcast_task_dependency_deleted(String.t(), map()) :: :ok | {:error, term()}
+  def broadcast_task_dependency_deleted(project_id, dependency) do
+    SacrumWeb.Endpoint.broadcast(
+      "project:#{project_id}",
+      "task_dependency_deleted",
+      task_dependency_payload(dependency)
+    )
+  end
+
   # Workflow broadcasts
 
   @spec broadcast_workflow_created(String.t(), map()) :: :ok | {:error, term()}
@@ -325,6 +354,35 @@ defmodule SacrumWeb.ProjectChannel do
     )
   end
 
+  # Code ref broadcasts
+
+  @spec broadcast_code_ref_created(String.t(), map()) :: :ok | {:error, term()}
+  def broadcast_code_ref_created(project_id, code_ref) do
+    SacrumWeb.Endpoint.broadcast(
+      "project:#{project_id}",
+      "code_ref_created",
+      code_ref_payload(code_ref)
+    )
+  end
+
+  @spec broadcast_code_ref_updated(String.t(), map()) :: :ok | {:error, term()}
+  def broadcast_code_ref_updated(project_id, code_ref) do
+    SacrumWeb.Endpoint.broadcast(
+      "project:#{project_id}",
+      "code_ref_updated",
+      code_ref_payload(code_ref)
+    )
+  end
+
+  @spec broadcast_code_ref_deleted(String.t(), map()) :: :ok | {:error, term()}
+  def broadcast_code_ref_deleted(project_id, code_ref) do
+    SacrumWeb.Endpoint.broadcast(
+      "project:#{project_id}",
+      "code_ref_deleted",
+      code_ref_payload(code_ref)
+    )
+  end
+
   # Payload helpers
 
   defp version_payload(payload), do: Map.put(payload, :schema_version, @schema_version)
@@ -363,6 +421,33 @@ defmodule SacrumWeb.ProjectChannel do
       workflow_id: task.workflow_id,
       level: task.level,
       archived: task.archived
+    })
+  end
+
+  defp task_parent_changed_payload(%{
+         task_id: task_id,
+         project_id: project_id,
+         from_parent_id: from_parent_id,
+         to_parent_id: to_parent_id,
+         level: level
+       }) do
+    version_payload(%{
+      task_id: task_id,
+      project_id: project_id,
+      from_parent_id: from_parent_id,
+      to_parent_id: to_parent_id,
+      level: level
+    })
+  end
+
+  defp task_dependency_payload(dependency) do
+    version_payload(%{
+      id: dependency.id,
+      task_id: dependency.task_id,
+      depends_on_id: dependency.depends_on_id,
+      project_id: dependency.project_id,
+      inserted_at: dependency.inserted_at,
+      updated_at: dependency.updated_at
     })
   end
 
@@ -554,6 +639,22 @@ defmodule SacrumWeb.ProjectChannel do
       done_at: section.done_at,
       inserted_at: section.inserted_at,
       updated_at: section.updated_at
+    })
+  end
+
+  defp code_ref_payload(code_ref) do
+    version_payload(%{
+      id: code_ref.id,
+      task_id: code_ref.task_id,
+      section_id: code_ref.section_id,
+      project_id: code_ref.project_id,
+      path: code_ref.path,
+      line_start: code_ref.line_start,
+      line_end: code_ref.line_end,
+      name: code_ref.name,
+      description: code_ref.description,
+      inserted_at: code_ref.inserted_at,
+      updated_at: code_ref.updated_at
     })
   end
 
