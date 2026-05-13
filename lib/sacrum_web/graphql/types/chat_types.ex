@@ -91,6 +91,15 @@ defmodule SacrumWeb.Graphql.Types.ChatTypes do
       end)
     end
 
+    field :chat_sessions, list_of(:chat_session) do
+      arg(:project_id, non_null(:uuid4))
+      arg(:limit, :integer)
+
+      resolve(fn %{project_id: project_id} = args, %{context: %{current_user: user}} ->
+        {:ok, LiveChat.list_sessions(user.id, project_id, list_opts(args))}
+      end)
+    end
+
     field :chat_messages, list_of(:chat_message) do
       arg(:project_id, non_null(:uuid4))
       arg(:chat_session_id, non_null(:uuid4))
