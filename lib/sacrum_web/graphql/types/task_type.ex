@@ -214,6 +214,7 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
       arg(:tags, list_of(:string))
       arg(:worktree, :string)
       arg(:parent_id, :uuid4)
+      arg(:workflow_id, :uuid4)
       arg(:sections, list_of(:task_section_input))
 
       resolve(fn args, %{context: %{current_user: user}} ->
