@@ -18,6 +18,8 @@ defmodule Sacrum.Application do
       SacrumWeb.Endpoint,
       # Absinthe subscriptions (must come after Endpoint)
       {Absinthe.Subscription, SacrumWeb.Endpoint},
+      # WalEx CDC projection for default-client realtime events
+      Sacrum.Realtime.Cdc.Supervisor,
       # Chat session runner processes
       {Registry, keys: :unique, name: Sacrum.ChatSessionRegistry},
       Sacrum.ChatSessionSupervisor,
