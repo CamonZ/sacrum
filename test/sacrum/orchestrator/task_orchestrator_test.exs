@@ -76,7 +76,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     default_attrs = %{
       title: "Test Task",
       description: "Test description",
-      level: "medium",
+      level: "task",
       priority: "normal",
       tags: ["test"]
     }
