@@ -23,6 +23,10 @@ end
 config :sacrum, SacrumWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
+if config_env() != :test do
+  config :sacrum, :cdc, start_consumer: System.get_env("SACRUM_CDC_ENABLED") in ~w(true 1)
+end
+
 config :sacrum, :google_oauth,
   client_id: System.get_env("GOOGLE_CLIENT_ID", ""),
   client_secret: System.get_env("GOOGLE_CLIENT_SECRET", ""),

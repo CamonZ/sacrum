@@ -15,6 +15,28 @@ config :sacrum,
   # Orchestrator configuration
   max_concurrent_executions: 5
 
+config :sacrum, :cdc,
+  start_consumer: false,
+  publication: "sacrum_cdc_publication",
+  slot_name: "sacrum_cdc_slot",
+  durable_slot: true,
+  subscriptions: [
+    "tasks",
+    "workflows",
+    "workflow_steps",
+    "step_transitions",
+    "workflow_transitions",
+    "step_executions",
+    "task_runs",
+    "session_logs",
+    "task_sections",
+    "task_dependencies",
+    "chat_sessions",
+    "chat_messages",
+    "chat_events"
+  ],
+  modules: [Sacrum.Realtime.Cdc.WalExConsumer]
+
 # Configure the endpoint
 config :sacrum, SacrumWeb.Endpoint,
   url: [host: "localhost"],

@@ -1,0 +1,479 @@
+defmodule Sacrum.Realtime.Cdc.Projector do
+  @moduledoc """
+  Projects committed WalEx row events into default-client ProjectChannel payloads.
+
+  The projector is intentionally regular-client only. Daemon commands such as
+  `run_step` and `cancel_step` stay on the explicit orchestration path.
+  """
+
+  use GenServer
+
+  import Ecto.Query
+
+  alias Sacrum.Chat.PublicEvents
+  alias Sacrum.Repo
+
+  alias Sacrum.Repo.Schemas.{
+    ChatEvent,
+    SessionLog,
+    StepExecution,
+    StepTransition,
+    Task,
+    TaskRun,
+    TaskSection,
+    Workflow,
+    WorkflowStep,
+    WorkflowTransition
+  }
+
+  alias Sacrum.TaskRuns.Status, as: TaskRunStatus
+  alias SacrumWeb.ProjectChannel
+
+  require Logger
+
+  @name __MODULE__
+
+  @schema_by_table %{
+    "tasks" => Task,
+    "workflows" => Workflow,
+    "workflow_steps" => WorkflowStep,
+    "step_transitions" => StepTransition,
+    "workflow_transitions" => WorkflowTransition,
+    "step_executions" => StepExecution,
+    "task_runs" => TaskRun,
+    "session_logs" => SessionLog,
+    "task_sections" => TaskSection,
+    "chat_events" => ChatEvent
+  }
+
+  @channel_broadcasts %{
+    "task_created" => :broadcast_task_created,
+    "task_updated" => :broadcast_task_updated,
+    "task_deleted" => :broadcast_task_deleted,
+    "workflow_created" => :broadcast_workflow_created,
+    "workflow_updated" => :broadcast_workflow_updated,
+    "workflow_deleted" => :broadcast_workflow_deleted,
+    "step_created" => :broadcast_step_created,
+    "step_updated" => :broadcast_step_updated,
+    "step_deleted" => :broadcast_step_deleted,
+    "step_transition_created" => :broadcast_step_transition_created,
+    "step_transition_deleted" => :broadcast_step_transition_deleted,
+    "workflow_transition_created" => :broadcast_workflow_transition_created,
+    "workflow_transition_deleted" => :broadcast_workflow_transition_deleted,
+    "step_execution_created" => :broadcast_step_execution_created,
+    "step_execution_status_changed" => :broadcast_step_execution_status_changed,
+    "task_run_created" => :broadcast_task_run_created,
+    "task_run_updated" => :broadcast_task_run_updated,
+    "task_run_step_changed" => :broadcast_task_run_step_changed,
+    "task_step_changed" => :broadcast_task_step_changed,
+    "session_log_created" => :broadcast_session_log_created,
+    "section_created" => :broadcast_section_created,
+    "section_updated" => :broadcast_section_updated,
+    "section_deleted" => :broadcast_section_deleted
+  }
+
+  @type dispatch_result :: %{
+          event: String.t(),
+          project_id: String.t(),
+          status: :dispatched
+        }
+
+  @spec start_link(term()) :: GenServer.on_start()
+  def start_link(init_arg) do
+    GenServer.start_link(__MODULE__, init_arg, name: @name)
+  end
+
+  @spec dispatch([WalEx.Event.t()] | WalEx.Event.t()) :: {:ok, [dispatch_result()]}
+  def dispatch(events) do
+    GenServer.call(@name, {:dispatch, List.wrap(events)}, :infinity)
+  end
+
+  @spec project_events([WalEx.Event.t()] | WalEx.Event.t()) :: {:ok, [dispatch_result()]}
+  def project_events(events) do
+    events
+    |> List.wrap()
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {event, source_index} -> project_event(event, source_index) end)
+    |> then(&{:ok, &1})
+  end
+
+  @impl true
+  def init(_init_arg), do: {:ok, %{}}
+
+  @impl true
+  def handle_call({:dispatch, events}, _from, state) do
+    {:reply, project_events(events), state}
+  end
+
+  defp project_event(%WalEx.Event{} = event, _source_index) do
+    event
+    |> projections()
+    |> Enum.with_index()
+    |> Enum.map(&dispatch_projection(&1))
+  end
+
+  defp projections(%WalEx.Event{source: %{table: "tasks"}, type: :insert, new_record: record}) do
+    task = record_to_struct!("tasks", record)
+    [projection("task_created", task.project_id, task)]
+  end
+
+  defp projections(%WalEx.Event{source: %{table: "tasks"}, type: :update} = event) do
+    task = record_to_struct!("tasks", event.new_record)
+    base_projection = projection("task_updated", task.project_id, task)
+
+    [base_projection | task_step_projections(event, task)]
+  end
+
+  defp projections(%WalEx.Event{source: %{table: "tasks"}, type: :delete, old_record: record}) do
+    task = record_to_struct!("tasks", record)
+    [projection("task_deleted", task.project_id, task)]
+  end
+
+  defp projections(%WalEx.Event{source: %{table: "workflows"}, type: :insert, new_record: record}) do
+    workflow = record_to_struct!("workflows", record)
+    [projection("workflow_created", workflow.project_id, workflow)]
+  end
+
+  defp projections(%WalEx.Event{source: %{table: "workflows"}, type: :update, new_record: record}) do
+    workflow = record_to_struct!("workflows", record)
+    [projection("workflow_updated", workflow.project_id, workflow)]
+  end
+
+  defp projections(%WalEx.Event{source: %{table: "workflows"}, type: :delete, old_record: record}) do
+    workflow = record_to_struct!("workflows", record)
+    [projection("workflow_deleted", workflow.project_id, workflow)]
+  end
+
+  defp projections(%WalEx.Event{
+         source: %{table: "workflow_steps"},
+         type: :insert,
+         new_record: record
+       }) do
+    step = record_to_struct!("workflow_steps", record)
+    [projection("step_created", step.project_id, step)]
+  end
+
+  defp projections(%WalEx.Event{
+         source: %{table: "workflow_steps"},
+         type: :update,
+         new_record: record
+       }) do
+    step = record_to_struct!("workflow_steps", record)
+    [projection("step_updated", step.project_id, step)]
+  end
+
+  defp projections(%WalEx.Event{
+         source: %{table: "workflow_steps"},
+         type: :delete,
+         old_record: record
+       }) do
+    step = record_to_struct!("workflow_steps", record)
+    [projection("step_deleted", step.project_id, step)]
+  end
+
+  defp projections(%WalEx.Event{
+         source: %{table: "step_transitions"},
+         type: :insert,
+         new_record: record
+       }) do
+    transition = record_to_struct!("step_transitions", record)
+    [projection("step_transition_created", transition.project_id, transition)]
+  end
+
+  defp projections(%WalEx.Event{
+         source: %{table: "step_transitions"},
+         type: :delete,
+         old_record: record
+       }) do
+    transition = record_to_struct!("step_transitions", record)
+    [projection("step_transition_deleted", transition.project_id, transition)]
+  end
+
+  defp projections(%WalEx.Event{
+         source: %{table: "workflow_transitions"},
+         type: :insert,
+         new_record: record
+       }) do
+    transition = record_to_struct!("workflow_transitions", record)
+    [projection("workflow_transition_created", transition.project_id, transition)]
+  end
+
+  defp projections(%WalEx.Event{
+         source: %{table: "workflow_transitions"},
+         type: :delete,
+         old_record: record
+       }) do
+    transition = record_to_struct!("workflow_transitions", record)
+    [projection("workflow_transition_deleted", transition.project_id, transition)]
+  end
+
+  defp projections(%WalEx.Event{
+         source: %{table: "step_executions"},
+         type: :insert,
+         new_record: record
+       }) do
+    execution = record_to_struct!("step_executions", record)
+    [projection("step_execution_created", execution.project_id, execution)]
+  end
+
+  defp projections(%WalEx.Event{source: %{table: "step_executions"}, type: :update} = event) do
+    if changed?(event, :status) do
+      execution = record_to_struct!("step_executions", event.new_record)
+      [projection("step_execution_status_changed", execution.project_id, execution)]
+    else
+      []
+    end
+  end
+
+  defp projections(%WalEx.Event{source: %{table: "task_runs"}, type: :insert, new_record: record}) do
+    task_run = record_to_struct!("task_runs", record)
+
+    [
+      projection("task_run_created", task_run.project_id, task_run)
+      | task_run_start_projections(task_run)
+    ]
+  end
+
+  defp projections(%WalEx.Event{source: %{table: "task_runs"}, type: :update} = event) do
+    task_run = record_to_struct!("task_runs", event.new_record)
+
+    [
+      projection("task_run_updated", task_run.project_id, task_run)
+      | task_run_end_projections(event, task_run)
+    ]
+  end
+
+  defp projections(%WalEx.Event{
+         source: %{table: "session_logs"},
+         type: :insert,
+         new_record: record
+       }) do
+    log = record_to_struct!("session_logs", record)
+    [projection("session_log_created", log.project_id, log)]
+  end
+
+  defp projections(%WalEx.Event{
+         source: %{table: "task_sections"},
+         type: :insert,
+         new_record: record
+       }) do
+    section = record_to_struct!("task_sections", record)
+    [projection("section_created", section.project_id, section)]
+  end
+
+  defp projections(%WalEx.Event{
+         source: %{table: "task_sections"},
+         type: :update,
+         new_record: record
+       }) do
+    section = record_to_struct!("task_sections", record)
+    [projection("section_updated", section.project_id, section)]
+  end
+
+  defp projections(%WalEx.Event{
+         source: %{table: "task_sections"},
+         type: :delete,
+         old_record: record
+       }) do
+    section = record_to_struct!("task_sections", record)
+    [projection("section_deleted", section.project_id, section)]
+  end
+
+  defp projections(%WalEx.Event{
+         source: %{table: "chat_events"},
+         type: :insert,
+         new_record: record
+       }) do
+    chat_event = record_to_struct!("chat_events", record)
+
+    case PublicEvents.channel_event(chat_event) do
+      {:ok, event_name, _payload} ->
+        [projection(event_name, chat_event.project_id, chat_event, :broadcast_chat_event)]
+
+      :ignore ->
+        []
+    end
+  end
+
+  defp projections(%WalEx.Event{}), do: []
+
+  defp task_step_projections(%WalEx.Event{} = event, %Task{} = task) do
+    from_step_id = old_value(event, :current_step_id)
+    to_step_id = task.current_step_id
+
+    cond do
+      from_step_id == to_step_id ->
+        []
+
+      active_run = active_task_run(task.id) ->
+        [
+          projection("task_run_step_changed", task.project_id, %{
+            task_run_id: active_run.id,
+            task_id: task.id,
+            from_step_id: from_step_id,
+            to_step_id: to_step_id,
+            status: active_run.status,
+            level: task.level
+          })
+        ]
+
+      true ->
+        [
+          projection("task_step_changed", task.project_id, %{
+            task_id: task.id,
+            from_step_id: from_step_id,
+            to_step_id: to_step_id,
+            workflow_id: task.workflow_id,
+            level: task.level
+          })
+        ]
+    end
+  end
+
+  defp task_run_start_projections(%TaskRun{} = task_run) do
+    case Repo.get(Task, task_run.task_id) do
+      %Task{} = task ->
+        [
+          projection("task_run_step_changed", task_run.project_id, %{
+            task_run_id: task_run.id,
+            task_id: task.id,
+            from_step_id: nil,
+            to_step_id: task.current_step_id,
+            status: task_run.status,
+            level: task.level
+          })
+        ]
+
+      nil ->
+        []
+    end
+  end
+
+  defp task_run_end_projections(%WalEx.Event{} = event, %TaskRun{} = task_run) do
+    if status_left_active?(event) do
+      case Repo.get(Task, task_run.task_id) do
+        %Task{} = task ->
+          [
+            projection("task_run_step_changed", task_run.project_id, %{
+              task_run_id: task_run.id,
+              task_id: task.id,
+              from_step_id: task.current_step_id,
+              to_step_id: nil,
+              status: task_run.status,
+              level: task.level
+            })
+          ]
+
+        nil ->
+          []
+      end
+    else
+      []
+    end
+  end
+
+  defp dispatch_projection({projection, _output_index}) do
+    emit(projection)
+    %{event: projection.event, project_id: projection.project_id, status: :dispatched}
+  rescue
+    exception ->
+      Logger.error(
+        "CDC projection failed for #{inspect(projection.event)}: " <>
+          Exception.format(:error, exception, __STACKTRACE__)
+      )
+
+      reraise exception, __STACKTRACE__
+  end
+
+  defp emit(%{project_id: project_id, payload: payload, channel_function: function}) do
+    apply(ProjectChannel, function, [project_id, payload])
+  end
+
+  defp projection(event, project_id, payload, channel_function \\ nil) do
+    %{
+      event: event,
+      project_id: project_id,
+      payload: payload,
+      channel_function: channel_function || Map.fetch!(@channel_broadcasts, event)
+    }
+  end
+
+  defp record_to_struct!(table, record) when is_map(record) do
+    schema = Map.fetch!(@schema_by_table, table)
+
+    attrs =
+      schema
+      |> schema_fields()
+      |> Map.new(fn field -> {field, value(record, field)} end)
+
+    struct(schema, attrs)
+  end
+
+  defp schema_fields(schema), do: schema.__schema__(:fields)
+
+  defp active_task_run(task_id) do
+    TaskRun
+    |> where([tr], tr.task_id == ^task_id)
+    |> where([tr], tr.status in ^TaskRunStatus.active_statuses())
+    |> order_by([tr], desc: tr.inserted_at)
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  defp status_left_active?(%WalEx.Event{} = event) do
+    old_status = old_value(event, :status)
+    new_status = new_value(event, :status)
+
+    TaskRunStatus.active?(normalize_task_run_status(old_status)) and
+      not TaskRunStatus.active?(normalize_task_run_status(new_status))
+  end
+
+  defp changed?(%WalEx.Event{changes: changes}, field) when is_map(changes) do
+    Map.has_key?(changes, field) or Map.has_key?(changes, Atom.to_string(field))
+  end
+
+  defp changed?(_event, _field), do: false
+
+  defp old_value(%WalEx.Event{changes: changes}, field) when is_map(changes) do
+    case value(changes, field) do
+      %{old_value: value} -> value
+      %{"old_value" => value} -> value
+      _ -> value(%{}, field)
+    end
+  end
+
+  defp old_value(%WalEx.Event{old_record: old_record}, field) when is_map(old_record) do
+    value(old_record, field)
+  end
+
+  defp old_value(_event, _field), do: nil
+
+  defp new_value(%WalEx.Event{new_record: new_record}, field) when is_map(new_record) do
+    value(new_record, field)
+  end
+
+  defp new_value(_event, _field), do: nil
+
+  defp value(map, field) when is_map(map) and is_atom(field) do
+    cond do
+      Map.has_key?(map, field) -> Map.fetch!(map, field)
+      Map.has_key?(map, Atom.to_string(field)) -> Map.fetch!(map, Atom.to_string(field))
+      true -> nil
+    end
+  end
+
+  defp normalize_task_run_status(status) when is_binary(status) do
+    case status do
+      "queued" -> :queued
+      "executing" -> :executing
+      "waiting" -> :waiting
+      "stopping" -> :stopping
+      "stopped" -> :stopped
+      "completed" -> :completed
+      "failed" -> :failed
+      _ -> status
+    end
+  end
+
+  defp normalize_task_run_status(status), do: status
+end

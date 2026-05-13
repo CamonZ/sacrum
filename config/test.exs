@@ -44,3 +44,5 @@ config :phoenix,
 config :sacrum,
   daemon_presence_required: false,
   scheduler_recovery_enabled: false
+
+config :sacrum, :cdc, start_consumer: false
