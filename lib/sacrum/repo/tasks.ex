@@ -18,7 +18,6 @@ defmodule Sacrum.Repo.Tasks do
 
   import Ecto.Query
   alias Sacrum.Repo
-  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.Project
   alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.Schemas.TaskDependency
@@ -237,7 +236,6 @@ defmodule Sacrum.Repo.Tasks do
       |> Task.create_changeset(prepared_attrs)
       |> Repo.insert()
       |> preload_sections()
-      |> Broadcaster.broadcast(:task_created, :project)
     end
   end
 
@@ -325,7 +323,7 @@ defmodule Sacrum.Repo.Tasks do
          {:ok, updated_task} <- do_update_task(task, attrs),
          {:ok, updated_task} <- maybe_update_parent(updated_task, attrs),
          :ok <- maybe_update_dependencies(updated_task, attrs) do
-      Broadcaster.broadcast({:ok, updated_task}, :task_updated, :project)
+      {:ok, updated_task}
     end
   end
 
@@ -420,14 +418,7 @@ defmodule Sacrum.Repo.Tasks do
       )
     end
 
-    case Repo.delete(task) do
-      {:ok, deleted_task} ->
-        Broadcaster.broadcast_event(deleted_task, :task_deleted, :project)
-        {:ok, deleted_task}
-
-      error ->
-        error
-    end
+    Repo.delete(task)
   end
 
   defp validate_section_ownership(%Task{} = task, %{"sections" => sections})

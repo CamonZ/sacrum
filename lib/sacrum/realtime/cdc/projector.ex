@@ -298,6 +298,14 @@ defmodule Sacrum.Realtime.Cdc.Projector do
   defp projections(%WalEx.Event{}), do: []
 
   defp task_step_projections(%WalEx.Event{} = event, %Task{} = task) do
+    if changed?(event, :current_step_id) do
+      do_task_step_projections(event, task)
+    else
+      []
+    end
+  end
+
+  defp do_task_step_projections(%WalEx.Event{} = event, %Task{} = task) do
     from_step_id = old_value(event, :current_step_id)
     to_step_id = task.current_step_id
 

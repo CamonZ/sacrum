@@ -2,6 +2,7 @@ defmodule SacrumWeb.ProjectChannelTest do
   use Sacrum.DataCase, async: true
 
   import Phoenix.ChannelTest
+  import Sacrum.CdcAssertions
 
   alias SacrumWeb.UserSocket
   alias Sacrum.Accounts.{ChatEvents, LiveChat}
@@ -499,12 +500,14 @@ defmodule SacrumWeb.ProjectChannelTest do
 
       {:ok, archived} = AccountsTasks.update(task, %{archived: true})
       assert archived.archived == true
+      assert {:ok, [%{event: "task_updated"}]} = project_update("tasks", task, archived)
       assert_push "task_updated", archived_payload
       assert archived_payload.id == task.id
       assert archived_payload.archived == true
 
       {:ok, unarchived} = AccountsTasks.update(archived, %{archived: false})
       assert unarchived.archived == false
+      assert {:ok, [%{event: "task_updated"}]} = project_update("tasks", archived, unarchived)
       assert_push "task_updated", unarchived_payload
       assert unarchived_payload.id == task.id
       assert unarchived_payload.archived == false
@@ -568,6 +571,7 @@ defmodule SacrumWeb.ProjectChannelTest do
           level: "ticket"
         })
 
+      assert {:ok, [%{event: "task_created"}]} = project_insert("tasks", task)
       assert_push "task_created", %{id: task_id}
       assert task_id == task.id
 

@@ -28,7 +28,6 @@ defmodule Sacrum.Repo.WorkflowSteps do
 
   import Ecto.Query
   alias Sacrum.Repo
-  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.StepTransition
   alias Sacrum.Repo.Schemas.Workflow
   alias Sacrum.Repo.Schemas.WorkflowStep
@@ -65,14 +64,12 @@ defmodule Sacrum.Repo.WorkflowSteps do
     %WorkflowStep{workflow_id: workflow_id, project_id: project_id}
     |> WorkflowStep.create_changeset(attrs)
     |> Repo.insert()
-    |> Broadcaster.broadcast(:step_created, workflow: :project)
   end
 
   def insert(workflow_id, attrs) when is_binary(workflow_id) and is_map(attrs) do
     %WorkflowStep{workflow_id: workflow_id}
     |> WorkflowStep.create_changeset(attrs)
     |> Repo.insert()
-    |> Broadcaster.broadcast(:step_created, workflow: :project)
   end
 
   defoverridable insert: 2
@@ -84,7 +81,6 @@ defmodule Sacrum.Repo.WorkflowSteps do
     %WorkflowStep{workflow_id: workflow_id, user_id: user_id}
     |> WorkflowStep.create_changeset(attrs)
     |> Repo.insert()
-    |> Broadcaster.broadcast(:step_created, workflow: :project)
   end
 
   @spec insert(String.t(), String.t(), String.t(), map()) ::
@@ -94,7 +90,6 @@ defmodule Sacrum.Repo.WorkflowSteps do
     %WorkflowStep{workflow_id: workflow_id, project_id: project_id, user_id: user_id}
     |> WorkflowStep.create_changeset(attrs)
     |> Repo.insert()
-    |> Broadcaster.broadcast(:step_created, workflow: :project)
   end
 
   @spec update(WorkflowStep.t(), map()) :: {:ok, WorkflowStep.t()} | {:error, Ecto.Changeset.t()}
@@ -102,7 +97,6 @@ defmodule Sacrum.Repo.WorkflowSteps do
     step
     |> WorkflowStep.update_changeset(attrs)
     |> Repo.update()
-    |> Broadcaster.broadcast(:step_updated, workflow: :project)
   end
 
   @doc """
@@ -211,14 +205,7 @@ defmodule Sacrum.Repo.WorkflowSteps do
 
   @spec delete(WorkflowStep.t()) :: {:ok, WorkflowStep.t()} | {:error, Ecto.Changeset.t()}
   def delete(%WorkflowStep{} = step) do
-    case Repo.delete(step) do
-      {:ok, deleted} ->
-        Broadcaster.broadcast_event(deleted, :step_deleted, workflow: :project)
-        {:ok, deleted}
-
-      error ->
-        error
-    end
+    Repo.delete(step)
   end
 
   @doc """

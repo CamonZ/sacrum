@@ -1,6 +1,8 @@
 defmodule Sacrum.Accounts.WorkflowTransitionsTest do
   use Sacrum.DataCase, async: false
 
+  import Sacrum.CdcAssertions
+
   alias Sacrum.Accounts.WorkflowTransitions
   alias Sacrum.Accounts.Workflows
   alias Sacrum.Accounts.Projects
@@ -111,8 +113,8 @@ defmodule Sacrum.Accounts.WorkflowTransitionsTest do
     end
   end
 
-  describe "broadcasts" do
-    test "insert/2 broadcasts workflow_transition_created on success" do
+  describe "CDC projections" do
+    test "insert/2 projects workflow_transition_created after CDC dispatch" do
       user = create_user()
       {project, workflow1, workflow2} = create_workflows(user)
 
@@ -126,18 +128,28 @@ defmodule Sacrum.Accounts.WorkflowTransitionsTest do
           "label" => "promote"
         })
 
-      assert_receive %Phoenix.Socket.Broadcast{
-        event: "workflow_transition_created",
-        payload: payload
-      }
+      refute_project_broadcast("workflow_transition_created", 50)
+
+      assert {:ok, [%{event: "workflow_transition_created"}]} =
+               project_insert("workflow_transitions", transition)
+
+      payload =
+        assert_project_broadcast("workflow_transition_created", %{
+          id: transition.id,
+          from_workflow_id: workflow1.id,
+          to_workflow_id: workflow2.id,
+          label: "promote"
+        })
 
       assert payload.id == transition.id
       assert payload.from_workflow_id == workflow1.id
       assert payload.to_workflow_id == workflow2.id
       assert payload.label == "promote"
+
+      refute_project_broadcast("workflow_transition_created", 50)
     end
 
-    test "insert/2 does not broadcast on validation error" do
+    test "insert/2 does not project on validation error" do
       user = create_user()
       {project, _workflow1, _workflow2} = create_workflows(user)
 
@@ -146,10 +158,10 @@ defmodule Sacrum.Accounts.WorkflowTransitionsTest do
       assert {:error, %Ecto.Changeset{}} =
                WorkflowTransitions.insert(user.id, %{"project_id" => project.id})
 
-      refute_receive %Phoenix.Socket.Broadcast{event: "workflow_transition_created"}, 100
+      refute_project_broadcast("workflow_transition_created")
     end
 
-    test "delete/1 broadcasts workflow_transition_deleted on success" do
+    test "delete/1 projects workflow_transition_deleted after CDC dispatch" do
       user = create_user()
       {project, workflow1, workflow2} = create_workflows(user)
 
@@ -164,10 +176,15 @@ defmodule Sacrum.Accounts.WorkflowTransitionsTest do
 
       {:ok, _deleted} = WorkflowTransitions.delete(transition)
 
-      assert_receive %Phoenix.Socket.Broadcast{
-        event: "workflow_transition_deleted",
-        payload: payload
-      }
+      assert {:ok, [%{event: "workflow_transition_deleted"}]} =
+               project_delete("workflow_transitions", transition)
+
+      payload =
+        assert_project_broadcast("workflow_transition_deleted", %{
+          id: transition.id,
+          from_workflow_id: workflow1.id,
+          to_workflow_id: workflow2.id
+        })
 
       assert payload.id == transition.id
       assert payload.from_workflow_id == workflow1.id

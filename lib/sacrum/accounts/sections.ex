@@ -6,7 +6,6 @@ defmodule Sacrum.Accounts.Sections do
   """
 
   alias Sacrum.Repo
-  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.TaskSection
   alias Sacrum.Repo.TaskSections
 
@@ -42,7 +41,6 @@ defmodule Sacrum.Accounts.Sections do
     %TaskSection{task_id: task_id, project_id: project_id, user_id: user_id}
     |> TaskSection.changeset(attrs)
     |> Repo.insert()
-    |> Broadcaster.broadcast_section(:section_created)
   end
 
   @doc """

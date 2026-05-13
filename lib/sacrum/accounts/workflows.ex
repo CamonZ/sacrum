@@ -2,8 +2,7 @@ defmodule Sacrum.Accounts.Workflows do
   @moduledoc """
   User-scoped workflow operations with business logic.
 
-  All operations are scoped to a specific user. Includes transition syncing
-  and broadcast support.
+  All operations are scoped to a specific user. Includes transition syncing.
   """
 
   use Sacrum.GenericResource,
@@ -12,7 +11,6 @@ defmodule Sacrum.Accounts.Workflows do
     default_order: [asc: :display_order, asc: :inserted_at]
 
   alias Sacrum.Repo
-  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.Workflow
   alias Sacrum.Repo.Schemas.WorkflowTransition
   alias Sacrum.Repo.Workflows, as: WorkflowsRepo
@@ -39,9 +37,7 @@ defmodule Sacrum.Accounts.Workflows do
   @spec insert(String.t(), String.t(), map()) ::
           {:ok, Workflow.t()} | {:error, Ecto.Changeset.t()}
   def insert(user_id, project_id, attrs) when is_binary(user_id) and is_binary(project_id) do
-    fn -> do_insert(user_id, project_id, attrs) end
-    |> maybe_with_demote(project_id, nil, attrs)
-    |> Broadcaster.broadcast(:workflow_created, :project)
+    maybe_with_demote(fn -> do_insert(user_id, project_id, attrs) end, project_id, nil, attrs)
   end
 
   defp do_insert(user_id, project_id, attrs) do
@@ -57,9 +53,12 @@ defmodule Sacrum.Accounts.Workflows do
           {:ok, Workflow.t()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
   def update(%Workflow{} = workflow, attrs) do
     with :ok <- validate_is_final_no_outgoing_transitions(workflow, attrs) do
-      fn -> do_update(workflow, attrs) end
-      |> maybe_with_demote(workflow.project_id, workflow.id, attrs)
-      |> Broadcaster.broadcast(:workflow_updated, :project)
+      maybe_with_demote(
+        fn -> do_update(workflow, attrs) end,
+        workflow.project_id,
+        workflow.id,
+        attrs
+      )
     end
   end
 

@@ -1,6 +1,8 @@
 defmodule Sacrum.Repo.TaskWorkflowsTest do
   use Sacrum.DataCase, async: true
 
+  import Sacrum.CdcAssertions
+
   alias Sacrum.Accounts
   alias Sacrum.Repo.Users
   alias Sacrum.Repo.Projects
@@ -495,14 +497,15 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
     end
   end
 
-  describe "task_step_changed broadcasts" do
-    test "assign_workflow to a new workflow emits task_step_changed with old and new step ids" do
+  describe "task_step_changed CDC projections" do
+    test "assign_workflow to a new workflow projects task_step_changed with old and new step ids" do
       %{project: project, workflow: workflow, steps: steps, task: task} =
         setup_workflow_with_steps()
 
       :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
 
-      {:ok, _assigned} = TaskWorkflows.assign_workflow(task, workflow)
+      {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
+      assert {:ok, _projections} = project_update("tasks", task, assigned)
 
       events = collect_broadcasts("task_step_changed")
       assert [event] = Enum.filter(events, &(&1.task_id == task.id))
@@ -512,7 +515,7 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
       assert event.level == task.level
     end
 
-    test "idempotent re-assign does not emit task_step_changed" do
+    test "idempotent re-assign does not project task_step_changed" do
       %{project: project, workflow: workflow, task: task} = setup_workflow_with_steps()
 
       {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
@@ -524,7 +527,7 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
       assert collect_broadcasts("task_step_changed") == []
     end
 
-    test "move_to_step emits task_step_changed with old and new step ids" do
+    test "move_to_step projects task_step_changed with old and new step ids" do
       %{project: project, workflow: workflow, steps: steps, task: task} =
         setup_workflow_with_steps()
 
@@ -532,7 +535,8 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
 
       :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
 
-      {:ok, _moved} = TaskWorkflows.move_to_step(assigned, steps.in_progress.id)
+      {:ok, moved} = TaskWorkflows.move_to_step(assigned, steps.in_progress.id)
+      assert {:ok, _projections} = project_update("tasks", assigned, moved)
 
       events = collect_broadcasts("task_step_changed")
       assert [event] = Enum.filter(events, &(&1.task_id == task.id))
@@ -541,7 +545,7 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
       assert event.workflow_id == workflow.id
     end
 
-    test "advance_to_step emits task_step_changed" do
+    test "advance_to_step projects task_step_changed" do
       %{project: project, workflow: workflow, steps: steps, task: task} =
         setup_workflow_with_steps()
 
@@ -549,7 +553,8 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
 
       :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
 
-      {:ok, _advanced} = TaskWorkflows.advance_to_step(assigned, steps.done.id)
+      {:ok, advanced} = TaskWorkflows.advance_to_step(assigned, steps.done.id)
+      assert {:ok, _projections} = project_update("tasks", assigned, advanced)
 
       events = collect_broadcasts("task_step_changed")
       assert [event] = Enum.filter(events, &(&1.task_id == task.id))
