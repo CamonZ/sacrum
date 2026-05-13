@@ -15,10 +15,12 @@ defmodule Sacrum.Realtime.Cdc.Projector do
 
   alias Sacrum.Repo.Schemas.{
     ChatEvent,
+    CodeRef,
     SessionLog,
     StepExecution,
     StepTransition,
     Task,
+    TaskDependency,
     TaskRun,
     TaskSection,
     Workflow,
@@ -43,6 +45,8 @@ defmodule Sacrum.Realtime.Cdc.Projector do
     "task_runs" => TaskRun,
     "session_logs" => SessionLog,
     "task_sections" => TaskSection,
+    "task_dependencies" => TaskDependency,
+    "code_refs" => CodeRef,
     "chat_events" => ChatEvent
   }
 
@@ -50,6 +54,9 @@ defmodule Sacrum.Realtime.Cdc.Projector do
     "task_created" => :broadcast_task_created,
     "task_updated" => :broadcast_task_updated,
     "task_deleted" => :broadcast_task_deleted,
+    "task_parent_changed" => :broadcast_task_parent_changed,
+    "task_dependency_created" => :broadcast_task_dependency_created,
+    "task_dependency_deleted" => :broadcast_task_dependency_deleted,
     "workflow_created" => :broadcast_workflow_created,
     "workflow_updated" => :broadcast_workflow_updated,
     "workflow_deleted" => :broadcast_workflow_deleted,
@@ -69,7 +76,10 @@ defmodule Sacrum.Realtime.Cdc.Projector do
     "session_log_created" => :broadcast_session_log_created,
     "section_created" => :broadcast_section_created,
     "section_updated" => :broadcast_section_updated,
-    "section_deleted" => :broadcast_section_deleted
+    "section_deleted" => :broadcast_section_deleted,
+    "code_ref_created" => :broadcast_code_ref_created,
+    "code_ref_updated" => :broadcast_code_ref_updated,
+    "code_ref_deleted" => :broadcast_code_ref_deleted
   }
 
   @type dispatch_result :: %{
@@ -116,7 +126,10 @@ defmodule Sacrum.Realtime.Cdc.Projector do
     task = record_to_struct!("tasks", event.new_record)
     base_projection = projection("task_updated", task.project_id, task)
 
-    [base_projection | task_step_projections(event, task, context)]
+    [
+      base_projection
+      | task_parent_projections(event, task) ++ task_step_projections(event, task, context)
+    ]
   end
 
   defp projections(
@@ -150,6 +163,24 @@ defmodule Sacrum.Realtime.Cdc.Projector do
   defp projections(%WalEx.Event{source: %{table: "tasks"}, type: :delete, old_record: record}) do
     task = record_to_struct!("tasks", record)
     [projection("task_deleted", task.project_id, task)]
+  end
+
+  defp projections(%WalEx.Event{
+         source: %{table: "task_dependencies"},
+         type: :insert,
+         new_record: record
+       }) do
+    dependency = record_to_struct!("task_dependencies", record)
+    [projection("task_dependency_created", dependency.project_id, dependency)]
+  end
+
+  defp projections(%WalEx.Event{
+         source: %{table: "task_dependencies"},
+         type: :delete,
+         old_record: record
+       }) do
+    dependency = record_to_struct!("task_dependencies", record)
+    [projection("task_dependency_deleted", dependency.project_id, dependency)]
   end
 
   defp projections(%WalEx.Event{source: %{table: "workflows"}, type: :insert, new_record: record}) do
@@ -285,6 +316,33 @@ defmodule Sacrum.Realtime.Cdc.Projector do
   end
 
   defp projections(%WalEx.Event{
+         source: %{table: "code_refs"},
+         type: :insert,
+         new_record: record
+       }) do
+    code_ref = record_to_struct!("code_refs", record)
+    [projection("code_ref_created", code_ref.project_id, code_ref)]
+  end
+
+  defp projections(%WalEx.Event{
+         source: %{table: "code_refs"},
+         type: :update,
+         new_record: record
+       }) do
+    code_ref = record_to_struct!("code_refs", record)
+    [projection("code_ref_updated", code_ref.project_id, code_ref)]
+  end
+
+  defp projections(%WalEx.Event{
+         source: %{table: "code_refs"},
+         type: :delete,
+         old_record: record
+       }) do
+    code_ref = record_to_struct!("code_refs", record)
+    [projection("code_ref_deleted", code_ref.project_id, code_ref)]
+  end
+
+  defp projections(%WalEx.Event{
          source: %{table: "chat_events"},
          type: :insert,
          new_record: record
@@ -331,6 +389,29 @@ defmodule Sacrum.Realtime.Cdc.Projector do
   end
 
   defp put_task_run_context(acc, _event), do: acc
+
+  defp task_parent_projections(%WalEx.Event{} = event, %Task{} = task) do
+    if changed?(event, :parent_id) do
+      from_parent_id = old_value(event, :parent_id)
+      to_parent_id = task.parent_id
+
+      if from_parent_id == to_parent_id do
+        []
+      else
+        [
+          projection("task_parent_changed", task.project_id, %{
+            task_id: task.id,
+            project_id: task.project_id,
+            from_parent_id: from_parent_id,
+            to_parent_id: to_parent_id,
+            level: task.level
+          })
+        ]
+      end
+    else
+      []
+    end
+  end
 
   defp task_step_projections(%WalEx.Event{} = event, %Task{} = task, context) do
     if changed?(event, :current_step_id) do

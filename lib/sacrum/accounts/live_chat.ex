@@ -11,7 +11,6 @@ defmodule Sacrum.Accounts.LiveChat do
   alias Sacrum.Chat.{Inference, InferenceEvents, PublicEvents}
   alias Sacrum.ChatSessions.Status, as: ChatSessionStatus
   alias Sacrum.Repo
-  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.{ChatMessage, ChatSession}
 
   @spec create_session(String.t(), String.t(), map()) ::
@@ -107,8 +106,7 @@ defmodule Sacrum.Accounts.LiveChat do
 
   defp transaction_result(fun) do
     case Repo.transaction(fun) do
-      {:ok, {result, event}} ->
-        Broadcaster.broadcast_chat_event({:ok, event})
+      {:ok, {result, _event}} ->
         {:ok, result}
 
       {:error, reason} ->

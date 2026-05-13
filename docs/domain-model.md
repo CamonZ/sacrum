@@ -194,6 +194,8 @@ rules are defined in
 | Event | Payload | Description |
 |-------|---------|-------------|
 | `task_created` / `task_updated` / `task_deleted` | Task fields (including `schema_version` and `archived`; delete includes before-image position fields) | Task lifecycle changes |
+| `task_parent_changed` | `{schema_version, task_id, project_id, from_parent_id, to_parent_id, level}` | Explicit task hierarchy move for tree UIs |
+| `task_dependency_created` / `task_dependency_deleted` | Dependency edge fields: `id`, `task_id`, `depends_on_id`, `project_id`, timestamps | Blocker/dependency relation changes |
 | `workflow_created` / `workflow_updated` / `workflow_deleted` | Workflow fields | Workflow lifecycle |
 | `step_created` / `step_updated` / `step_deleted` | Step fields | WorkflowStep lifecycle |
 | `step_transition_created` / `step_transition_deleted` | Transition fields | Step-to-step edges |
@@ -204,6 +206,8 @@ rules are defined in
 | `task_step_changed` | `{schema_version, task_id, from_step_id, to_step_id, workflow_id, level}` | Emitted when `current_step_id` changes outside orchestrator execution (`assign_workflow`, `advance_to_step`, `move_to_step`). Mirrors `task_run_step_changed` for the manual-move case where no TaskRun exists; only fires when `from != to`. |
 | `session_log_created` | Log fields | New log entry attached |
 | `section_created` / `section_updated` / `section_deleted` | Section fields | Task section changes |
+| `code_ref_created` / `code_ref_updated` / `code_ref_deleted` | Code reference fields: task/section owner, path, line range, name, description, timestamps | Task detail and evidence reference changes |
+| `chat_session_created` / `chat_session_updated` / `chat_message_created` / `chat_event_created` | Public payloads projected from public `chat_events` rows | Public live-chat transcript and progress events; internal events are suppressed |
 | `run_step` | Execution + step config | **Daemon only** — Run a step |
 | `cancel_step` | Execution ID, task ID | **Daemon only** — Cancel running step |
 

@@ -5,11 +5,13 @@ defmodule Sacrum.Realtime.Cdc.ProjectorTest do
   import Sacrum.CdcAssertions
 
   alias Sacrum.Repo
+  alias Sacrum.Repo.CodeRefs
   alias Sacrum.Repo.Projects
-  alias Sacrum.Repo.Schemas.Task
+  alias Sacrum.Repo.Schemas.{CodeRef, Task}
   alias Sacrum.Repo.Schemas.Workflow
   alias Sacrum.Repo.Schemas.WorkflowStep
   alias Sacrum.Repo.StepTransitions
+  alias Sacrum.Repo.TaskDependencies
   alias Sacrum.Repo.TaskSections
   alias Sacrum.Repo.Tasks
   alias Sacrum.Repo.Users
@@ -166,6 +168,163 @@ defmodule Sacrum.Realtime.Cdc.ProjectorTest do
       store = put_in(store, [:sections, section_payload.id], section_payload)
       assert store.sections[section.id].content == "Updated context"
       assert store.sections[section.id].done == true
+    end
+
+    test "task dependency changes project complete blocker edges through CDC" do
+      project = create_project()
+      {:ok, task} = Tasks.insert(project, %{title: "Dependent"})
+      {:ok, blocker} = Tasks.insert(project, %{title: "Blocker"})
+      {:ok, dependency} = TaskDependencies.add_dependency(task, blocker)
+
+      :ok = subscribe_project(project.id)
+
+      assert {:ok, [%{event: "task_dependency_created"}]} =
+               project_insert("task_dependencies", dependency)
+
+      assert_project_broadcast("task_dependency_created", %{
+        schema_version: 1,
+        id: dependency.id,
+        task_id: task.id,
+        depends_on_id: blocker.id,
+        project_id: project.id
+      })
+
+      {:ok, deleted_dependency} = TaskDependencies.remove_dependency(task, blocker)
+
+      assert {:ok, [%{event: "task_dependency_deleted"}]} =
+               project_delete("task_dependencies", deleted_dependency)
+
+      assert_project_broadcast("task_dependency_deleted", %{
+        schema_version: 1,
+        id: dependency.id,
+        task_id: task.id,
+        depends_on_id: blocker.id,
+        project_id: project.id
+      })
+    end
+
+    test "code ref changes project complete detail and evidence refs through CDC" do
+      project = create_project()
+      {:ok, task} = Tasks.insert(project, %{title: "Evidence task"})
+
+      {:ok, code_ref} =
+        CodeRefs.insert_for_task(task, %{
+          path: "lib/sacrum/example.ex",
+          line_start: 10,
+          line_end: 20,
+          name: "Example",
+          description: "Initial ref"
+        })
+
+      :ok = subscribe_project(project.id)
+
+      assert {:ok, [%{event: "code_ref_created"}]} = project_insert("code_refs", code_ref)
+
+      assert_project_broadcast("code_ref_created", %{
+        schema_version: 1,
+        id: code_ref.id,
+        task_id: task.id,
+        section_id: nil,
+        project_id: project.id,
+        path: "lib/sacrum/example.ex",
+        line_start: 10,
+        line_end: 20,
+        name: "Example",
+        description: "Initial ref"
+      })
+
+      {:ok, updated_ref} =
+        code_ref
+        |> CodeRef.changeset(%{name: "Updated Example", line_end: 24})
+        |> CodeRefs.update()
+
+      assert {:ok, [%{event: "code_ref_updated"}]} =
+               project_update("code_refs", code_ref, updated_ref)
+
+      assert_project_broadcast("code_ref_updated", %{
+        schema_version: 1,
+        id: code_ref.id,
+        task_id: task.id,
+        project_id: project.id,
+        path: "lib/sacrum/example.ex",
+        line_end: 24,
+        name: "Updated Example"
+      })
+
+      {:ok, deleted_ref} = CodeRefs.delete(updated_ref)
+
+      assert {:ok, [%{event: "code_ref_deleted"}]} = project_delete("code_refs", deleted_ref)
+
+      assert_project_broadcast("code_ref_deleted", %{
+        schema_version: 1,
+        id: code_ref.id,
+        task_id: task.id,
+        project_id: project.id,
+        path: "lib/sacrum/example.ex",
+        line_end: 24,
+        name: "Updated Example"
+      })
+    end
+
+    test "parent changes project an explicit hierarchy delta with before and after parents" do
+      project = create_project()
+      {:ok, parent} = Tasks.insert(project, %{title: "Parent"})
+      {:ok, child} = Tasks.insert(project, %{title: "Child"})
+
+      :ok = subscribe_project(project.id)
+
+      {:ok, updated_child} = Tasks.update(child, %{"parent_id" => parent.id})
+
+      assert {:ok, [%{event: "task_updated"}, %{event: "task_parent_changed"}]} =
+               project_update("tasks", child, updated_child)
+
+      assert_project_broadcast("task_updated", %{
+        schema_version: 1,
+        id: child.id,
+        parent_id: parent.id,
+        project_id: project.id
+      })
+
+      assert_project_broadcast("task_parent_changed", %{
+        schema_version: 1,
+        task_id: child.id,
+        project_id: project.id,
+        from_parent_id: nil,
+        to_parent_id: parent.id,
+        level: child.level
+      })
+    end
+
+    test "public chat events project through CDC and internal chat events are suppressed" do
+      project = create_project()
+      {:ok, session} = Sacrum.Accounts.LiveChat.create_session(project.user_id, project.id, %{})
+
+      {:ok, public_event} =
+        Sacrum.Accounts.ChatEvents.get_by_type(session, "chat_session_created", :public)
+
+      :ok = subscribe_project(project.id)
+
+      assert {:ok, [%{event: "chat_session_created"}]} =
+               project_insert("chat_events", public_event)
+
+      assert_project_broadcast("chat_session_created", %{
+        schema_version: 1,
+        id: session.id,
+        project_id: project.id,
+        status: "queued"
+      })
+
+      {:ok, internal_event} =
+        Sacrum.Accounts.ChatEvents.append(project.user_id, project.id, session.id, %{
+          event_type: "runner.tool_trace",
+          visibility: :internal,
+          public_payload: %{},
+          internal_payload: %{"secret" => "hidden"}
+        })
+
+      assert {:ok, []} = project_insert("chat_events", internal_event)
+      refute_project_broadcast("chat_event_created")
+      refute_project_broadcast("runner.tool_trace")
     end
   end
 

@@ -95,6 +95,28 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContractTest do
     assert task_contract.derivation.emission_rule =~ "no active orchestrator/TaskRun"
   end
 
+  test "hierarchy and relation gap events are explicit CDC projections" do
+    assert {:ok, parent_contract} = ProjectChannelCdcContract.contract_for("task_parent_changed")
+    assert parent_contract.classification == :semantic_delta
+
+    parent_source = source_change(parent_contract, "tasks")
+    assert :parent_id in parent_source.before_image_fields
+    assert :parent_id in parent_source.after_image_fields
+    assert parent_contract.derivation.from_parent_id =~ "before image"
+    assert parent_contract.derivation.to_parent_id =~ "after image"
+
+    assert {:ok, dependency_contract} =
+             ProjectChannelCdcContract.contract_for("task_dependency_created")
+
+    assert dependency_contract.classification == :relation_change
+    assert source_tables(dependency_contract) == MapSet.new(["task_dependencies"])
+
+    assert {:ok, code_ref_contract} = ProjectChannelCdcContract.contract_for("code_ref_deleted")
+    assert code_ref_contract.classification == :relation_change
+    assert source_tables(code_ref_contract) == MapSet.new(["code_refs"])
+    assert code_ref_contract.completeness =~ "without refetching"
+  end
+
   test "representative payload contracts are complete for GUI store updates" do
     assert_payload_includes("task_updated", [
       :schema_version,
@@ -117,6 +139,35 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContractTest do
       :workflow_id,
       :level,
       :archived
+    ])
+
+    assert_payload_includes("task_parent_changed", [
+      :schema_version,
+      :task_id,
+      :project_id,
+      :from_parent_id,
+      :to_parent_id,
+      :level
+    ])
+
+    assert_payload_includes("task_dependency_created", [
+      :schema_version,
+      :id,
+      :task_id,
+      :depends_on_id,
+      :project_id,
+      :inserted_at,
+      :updated_at
+    ])
+
+    assert_payload_includes("task_dependency_deleted", [
+      :schema_version,
+      :id,
+      :task_id,
+      :depends_on_id,
+      :project_id,
+      :inserted_at,
+      :updated_at
     ])
 
     assert_payload_includes("step_updated", [
@@ -176,6 +227,45 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContractTest do
       :metadata
     ])
 
+    assert_payload_includes("code_ref_created", [
+      :schema_version,
+      :id,
+      :task_id,
+      :section_id,
+      :project_id,
+      :path,
+      :line_start,
+      :line_end,
+      :name,
+      :description
+    ])
+
+    assert_payload_includes("code_ref_updated", [
+      :schema_version,
+      :id,
+      :task_id,
+      :section_id,
+      :project_id,
+      :path,
+      :line_start,
+      :line_end,
+      :name,
+      :description
+    ])
+
+    assert_payload_includes("code_ref_deleted", [
+      :schema_version,
+      :id,
+      :task_id,
+      :section_id,
+      :project_id,
+      :path,
+      :line_start,
+      :line_end,
+      :name,
+      :description
+    ])
+
     assert_payload_includes("task_run_step_changed", [
       :schema_version,
       :task_run_id,
@@ -204,6 +294,8 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContractTest do
     assert snapshot.cursor_rule =~ "snapshot boundary"
     assert "tasks" in snapshot.source_tables
     assert "task_runs" in snapshot.source_tables
+    assert "task_dependencies" in snapshot.source_tables
+    assert "code_refs" in snapshot.source_tables
     assert "chat_events" in snapshot.source_tables
 
     assert recovery.healthy_reconnect =~ "replay changes"

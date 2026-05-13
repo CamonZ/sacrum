@@ -16,7 +16,6 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
   alias Sacrum.Chat.{Inference, InferenceEvents, PublicEvents}
   alias Sacrum.ChatSessions.Status, as: ChatSessionStatus
   alias Sacrum.Repo
-  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.ChatSessions, as: ChatSessionsRepo
   alias Sacrum.Repo.Schemas.{ChatEvent, ChatMessage, ChatSession}
 
@@ -198,8 +197,7 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
           {:ok, ChatSession.t()} | {:error, term()}
   defp update_session_with_event(%ChatSession{} = session, attrs) do
     case Repo.transaction(fn -> update_session_and_event!(session, attrs) end) do
-      {:ok, {updated_session, event}} ->
-        Broadcaster.broadcast_chat_event({:ok, event})
+      {:ok, {updated_session, _event}} ->
         {:ok, updated_session}
 
       {:error, reason} ->
@@ -287,9 +285,7 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
         {:ok, event}
 
       {:error, :not_found} ->
-        session
-        |> ChatEvents.append_to_session(PublicEvents.message_created_attrs(message))
-        |> broadcast_event_result()
+        ChatEvents.append_to_session(session, PublicEvents.message_created_attrs(message))
     end
   end
 
@@ -383,18 +379,7 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
           internal_payload: internal_payload
         }
 
-        session
-        |> ChatEvents.append_to_session(attrs)
-        |> broadcast_event_result()
+        ChatEvents.append_to_session(session, attrs)
     end
   end
-
-  @spec broadcast_event_result({:ok, ChatEvent.t()} | {:error, term()}) ::
-          {:ok, ChatEvent.t()} | {:error, term()}
-  defp broadcast_event_result({:ok, event} = result) do
-    Broadcaster.broadcast_chat_event(result)
-    {:ok, event}
-  end
-
-  defp broadcast_event_result(error), do: error
 end

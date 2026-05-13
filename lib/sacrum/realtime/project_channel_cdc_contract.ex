@@ -43,6 +43,16 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
     schema_version id current_step_id workflow_id level archived
   )a
 
+  @task_parent_changed_payload_keys ~w(
+    schema_version task_id project_id from_parent_id to_parent_id level
+  )a
+
+  @task_dependency_payload_keys ~w(
+    id task_id depends_on_id project_id inserted_at updated_at
+  )a
+
+  @task_dependency_event_payload_keys [:schema_version | @task_dependency_payload_keys]
+
   @workflow_payload_keys ~w(
     id name description auto_advance is_default is_final display_order metadata initial_step_id
     kanban_column project_id inserted_at updated_at
@@ -141,6 +151,12 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
 
   @section_event_payload_keys [:schema_version | @section_payload_keys]
 
+  @code_ref_payload_keys ~w(
+    id task_id section_id project_id path line_start line_end name description inserted_at updated_at
+  )a
+
+  @code_ref_event_payload_keys [:schema_version | @code_ref_payload_keys]
+
   @chat_session_payload_keys ~w(
     id project_id status session_kind started_at ended_at stop_requested_at public_metadata
     inserted_at updated_at
@@ -208,6 +224,60 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
       schema_version: @schema_version,
       completeness:
         "Deletion tombstone with before-image pipeline/archive fields so clients can remove the task and decrement any affected pipeline bucket without a task-position cache."
+    },
+    %{
+      event: "task_parent_changed",
+      classification: @semantic_delta,
+      source_changes: [
+        %{
+          table: "tasks",
+          operation: :update,
+          before_image_fields: [:id, :parent_id],
+          after_image_fields: [:id, :project_id, :parent_id, :level]
+        }
+      ],
+      payload_keys: @task_parent_changed_payload_keys,
+      schema_version: @schema_version,
+      derivation: %{
+        task_id: "tasks.id",
+        from_parent_id: "tasks.parent_id before image",
+        to_parent_id: "tasks.parent_id after image",
+        project_id: "tasks.project_id after image",
+        level: "tasks.level after image",
+        emission_rule: "emit only when from_parent_id != to_parent_id"
+      },
+      completeness:
+        "Semantic hierarchy delta for tree stores. It gives clients both old and new parent ids, while task_updated carries the complete replacement task row."
+    },
+    %{
+      event: "task_dependency_created",
+      classification: @relation_change,
+      source_changes: [
+        %{
+          table: "task_dependencies",
+          operation: :insert,
+          after_image_fields: @task_dependency_payload_keys
+        }
+      ],
+      payload_keys: @task_dependency_event_payload_keys,
+      schema_version: @schema_version,
+      completeness:
+        "Complete dependency edge projection for blocker/dependency views; clients add the edge without refetching."
+    },
+    %{
+      event: "task_dependency_deleted",
+      classification: @relation_change,
+      source_changes: [
+        %{
+          table: "task_dependencies",
+          operation: :delete,
+          before_image_fields: @task_dependency_payload_keys
+        }
+      ],
+      payload_keys: @task_dependency_event_payload_keys,
+      schema_version: @schema_version,
+      completeness:
+        "Complete dependency edge tombstone from the before image so clients can remove by id or task/blocker endpoints without refetching."
     },
     %{
       event: "workflow_created",
@@ -536,6 +606,44 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
       completeness: "Deletion tombstone with task scope so clients can remove the section by id."
     },
     %{
+      event: "code_ref_created",
+      classification: @relation_change,
+      source_changes: [
+        %{table: "code_refs", operation: :insert, after_image_fields: @code_ref_payload_keys}
+      ],
+      payload_keys: @code_ref_event_payload_keys,
+      schema_version: @schema_version,
+      completeness:
+        "Complete code reference projection for task detail, section detail, and evidence views; clients add the reference without refetching."
+    },
+    %{
+      event: "code_ref_updated",
+      classification: @relation_change,
+      source_changes: [
+        %{
+          table: "code_refs",
+          operation: :update,
+          before_image_fields: [:id],
+          after_image_fields: @code_ref_payload_keys
+        }
+      ],
+      payload_keys: @code_ref_event_payload_keys,
+      schema_version: @schema_version,
+      completeness:
+        "Complete code reference replacement for task detail, section detail, and evidence views."
+    },
+    %{
+      event: "code_ref_deleted",
+      classification: @relation_change,
+      source_changes: [
+        %{table: "code_refs", operation: :delete, before_image_fields: @code_ref_payload_keys}
+      ],
+      payload_keys: @code_ref_event_payload_keys,
+      schema_version: @schema_version,
+      completeness:
+        "Complete code reference tombstone from the before image so clients can remove by id without refetching."
+    },
+    %{
       event: PublicEvents.event_type(:session_created),
       classification: @public_chat_projection,
       source_changes: [
@@ -650,7 +758,8 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
       "Capture a CDC cursor/LSN for the snapshot boundary, read all project rows at or before that boundary, then apply committed WalEx changes after that cursor in commit order.",
     source_tables: ~w(
       projects workflows workflow_steps step_transitions workflow_transitions tasks task_runs
-      step_executions session_logs task_sections chat_sessions chat_messages chat_events
+      step_executions session_logs task_sections task_dependencies code_refs chat_sessions
+      chat_messages chat_events
     ),
     gui_projection:
       "Equivalent to the GraphQL task list/detail, pipeline summary, run trace, section, and public chat queries for the project. Include archived tasks when building a full local store."

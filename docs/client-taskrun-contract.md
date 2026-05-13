@@ -372,6 +372,8 @@ Handle these events for run-aware GUI/CLI state:
 | Event | Client action |
 |-------|---------------|
 | `task_created` / `task_updated` / `task_deleted` | Upsert/remove task row. The `task_updated` payload carries `archived` so archive/unarchive toggles can immediately move the row in or out of pipeline buckets without a refetch. `task_deleted` carries before-image `current_step_id`, `workflow_id`, `level`, and `archived` so clients can remove the task from pipeline buckets without a position cache. |
+| `task_parent_changed` | Move a task between local tree buckets using `from_parent_id` and `to_parent_id`; replace the full row from the paired `task_updated` payload. |
+| `task_dependency_created` / `task_dependency_deleted` | Add/remove blocker edges in dependency views by id or by `task_id` + `depends_on_id` without refetching the task list. |
 | `step_execution_created` | Append attempt history; update latest execution view if it belongs to the active run. Do **not** use this as a from/to step signal for pipeline counts; not every step transition dispatches a new execution. |
 | `step_execution_status_changed` | Update attempt history. Do not infer run terminal state from this alone. |
 | `task_run_created` | Upsert TaskRun; set `task.runControls.activeRun` from payload if present. |
@@ -379,6 +381,8 @@ Handle these events for run-aware GUI/CLI state:
 | `task_run_step_changed` | Emitted whenever a task's `current_step_id` changes while a TaskRun exists, and at run-end paths (completion, retry exhaustion, stop). Lets pipeline views decrement the `from_step_id` bucket and increment the `to_step_id` bucket without refetching. |
 | `task_step_changed` | Emitted whenever a task's `current_step_id` changes outside orchestrator execution (manual `assign_workflow`, `advance_to_step`, `move_to_step`). Same pipeline use as `task_run_step_changed`, without `task_run_id` / `status` since no run is involved. |
 | `session_log_created` | Append log to the matching step execution. |
+| `code_ref_created` / `code_ref_updated` / `code_ref_deleted` | Upsert/remove task or section code references in detail/evidence stores by id. |
+| `chat_session_created` / `chat_session_updated` / `chat_message_created` / `chat_event_created` | Apply public chat transcript/progress events projected from `chat_events.public_payload`; internal chat events are not delivered. |
 
 Channel payloads are snake_case. GraphQL fields are camelCase.
 Default-client channel payloads include `schema_version: 1`; clients should
