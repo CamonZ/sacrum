@@ -27,6 +27,12 @@ rows and is complete enough for normal GUI store updates. Clients should not use
 ordinary events as invalidation signals or perform routine GraphQL refetches
 after each event.
 
+Repo, Accounts, routing, and chat persistence paths must not emit these
+default-client events directly. They commit rows; `Sacrum.Realtime.Cdc.Projector`
+owns the ProjectChannel payload construction for regular clients. The only
+imperative ProjectChannel broadcasts are daemon commands such as `run_step` and
+`cancel_step`.
+
 Channel payloads use `snake_case` keys. GraphQL uses `camelCase`.
 
 Every default-client ProjectChannel payload carries `schema_version: 1`.

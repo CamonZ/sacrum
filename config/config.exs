@@ -16,7 +16,7 @@ config :sacrum,
   max_concurrent_executions: 5
 
 config :sacrum, :cdc,
-  start_consumer: false,
+  start_consumer: true,
   publication: "sacrum_cdc_publication",
   slot_name: "sacrum_cdc_slot",
   durable_slot: true,

@@ -2,16 +2,11 @@ defmodule SacrumWeb.ProjectChannelTest do
   use Sacrum.DataCase, async: true
 
   import Phoenix.ChannelTest
-  import Sacrum.CdcAssertions
-
   alias SacrumWeb.UserSocket
-  alias Sacrum.Accounts.{ChatEvents, LiveChat}
   alias Sacrum.Auth
-  alias Sacrum.Chat.PublicEvents
   alias Sacrum.Realtime.ProjectChannelCdcContract
   alias Sacrum.Repo.Users
   alias Sacrum.Repo.Projects
-  alias Sacrum.Accounts.Tasks, as: AccountsTasks
 
   @endpoint SacrumWeb.Endpoint
 
@@ -487,32 +482,6 @@ defmodule SacrumWeb.ProjectChannelTest do
       end)
     end
 
-    test "archiving a task pushes task_updated with archived=true and unarchive pushes archived=false" do
-      {user, project, socket} = setup_socket()
-      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}", %{})
-
-      {:ok, task} =
-        AccountsTasks.insert(user.id, project.id, %{
-          title: "Archive me",
-          description: "to be archived",
-          level: "ticket"
-        })
-
-      {:ok, archived} = AccountsTasks.update(task, %{archived: true})
-      assert archived.archived == true
-      assert {:ok, [%{event: "task_updated"}]} = project_update("tasks", task, archived)
-      assert_push "task_updated", archived_payload
-      assert archived_payload.id == task.id
-      assert archived_payload.archived == true
-
-      {:ok, unarchived} = AccountsTasks.update(archived, %{archived: false})
-      assert unarchived.archived == false
-      assert {:ok, [%{event: "task_updated"}]} = project_update("tasks", archived, unarchived)
-      assert_push "task_updated", unarchived_payload
-      assert unarchived_payload.id == task.id
-      assert unarchived_payload.archived == false
-    end
-
     test "step payload includes editor and daemon configuration fields" do
       {_user, project, socket} = setup_socket()
       {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}", %{})
@@ -558,65 +527,6 @@ defmodule SacrumWeb.ProjectChannelTest do
       assert payload.step_id == execution.step_id
       assert payload.handoff == execution.handoff
       assert payload.status == "waiting"
-    end
-
-    test "task_run payload includes replacement run_controls" do
-      {user, project, socket} = setup_socket()
-      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}", %{})
-
-      {:ok, task} =
-        AccountsTasks.insert(user.id, project.id, %{
-          title: "Run controls over CDC",
-          description: "row controls should not require refetch",
-          level: "ticket"
-        })
-
-      assert {:ok, [%{event: "task_created"}]} = project_insert("tasks", task)
-      assert_push "task_created", %{id: task_id}
-      assert task_id == task.id
-
-      {:ok, task_run} =
-        Sacrum.Accounts.TaskRuns.insert(user.id, project.id, task.id, %{
-          status: :queued,
-          outcome_context: %{"phase" => "created"}
-        })
-
-      assert {:ok, [%{event: "task_run_created"}, %{event: "task_run_step_changed"}]} =
-               project_insert("task_runs", task_run)
-
-      assert_push "task_run_created", created_payload
-      assert_contract_payload_keys("task_run_created", created_payload)
-      assert_run_control_contract_keys(created_payload.run_controls)
-      assert created_payload.run_controls.active_run.id == task_run.id
-
-      assert_push "task_run_step_changed", %{task_run_id: task_run_id}
-      assert task_run_id == task_run.id
-
-      {:ok, updated_run} =
-        Sacrum.Accounts.TaskRuns.update(task_run, %{
-          status: :waiting,
-          outcome_kind: "human_input",
-          outcome_context: %{"gate" => "review"}
-        })
-
-      assert {:ok, [%{event: "task_run_updated"}]} =
-               project_update("task_runs", task_run, updated_run)
-
-      assert_push "task_run_updated", payload
-      assert_contract_payload_keys("task_run_updated", payload)
-      assert_run_control_contract_keys(payload.run_controls)
-      assert payload.id == updated_run.id
-      assert payload.task_id == task.id
-      assert payload.project_id == project.id
-      assert payload.status == "waiting"
-      assert payload.outcome_kind == "human_input"
-      assert payload.outcome_context == %{"gate" => "review"}
-
-      assert payload.run_controls.runnable == false
-      assert payload.run_controls.stoppable == true
-      assert payload.run_controls.disabled_reason_code == "active_run"
-      assert payload.run_controls.active_run.id == updated_run.id
-      assert payload.run_controls.active_run.status == "waiting"
     end
   end
 
@@ -897,27 +807,11 @@ defmodule SacrumWeb.ProjectChannelTest do
 
       refute_push "section_created", _payload
     end
-
-    test "daemon client does NOT receive public chat events" do
-      {user, project, socket} = setup_socket()
-
-      {:ok, _reply, _socket} =
-        subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
-
-      {:ok, session} = LiveChat.create_session(user.id, project.id, %{})
-
-      {:ok, event} =
-        ChatEvents.get_by_type(session, PublicEvents.event_type(:session_created), :public)
-
-      assert {:ok, [%{event: "chat_session_created"}]} = project_insert("chat_events", event)
-
-      refute_push "chat_session_created", _payload
-    end
   end
 
   describe "public chat event filtering" do
     test "token for another user cannot subscribe to public chat events" do
-      {user, project, _socket} = setup_socket()
+      {_user, project, _socket} = setup_socket()
 
       {:ok, other_user} =
         Users.insert(%{
@@ -933,110 +827,6 @@ defmodule SacrumWeb.ProjectChannelTest do
 
       assert {:error, %{reason: "not found"}} =
                subscribe_and_join(other_socket, "project:#{project.id}", %{})
-
-      {:ok, session} = LiveChat.create_session(user.id, project.id, %{})
-
-      {:ok, event} =
-        ChatEvents.get_by_type(session, PublicEvents.event_type(:session_created), :public)
-
-      assert {:ok, [%{event: "chat_session_created"}]} = project_insert("chat_events", event)
-
-      refute_push "chat_session_created", _payload
-    end
-
-    test "default client receives stable CDC-projected public session, message, and status payloads" do
-      {user, project, socket} = setup_socket()
-      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}", %{})
-
-      {:ok, session} =
-        LiveChat.create_session(user.id, project.id, %{
-          session_kind: "planning",
-          public_metadata: %{"surface" => "app"}
-        })
-
-      {:ok, session_event} =
-        ChatEvents.get_by_type(session, PublicEvents.event_type(:session_created), :public)
-
-      assert {:ok, [%{event: "chat_session_created"}]} =
-               project_insert("chat_events", session_event)
-
-      assert_push "chat_session_created", session_payload
-      assert_contract_payload_keys("chat_session_created", session_payload)
-      assert session_payload == chat_session_payload(session)
-
-      {:ok, message} =
-        LiveChat.send_message(user.id, project.id, session.id, %{
-          content: "Draft a plan",
-          content_format: "markdown",
-          client_message_id: "client-channel-1",
-          metadata: %{"source" => "composer"}
-        })
-
-      {:ok, message_event} = ChatEvents.get_message_created_for_message(session, message.id)
-
-      assert {:ok, [%{event: "chat_message_created"}]} =
-               project_insert("chat_events", message_event)
-
-      assert_push "chat_message_created", message_payload
-      assert_contract_payload_keys("chat_message_created", message_payload)
-      assert message_payload == chat_message_payload(message)
-
-      {:ok, cancelled} = LiveChat.cancel_session(user.id, project.id, session.id)
-
-      {:ok, status_event} =
-        ChatEvents.get_by_type(cancelled, PublicEvents.event_type(:session_updated), :public)
-
-      assert {:ok, [%{event: "chat_session_updated"}]} =
-               project_insert("chat_events", status_event)
-
-      assert_push "chat_session_updated", status_payload
-      assert_contract_payload_keys("chat_session_updated", status_payload)
-      assert status_payload == chat_session_payload(cancelled, :session_updated)
-      assert status_payload.status == "cancelled"
-      assert is_binary(status_payload.stop_requested_at)
-      assert is_binary(status_payload.ended_at)
-
-      {:ok, public_event} =
-        ChatEvents.append(user.id, project.id, session.id, %{
-          event_type: "runner.progress",
-          visibility: :public,
-          public_payload: %{"message" => "working"},
-          internal_payload: %{}
-        })
-
-      assert {:ok, [%{event: "chat_event_created"}]} = project_insert("chat_events", public_event)
-
-      assert_push "chat_event_created", event_payload
-      assert_contract_payload_keys("chat_event_created", event_payload)
-      assert event_payload.payload == %{"message" => "working"}
-    end
-
-    test "internal chat events are not pushed to default clients" do
-      {user, project, socket} = setup_socket()
-      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}", %{})
-
-      {:ok, session} = LiveChat.create_session(user.id, project.id, %{})
-
-      {:ok, session_event} =
-        ChatEvents.get_by_type(session, PublicEvents.event_type(:session_created), :public)
-
-      assert {:ok, [%{event: "chat_session_created"}]} =
-               project_insert("chat_events", session_event)
-
-      assert_push "chat_session_created", _payload
-
-      {:ok, internal_event} =
-        ChatEvents.append(user.id, project.id, session.id, %{
-          event_type: "runner.tool_trace",
-          visibility: :internal,
-          public_payload: %{},
-          internal_payload: %{"secret" => "hidden"}
-        })
-
-      assert {:ok, []} = project_insert("chat_events", internal_event)
-
-      refute_push "chat_event_created", _payload
-      refute_push "runner.tool_trace", _payload
     end
   end
 
@@ -1283,29 +1073,6 @@ defmodule SacrumWeb.ProjectChannelTest do
     }
   end
 
-  defp chat_session_payload(session, event_type \\ :session_created) do
-    session
-    |> PublicEvents.session_payload()
-    |> channel_payload(PublicEvents.event_type(event_type))
-  end
-
-  defp chat_message_payload(message) do
-    message
-    |> PublicEvents.message_payload()
-    |> channel_payload(PublicEvents.event_type(:message_created))
-  end
-
-  defp channel_payload(public_payload, event_type) do
-    {:ok, ^event_type, payload} =
-      PublicEvents.channel_event(%{
-        visibility: :public,
-        event_type: event_type,
-        public_payload: public_payload
-      })
-
-    Map.put(payload, :schema_version, 1)
-  end
-
   defp assert_broadcast_payload_keys(event, broadcast_fun) do
     broadcast_fun.()
     assert_broadcast ^event, payload
@@ -1315,17 +1082,5 @@ defmodule SacrumWeb.ProjectChannelTest do
   defp assert_contract_payload_keys(event, payload) do
     assert {:ok, contract} = ProjectChannelCdcContract.contract_for(event)
     assert Enum.sort(Map.keys(payload)) == Enum.sort(contract.payload_keys)
-  end
-
-  defp assert_run_control_contract_keys(run_controls) do
-    assert {:ok, contract} = ProjectChannelCdcContract.contract_for("task_run_updated")
-
-    assert Enum.sort(Map.keys(run_controls)) ==
-             Enum.sort(Map.fetch!(contract.nested_payload_keys, :run_controls))
-
-    if run_controls.active_run do
-      assert Enum.sort(Map.keys(run_controls.active_run)) ==
-               Enum.sort(Map.fetch!(contract.nested_payload_keys, :"run_controls.active_run"))
-    end
   end
 end

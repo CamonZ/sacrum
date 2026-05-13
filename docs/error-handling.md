@@ -134,7 +134,7 @@ def update(%Task{} = task, attrs) do
        {:ok, updated_task} <- do_update_task(task, attrs),
        {:ok, updated_task} <- maybe_update_parent(updated_task, attrs),
        :ok <- maybe_update_dependencies(updated_task, attrs) do
-    Broadcaster.broadcast({:ok, updated_task}, :task_updated, :project)
+    {:ok, updated_task}
   end
 end
 ```
@@ -194,28 +194,16 @@ def sync_transitions(%Workflow{} = workflow, transition_maps) do
 end
 ```
 
-### Broadcaster Resilience
+### Realtime Projection Resilience
 
-The Broadcaster intentionally swallows broadcast failures so mutations never fail due to broadcast issues:
+Default-client ProjectChannel events are emitted from committed WalEx row
+changes, not inline mutation side effects. A mutation should succeed or fail on
+database/domain rules only; live GUI projection is a post-commit CDC concern.
 
 ```elixir
-# Pass-through pattern
-def broadcast({:ok, entity}, event, preload_path) do
-  broadcast_event(entity, event, preload_path)
-  {:ok, entity}
-end
-
-def broadcast({:error, _} = error, _event, _preload_path), do: error
-
-# Extraction failure logs a warning but returns :ok
-def broadcast_event(entity, event, preload_path) do
-  case extract_project_id(entity, preload_path) do
-    {:ok, project_id} ->
-      # ... broadcast
-    :error ->
-      Logger.warning("[Broadcast] #{event} failed to extract project_id")
-      :ok
-  end
+case Repo.update(changeset) do
+  {:ok, updated_task} -> {:ok, updated_task}
+  {:error, changeset} -> {:error, changeset}
 end
 ```
 

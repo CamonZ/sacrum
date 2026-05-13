@@ -21,8 +21,8 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   alias Sacrum.Accounts
   alias Sacrum.Orchestrator.{ExecutionHistory, PromptContext, PromptRenderer}
   alias Sacrum.Orchestrator.TaskRuns.Failure
+  alias Sacrum.Realtime.CommandBroadcaster
   alias Sacrum.Repo
-  alias Sacrum.Repo.Broadcaster
   alias Sacrum.Repo.Schemas.{StepExecution, Task, TaskRun, WorkflowStep}
   alias Sacrum.TaskRuns.Status, as: TaskRunStatus
   alias Sacrum.Tasks.Status
@@ -194,7 +194,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
         "task=#{task.id} task_run=#{task_run.id} prompt_length=#{String.length(rendered)}"
     )
 
-    Broadcaster.broadcast_run_step(
+    CommandBroadcaster.broadcast_run_step(
       %{execution: execution, step: step, task: task, rendered_prompt: rendered},
       task.project_id
     )

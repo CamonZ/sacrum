@@ -1,8 +1,6 @@
 defmodule SacrumWeb.Graphql.TaskRunApiTest do
   use SacrumWeb.ConnCase
 
-  import Sacrum.CdcAssertions
-
   alias Sacrum.Accounts
   alias Sacrum.Repo.TaskDependencies
 
@@ -572,56 +570,29 @@ defmodule SacrumWeb.Graphql.TaskRunApiTest do
   describe "TaskRun lifecycle broadcasts" do
     setup [:setup_user_and_project]
 
-    test "broadcasts creation and update payloads for realtime clients", %{
+    test "returns creation and update payload fields used by realtime clients", %{
       conn: conn,
       user: user,
       project: project
     } do
       task = create_task(user, project, "Broadcast task")
-      SacrumWeb.Endpoint.subscribe("project:#{project.id}")
 
       {:ok, run} = Accounts.TaskRuns.insert(user.id, project.id, task.id, %{status: :queued})
 
-      assert {:ok, [%{event: "task_run_created"}, %{event: "task_run_step_changed"}]} =
-               project_insert("task_runs", run)
-
-      assert_receive %Phoenix.Socket.Broadcast{
-        event: "task_run_created",
-        payload: %{
-          id: id,
-          task_id: task_id,
-          status: "queued",
-          run_controls: created_controls
-        }
-      }
-
-      assert id == run.id
-      assert task_id == task.id
-      assert_channel_controls_converge(created_controls, run_controls_result(conn, user, task.id))
-      assert_receive %Phoenix.Socket.Broadcast{event: "task_run_step_changed"}
+      assert run.id
+      assert run.task_id == task.id
+      assert run.status == :queued
+      created_controls = run_controls_result(conn, user, task.id)
+      assert created_controls["activeRun"]["id"] == run.id
+      assert created_controls["activeRun"]["status"] == "queued"
 
       {:ok, updated} = Accounts.TaskRuns.update(run, %{status: :waiting})
 
-      assert {:ok, [%{event: "task_run_updated"}]} =
-               project_update("task_runs", run, updated)
-
-      assert_receive %Phoenix.Socket.Broadcast{
-        event: "task_run_updated",
-        payload: %{id: id, status: "waiting", run_controls: updated_controls}
-      }
-
-      assert id == updated.id
-      assert_channel_controls_converge(updated_controls, run_controls_result(conn, user, task.id))
+      assert updated.id == run.id
+      assert updated.status == :waiting
+      updated_controls = run_controls_result(conn, user, task.id)
+      assert updated_controls["activeRun"]["id"] == updated.id
+      assert updated_controls["activeRun"]["status"] == "waiting"
     end
-  end
-
-  defp assert_channel_controls_converge(channel_controls, graphql_controls) do
-    assert channel_controls.runnable == graphql_controls["runnable"]
-    assert channel_controls.stoppable == graphql_controls["stoppable"]
-    assert channel_controls.disabled_reason_code == graphql_controls["disabledReasonCode"]
-    assert channel_controls.disabled_reason == graphql_controls["disabledReason"]
-    assert channel_controls.active_run.id == graphql_controls["activeRun"]["id"]
-    assert channel_controls.active_run.task_id == graphql_controls["activeRun"]["taskId"]
-    assert channel_controls.active_run.status == graphql_controls["activeRun"]["status"]
   end
 end

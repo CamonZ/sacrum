@@ -12,7 +12,7 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
   alias Sacrum.Accounts
   alias Sacrum.Orchestrator.{ExecutionDispatcher, Scheduler}
   alias Sacrum.Orchestrator.TaskRuns.Root
-  alias Sacrum.Repo.Broadcaster
+  alias Sacrum.Realtime.CommandBroadcaster
   alias Sacrum.Repo.Schemas.TaskRun
   alias Sacrum.TaskRuns.Status, as: TaskRunStatus
   alias SacrumWeb.Graphql.ChangesetErrors
@@ -413,7 +413,11 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
               with {:ok, updated_execution} <-
                      Accounts.StepExecutions.update(execution, %{status: "cancelling"}) do
                 # After status update, broadcast the cancel_step event to the daemon
-                Broadcaster.broadcast_cancel_step(updated_execution, updated_execution.project_id)
+                CommandBroadcaster.broadcast_cancel_step(
+                  updated_execution,
+                  updated_execution.project_id
+                )
+
                 {:ok, updated_execution}
               end
 

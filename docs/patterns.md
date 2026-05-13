@@ -1,18 +1,21 @@
 # Repository & Accounts Pattern
 
-Sacrum uses a three-layer architecture instead of Phoenix contexts. Data flows through three layers: **Accounts** (business logic) → **Repo** (database operations) → **Ecto/PostgreSQL**.
+Sacrum uses a three-layer architecture instead of Phoenix contexts. Data flows through three layers: **Accounts** (business logic) -> **Repo** (database operations) -> **Ecto/PostgreSQL**. Regular client realtime state is projected separately from committed rows by WalEx CDC.
 
 ```
 GraphQL Resolver
     │
     ▼
-Accounts Layer (Sacrum.Accounts.*)       ← User-scoped access, business logic, broadcasting
+Accounts Layer (Sacrum.Accounts.*)       ← User-scoped access, business logic
     │  uses GenericResource macro
     ▼
 Repository Layer (Sacrum.Repo.*)         ← Database CRUD, queries, transactions
     │  uses GenericRepo macro
     ▼
 Ecto / PostgreSQL
+    │
+    ▼
+WalEx CDC Projector                      ← Default-client ProjectChannel projections
 ```
 
 ### Data Flow Example
@@ -22,8 +25,9 @@ GraphQL Resolver → Accounts.Tasks.insert(user_id, project_id, attrs)
                      → Repo.Tasks.insert(changeset)  [GenericRepo]
                        → Ecto / PostgreSQL
                      ← {:ok, task}
-                     → Broadcaster.broadcast(:task_created, :project)
-                       → ProjectChannel
+WalEx committed row change
+                     → Sacrum.Realtime.Cdc.Projector
+                       → ProjectChannel default clients
 ```
 
 ## Directory Structure
@@ -175,7 +179,7 @@ Accounts modules (`lib/sacrum/accounts/`) sit on top of GenericResource. They:
 
 1. **Use GenericResource** for all read operations (`get_by`, `list_by`)
 2. **Add custom write operations** (insert/update/delete) with changeset construction
-3. **Handle broadcasting** via `Broadcaster` after successful operations
+3. **Return committed row changes** for post-commit WalEx CDC projection
 4. **Translate domain errors** from atoms to user-facing messages (see [Error Handling](error-handling.md))
 
 ### Simple Accounts Module
@@ -212,14 +216,13 @@ end
 Complex modules add domain-specific operations, validation pipelines, and error translation:
 
 ```elixir
-# lib/sacrum/accounts/tasks.ex — insert with auto-workflow and broadcasting
+# lib/sacrum/accounts/tasks.ex — insert with auto-workflow
 def insert(user_id, project_id, attrs) do
   %Task{project_id: project_id, user_id: user_id}
   |> Task.create_changeset(attrs)
   |> TasksRepo.insert()
   |> preload_sections()
   |> maybe_assign_default_workflow(project_id)
-  |> Broadcaster.broadcast(:task_created, :project)
 end
 
 # update with validation pipeline
@@ -230,17 +233,17 @@ def update(%Task{} = task, attrs) do
        {:ok, updated_task} <- do_update_task(task, attrs),
        {:ok, updated_task} <- maybe_update_parent(updated_task, attrs),
        :ok <- maybe_update_dependencies(updated_task, attrs) do
-    Broadcaster.broadcast({:ok, updated_task}, :task_updated, :project)
+    {:ok, updated_task}
   end
 end
 ```
 
 ### Key Distinction
 
-- **Repo modules** = database operations only. No user scoping, no broadcasting, no business rules.
-- **Accounts modules** = business logic + user scoping + broadcasting. GraphQL resolvers call these, never Repo modules directly (except for cross-domain operations like `TaskWorkflows` and `TaskDependencies`).
+- **Repo modules** = database operations only. No user scoping, no default-client broadcasting, no business rules.
+- **Accounts modules** = business logic + user scoping. GraphQL resolvers call these, never Repo modules directly (except for cross-domain operations like `TaskWorkflows` and `TaskDependencies`). Default-client ProjectChannel updates are emitted by WalEx CDC after the row commits.
 
-> **Known violation:** `Repo.Tasks` currently contains broadcasting, validation pipelines, and error translation that belong in `Accounts.Tasks`. New code should follow the intended separation — keep Repo modules focused on database operations and put business logic in the Accounts layer.
+> **Known violation:** `Repo.Tasks` currently contains validation pipelines and error translation that belong in `Accounts.Tasks`. New code should follow the intended separation — keep Repo modules focused on database operations and put business logic in the Accounts layer.
 
 ## Schema Conventions
 
@@ -317,9 +320,9 @@ has_many :blockers, through: [:task_dependencies, :depends_on]
 
 ## Repo Module Patterns
 
-Repo modules override GenericRepo functions for domain-specific query logic (filtering, CTEs, subqueries). Business logic and broadcasting should live in the Accounts layer.
+Repo modules override GenericRepo functions for domain-specific query logic (filtering, CTEs, subqueries). Business logic should live in the Accounts layer, and regular-client broadcasting should stay in the WalEx CDC projector.
 
-> **Note:** The examples below are from `Repo.Tasks`, which currently violates this by including broadcasting and validation. They illustrate working patterns but new code should place business logic in the corresponding Accounts module.
+> **Note:** The examples below are from `Repo.Tasks`, which currently violates this by including validation. They illustrate working patterns but new code should place business logic in the corresponding Accounts module.
 
 ### Multi-Arity Insert
 
@@ -337,7 +340,6 @@ def insert(project_id, user_id, attrs) when is_binary(project_id) and is_binary(
   |> Task.create_changeset(attrs)
   |> Repo.insert()
   |> preload_sections()
-  |> Broadcaster.broadcast(:task_created, :project)
 end
 ```
 
@@ -354,7 +356,6 @@ def delete(%Task{} = task, opts \\ []) do
 
   case Repo.delete(task) do
     {:ok, deleted_task} ->
-      Broadcaster.broadcast_event(deleted_task, :task_deleted, :project)
       {:ok, deleted_task}
     error -> error
   end
@@ -449,25 +450,25 @@ task = Repo.preload(task, [:sections, project: [:users]])
 task = Repo.preload(task, :sections, force: true)
 ```
 
-## Broadcaster Integration
+## Realtime Projection Boundary
 
-The `Sacrum.Repo.Broadcaster` module provides a pass-through broadcasting pattern:
+Regular/default-client ProjectChannel state is owned by the WalEx CDC projector.
+Repo, Accounts, routing, and chat persistence paths should commit rows and
+return their results without directly calling ProjectChannel broadcast helpers.
 
 ```elixir
-# Pipe repo result through broadcast
 def insert(project, attrs) do
   %Task{project_id: project.id}
   |> Task.create_changeset(attrs)
   |> Repo.insert()
-  |> Broadcaster.broadcast(:task_created, :project)
 end
 ```
 
-The second argument is the event name. The third is the preload path to extract `project_id`:
-- `:project` — entity has a `project_id` field directly
-- `workflow: :project` — entity → workflow → project (nested preload)
-
-See [Error Handling](error-handling.md) for how the Broadcaster handles failures.
+After commit, `Sacrum.Realtime.Cdc.Projector` receives the row image and emits
+the complete default-client payload described in
+[WalEx CDC GUI Projection Contract](walex-cdc-gui-projection-contract.md).
+Imperative daemon commands such as `run_step` and `cancel_step` are the
+exception and go through `Sacrum.Realtime.CommandBroadcaster`.
 
 ## SyncHelper for Bulk Operations
 
@@ -550,7 +551,7 @@ end
 - **Entity repos** — Plural noun: `Tasks`, `Workflows`, `Users`
 - **Relationship repos** — Compound noun: `TaskDependencies`, `TaskHierarchy`, `StepTransitions`
 - **Cross-domain repos** — Entity + domain: `TaskWorkflows` (workflow operations on tasks)
-- **Support modules** — Descriptive noun: `Broadcaster`, `SyncHelper`
+- **Support modules** — Descriptive noun: `CommandBroadcaster`, `SyncHelper`
 
 ### Functions
 
@@ -563,4 +564,4 @@ end
 | `maybe_*` | Conditional operation | `maybe_update_parent/2` |
 | `validate_*` | Validation helper | `validate_section_ownership/2` |
 | `apply_*` | Query composition | `apply_filters/2` |
-| `broadcast_*` | Event broadcasting | `broadcast_event/3` |
+| `broadcast_*` | Daemon command broadcasting | `broadcast_run_step/2` |
