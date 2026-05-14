@@ -4,6 +4,7 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
   alias Sacrum.Accounts
   alias Sacrum.Accounts.{ChatEvents, ChatSessions, LiveChat}
   alias Sacrum.Repo
+  alias Sacrum.Repo.Schemas.{ChatEvent, ChatMessage, ChatSession}
 
   defp graphql(conn, query) do
     post(conn, "/graphql", %{"query" => query})
@@ -250,6 +251,121 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
 
       assert events_result["data"]["chatEvents"] == nil
       assert [%{"message" => _}] = events_result["errors"]
+
+      delete_result =
+        graphql_result(conn, other_user, """
+        mutation {
+          deleteChatSession(projectId: "#{project.id}", chatSessionId: "#{session_id}") {
+            deletedSessionId
+            success
+          }
+        }
+        """)
+
+      assert delete_result["data"]["deleteChatSession"] == nil
+      assert [%{"message" => _}] = delete_result["errors"]
+      assert {:ok, _still_present} = ChatSessions.get_session(user.id, project.id, session_id)
+    end
+
+    test "deletes an owned project chat session and removes it from history", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, kept_session} = ChatSessions.insert(user.id, project.id, %{})
+
+      create_result =
+        graphql_result(conn, user, """
+        mutation {
+          createChatSession(projectId: "#{project.id}") { id }
+        }
+        """)
+
+      assert create_result["errors"] == nil
+      session_id = create_result["data"]["createChatSession"]["id"]
+
+      message_result =
+        graphql_result(conn, user, """
+        mutation {
+          sendChatMessage(
+            projectId: "#{project.id}"
+            chatSessionId: "#{session_id}"
+            content: "remove this transcript"
+          ) { id }
+        }
+        """)
+
+      assert message_result["errors"] == nil
+      message_id = message_result["data"]["sendChatMessage"]["id"]
+
+      public_event_ids =
+        chat_event_ids_for_session(user.id, project.id, session_id)
+
+      delete_result =
+        graphql_result(conn, user, """
+          mutation {
+            deleteChatSession(projectId: "#{project.id}", chatSessionId: "#{session_id}") {
+              deletedSessionId
+              success
+            }
+          }
+        """)
+
+      assert delete_result["errors"] == nil
+
+      assert delete_result["data"]["deleteChatSession"] == %{
+               "deletedSessionId" => session_id,
+               "success" => true
+             }
+
+      history_result =
+        graphql_result(conn, user, """
+        {
+          chatSessions(projectId: "#{project.id}") { id }
+          chatSession(projectId: "#{project.id}", id: "#{session_id}") { id }
+        }
+        """)
+
+      assert Enum.map(history_result["data"]["chatSessions"], & &1["id"]) == [kept_session.id]
+      assert history_result["data"]["chatSession"] == nil
+      assert [%{"message" => _}] = history_result["errors"]
+
+      refute Repo.get(ChatSession, session_id)
+      refute Repo.get(ChatMessage, message_id)
+
+      for event_id <- public_event_ids do
+        refute Repo.get(ChatEvent, event_id)
+      end
+    end
+
+    test "deleteChatSession rejects a session from another project and leaves it intact", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, other_project} =
+        Accounts.Projects.insert(user.id, %{name: "Other Delete API Project"})
+
+      {:ok, other_project_session} = ChatSessions.insert(user.id, other_project.id, %{})
+
+      result =
+        graphql_result(conn, user, """
+        mutation {
+          deleteChatSession(
+            projectId: "#{project.id}"
+            chatSessionId: "#{other_project_session.id}"
+          ) {
+            deletedSessionId
+            success
+          }
+        }
+        """)
+
+      assert result["data"]["deleteChatSession"] == nil
+      assert [%{"message" => _}] = result["errors"]
+
+      assert {:ok, _still_present} =
+               ChatSessions.get_session(user.id, other_project.id, other_project_session.id)
     end
 
     test "lists project chat sessions newest first with existing session fields", %{
@@ -374,5 +490,10 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
                other_session.id
              ]
     end
+  end
+
+  defp chat_event_ids_for_session(user_id, project_id, chat_session_id) do
+    {:ok, events} = ChatEvents.list_public_for_session(user_id, project_id, chat_session_id)
+    Enum.map(events, & &1.id)
   end
 end

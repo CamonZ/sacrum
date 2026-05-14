@@ -51,6 +51,13 @@ defmodule Sacrum.Accounts.ChatSessions do
     ChatSessionsRepo.update(chat_session, attrs)
   end
 
+  @spec delete_session(String.t(), String.t(), String.t()) ::
+          {:ok, ChatSession.t()} | {:error, :not_found}
+  def delete_session(user_id, project_id, chat_session_id)
+      when is_session_scope(user_id, project_id, chat_session_id) do
+    ChatSessionsRepo.delete_session(user_id, project_id, chat_session_id)
+  end
+
   @spec transition_status(String.t(), String.t(), String.t(), atom() | String.t()) ::
           {:ok, ChatSession.t()} | {:error, :not_found | Ecto.Changeset.t()}
   def transition_status(user_id, project_id, chat_session_id, status)
