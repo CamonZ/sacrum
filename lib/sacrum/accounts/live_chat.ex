@@ -86,6 +86,12 @@ defmodule Sacrum.Accounts.LiveChat do
     end)
   end
 
+  @spec delete_session(String.t(), String.t(), String.t()) ::
+          {:ok, ChatSession.t()} | {:error, term()}
+  def delete_session(user_id, project_id, chat_session_id) do
+    ChatSessions.delete_session(user_id, project_id, chat_session_id)
+  end
+
   @spec get_session(String.t(), String.t(), String.t()) ::
           {:ok, ChatSession.t()} | {:error, term()}
   def get_session(user_id, project_id, chat_session_id) do

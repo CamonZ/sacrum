@@ -29,6 +29,24 @@ defmodule Sacrum.Repo.ChatSessions do
     |> Repo.update()
   end
 
+  @spec delete_session(String.t(), String.t(), String.t()) ::
+          {:ok, ChatSession.t()} | {:error, :not_found}
+  def delete_session(user_id, project_id, chat_session_id)
+      when is_session_scope(user_id, project_id, chat_session_id) do
+    ChatSession
+    |> where(
+      [session],
+      session.user_id == ^user_id and session.project_id == ^project_id and
+        session.id == ^chat_session_id
+    )
+    |> select([session], session)
+    |> Repo.delete_all()
+    |> case do
+      {1, [chat_session]} -> {:ok, chat_session}
+      {0, []} -> {:error, :not_found}
+    end
+  end
+
   @spec list_for_project(String.t(), String.t(), keyword()) :: [ChatSession.t()]
   def list_for_project(user_id, project_id, opts \\ [])
       when is_user_project_scope(user_id, project_id) and is_options(opts) do

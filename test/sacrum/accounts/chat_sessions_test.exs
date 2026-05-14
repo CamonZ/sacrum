@@ -1,10 +1,11 @@
 defmodule Sacrum.Accounts.ChatSessionsTest do
   use Sacrum.DataCase, async: true
 
-  alias Sacrum.Accounts.ChatSessions
+  alias Sacrum.Accounts.{ChatEvents, ChatMessages, ChatSessions}
   alias Sacrum.Accounts.Projects
+  alias Sacrum.Chat.PublicEvents
   alias Sacrum.ChatSessions.Status, as: ChatSessionStatus
-  alias Sacrum.Repo.Schemas.{ChatSession, StepExecution, TaskRun}
+  alias Sacrum.Repo.Schemas.{ChatEvent, ChatMessage, ChatSession, StepExecution, TaskRun}
   alias Sacrum.Repo.Users
 
   defp create_user(prefix \\ "chat-session") do
@@ -198,6 +199,50 @@ defmodule Sacrum.Accounts.ChatSessionsTest do
       assert %DateTime{} = completed.ended_at
       assert Repo.aggregate(TaskRun, :count) == 0
       assert Repo.aggregate(StepExecution, :count) == 0
+    end
+
+    test "hard deletes a scoped session and cascades related messages and events", %{
+      user: user,
+      project: project
+    } do
+      other_project = create_project(user, "Other Delete Scope")
+
+      {:ok, session} = ChatSessions.insert(user.id, project.id, %{})
+      {:ok, other_session} = ChatSessions.insert(user.id, other_project.id, %{})
+
+      {:ok, message} =
+        ChatMessages.append(user.id, project.id, session.id, %{
+          role: :user,
+          content: "delete me",
+          content_format: :plain
+        })
+
+      {:ok, event} =
+        ChatEvents.append(
+          user.id,
+          project.id,
+          session.id,
+          PublicEvents.message_created_attrs(message)
+        )
+
+      assert {:error, :not_found} =
+               ChatSessions.delete_session(user.id, other_project.id, session.id)
+
+      assert {:ok, _still_present} = ChatSessions.get_session(user.id, project.id, session.id)
+
+      assert {:ok, deleted} = ChatSessions.delete_session(user.id, project.id, session.id)
+      assert deleted.id == session.id
+
+      assert {:error, :not_found} = ChatSessions.get_session(user.id, project.id, session.id)
+      assert Enum.map(ChatSessions.list_sessions(user.id, project.id), & &1.id) == []
+
+      assert Enum.map(ChatSessions.list_sessions(user.id, other_project.id), & &1.id) == [
+               other_session.id
+             ]
+
+      refute Repo.get(ChatSession, session.id)
+      refute Repo.get(ChatMessage, message.id)
+      refute Repo.get(ChatEvent, event.id)
     end
   end
 end

@@ -81,6 +81,11 @@ defmodule SacrumWeb.Graphql.Types.ChatTypes do
     field :inserted_at, :datetime
   end
 
+  object :delete_chat_session_payload do
+    field :deleted_session_id, non_null(:id)
+    field :success, non_null(:boolean)
+  end
+
   object :chat_queries do
     field :chat_session, :chat_session do
       arg(:project_id, non_null(:uuid4))
@@ -177,6 +182,19 @@ defmodule SacrumWeb.Graphql.Types.ChatTypes do
         |> format_result()
       end)
     end
+
+    field :delete_chat_session, :delete_chat_session_payload do
+      arg(:project_id, non_null(:uuid4))
+      arg(:chat_session_id, non_null(:uuid4))
+
+      resolve(fn %{project_id: project_id, chat_session_id: chat_session_id},
+                 %{context: %{current_user: user}} ->
+        user.id
+        |> LiveChat.delete_session(project_id, chat_session_id)
+        |> delete_result()
+        |> format_result()
+      end)
+    end
   end
 
   defp list_opts(args) do
@@ -195,6 +213,12 @@ defmodule SacrumWeb.Graphql.Types.ChatTypes do
   end
 
   defp format_result(result), do: result
+
+  defp delete_result({:ok, session}) do
+    {:ok, %{deleted_session_id: session.id, success: true}}
+  end
+
+  defp delete_result(result), do: result
 
   defp wire_value(value) when is_atom(value), do: Atom.to_string(value)
   defp wire_value(value), do: value

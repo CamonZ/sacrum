@@ -112,6 +112,12 @@ V0 persists only the session-level spine. The V0 tables are scoped directly by
 `chat_session_id`. Future migrations can add `chat_runs` and backfill or link
 sessions without changing the V0 public transcript/event records.
 
+V0 chat session deletion is a hard delete of the `chat_sessions` row after
+scoping by authenticated `user_id`, `project_id`, and `chat_session_id`.
+`chat_messages` and `chat_events` use `ON DELETE CASCADE`, so deleting the
+session also removes its public transcript and event rows. Deleted sessions
+must not appear in project `chatSessions` history or scoped session fetches.
+
 ### `chat_runs`
 
 Planned stable user-facing chat identity and durable work container. This table
