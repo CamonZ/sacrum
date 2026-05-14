@@ -9,6 +9,8 @@ defmodule Sacrum.Chat.Inference.OpenRouter do
 
   @behaviour Sacrum.Chat.Inference.Provider
 
+  alias Sacrum.Chat.Inference
+  alias Sacrum.Chat.Inference.Actions.OpenRouterChat
   alias Sacrum.Chat.Inference.Result
 
   @default_base_url "https://openrouter.ai/api/v1"
@@ -32,6 +34,8 @@ defmodule Sacrum.Chat.Inference.OpenRouter do
   end
 
   defp run_jido_action(messages, config, opts) do
+    timeout = Keyword.get(opts, :timeout, config.timeout)
+
     params =
       %{
         messages: messages,
@@ -43,9 +47,9 @@ defmodule Sacrum.Chat.Inference.OpenRouter do
       |> maybe_put(:app_title, config.app_title)
       |> maybe_put(:temperature, Keyword.get(opts, :temperature))
       |> maybe_put(:max_tokens, Keyword.get(opts, :max_tokens))
-      |> maybe_put(:timeout, Keyword.get(opts, :timeout))
+      |> maybe_put(:timeout, timeout)
 
-    case Jido.Exec.run(Sacrum.Chat.Inference.Actions.OpenRouterChat, params) do
+    case Jido.Exec.run(OpenRouterChat, params, %{}, timeout: timeout) do
       {:ok, result} -> {:ok, result}
       {:error, reason} -> {:error, {:openrouter_request_failed, scrub_error(reason, config)}}
     end
@@ -105,7 +109,8 @@ defmodule Sacrum.Chat.Inference.OpenRouter do
       base_url: blank_to_nil(Keyword.get(merged_config, :base_url, @default_base_url)),
       model: blank_to_nil(Keyword.get(merged_config, :model)),
       app_referer: blank_to_nil(Keyword.get(merged_config, :app_referer)),
-      app_title: blank_to_nil(Keyword.get(merged_config, :app_title))
+      app_title: blank_to_nil(Keyword.get(merged_config, :app_title)),
+      timeout: Inference.timeout(timeout: Keyword.get(merged_config, :timeout))
     }
   end
 

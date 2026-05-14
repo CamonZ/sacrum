@@ -43,7 +43,9 @@ defmodule Sacrum.ChatSessionRunner do
 
   require Logger
 
+  alias Sacrum.Chat.Inference
   alias Sacrum.ChatSessionRunner.Actions
+  alias Sacrum.ChatSessionRunner.Actions.InvokeInference
 
   @engine_session_ref_prefix "jido_agent_server:"
   @completion_cleanup_delay_ms 100
@@ -99,6 +101,15 @@ defmodule Sacrum.ChatSessionRunner do
   def agent_id(chat_session_id) when is_binary(chat_session_id) do
     @engine_session_ref_prefix <> chat_session_id
   end
+
+  @impl true
+  def on_before_cmd(agent, {InvokeInference, params}) when is_map(params) do
+    inference_opts = Map.get(params, :inference_opts, Map.get(params, "inference_opts", []))
+    timeout = Inference.timeout(inference_opts)
+    {:ok, agent, {InvokeInference, params, %{}, [timeout: timeout]}}
+  end
+
+  def on_before_cmd(agent, action), do: {:ok, agent, action}
 
   @spec start_completion_cleanup(pid()) :: :ok
   defp start_completion_cleanup(pid) when is_pid(pid) do
