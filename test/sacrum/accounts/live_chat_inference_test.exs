@@ -28,6 +28,17 @@ defmodule Sacrum.Accounts.LiveChatInferenceTest do
          },
          internal_metadata: %{
            "trace_id" => "trace-1",
+           "reasoning" => %{
+             "text" => "Internal model reasoning",
+             "details" => [
+               %{
+                 "type" => "reasoning.text",
+                 "text" => "Internal model reasoning",
+                 "signature" => "opaque-provider-signature"
+               }
+             ],
+             "tokens" => 9
+           },
            "raw_provider_payload" => %{
              "id" => "provider-response-1",
              "headers" => %{
@@ -103,6 +114,8 @@ defmodule Sacrum.Accounts.LiveChatInferenceTest do
                "usage" => %{"input_tokens" => 7, "output_tokens" => 5}
              }
 
+      refute Map.has_key?(assistant_message.metadata, "reasoning")
+
       assert {:ok, public_events} = LiveChat.list_public_events(user.id, project.id, session.id)
       public_event_types = Enum.map(public_events, & &1.event_type)
 
@@ -113,6 +126,7 @@ defmodule Sacrum.Accounts.LiveChatInferenceTest do
              ]
 
       refute Enum.any?(public_events, &(&1.event_type == "chat_inference.completed"))
+      refute inspect(public_events) =~ "Internal model reasoning"
       refute inspect(public_events) =~ "raw_provider_payload"
       refute inspect(public_events) =~ "raw-secret"
 
@@ -133,6 +147,17 @@ defmodule Sacrum.Accounts.LiveChatInferenceTest do
                "assistant_message_id" => assistant_message_id,
                "metadata" => %{
                  "trace_id" => "trace-1",
+                 "reasoning" => %{
+                   "text" => "Internal model reasoning",
+                   "details" => [
+                     %{
+                       "type" => "reasoning.text",
+                       "text" => "Internal model reasoning",
+                       "signature" => "opaque-provider-signature"
+                     }
+                   ],
+                   "tokens" => 9
+                 },
                  "raw_provider_payload" => %{
                    "id" => "provider-response-1",
                    "headers" => %{"content-type" => "application/json"},

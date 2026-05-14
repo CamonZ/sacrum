@@ -47,6 +47,11 @@ defmodule Sacrum.Chat.Inference.OpenRouter do
       |> maybe_put(:app_title, config.app_title)
       |> maybe_put(:temperature, Keyword.get(opts, :temperature))
       |> maybe_put(:max_tokens, Keyword.get(opts, :max_tokens))
+      |> maybe_put(
+        :reasoning_effort,
+        Keyword.get(opts, :reasoning_effort, config.reasoning_effort)
+      )
+      |> maybe_put(:provider_options, Keyword.get(opts, :provider_options))
       |> maybe_put(:timeout, timeout)
 
     case Jido.Exec.run(OpenRouterChat, params, %{}, timeout: timeout) do
@@ -56,42 +61,53 @@ defmodule Sacrum.Chat.Inference.OpenRouter do
   end
 
   defp normalize_action_result(result, config) do
-    usage = normalized_usage(Map.get(result, :usage) || Map.get(result, "usage") || %{})
-    model = Map.get(result, :model) || Map.get(result, "model") || config.model
-    finish_reason = Map.get(result, :finish_reason) || Map.get(result, "finish_reason")
+    model = fetch_result(result, :model) || config.model
 
-    provider_metadata =
-      Map.get(result, :provider_metadata) || Map.get(result, "provider_metadata") || %{}
-
-    public_metadata =
-      maybe_put_string(
-        %{
-          "provider" => "openrouter",
-          "model" => model,
-          "usage" => usage
-        },
-        "finish_reason",
-        normalize_value(finish_reason)
-      )
-
-    internal_metadata =
-      maybe_put_string(
-        %{
-          "provider" => "openrouter",
-          "model" => model,
-          "usage" => usage,
-          "provider_metadata" => normalize_value(provider_metadata)
-        },
-        "finish_reason",
-        normalize_value(finish_reason)
-      )
+    metadata = action_metadata(result, model)
 
     %Result{
-      content: Map.get(result, :text) || Map.get(result, "text"),
+      content: fetch_result(result, :text),
       content_format: :markdown,
-      public_metadata: public_metadata,
-      internal_metadata: internal_metadata
+      public_metadata: metadata.public,
+      internal_metadata: metadata.internal
     }
+  end
+
+  defp action_metadata(result, model) do
+    usage = normalized_usage(fetch_result(result, :usage) || %{})
+    finish_reason = normalize_value(fetch_result(result, :finish_reason))
+
+    %{
+      public: public_metadata(model, usage, finish_reason),
+      internal: internal_metadata(result, model, usage, finish_reason)
+    }
+  end
+
+  defp public_metadata(model, usage, finish_reason) do
+    metadata = %{
+      "provider" => "openrouter",
+      "model" => model,
+      "usage" => public_usage(usage)
+    }
+
+    maybe_put_string(metadata, "finish_reason", finish_reason)
+  end
+
+  defp internal_metadata(result, model, usage, finish_reason) do
+    provider_metadata = fetch_result(result, :provider_metadata) || %{}
+
+    %{
+      "provider" => "openrouter",
+      "model" => model,
+      "usage" => usage,
+      "provider_metadata" => normalize_value(provider_metadata)
+    }
+    |> maybe_put_string("reasoning", reasoning_metadata(result))
+    |> maybe_put_string("finish_reason", finish_reason)
+  end
+
+  defp fetch_result(result, key) when is_atom(key) do
+    Map.get(result, key) || Map.get(result, Atom.to_string(key))
   end
 
   defp openrouter_config(opts) do
@@ -110,6 +126,7 @@ defmodule Sacrum.Chat.Inference.OpenRouter do
       model: blank_to_nil(Keyword.get(merged_config, :model)),
       app_referer: blank_to_nil(Keyword.get(merged_config, :app_referer)),
       app_title: blank_to_nil(Keyword.get(merged_config, :app_title)),
+      reasoning_effort: blank_to_nil(Keyword.get(merged_config, :reasoning_effort)),
       timeout: Inference.timeout(timeout: Keyword.get(merged_config, :timeout))
     }
   end
@@ -145,7 +162,57 @@ defmodule Sacrum.Chat.Inference.OpenRouter do
   defp maybe_put_string(map, _key, nil), do: map
   defp maybe_put_string(map, key, value), do: Map.put(map, key, value)
 
+  defp reasoning_metadata(result) do
+    reasoning_text = fetch_result(result, :reasoning_text)
+    reasoning_details = fetch_result(result, :reasoning_details) || []
+    reasoning_tokens = fetch_result(result, :reasoning_tokens)
+
+    normalized_details = normalize_value(reasoning_details || [])
+    normalized_text = blank_to_nil(reasoning_text)
+    normalized_tokens = reasoning_tokens || 0
+
+    if is_nil(normalized_text) and normalized_details == [] and normalized_tokens == 0 do
+      nil
+    else
+      %{
+        "text" => normalized_text,
+        "details" => normalized_details,
+        "tokens" => normalized_tokens
+      }
+    end
+  end
+
   defp normalized_usage(usage), do: normalize_value(usage || %{})
+
+  defp public_usage(usage) when is_map(usage) do
+    usage
+    |> Map.drop(["reasoning", "reasoning_tokens", "thinking_tokens"])
+    |> drop_nested_usage_keys("completion_tokens_details", [
+      "reasoning",
+      "reasoning_tokens",
+      "thinking_tokens"
+    ])
+    |> drop_nested_usage_keys("output_tokens_details", [
+      "reasoning",
+      "reasoning_tokens",
+      "thinking_tokens"
+    ])
+  end
+
+  defp public_usage(usage), do: usage
+
+  defp drop_nested_usage_keys(usage, key, nested_keys) do
+    case Map.get(usage, key) do
+      nested when is_map(nested) -> Map.put(usage, key, Map.drop(nested, nested_keys))
+      _other -> usage
+    end
+  end
+
+  defp normalize_value(%ReqLLM.Message.ReasoningDetails{} = detail) do
+    detail
+    |> Map.from_struct()
+    |> normalize_value()
+  end
 
   defp normalize_value(value) when is_atom(value), do: Atom.to_string(value)
 

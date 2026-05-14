@@ -40,6 +40,7 @@ config :sacrum, :chat_inference,
     base_url: System.get_env("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
     api_key: System.get_env("OPENROUTER_API_KEY"),
     model: System.get_env("OPENROUTER_MODEL", "openai/gpt-4o-mini"),
+    reasoning_effort: System.get_env("OPENROUTER_REASONING_EFFORT"),
     app_referer: System.get_env("OPENROUTER_APP_REFERER"),
     app_title: System.get_env("OPENROUTER_APP_TITLE", "Sacrum"),
     timeout: chat_inference_timeout_ms
