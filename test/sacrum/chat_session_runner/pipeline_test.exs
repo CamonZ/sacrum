@@ -20,7 +20,7 @@ defmodule Sacrum.ChatSessionRunner.PipelineTest do
   alias Sacrum.Repo.Schemas.ChatEvent
   alias Sacrum.Repo.Users
 
-  @assistant_client_message_id "chat_session_runner:assistant:v1"
+  @assistant_client_message_id_prefix "chat_session_runner:assistant:v1"
 
   defmodule StubProvider do
     @behaviour Sacrum.Chat.Inference.Provider
@@ -190,7 +190,7 @@ defmodule Sacrum.ChatSessionRunner.PipelineTest do
       assert {:ok, intake_status_message} =
                ChatMessages.get_by_client_message_id(
                  running,
-                 "chat_session_runner:status:intake:v1"
+                 "chat_session_runner:status:intake:v1:#{ctx.user_message.id}"
                )
 
       assert intake_status_message.content == "Chat session started."
@@ -203,13 +203,14 @@ defmodule Sacrum.ChatSessionRunner.PipelineTest do
     test "is idempotent — re-running intake does not duplicate messages or checkpoints", ctx do
       {:ok, _} = Pipeline.intake(ctx.session, ctx.engine_session_ref)
       {:ok, _} = Pipeline.intake(ctx.session, ctx.engine_session_ref)
+      client_message_id = "chat_session_runner:status:intake:v1:#{ctx.user_message.id}"
 
       intake_status_messages =
         Repo.all(
           from m in Sacrum.Repo.Schemas.ChatMessage,
             where:
               m.chat_session_id == ^ctx.session.id and
-                m.client_message_id == "chat_session_runner:status:intake:v1"
+                m.client_message_id == ^client_message_id
         )
 
       assert length(intake_status_messages) == 1
@@ -248,7 +249,7 @@ defmodule Sacrum.ChatSessionRunner.PipelineTest do
           role: :assistant,
           content: "previous answer",
           content_format: :markdown,
-          client_message_id: @assistant_client_message_id,
+          client_message_id: "#{@assistant_client_message_id_prefix}:#{ctx.user_message.id}",
           metadata: %{"provider" => "pipeline-stub", "model" => "pipeline-test"}
         })
 
@@ -301,7 +302,9 @@ defmodule Sacrum.ChatSessionRunner.PipelineTest do
 
       assert {:ok, message} = Pipeline.append_assistant_message(ctx.session, inference_result)
       assert message.role == :assistant
-      assert message.client_message_id == @assistant_client_message_id
+
+      assert message.client_message_id ==
+               "#{@assistant_client_message_id_prefix}:#{ctx.user_message.id}"
 
       assert {:ok, second_call_message} =
                Pipeline.append_assistant_message(ctx.session, inference_result)
@@ -339,7 +342,7 @@ defmodule Sacrum.ChatSessionRunner.PipelineTest do
           role: :assistant,
           content: "Resumed answer",
           content_format: :markdown,
-          client_message_id: @assistant_client_message_id,
+          client_message_id: "#{@assistant_client_message_id_prefix}:#{ctx.user_message.id}",
           metadata: %{"provider" => "pipeline-stub", "model" => "pipeline-test"}
         })
 
@@ -379,7 +382,7 @@ defmodule Sacrum.ChatSessionRunner.PipelineTest do
       assert {:ok, status_message} =
                ChatMessages.get_by_client_message_id(
                  completed,
-                 "chat_session_runner:status:complete_session:v1"
+                 "chat_session_runner:status:complete_session:v1:#{ctx.user_message.id}"
                )
 
       assert status_message.content == "Chat session completed."

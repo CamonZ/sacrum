@@ -166,7 +166,7 @@ defmodule SacrumWeb.Graphql.Types.ChatTypes do
           |> reject_nil_values()
 
         user.id
-        |> LiveChat.send_message(project_id, chat_session_id, attrs)
+        |> LiveChat.send_message_and_start_runner(project_id, chat_session_id, attrs)
         |> format_result()
       end)
     end
