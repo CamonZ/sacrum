@@ -128,7 +128,7 @@ defmodule Sacrum.ChatSessionRunnerTest do
       assert %DateTime{} = completed_session.started_at
       assert %DateTime{} = completed_session.ended_at
 
-      {:ok, messages} = ChatMessages.list_for_session(completed_session, [])
+      {:ok, messages} = ChatMessages.list_for_session(completed_session, include_private: true)
 
       assert Enum.map(messages, &{&1.role, &1.client_message_id, &1.content}) == [
                {:user, "client-runner-user", "Plan the next step"},
@@ -179,7 +179,7 @@ defmodule Sacrum.ChatSessionRunnerTest do
       {:ok, reloaded_session} = ChatSessions.get_session(user.id, project.id, session.id)
       assert reloaded_session.status == :cancelled
 
-      {:ok, messages} = ChatMessages.list_for_session(reloaded_session, [])
+      {:ok, messages} = ChatMessages.list_for_session(reloaded_session, include_private: true)
 
       refute Enum.any?(messages, fn message ->
                message.role == :assistant and message.content == "Output after cancellation"
@@ -230,7 +230,7 @@ defmodule Sacrum.ChatSessionRunnerTest do
 
       refute_receive {:unexpected_provider_called, _messages}
 
-      {:ok, messages} = ChatMessages.list_for_session(completed_session, [])
+      {:ok, messages} = ChatMessages.list_for_session(completed_session, include_private: true)
       assistant_messages = Enum.filter(messages, &(&1.role == :assistant))
 
       assert Enum.map(assistant_messages, &{&1.id, &1.client_message_id, &1.content}) == [
@@ -299,7 +299,8 @@ defmodule Sacrum.ChatSessionRunnerTest do
       assert first_completion.status == :completed
       stable_engine_session_ref = first_completion.engine_session_ref
 
-      {:ok, first_messages} = ChatMessages.list_for_session(first_completion, [])
+      {:ok, first_messages} =
+        ChatMessages.list_for_session(first_completion, include_private: true)
 
       first_event_count =
         Repo.aggregate(
@@ -318,7 +319,7 @@ defmodule Sacrum.ChatSessionRunnerTest do
       assert second_view.status == :completed
       assert second_view.engine_session_ref == stable_engine_session_ref
 
-      {:ok, second_messages} = ChatMessages.list_for_session(second_view, [])
+      {:ok, second_messages} = ChatMessages.list_for_session(second_view, include_private: true)
 
       assert Enum.map(second_messages, & &1.id) == Enum.map(first_messages, & &1.id)
 

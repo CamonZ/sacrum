@@ -76,7 +76,7 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
 
   @spec load_messages(ChatSession.t()) :: {:ok, [ChatMessage.t()]} | {:error, term()}
   def load_messages(%ChatSession{} = session) do
-    with {:ok, messages} <- ChatMessages.list_for_session(session, []),
+    with {:ok, messages} <- ChatMessages.list_for_session(session, include_private: true),
          {:ok, _events} <-
            checkpoint_step(session, :load_messages, %{"message_count" => length(messages)}) do
       {:ok, messages}
@@ -311,14 +311,12 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
         "runner" => "chat_session_runner",
         "runner_version" => @runner_version,
         "step" => Atom.to_string(step),
-        "turn_message_id" => turn_message_id
+        "turn_message_id" => turn_message_id,
+        "visibility" => "internal"
       }
     }
 
-    with {:ok, message} <- ensure_message(session, attrs),
-         {:ok, _event} <- ensure_public_message_event(session, message) do
-      {:ok, message}
-    end
+    ensure_message(session, attrs)
   end
 
   @spec ensure_message(ChatSession.t(), map()) ::

@@ -264,7 +264,7 @@ defmodule Sacrum.ChatSessionRunner.PipelineTest do
     test "returns the inference result and writes a checkpoint with public provider/model", ctx do
       ctx = transition_running(ctx)
 
-      {:ok, messages} = ChatMessages.list_for_session(ctx.session, [])
+      {:ok, messages} = ChatMessages.list_for_session(ctx.session, include_private: true)
 
       assert {:ok, refreshed_session, %Result{content: "Pipeline stub answer"}} =
                Pipeline.invoke_inference(ctx.session, messages,
@@ -283,7 +283,7 @@ defmodule Sacrum.ChatSessionRunner.PipelineTest do
     test "halts when the session became terminal during inference", ctx do
       ctx = transition_running(ctx)
 
-      {:ok, messages} = ChatMessages.list_for_session(ctx.session, [])
+      {:ok, messages} = ChatMessages.list_for_session(ctx.session, include_private: true)
 
       assert {:halt, _session, {:terminal_status, :cancelled}} =
                Pipeline.invoke_inference(ctx.session, messages,
@@ -311,7 +311,7 @@ defmodule Sacrum.ChatSessionRunner.PipelineTest do
 
       assert second_call_message.id == message.id
 
-      {:ok, messages} = ChatMessages.list_for_session(ctx.session, [])
+      {:ok, messages} = ChatMessages.list_for_session(ctx.session, include_private: true)
       assistants = Enum.filter(messages, &(&1.role == :assistant))
       assert length(assistants) == 1
 

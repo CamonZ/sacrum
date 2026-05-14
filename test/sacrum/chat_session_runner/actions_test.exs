@@ -343,7 +343,7 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
       assert emit.signal.type == Signals.complete_session()
 
       {:ok, reloaded} = Sacrum.Repo.ChatSessions.get(ctx.session.id)
-      {:ok, messages} = ChatMessages.list_for_session(reloaded, [])
+      {:ok, messages} = ChatMessages.list_for_session(reloaded, include_private: true)
 
       assistant_messages = Enum.filter(messages, &(&1.role == :assistant))
 
@@ -360,7 +360,7 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
       # Idempotent: running again with the same client_message_id must not duplicate.
       assert {:ok, %{step: :append_assistant}, [_emit]} = AppendAssistant.run(params, %{})
 
-      {:ok, refreshed_messages} = ChatMessages.list_for_session(reloaded, [])
+      {:ok, refreshed_messages} = ChatMessages.list_for_session(reloaded, include_private: true)
 
       assert length(Enum.filter(refreshed_messages, &(&1.role == :assistant))) == 1
     end
@@ -393,7 +393,7 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
              end)
 
       {:ok, refreshed_session} = Sacrum.Repo.ChatSessions.get(ctx.session.id)
-      {:ok, messages} = ChatMessages.list_for_session(refreshed_session, [])
+      {:ok, messages} = ChatMessages.list_for_session(refreshed_session, include_private: true)
       assert Enum.filter(messages, &(&1.role == :assistant)) == []
     end
   end

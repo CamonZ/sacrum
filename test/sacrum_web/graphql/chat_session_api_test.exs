@@ -175,6 +175,8 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
       assert found_session["status"] == "completed"
       assert message["id"] in Enum.map(found_session["messages"], & &1["id"])
       assert message["id"] in Enum.map(query_result["data"]["chatMessages"], & &1["id"])
+      refute Enum.any?(found_session["messages"], &(&1["role"] == "status"))
+      refute Enum.any?(query_result["data"]["chatMessages"], &(&1["role"] == "status"))
 
       assistant_message =
         Enum.find(found_session["messages"], &(&1["role"] == "assistant"))

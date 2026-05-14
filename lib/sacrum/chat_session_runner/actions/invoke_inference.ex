@@ -27,7 +27,7 @@ defmodule Sacrum.ChatSessionRunner.Actions.InvokeInference do
   def run(params, _context) do
     with {:ok, session} <- Pipeline.fetch_session(params.chat_session_id),
          {:continue, session} <- Pipeline.ensure_runnable(session),
-         {:ok, messages} <- ChatMessages.list_for_session(session, []),
+         {:ok, messages} <- ChatMessages.list_for_session(session, include_private: true),
          {:ok, session, result} <-
            Pipeline.invoke_inference(session, messages, params.inference_opts) do
       directive =
