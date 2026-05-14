@@ -30,6 +30,7 @@ defmodule Sacrum.Repo.ChatMessages do
       message.user_id == ^chat_session.user_id and message.project_id == ^chat_session.project_id and
         message.chat_session_id == ^chat_session.id
     )
+    |> maybe_include_private(Keyword.get(opts, :include_private, false))
     |> maybe_after(Keyword.get(opts, :after))
     |> order_by([message], asc: message.inserted_at, asc: message.id)
     |> limit(^limit_option(opts))
@@ -54,6 +55,16 @@ defmodule Sacrum.Repo.ChatMessages do
 
   defp maybe_after(query, %DateTime{} = after_inserted_at) do
     where(query, [message], message.inserted_at > ^after_inserted_at)
+  end
+
+  defp maybe_include_private(query, true), do: query
+
+  defp maybe_include_private(query, _include_private) do
+    where(
+      query,
+      [message],
+      fragment("coalesce(?->>'visibility', 'public')", message.metadata) == "public"
+    )
   end
 
   defp limit_option(opts) do

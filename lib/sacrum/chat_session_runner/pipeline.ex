@@ -19,11 +19,13 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
   alias Sacrum.Repo.ChatSessions, as: ChatSessionsRepo
   alias Sacrum.Repo.Schemas.{ChatEvent, ChatMessage, ChatSession}
 
+  import Ecto.Query
+
   @engine_kind "jido"
   @runner_version 1
-  @assistant_client_message_id "chat_session_runner:assistant:v1"
+  @assistant_client_message_id_prefix "chat_session_runner:assistant:v1"
 
-  @public_payload_keys ~w(status message_count assistant_message_id resumed provider model)
+  @public_payload_keys ~w(status message_count assistant_message_id resumed provider model turn_message_id)
 
   @spec fetch_session(String.t()) :: {:ok, ChatSession.t()} | {:error, term()}
   def fetch_session(chat_session_id) when is_binary(chat_session_id) do
@@ -33,10 +35,22 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
   @spec ensure_runnable(ChatSession.t()) ::
           {:continue, ChatSession.t()} | {:halt, ChatSession.t(), term()}
   def ensure_runnable(%ChatSession{} = session) do
-    if ChatSessionStatus.terminal?(session.status) do
-      {:halt, session, {:terminal_status, session.status}}
-    else
-      {:continue, session}
+    cond do
+      session.status in [:cancelled, :cancelling] ->
+        {:halt, session, {:terminal_status, session.status}}
+
+      session.status in [:completed, :failed] ->
+        if pending_user_turn?(session) do
+          {:continue, session}
+        else
+          {:halt, session, {:terminal_status, session.status}}
+        end
+
+      ChatSessionStatus.terminal?(session.status) ->
+        {:halt, session, {:terminal_status, session.status}}
+
+      true ->
+        {:continue, session}
     end
   end
 
@@ -62,7 +76,7 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
 
   @spec load_messages(ChatSession.t()) :: {:ok, [ChatMessage.t()]} | {:error, term()}
   def load_messages(%ChatSession{} = session) do
-    with {:ok, messages} <- ChatMessages.list_for_session(session, []),
+    with {:ok, messages} <- ChatMessages.list_for_session(session, include_private: true),
          {:ok, _events} <-
            checkpoint_step(session, :load_messages, %{"message_count" => length(messages)}) do
       {:ok, messages}
@@ -72,19 +86,30 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
   @spec lookup_assistant_message(ChatSession.t()) ::
           {:ok, ChatMessage.t()} | {:error, :not_found}
   def lookup_assistant_message(%ChatSession{} = session) do
-    ChatMessages.get_by_client_message_id(session, @assistant_client_message_id)
+    with {:ok, turn_message} <- latest_user_message(session) do
+      lookup_assistant_message(session, turn_message.id)
+    end
+  end
+
+  @spec lookup_assistant_message(ChatSession.t(), String.t()) ::
+          {:ok, ChatMessage.t()} | {:error, :not_found}
+  def lookup_assistant_message(%ChatSession{} = session, turn_message_id)
+      when is_binary(turn_message_id) do
+    ChatMessages.get_by_client_message_id(session, assistant_client_message_id(turn_message_id))
   end
 
   @spec invoke_inference(ChatSession.t(), [ChatMessage.t()], keyword()) ::
           {:ok, ChatSession.t(), Inference.Result.t()} | {:error, term()}
   def invoke_inference(%ChatSession{} = session, messages, inference_opts)
       when is_list(messages) and is_list(inference_opts) do
-    with {:ok, result} <- Inference.generate(messages, inference_opts),
+    with {:ok, result} <-
+           Inference.generate(conversation_messages_for_inference(messages), inference_opts),
          {:ok, session} <- refresh_runnable_session(session),
          {:ok, _events} <-
            checkpoint_step(session, :invoke_inference, %{
              "provider" => Map.get(result.public_metadata, "provider"),
-             "model" => Map.get(result.public_metadata, "model")
+             "model" => Map.get(result.public_metadata, "model"),
+             "turn_message_id" => turn_message_id(messages)
            }) do
       {:ok, session, result}
     end
@@ -92,10 +117,18 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
 
   @spec append_assistant_message(ChatSession.t(), Inference.Result.t()) ::
           {:ok, ChatMessage.t()} | {:error, term()}
-  def append_assistant_message(%ChatSession{} = session, %Inference.Result{} = inference_result) do
+  @spec append_assistant_message(ChatSession.t(), Inference.Result.t(), String.t() | nil) ::
+          {:ok, ChatMessage.t()} | {:error, term()}
+  def append_assistant_message(
+        %ChatSession{} = session,
+        %Inference.Result{} = inference_result,
+        turn_message_id \\ nil
+      ) do
+    turn_message_id = turn_message_id || latest_user_message_id!(session)
+
     attrs =
       InferenceEvents.assistant_message_attrs(inference_result,
-        client_message_id: @assistant_client_message_id
+        client_message_id: assistant_client_message_id(turn_message_id)
       )
 
     with {:ok, message} <- ensure_message(session, attrs),
@@ -103,7 +136,8 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
          {:ok, _event} <- append_inference_completed_event(session, message, inference_result),
          {:ok, _events} <-
            checkpoint_step(session, :append_assistant, %{
-             "assistant_message_id" => message.id
+             "assistant_message_id" => message.id,
+             "turn_message_id" => turn_message_id
            }) do
       {:ok, message}
     end
@@ -118,26 +152,52 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
          {:ok, _events} <-
            checkpoint_step(session, :append_assistant, %{
              "assistant_message_id" => message.id,
+             "turn_message_id" => turn_message_id_from_assistant(message),
              "resumed" => true
            }) do
       {:ok, session, message}
     end
   end
 
-  @spec complete_session(ChatSession.t()) :: {:ok, ChatSession.t()} | {:error, term()}
-  def complete_session(%ChatSession{} = session) do
+  @spec complete_session(ChatSession.t(), String.t() | nil) ::
+          {:ok, ChatSession.t()} | {:error, term()}
+  def complete_session(%ChatSession{} = session, turn_message_id \\ nil) do
+    turn_message_id = turn_message_id || latest_user_message_id!(session)
+
     with {:ok, session} <- refresh_runnable_session(session),
          {:ok, _message} <-
-           ensure_status_message(session, :complete_session, "Chat session completed."),
+           ensure_status_message(
+             session,
+             :complete_session,
+             "Chat session completed.",
+             turn_message_id
+           ),
          {:ok, session} <- ensure_completed_session(session),
          {:ok, _events} <-
-           checkpoint_step(session, :complete_session, %{"status" => "completed"}) do
+           checkpoint_step(session, :complete_session, %{
+             "status" => "completed",
+             "turn_message_id" => turn_message_id
+           }) do
       {:ok, session}
     end
   end
 
-  @spec mark_failed(String.t(), term()) :: {:error, term()}
-  def mark_failed(chat_session_id, reason) when is_binary(chat_session_id) do
+  @spec pending_user_turn_after?(ChatSession.t(), String.t() | nil) :: boolean()
+  def pending_user_turn_after?(%ChatSession{}, nil), do: false
+
+  def pending_user_turn_after?(%ChatSession{} = session, turn_message_id)
+      when is_binary(turn_message_id) do
+    with {:ok, turn_message} <- get_message(session, turn_message_id),
+         {:ok, latest_user} <- latest_user_message(session) do
+      latest_user.id != turn_message.id and compare_messages(latest_user, turn_message) == :gt and
+        match?({:error, :not_found}, lookup_assistant_message(session, latest_user.id))
+    else
+      {:error, :not_found} -> false
+    end
+  end
+
+  @spec surface_failure(String.t(), term()) :: :ok | {:error, term()}
+  def surface_failure(chat_session_id, reason) when is_binary(chat_session_id) do
     case ChatSessionsRepo.get(chat_session_id) do
       {:ok, %ChatSession{} = session} ->
         failed_reason = inspect(reason)
@@ -146,14 +206,22 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
              {:ok, failed_session} <- update_session_with_event(session, %{status: :failed}),
              {:ok, _events} <-
                checkpoint_step(failed_session, :failed, %{"reason" => failed_reason}) do
-          {:error, reason}
+          :ok
         else
-          {:halt, _session, _reason} -> {:error, reason}
-          {:error, _failure_reason} -> {:error, reason}
+          {:halt, _session, _reason} -> :ok
+          {:error, failure_reason} -> {:error, failure_reason}
         end
 
       {:error, :not_found} ->
-        {:error, reason}
+        {:error, :not_found}
+    end
+  end
+
+  @spec mark_failed(String.t(), term()) :: {:error, term()}
+  def mark_failed(chat_session_id, reason) when is_binary(chat_session_id) do
+    case surface_failure(chat_session_id, reason) do
+      :ok -> {:error, reason}
+      {:error, _failure_reason} -> {:error, reason}
     end
   end
 
@@ -180,6 +248,8 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
   defp ensure_running_session(%ChatSession{} = session, engine_session_ref) do
     update_session_with_event(session, %{
       status: :running,
+      ended_at: nil,
+      stop_requested_at: nil,
       engine_kind: @engine_kind,
       engine_session_ref: engine_session_ref
     })
@@ -221,23 +291,32 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
 
   @spec ensure_status_message(ChatSession.t(), atom(), String.t()) ::
           {:ok, ChatMessage.t()} | {:error, term()}
-  defp ensure_status_message(%ChatSession{} = session, step, content) when is_atom(step) do
+  @spec ensure_status_message(ChatSession.t(), atom(), String.t(), String.t() | nil) ::
+          {:ok, ChatMessage.t()} | {:error, term()}
+  defp ensure_status_message(
+         %ChatSession{} = session,
+         step,
+         content,
+         turn_message_id \\ nil
+       )
+       when is_atom(step) do
+    turn_message_id = turn_message_id || latest_user_message_id!(session)
+
     attrs = %{
       role: :status,
       content: content,
       content_format: :plain,
-      client_message_id: "chat_session_runner:status:#{step}:v1",
+      client_message_id: "chat_session_runner:status:#{step}:v1:#{turn_message_id}",
       metadata: %{
         "runner" => "chat_session_runner",
         "runner_version" => @runner_version,
-        "step" => Atom.to_string(step)
+        "step" => Atom.to_string(step),
+        "turn_message_id" => turn_message_id,
+        "visibility" => "internal"
       }
     }
 
-    with {:ok, message} <- ensure_message(session, attrs),
-         {:ok, _event} <- ensure_public_message_event(session, message) do
-      {:ok, message}
-    end
+    ensure_message(session, attrs)
   end
 
   @spec ensure_message(ChatSession.t(), map()) ::
@@ -313,11 +392,9 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
   @spec ensure_inference_completed_event(ChatSession.t(), map()) ::
           {:ok, ChatEvent.t()} | {:error, term()}
   defp ensure_inference_completed_event(%ChatSession{} = session, attrs) do
-    case ChatEvents.get_by_type(
-           session,
-           InferenceEvents.event_type(:inference_completed),
-           :internal
-         ) do
+    assistant_message_id = attrs.internal_payload["assistant_message_id"]
+
+    case get_inference_completed_for_assistant(session, assistant_message_id) do
       {:ok, event} -> {:ok, event}
       {:error, :not_found} -> ChatEvents.append_to_session(session, attrs)
     end
@@ -328,6 +405,7 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
   defp checkpoint_step(%ChatSession{} = session, step, details)
        when is_atom(step) and is_map(details) do
     event_type = "chat_session_runner.#{step}.completed"
+    details = Map.put_new(details, "turn_message_id", latest_user_message_id!(session))
     public_payload = runner_public_payload(session, step, details)
 
     internal_payload =
@@ -367,7 +445,7 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
          public_payload,
          internal_payload
        ) do
-    case ChatEvents.get_by_type(session, event_type, visibility) do
+    case get_checkpoint_event(session, event_type, visibility, public_payload, internal_payload) do
       {:ok, event} ->
         {:ok, event}
 
@@ -382,4 +460,185 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
         ChatEvents.append_to_session(session, attrs)
     end
   end
+
+  @spec pending_user_turn?(ChatSession.t()) :: boolean()
+  defp pending_user_turn?(%ChatSession{} = session) do
+    case latest_user_message(session) do
+      {:ok, user_message} ->
+        case lookup_assistant_message(session, user_message.id) do
+          {:ok, _assistant_message} -> false
+          {:error, :not_found} -> true
+        end
+
+      {:error, :not_found} ->
+        false
+    end
+  end
+
+  @spec latest_user_message(ChatSession.t()) :: {:ok, ChatMessage.t()} | {:error, :not_found}
+  defp latest_user_message(%ChatSession{} = session) do
+    latest_message_by_role(session, :user)
+  end
+
+  @spec latest_message_by_role(ChatSession.t(), atom()) ::
+          {:ok, ChatMessage.t()} | {:error, :not_found}
+  defp latest_message_by_role(%ChatSession{} = session, role) do
+    query =
+      from message in ChatMessage,
+        where:
+          message.user_id == ^session.user_id and message.project_id == ^session.project_id and
+            message.chat_session_id == ^session.id and message.role == ^role,
+        order_by: [desc: message.inserted_at, desc: message.id],
+        limit: 1
+
+    case Repo.one(query) do
+      nil -> {:error, :not_found}
+      message -> {:ok, message}
+    end
+  end
+
+  @spec get_message(ChatSession.t(), String.t()) :: {:ok, ChatMessage.t()} | {:error, :not_found}
+  defp get_message(%ChatSession{} = session, message_id) do
+    query =
+      from message in ChatMessage,
+        where:
+          message.user_id == ^session.user_id and message.project_id == ^session.project_id and
+            message.chat_session_id == ^session.id and message.id == ^message_id,
+        limit: 1
+
+    case Repo.one(query) do
+      nil -> {:error, :not_found}
+      message -> {:ok, message}
+    end
+  end
+
+  @spec latest_user_message_id!(ChatSession.t()) :: String.t()
+  defp latest_user_message_id!(%ChatSession{} = session) do
+    case latest_user_message(session) do
+      {:ok, message} -> message.id
+      {:error, :not_found} -> raise ArgumentError, "chat session has no user message"
+    end
+  end
+
+  @spec turn_message_id([ChatMessage.t()]) :: String.t() | nil
+  defp turn_message_id(messages) when is_list(messages) do
+    messages
+    |> Enum.filter(&(&1.role == :user))
+    |> List.last()
+    |> case do
+      %ChatMessage{id: id} -> id
+      nil -> nil
+    end
+  end
+
+  @spec conversation_messages_for_inference([ChatMessage.t()]) :: [ChatMessage.t()]
+  defp conversation_messages_for_inference(messages) do
+    assistant_by_turn =
+      messages
+      |> Enum.filter(&(&1.role == :assistant))
+      |> Map.new(fn message -> {turn_message_id_from_assistant(message), message} end)
+      |> Map.delete(nil)
+
+    messages
+    |> Enum.filter(&(&1.role == :user))
+    |> Enum.flat_map(fn user_message ->
+      case Map.fetch(assistant_by_turn, user_message.id) do
+        {:ok, assistant_message} -> [user_message, assistant_message]
+        :error -> [user_message]
+      end
+    end)
+  end
+
+  @spec assistant_client_message_id(String.t()) :: String.t()
+  defp assistant_client_message_id(turn_message_id) when is_binary(turn_message_id) do
+    "#{@assistant_client_message_id_prefix}:#{turn_message_id}"
+  end
+
+  @spec turn_message_id_from_assistant(ChatMessage.t()) :: String.t() | nil
+  defp turn_message_id_from_assistant(%ChatMessage{client_message_id: client_message_id})
+       when is_binary(client_message_id) do
+    prefix = "#{@assistant_client_message_id_prefix}:"
+
+    if String.starts_with?(client_message_id, prefix) do
+      String.replace_prefix(client_message_id, prefix, "")
+    end
+  end
+
+  defp turn_message_id_from_assistant(_message), do: nil
+
+  @spec compare_messages(ChatMessage.t(), ChatMessage.t()) :: :lt | :eq | :gt
+  defp compare_messages(%ChatMessage{} = left, %ChatMessage{} = right) do
+    case DateTime.compare(left.inserted_at, right.inserted_at) do
+      :eq -> compare_ids(left.id, right.id)
+      comparison -> comparison
+    end
+  end
+
+  defp compare_ids(left_id, right_id) do
+    cond do
+      left_id > right_id -> :gt
+      left_id < right_id -> :lt
+      true -> :eq
+    end
+  end
+
+  defp get_checkpoint_event(session, event_type, visibility, public_payload, internal_payload) do
+    turn_message_id =
+      public_payload["turn_message_id"] ||
+        get_in(internal_payload, ["details", "turn_message_id"])
+
+    if turn_message_id do
+      get_checkpoint_event_for_turn(session, event_type, visibility, turn_message_id)
+    else
+      ChatEvents.get_by_type(session, event_type, visibility)
+    end
+  end
+
+  defp get_checkpoint_event_for_turn(session, event_type, visibility, turn_message_id) do
+    query =
+      from event in ChatEvent,
+        where:
+          event.user_id == ^session.user_id and event.project_id == ^session.project_id and
+            event.chat_session_id == ^session.id and event.event_type == ^event_type and
+            event.visibility == ^visibility and
+            (fragment("?->>'turn_message_id' = ?", event.public_payload, ^turn_message_id) or
+               fragment(
+                 "?->'details'->>'turn_message_id' = ?",
+                 event.internal_payload,
+                 ^turn_message_id
+               )),
+        order_by: [asc: event.inserted_at, asc: event.id],
+        limit: 1
+
+    case Repo.one(query) do
+      nil -> {:error, :not_found}
+      event -> {:ok, event}
+    end
+  end
+
+  defp get_inference_completed_for_assistant(session, assistant_message_id)
+       when is_binary(assistant_message_id) do
+    query =
+      from event in ChatEvent,
+        where:
+          event.user_id == ^session.user_id and event.project_id == ^session.project_id and
+            event.chat_session_id == ^session.id and
+            event.event_type == ^InferenceEvents.event_type(:inference_completed) and
+            event.visibility == :internal and
+            fragment(
+              "?->>'assistant_message_id' = ?",
+              event.internal_payload,
+              ^assistant_message_id
+            ),
+        order_by: [asc: event.inserted_at, asc: event.id],
+        limit: 1
+
+    case Repo.one(query) do
+      nil -> {:error, :not_found}
+      event -> {:ok, event}
+    end
+  end
+
+  defp get_inference_completed_for_assistant(_session, _assistant_message_id),
+    do: {:error, :not_found}
 end

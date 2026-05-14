@@ -14,6 +14,7 @@ defmodule Sacrum.ChatSessionRunner.Actions.AppendAssistant do
       chat_session_id: [type: :string, required: true],
       engine_session_ref: [type: :string, required: true],
       inference_opts: [type: :any, default: []],
+      turn_message_id: [type: :string],
       inference_result: [type: :any, required: true]
     ]
 
@@ -28,12 +29,18 @@ defmodule Sacrum.ChatSessionRunner.Actions.AppendAssistant do
     with :ok <- validate_result(params.inference_result),
          {:ok, session} <- Pipeline.fetch_session(params.chat_session_id),
          {:continue, session} <- Pipeline.ensure_runnable(session),
-         {:ok, _message} <- Pipeline.append_assistant_message(session, params.inference_result) do
+         {:ok, _message} <-
+           Pipeline.append_assistant_message(
+             session,
+             params.inference_result,
+             Map.get(params, :turn_message_id)
+           ) do
       directive =
         Actions.emit(Signals.complete_session(), %{
           chat_session_id: session.id,
           engine_session_ref: params.engine_session_ref,
-          inference_opts: params.inference_opts
+          inference_opts: params.inference_opts,
+          turn_message_id: Map.get(params, :turn_message_id)
         })
 
       {:ok, %{step: :append_assistant, chat_session_id: session.id}, [directive]}

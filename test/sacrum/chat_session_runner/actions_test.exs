@@ -31,7 +31,7 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
   alias Sacrum.Repo.Schemas.ChatEvent
   alias Sacrum.Repo.Users
 
-  @assistant_client_message_id "chat_session_runner:assistant:v1"
+  @assistant_client_message_id_prefix "chat_session_runner:assistant:v1"
 
   defmodule StubProvider do
     @behaviour Sacrum.Chat.Inference.Provider
@@ -73,7 +73,7 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
     {:ok, project} = Projects.insert(user.id, %{name: "Actions Project"})
     {:ok, session} = LiveChat.create_session(user.id, project.id, %{})
 
-    {:ok, _user_message} =
+    {:ok, user_message} =
       LiveChat.send_message(user.id, project.id, session.id, %{
         content: "Hello from unit tests",
         client_message_id: "actions-user"
@@ -85,6 +85,7 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
       user: user,
       project: project,
       session: session,
+      user_message: user_message,
       engine_session_ref: engine_session_ref
     }
   end
@@ -190,7 +191,10 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
       assert reloaded.engine_session_ref == ctx.engine_session_ref
 
       intake_status_message =
-        ChatMessages.get_by_client_message_id(reloaded, "chat_session_runner:status:intake:v1")
+        ChatMessages.get_by_client_message_id(
+          reloaded,
+          "chat_session_runner:status:intake:v1:#{ctx.user_message.id}"
+        )
 
       assert {:ok, message} = intake_status_message
       assert message.content == "Chat session started."
@@ -258,7 +262,7 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
           role: :assistant,
           content: "previous output",
           content_format: :markdown,
-          client_message_id: @assistant_client_message_id,
+          client_message_id: "#{@assistant_client_message_id_prefix}:#{ctx.user_message.id}",
           metadata: %{"provider" => "stub", "model" => "actions-test"}
         })
 
@@ -339,17 +343,24 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
       assert emit.signal.type == Signals.complete_session()
 
       {:ok, reloaded} = Sacrum.Repo.ChatSessions.get(ctx.session.id)
-      {:ok, messages} = ChatMessages.list_for_session(reloaded, [])
+      {:ok, messages} = ChatMessages.list_for_session(reloaded, include_private: true)
 
       assistant_messages = Enum.filter(messages, &(&1.role == :assistant))
 
-      assert [%{content: "Answer body", client_message_id: @assistant_client_message_id}] =
-               assistant_messages
+      assistant_client_message_id =
+        "#{@assistant_client_message_id_prefix}:#{ctx.user_message.id}"
+
+      assert [
+               %{
+                 content: "Answer body",
+                 client_message_id: ^assistant_client_message_id
+               }
+             ] = assistant_messages
 
       # Idempotent: running again with the same client_message_id must not duplicate.
       assert {:ok, %{step: :append_assistant}, [_emit]} = AppendAssistant.run(params, %{})
 
-      {:ok, refreshed_messages} = ChatMessages.list_for_session(reloaded, [])
+      {:ok, refreshed_messages} = ChatMessages.list_for_session(reloaded, include_private: true)
 
       assert length(Enum.filter(refreshed_messages, &(&1.role == :assistant))) == 1
     end
@@ -382,7 +393,7 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
              end)
 
       {:ok, refreshed_session} = Sacrum.Repo.ChatSessions.get(ctx.session.id)
-      {:ok, messages} = ChatMessages.list_for_session(refreshed_session, [])
+      {:ok, messages} = ChatMessages.list_for_session(refreshed_session, include_private: true)
       assert Enum.filter(messages, &(&1.role == :assistant)) == []
     end
   end

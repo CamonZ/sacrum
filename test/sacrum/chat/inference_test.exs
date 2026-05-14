@@ -1,5 +1,5 @@
 defmodule Sacrum.Chat.InferenceTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Sacrum.Chat.Inference
   alias Sacrum.Chat.Inference.OpenRouter
@@ -57,6 +57,25 @@ defmodule Sacrum.Chat.InferenceTest do
       assert result.content_format == :markdown
       assert result.public_metadata == %{"provider" => "fake"}
       assert result.internal_metadata == %{"trace_id" => "trace-1"}
+    end
+  end
+
+  describe "timeout/1" do
+    test "uses explicit opts before runtime configuration" do
+      original_config = Application.get_env(:sacrum, :chat_inference, [])
+
+      on_exit(fn ->
+        Application.put_env(:sacrum, :chat_inference, original_config)
+      end)
+
+      Application.put_env(
+        :sacrum,
+        :chat_inference,
+        Keyword.put(original_config, :timeout, 90_000)
+      )
+
+      assert Inference.timeout() == 90_000
+      assert Inference.timeout(timeout: 45_000) == 45_000
     end
   end
 

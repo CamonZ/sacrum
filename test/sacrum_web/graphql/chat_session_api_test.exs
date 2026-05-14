@@ -3,8 +3,35 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
 
   alias Sacrum.Accounts
   alias Sacrum.Accounts.{ChatEvents, ChatSessions, LiveChat}
+  alias Sacrum.Chat.{Inference.Result, PublicEvents}
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{ChatEvent, ChatMessage, ChatSession}
+
+  import Ecto.Query
+
+  defmodule FakeProvider do
+    @behaviour Sacrum.Chat.Inference.Provider
+
+    @impl true
+    def generate(messages, opts) do
+      test_pid = Keyword.fetch!(opts, :test_pid)
+      send(test_pid, {:fake_provider_called, self(), messages})
+
+      receive do
+        :release_fake_provider -> :ok
+      after
+        1_000 -> :ok
+      end
+
+      {:ok,
+       %Result{
+         content: "Assistant response from GraphQL runner",
+         content_format: :markdown,
+         public_metadata: %{"provider" => "fake", "model" => "graphql-test"},
+         internal_metadata: %{"trace_id" => "graphql-runner-trace"}
+       }}
+    end
+  end
 
   defp graphql(conn, query) do
     post(conn, "/graphql", %{"query" => query})
@@ -29,10 +56,26 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
     |> Repo.update!()
   end
 
-  describe "live chat session GraphQL API" do
-    setup [:setup_user_and_project]
+  defp configure_live_chat_runner(_context) do
+    previous = Application.get_env(:sacrum, :live_chat_runner)
 
-    test "creates, sends, queries, and cancels the current chat session", %{
+    Application.put_env(:sacrum, :live_chat_runner,
+      start_opts: [inference_opts: [provider: FakeProvider, test_pid: self()]]
+    )
+
+    on_exit(fn ->
+      if previous do
+        Application.put_env(:sacrum, :live_chat_runner, previous)
+      else
+        Application.delete_env(:sacrum, :live_chat_runner)
+      end
+    end)
+  end
+
+  describe "live chat session GraphQL API" do
+    setup [:setup_user_and_project, :configure_live_chat_runner]
+
+    test "creates, sends, queries, and completes the current chat session", %{
       conn: conn,
       user: user,
       project: project
@@ -99,6 +142,12 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
       assert message["clientMessageId"] == "client-1"
       assert message["metadata"] == %{}
 
+      assert_receive {:fake_provider_called, provider_pid,
+                      [%{role: "user", content: "Plan the next step"}]},
+                     1_000
+
+      await_graphql_runner_completion(session["id"], provider_pid)
+
       query_result =
         graphql_result(conn, user, """
         {
@@ -123,28 +172,113 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
       assert query_result["errors"] == nil
       found_session = query_result["data"]["chatSession"]
       assert found_session["id"] == session["id"]
-      assert found_session["status"] == "queued"
-      assert Enum.map(found_session["messages"], & &1["id"]) == [message["id"]]
-      assert Enum.map(query_result["data"]["chatMessages"], & &1["id"]) == [message["id"]]
+      assert found_session["status"] == "completed"
+      assert message["id"] in Enum.map(found_session["messages"], & &1["id"])
+      assert message["id"] in Enum.map(query_result["data"]["chatMessages"], & &1["id"])
+      refute Enum.any?(found_session["messages"], &(&1["role"] == "status"))
+      refute Enum.any?(query_result["data"]["chatMessages"], &(&1["role"] == "status"))
+
+      assistant_message =
+        Enum.find(found_session["messages"], &(&1["role"] == "assistant"))
+
+      assert assistant_message["content"] == "Assistant response from GraphQL runner"
 
       event_types = Enum.map(query_result["data"]["chatEvents"], & &1["eventType"])
-      assert event_types == ["chat_session_created", "chat_message_created"]
+      assert PublicEvents.event_type(:session_created) in event_types
+      assert PublicEvents.event_type(:message_created) in event_types
+      assert PublicEvents.event_type(:session_updated) in event_types
       refute "runner.tool_trace" in event_types
 
       message_event =
         Enum.find(
           query_result["data"]["chatEvents"],
-          &(&1["eventType"] == "chat_message_created")
+          &(&1["eventType"] == PublicEvents.event_type(:message_created) and
+              &1["payload"]["id"] == message["id"])
         )
 
       assert message_event["payload"]["content"] == "Plan the next step"
       refute Map.has_key?(message_event["payload"], "internal_payload")
       refute Map.has_key?(message_event["payload"], "secret")
 
+      second_send_result =
+        graphql_result(conn, user, """
+        mutation {
+          sendChatMessage(
+            projectId: "#{project.id}"
+            chatSessionId: "#{session["id"]}"
+            content: "What can you tell me about yourself?"
+            contentFormat: "markdown"
+            clientMessageId: "client-2"
+          ) {
+            id
+            role
+            content
+            clientMessageId
+          }
+        }
+        """)
+
+      assert second_send_result["errors"] == nil
+      second_message = second_send_result["data"]["sendChatMessage"]
+      assert second_message["role"] == "user"
+      assert second_message["content"] == "What can you tell me about yourself?"
+
+      assert_receive {:fake_provider_called, second_provider_pid,
+                      [
+                        %{role: "user", content: "Plan the next step"},
+                        %{role: "assistant", content: "Assistant response from GraphQL runner"},
+                        %{role: "user", content: "What can you tell me about yourself?"}
+                      ]},
+                     1_000
+
+      await_graphql_runner_completion(session["id"], second_provider_pid)
+
+      second_query_result =
+        graphql_result(conn, user, """
+        {
+          chatSession(projectId: "#{project.id}", id: "#{session["id"]}") {
+            id
+            status
+            messages { id content role clientMessageId }
+          }
+        }
+        """)
+
+      assert second_query_result["errors"] == nil
+      second_found_session = second_query_result["data"]["chatSession"]
+      assert second_found_session["status"] == "completed"
+
+      messages = second_found_session["messages"]
+      assert length(Enum.filter(messages, &(&1["role"] == "user"))) == 2
+      assert length(Enum.filter(messages, &(&1["role"] == "assistant"))) == 2
+      assert second_message["id"] in Enum.map(messages, & &1["id"])
+
+      inference_completed_events =
+        Repo.all(
+          from event in ChatEvent,
+            where:
+              event.chat_session_id == ^session["id"] and
+                event.event_type == "chat_inference.completed" and
+                event.visibility == :internal
+        )
+
+      assert length(inference_completed_events) == 2
+    end
+
+    test "cancels a queued chat session", %{conn: conn, user: user, project: project} do
+      create_result =
+        graphql_result(conn, user, """
+        mutation {
+          createChatSession(projectId: "#{project.id}") { id }
+        }
+        """)
+
+      session_id = create_result["data"]["createChatSession"]["id"]
+
       cancel_result =
         graphql_result(conn, user, """
         mutation {
-          cancelChatSession(projectId: "#{project.id}", chatSessionId: "#{session["id"]}") {
+          cancelChatSession(projectId: "#{project.id}", chatSessionId: "#{session_id}") {
             id
             status
             stopRequestedAt
@@ -155,7 +289,7 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
 
       assert cancel_result["errors"] == nil
       cancelled = cancel_result["data"]["cancelChatSession"]
-      assert cancelled["id"] == session["id"]
+      assert cancelled["id"] == session_id
       assert cancelled["status"] == "cancelled"
       assert is_binary(cancelled["stopRequestedAt"])
       assert is_binary(cancelled["endedAt"])
@@ -163,7 +297,7 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
       events_after_cancel =
         graphql_result(conn, user, """
         {
-          chatEvents(projectId: "#{project.id}", chatSessionId: "#{session["id"]}") {
+          chatEvents(projectId: "#{project.id}", chatSessionId: "#{session_id}") {
             eventType
             payload
           }
@@ -172,20 +306,106 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
 
       assert events_after_cancel["errors"] == nil
 
-      assert Enum.map(events_after_cancel["data"]["chatEvents"], & &1["eventType"]) == [
-               "chat_session_created",
-               "chat_message_created",
-               "chat_session_updated"
-             ]
+      events_after_cancel_types =
+        Enum.map(events_after_cancel["data"]["chatEvents"], & &1["eventType"])
+
+      assert PublicEvents.event_type(:session_created) in events_after_cancel_types
+      assert PublicEvents.event_type(:session_updated) in events_after_cancel_types
 
       status_event =
-        Enum.find(
-          events_after_cancel["data"]["chatEvents"],
-          &(&1["eventType"] == "chat_session_updated")
-        )
+        events_after_cancel["data"]["chatEvents"]
+        |> Enum.filter(&(&1["eventType"] == PublicEvents.event_type(:session_updated)))
+        |> List.last()
 
       assert status_event["payload"]["status"] == "cancelled"
-      assert status_event["payload"]["id"] == session["id"]
+      assert status_event["payload"]["id"] == session_id
+    end
+
+    test "treats duplicate runner starts as successful in-flight turns", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      create_result =
+        graphql_result(conn, user, """
+        mutation {
+          createChatSession(projectId: "#{project.id}") { id }
+        }
+        """)
+
+      session_id = create_result["data"]["createChatSession"]["id"]
+
+      first_send =
+        graphql_result(conn, user, """
+        mutation {
+          sendChatMessage(
+            projectId: "#{project.id}"
+            chatSessionId: "#{session_id}"
+            content: "first"
+            clientMessageId: "client-duplicate-1"
+          ) { id role content }
+        }
+        """)
+
+      assert first_send["errors"] == nil
+
+      assert_receive {:fake_provider_called, provider_pid, [%{role: "user", content: "first"}]},
+                     1_000
+
+      second_send =
+        graphql_result(conn, user, """
+        mutation {
+          sendChatMessage(
+            projectId: "#{project.id}"
+            chatSessionId: "#{session_id}"
+            content: "second"
+            clientMessageId: "client-duplicate-2"
+          ) { id role content }
+        }
+        """)
+
+      assert second_send["errors"] == nil
+      assert second_send["data"]["sendChatMessage"]["content"] == "second"
+      assert [{runner_pid, _}] = Sacrum.ChatSessionRegistry.lookup(session_id)
+      refute_receive {:fake_provider_called, _second_provider_pid, _messages}, 100
+
+      await_task =
+        Elixir.Task.async(fn -> Jido.AgentServer.await_completion(runner_pid, timeout: 2_000) end)
+
+      send(provider_pid, :release_fake_provider)
+
+      assert_receive {:fake_provider_called, second_provider_pid,
+                      [
+                        %{role: "user", content: "first"},
+                        %{role: "assistant", content: "Assistant response from GraphQL runner"},
+                        %{role: "user", content: "second"}
+                      ]},
+                     1_000
+
+      send(second_provider_pid, :release_fake_provider)
+
+      assert {:ok, %{status: :completed}} = Elixir.Task.await(await_task, 2_500)
+      assert_registry_empty(session_id)
+
+      messages_result =
+        graphql_result(conn, user, """
+        {
+          chatMessages(projectId: "#{project.id}", chatSessionId: "#{session_id}") {
+            role
+            content
+          }
+        }
+        """)
+
+      assert messages_result["errors"] == nil
+
+      user_contents =
+        messages_result["data"]["chatMessages"]
+        |> Enum.filter(&(&1["role"] == "user"))
+        |> Enum.map(& &1["content"])
+
+      assert "first" in user_contents
+      assert "second" in user_contents
     end
 
     test "rejects cross-user query and mutation access", %{
@@ -227,6 +447,7 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
 
       assert message_result["data"]["sendChatMessage"] == nil
       assert [%{"message" => _}] = message_result["errors"]
+      refute_receive {:fake_provider_called, _pid, _messages}
 
       cancel_result =
         graphql_result(conn, other_user, """
@@ -495,5 +716,34 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
   defp chat_event_ids_for_session(user_id, project_id, chat_session_id) do
     {:ok, events} = ChatEvents.list_public_for_session(user_id, project_id, chat_session_id)
     Enum.map(events, & &1.id)
+  end
+
+  defp await_graphql_runner_completion(session_id, provider_pid) do
+    assert [{runner_pid, _}] = Sacrum.ChatSessionRegistry.lookup(session_id)
+
+    await_task =
+      Elixir.Task.async(fn -> Jido.AgentServer.await_completion(runner_pid, timeout: 1_000) end)
+
+    send(provider_pid, :release_fake_provider)
+
+    assert {:ok, %{status: :completed}} = Elixir.Task.await(await_task, 1_500)
+    assert_registry_empty(session_id)
+  end
+
+  defp assert_registry_empty(session_id, attempts \\ 20)
+
+  defp assert_registry_empty(session_id, attempts) when attempts > 0 do
+    case Sacrum.ChatSessionRegistry.lookup(session_id) do
+      [] ->
+        :ok
+
+      _registered ->
+        Process.sleep(10)
+        assert_registry_empty(session_id, attempts - 1)
+    end
+  end
+
+  defp assert_registry_empty(session_id, 0) do
+    assert [] = Sacrum.ChatSessionRegistry.lookup(session_id)
   end
 end

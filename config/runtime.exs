@@ -29,14 +29,21 @@ config :sacrum, :google_oauth,
   redirect_uri:
     System.get_env("GOOGLE_REDIRECT_URI", "http://localhost:4000/auth/google/callback")
 
+chat_inference_timeout_ms =
+  System.get_env("CHAT_INFERENCE_TIMEOUT_MS", System.get_env("OPENROUTER_TIMEOUT_MS", "120000"))
+  |> String.to_integer()
+
 config :sacrum, :chat_inference,
   provider: Sacrum.Chat.Inference.OpenRouter,
+  timeout: chat_inference_timeout_ms,
   openrouter: [
     base_url: System.get_env("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
     api_key: System.get_env("OPENROUTER_API_KEY"),
     model: System.get_env("OPENROUTER_MODEL", "openai/gpt-4o-mini"),
+    reasoning_effort: System.get_env("OPENROUTER_REASONING_EFFORT"),
     app_referer: System.get_env("OPENROUTER_APP_REFERER"),
-    app_title: System.get_env("OPENROUTER_APP_TITLE", "Sacrum")
+    app_title: System.get_env("OPENROUTER_APP_TITLE", "Sacrum"),
+    timeout: chat_inference_timeout_ms
   ]
 
 if config_env() == :prod do

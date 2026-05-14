@@ -21,12 +21,13 @@ defmodule Sacrum.ChatSessionRunner.Actions.InvokeInference do
   alias Sacrum.ChatSessionRunner.Actions.Failure
   alias Sacrum.ChatSessionRunner.Pipeline
   alias Sacrum.ChatSessionRunner.Signals
+  alias Sacrum.Repo.Schemas.ChatMessage
 
   @impl true
   def run(params, _context) do
     with {:ok, session} <- Pipeline.fetch_session(params.chat_session_id),
          {:continue, session} <- Pipeline.ensure_runnable(session),
-         {:ok, messages} <- ChatMessages.list_for_session(session, []),
+         {:ok, messages} <- ChatMessages.list_for_session(session, include_private: true),
          {:ok, session, result} <-
            Pipeline.invoke_inference(session, messages, params.inference_opts) do
       directive =
@@ -34,6 +35,7 @@ defmodule Sacrum.ChatSessionRunner.Actions.InvokeInference do
           chat_session_id: session.id,
           engine_session_ref: params.engine_session_ref,
           inference_opts: params.inference_opts,
+          turn_message_id: turn_message_id(messages),
           inference_result: result
         })
 
@@ -41,6 +43,16 @@ defmodule Sacrum.ChatSessionRunner.Actions.InvokeInference do
     else
       {:halt, _session, reason} -> Failure.halt(params, reason)
       {:error, reason} -> Failure.fail(params, reason)
+    end
+  end
+
+  defp turn_message_id(messages) do
+    messages
+    |> Enum.filter(&(&1.role == :user))
+    |> List.last()
+    |> case do
+      %ChatMessage{id: id} -> id
+      nil -> nil
     end
   end
 end

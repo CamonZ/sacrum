@@ -105,6 +105,39 @@ defmodule Sacrum.Accounts.ChatMessagesTest do
       assert Enum.map(messages, & &1.content) == ["Draft a plan", "Here is the plan."]
     end
 
+    test "hides internal messages unless explicitly requested", %{
+      user: user,
+      project: project,
+      session: session
+    } do
+      assert {:ok, public_message} =
+               ChatMessages.append(user.id, project.id, session.id, %{
+                 role: :user,
+                 content: "Visible message",
+                 client_message_id: "client-visible"
+               })
+
+      assert {:ok, internal_message} =
+               ChatMessages.append(user.id, project.id, session.id, %{
+                 role: :status,
+                 content: "Internal runner status",
+                 client_message_id: "client-internal",
+                 metadata: %{"visibility" => "internal"}
+               })
+
+      assert {:ok, public_messages} =
+               ChatMessages.list_for_session(user.id, project.id, session.id)
+
+      assert Enum.map(public_messages, & &1.id) == [public_message.id]
+
+      assert {:ok, all_messages} =
+               ChatMessages.list_for_session(user.id, project.id, session.id,
+                 include_private: true
+               )
+
+      assert Enum.map(all_messages, & &1.id) == [public_message.id, internal_message.id]
+    end
+
     test "rejects appends across users or projects", %{
       user: user,
       project: project,

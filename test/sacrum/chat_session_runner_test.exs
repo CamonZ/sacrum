@@ -6,7 +6,7 @@ defmodule Sacrum.ChatSessionRunnerTest do
   alias Sacrum.Repo.Schemas.{ChatEvent, StepExecution, Task, TaskRun}
   alias Sacrum.Repo.Users
 
-  @assistant_client_message_id "chat_session_runner:assistant:v1"
+  @assistant_client_message_id_prefix "chat_session_runner:assistant:v1"
   @runner_steps ~w(
     chat_session_runner.intake.completed
     chat_session_runner.load_messages.completed
@@ -91,8 +91,11 @@ defmodule Sacrum.ChatSessionRunnerTest do
     test "runs one Jido-backed chat loop through Sacrum inference and completes", %{
       user: user,
       project: project,
-      session: session
+      session: session,
+      user_message: user_message
     } do
+      assistant_client_message_id = "#{@assistant_client_message_id_prefix}:#{user_message.id}"
+
       assert {:ok, pid} =
                Sacrum.ChatSessionSupervisor.start_runner(session.id,
                  inference_opts: [provider: BlockingProvider, test_pid: self()]
@@ -125,13 +128,14 @@ defmodule Sacrum.ChatSessionRunnerTest do
       assert %DateTime{} = completed_session.started_at
       assert %DateTime{} = completed_session.ended_at
 
-      {:ok, messages} = ChatMessages.list_for_session(completed_session, [])
+      {:ok, messages} = ChatMessages.list_for_session(completed_session, include_private: true)
 
       assert Enum.map(messages, &{&1.role, &1.client_message_id, &1.content}) == [
                {:user, "client-runner-user", "Plan the next step"},
-               {:status, "chat_session_runner:status:intake:v1", "Chat session started."},
-               {:assistant, @assistant_client_message_id, "Supervised assistant output"},
-               {:status, "chat_session_runner:status:complete_session:v1",
+               {:status, "chat_session_runner:status:intake:v1:#{user_message.id}",
+                "Chat session started."},
+               {:assistant, assistant_client_message_id, "Supervised assistant output"},
+               {:status, "chat_session_runner:status:complete_session:v1:#{user_message.id}",
                 "Chat session completed."}
              ]
 
@@ -175,7 +179,7 @@ defmodule Sacrum.ChatSessionRunnerTest do
       {:ok, reloaded_session} = ChatSessions.get_session(user.id, project.id, session.id)
       assert reloaded_session.status == :cancelled
 
-      {:ok, messages} = ChatMessages.list_for_session(reloaded_session, [])
+      {:ok, messages} = ChatMessages.list_for_session(reloaded_session, include_private: true)
 
       refute Enum.any?(messages, fn message ->
                message.role == :assistant and message.content == "Output after cancellation"
@@ -189,8 +193,11 @@ defmodule Sacrum.ChatSessionRunnerTest do
     test "resumes from existing assistant output without duplicating it", %{
       user: user,
       project: project,
-      session: session
+      session: session,
+      user_message: user_message
     } do
+      assistant_client_message_id = "#{@assistant_client_message_id_prefix}:#{user_message.id}"
+
       {:ok, running_session} =
         ChatSessions.transition_status(user.id, project.id, session.id, :running)
 
@@ -199,7 +206,7 @@ defmodule Sacrum.ChatSessionRunnerTest do
           role: :assistant,
           content: "Recovered assistant output",
           content_format: :markdown,
-          client_message_id: @assistant_client_message_id,
+          client_message_id: assistant_client_message_id,
           metadata: %{"provider" => "fake", "model" => "precrash"}
         })
 
@@ -223,11 +230,11 @@ defmodule Sacrum.ChatSessionRunnerTest do
 
       refute_receive {:unexpected_provider_called, _messages}
 
-      {:ok, messages} = ChatMessages.list_for_session(completed_session, [])
+      {:ok, messages} = ChatMessages.list_for_session(completed_session, include_private: true)
       assistant_messages = Enum.filter(messages, &(&1.role == :assistant))
 
       assert Enum.map(assistant_messages, &{&1.id, &1.client_message_id, &1.content}) == [
-               {assistant_before_restart.id, @assistant_client_message_id,
+               {assistant_before_restart.id, assistant_client_message_id,
                 "Recovered assistant output"}
              ]
 
@@ -292,7 +299,8 @@ defmodule Sacrum.ChatSessionRunnerTest do
       assert first_completion.status == :completed
       stable_engine_session_ref = first_completion.engine_session_ref
 
-      {:ok, first_messages} = ChatMessages.list_for_session(first_completion, [])
+      {:ok, first_messages} =
+        ChatMessages.list_for_session(first_completion, include_private: true)
 
       first_event_count =
         Repo.aggregate(
@@ -311,7 +319,7 @@ defmodule Sacrum.ChatSessionRunnerTest do
       assert second_view.status == :completed
       assert second_view.engine_session_ref == stable_engine_session_ref
 
-      {:ok, second_messages} = ChatMessages.list_for_session(second_view, [])
+      {:ok, second_messages} = ChatMessages.list_for_session(second_view, include_private: true)
 
       assert Enum.map(second_messages, & &1.id) == Enum.map(first_messages, & &1.id)
 

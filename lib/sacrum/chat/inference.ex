@@ -10,6 +10,7 @@ defmodule Sacrum.Chat.Inference do
   alias Sacrum.Chat.Inference.Result
   alias Sacrum.Repo.Schemas.ChatMessage
 
+  @default_timeout_ms 120_000
   @supported_provider_roles ~w(system user assistant)
   @sensitive_key_names ~w(authorization bearer password credential credentials)
   @sensitive_key_suffixes ~w(api_key auth_token access_token refresh_token token secret private_key)
@@ -51,6 +52,13 @@ defmodule Sacrum.Chat.Inference do
 
   def scrub_secrets(value) when is_list(value), do: Enum.map(value, &scrub_secrets/1)
   def scrub_secrets(value), do: value
+
+  @spec timeout(keyword()) :: non_neg_integer()
+  def timeout(opts \\ []) when is_list(opts) do
+    opts
+    |> Keyword.get(:timeout)
+    |> normalize_timeout(configured_timeout())
+  end
 
   defp normalize_message(%ChatMessage{role: role, content: content}) do
     normalize_message(%{role: role, content: content})
@@ -121,6 +129,16 @@ defmodule Sacrum.Chat.Inference do
     |> Application.get_env(:chat_inference, [])
     |> Keyword.get(:provider, Sacrum.Chat.Inference.OpenRouter)
   end
+
+  defp configured_timeout do
+    :sacrum
+    |> Application.get_env(:chat_inference, [])
+    |> Keyword.get(:timeout)
+    |> normalize_timeout(@default_timeout_ms)
+  end
+
+  defp normalize_timeout(value, _fallback) when is_integer(value) and value >= 0, do: value
+  defp normalize_timeout(_value, fallback), do: fallback
 
   defp fetch_value(map, key) when is_atom(key) do
     cond do
