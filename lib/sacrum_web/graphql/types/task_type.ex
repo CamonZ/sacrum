@@ -97,6 +97,12 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
       resolve(dataloader(Accounts.TaskRuns))
     end
 
+    field :artifacts, list_of(:artifact) do
+      resolve(fn task, _args, %{context: %{current_user: user}} ->
+        {:ok, Accounts.Artifacts.list_for_subject(user.id, "task", task.id, task.project_id)}
+      end)
+    end
+
     field :run_controls, :task_run_controls do
       resolve(fn task, _args, %{context: %{current_user: user}} ->
         batch({RunControls, :for_tasks, user.id}, task, fn results ->

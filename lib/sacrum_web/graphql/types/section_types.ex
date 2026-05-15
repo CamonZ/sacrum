@@ -34,6 +34,18 @@ defmodule SacrumWeb.Graphql.Types.SectionTypes do
     field :code_refs, list_of(:code_ref) do
       resolve(dataloader(Accounts.CodeRefs))
     end
+
+    field :artifacts, list_of(:artifact) do
+      resolve(fn section, _args, %{context: %{current_user: user}} ->
+        {:ok,
+         Accounts.Artifacts.list_for_subject(
+           user.id,
+           "task_section",
+           section.id,
+           section.project_id
+         )}
+      end)
+    end
   end
 
   object :code_ref do

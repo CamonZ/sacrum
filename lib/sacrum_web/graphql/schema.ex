@@ -15,6 +15,7 @@ defmodule SacrumWeb.Graphql.Schema do
   import_types(SacrumWeb.Graphql.Types.TransitionTypes)
   import_types(SacrumWeb.Graphql.Types.ExecutionTypes)
   import_types(SacrumWeb.Graphql.Types.ChatTypes)
+  import_types(SacrumWeb.Graphql.Types.ArtifactTypes)
 
   query do
     import_fields(:project_queries)
@@ -34,6 +35,7 @@ defmodule SacrumWeb.Graphql.Schema do
     import_fields(:transition_mutations)
     import_fields(:execution_mutations)
     import_fields(:chat_mutations)
+    import_fields(:artifact_mutations)
   end
 
   @spec context(map()) :: map()

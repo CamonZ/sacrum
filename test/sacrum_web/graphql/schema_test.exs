@@ -5955,4 +5955,415 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert Enum.any?(result["errors"], &String.contains?(&1["message"], "active orchestrator"))
     end
   end
+
+  describe "artifact mutations" do
+    setup [:setup_user_and_project]
+
+    test "creates an artifact", %{conn: conn, user: user, project: project} do
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createArtifact(
+              projectId: "#{project.id}"
+              artifactType: "screenshot"
+              title: "Evidence Screenshot"
+              content: "This is a screenshot"
+              visibility: "public"
+            ) {
+              id
+              artifactType
+              title
+              content
+              visibility
+              insertedAt
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert data = result["data"]["createArtifact"]
+      assert data["artifactType"] == "screenshot"
+      assert data["title"] == "Evidence Screenshot"
+      assert data["content"] == "This is a screenshot"
+      assert data["visibility"] == "public"
+      assert data["id"] != nil
+      assert data["insertedAt"] != nil
+    end
+
+    test "creates artifact with optional data field", %{conn: conn, user: user, project: project} do
+      data_json = ~S|{"key": "value"}|
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createArtifact(
+              projectId: "#{project.id}"
+              artifactType: "json_data"
+              title: "JSON Data"
+              content: "Data content"
+              data: #{data_json}
+              visibility: "public"
+            ) {
+              id
+              data
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert data = result["data"]["createArtifact"]
+      assert data["id"] != nil
+      assert data["data"] == data_json
+    end
+
+    test "createArtifactLink links artifact to task", %{conn: conn, user: user, project: project} do
+      # Create task and artifact first
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Test Task"})
+
+      create_result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createArtifact(
+              projectId: "#{project.id}"
+              artifactType: "screenshot"
+              title: "Task Evidence"
+              content: "Screenshot content"
+              visibility: "public"
+            ) {
+              id
+            }
+          }
+        """)
+        |> json_response(200)
+
+      artifact_id = create_result["data"]["createArtifact"]["id"]
+
+      # Link artifact to task
+      link_result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createArtifactLink(
+              artifactId: "#{artifact_id}"
+              subjectType: "task"
+              subjectId: "#{task.id}"
+              relationshipKind: "demonstrates"
+            ) {
+              id
+              artifactType
+              title
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert link_result["data"]["createArtifactLink"] != nil
+    end
+
+    test "createArtifactLink links artifact to task section", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      # Create task, section, and artifact
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Test Task"})
+
+      {:ok, section} =
+        Accounts.Sections.insert(user.id, %{
+          task_id: task.id,
+          project_id: project.id,
+          section_type: "testing_criterion",
+          content: "Test should verify X"
+        })
+
+      create_result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createArtifact(
+              projectId: "#{project.id}"
+              artifactType: "test_result"
+              title: "Test Evidence"
+              content: "Test passed"
+              visibility: "public"
+            ) {
+              id
+            }
+          }
+        """)
+        |> json_response(200)
+
+      artifact_id = create_result["data"]["createArtifact"]["id"]
+
+      # Link artifact to section
+      link_result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createArtifactLink(
+              artifactId: "#{artifact_id}"
+              subjectType: "task_section"
+              subjectId: "#{section.id}"
+              relationshipKind: "evidence_for"
+            ) {
+              id
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert link_result["data"]["createArtifactLink"] != nil
+    end
+  end
+
+  describe "artifact queries on task" do
+    setup [:setup_user_and_project]
+
+    test "returns public artifacts linked to task, excludes internal artifacts", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      # Create task
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Test Task"})
+
+      # Create public artifact and link to task
+      public_result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createArtifact(
+              projectId: "#{project.id}"
+              artifactType: "screenshot"
+              title: "Public Evidence"
+              content: "Public screenshot"
+              visibility: "public"
+            ) {
+              id
+            }
+          }
+        """)
+        |> json_response(200)
+
+      public_artifact_id = public_result["data"]["createArtifact"]["id"]
+
+      # Link public artifact to task
+      conn
+      |> authenticate(user)
+      |> graphql("""
+        mutation {
+          createArtifactLink(
+            artifactId: "#{public_artifact_id}"
+            subjectType: "task"
+            subjectId: "#{task.id}"
+            relationshipKind: "demonstrates"
+          ) {
+            id
+          }
+        }
+      """)
+      |> json_response(200)
+
+      # Create internal artifact and link to task
+      internal_result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createArtifact(
+              projectId: "#{project.id}"
+              artifactType: "note"
+              title: "Internal Note"
+              content: "Internal content"
+              visibility: "internal"
+            ) {
+              id
+            }
+          }
+        """)
+        |> json_response(200)
+
+      internal_artifact_id = internal_result["data"]["createArtifact"]["id"]
+
+      # Link internal artifact to task
+      conn
+      |> authenticate(user)
+      |> graphql("""
+        mutation {
+          createArtifactLink(
+            artifactId: "#{internal_artifact_id}"
+            subjectType: "task"
+            subjectId: "#{task.id}"
+            relationshipKind: "demonstrates"
+          ) {
+            id
+          }
+        }
+      """)
+      |> json_response(200)
+
+      # Query task artifacts - should only return public ones
+      query_result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          {
+            task(id: "#{task.id}") {
+              id
+              artifacts {
+                id
+                artifactType
+                title
+                visibility
+              }
+            }
+          }
+        """)
+        |> json_response(200)
+
+      artifacts = query_result["data"]["task"]["artifacts"]
+      assert length(artifacts) == 1
+      assert hd(artifacts)["id"] == public_artifact_id
+      assert hd(artifacts)["title"] == "Public Evidence"
+      assert hd(artifacts)["visibility"] == "public"
+    end
+  end
+
+  describe "artifact queries on task section" do
+    setup [:setup_user_and_project]
+
+    test "returns public artifacts linked to section with evidence_for relationship", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      # Create task and section
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Test Task"})
+
+      {:ok, section} =
+        Accounts.Sections.insert(user.id, %{
+          task_id: task.id,
+          project_id: project.id,
+          section_type: "testing_criterion",
+          content: "Test should verify behavior"
+        })
+
+      # Create public artifact and link to section
+      public_result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createArtifact(
+              projectId: "#{project.id}"
+              artifactType: "test_result"
+              title: "Public Test Evidence"
+              content: "Test passed"
+              visibility: "public"
+            ) {
+              id
+            }
+          }
+        """)
+        |> json_response(200)
+
+      public_artifact_id = public_result["data"]["createArtifact"]["id"]
+
+      # Link public artifact to section
+      conn
+      |> authenticate(user)
+      |> graphql("""
+        mutation {
+          createArtifactLink(
+            artifactId: "#{public_artifact_id}"
+            subjectType: "task_section"
+            subjectId: "#{section.id}"
+            relationshipKind: "evidence_for"
+          ) {
+            id
+          }
+        }
+      """)
+      |> json_response(200)
+
+      # Create internal artifact and link to section
+      internal_result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createArtifact(
+              projectId: "#{project.id}"
+              artifactType: "note"
+              title: "Internal Note"
+              content: "Internal notes"
+              visibility: "internal"
+            ) {
+              id
+            }
+          }
+        """)
+        |> json_response(200)
+
+      internal_artifact_id = internal_result["data"]["createArtifact"]["id"]
+
+      # Link internal artifact to section
+      conn
+      |> authenticate(user)
+      |> graphql("""
+        mutation {
+          createArtifactLink(
+            artifactId: "#{internal_artifact_id}"
+            subjectType: "task_section"
+            subjectId: "#{section.id}"
+            relationshipKind: "evidence_for"
+          ) {
+            id
+          }
+        }
+      """)
+      |> json_response(200)
+
+      # Query section artifacts - should only return public ones
+      query_result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          {
+            task(id: "#{task.id}") {
+              sections {
+                id
+                artifacts {
+                  id
+                  artifactType
+                  title
+                  visibility
+                }
+              }
+            }
+          }
+        """)
+        |> json_response(200)
+
+      sections = query_result["data"]["task"]["sections"]
+      assert length(sections) > 0
+      first_section = hd(sections)
+      artifacts = first_section["artifacts"]
+
+      assert length(artifacts) == 1
+      assert hd(artifacts)["id"] == public_artifact_id
+      assert hd(artifacts)["title"] == "Public Test Evidence"
+      assert hd(artifacts)["visibility"] == "public"
+    end
+  end
 end
