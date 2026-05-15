@@ -33,7 +33,7 @@ defmodule Sacrum.Repo.Migrations.CreateArtifactLinks do
 
     create constraint(:artifact_links, :artifact_links_relationship_kind_check,
              check:
-               "relationship_kind IN ('produced_by', 'attached_to', 'evidence_for', 'source_for', 'validates', 'supersedes')"
+               "relationship_kind IN ('produced_by', 'attached_to', 'evidence_for', 'source_for', 'validates', 'supersedes', 'demonstrates')"
            )
   end
 end

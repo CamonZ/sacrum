@@ -7,7 +7,7 @@ defmodule Sacrum.Repo.Schemas.ArtifactLink do
   @foreign_key_type :binary_id
 
   @subject_types ~w(task task_section chat_session task_run step_execution)
-  @relationship_kinds ~w(produced_by attached_to evidence_for source_for validates supersedes)
+  @relationship_kinds ~w(produced_by attached_to evidence_for source_for validates supersedes demonstrates)
 
   @fields ~w(
     artifact_id subject_type subject_id relationship_kind
