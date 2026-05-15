@@ -141,11 +141,11 @@ defmodule Sacrum.Tasks.StatusTest do
     test "does not infer task completion from a completed StepExecution alone" do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, %{is_final: true})
-      final_step = create_step(workflow, %{is_final: true})
-      task = create_task(user, project, workflow, final_step)
+      workflow = create_workflow(user, project)
+      step = create_step(workflow)
+      task = create_task(user, project, workflow, step)
 
-      {:ok, completed_attempt} = insert_execution(task, workflow, final_step, "completed")
+      {:ok, completed_attempt} = insert_execution(task, workflow, step, "completed")
 
       assert completed_attempt.status == "completed"
       assert task.completed_at == nil

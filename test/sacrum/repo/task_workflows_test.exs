@@ -541,6 +541,87 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
     end
   end
 
+  describe "terminal workflow completion stamping" do
+    test "assign_workflow stamps completed_at when terminal workflow lands on terminal step" do
+      user = create_user()
+      project = create_project(user)
+      {:ok, workflow} = Workflows.insert(project, %{name: "Done Workflow", is_final: true})
+      step = create_step(workflow, %{name: "done", step_order: 1, is_final: true})
+      {:ok, workflow} = Workflows.update(workflow, %{initial_step_id: step.id})
+      task = create_task(project)
+
+      {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
+
+      assert assigned.workflow_id == workflow.id
+      assert assigned.current_step_id == step.id
+      assert assigned.completed_at != nil
+      assert assigned.status == "done"
+    end
+
+    test "assign_workflow does not stamp completed_at for non-terminal initial step" do
+      user = create_user()
+      project = create_project(user)
+      {:ok, workflow} = Workflows.insert(project, %{name: "Terminal Workflow", is_final: true})
+      step = create_step(workflow, %{name: "review", step_order: 1, is_final: false})
+      {:ok, workflow} = Workflows.update(workflow, %{initial_step_id: step.id})
+      task = create_task(project)
+
+      {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
+
+      assert assigned.completed_at == nil
+      assert assigned.status == "ready"
+    end
+
+    test "assign_workflow does not stamp completed_at for terminal step in non-terminal workflow" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(project)
+      step = create_step(workflow, %{name: "done", step_order: 1, is_final: true})
+      {:ok, workflow} = Workflows.update(workflow, %{initial_step_id: step.id})
+      task = create_task(project)
+
+      {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
+
+      assert assigned.completed_at == nil
+      assert assigned.status == "ready"
+    end
+
+    test "move_to_step stamps completed_at when moving into terminal step in terminal workflow" do
+      user = create_user()
+      project = create_project(user)
+      {:ok, workflow} = Workflows.insert(project, %{name: "Terminal Workflow", is_final: true})
+      start_step = create_step(workflow, %{name: "review", step_order: 1})
+      done_step = create_step(workflow, %{name: "done", step_order: 2, is_final: true})
+      {:ok, workflow} = Workflows.update(workflow, %{initial_step_id: start_step.id})
+      create_transition(start_step, done_step)
+      task = create_task(project)
+      {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
+
+      {:ok, moved} = TaskWorkflows.move_to_step(assigned, done_step.id)
+
+      assert moved.current_step_id == done_step.id
+      assert moved.completed_at != nil
+      assert moved.status == "done"
+    end
+
+    test "advance_to_step stamps completed_at when advancing into terminal step in terminal workflow" do
+      user = create_user()
+      project = create_project(user)
+      {:ok, workflow} = Workflows.insert(project, %{name: "Terminal Workflow", is_final: true})
+      start_step = create_step(workflow, %{name: "review", step_order: 1})
+      done_step = create_step(workflow, %{name: "done", step_order: 2, is_final: true})
+      {:ok, workflow} = Workflows.update(workflow, %{initial_step_id: start_step.id})
+      task = create_task(project)
+      {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
+
+      {:ok, advanced} = TaskWorkflows.advance_to_step(assigned, done_step.id)
+
+      assert advanced.current_step_id == done_step.id
+      assert advanced.completed_at != nil
+      assert advanced.status == "done"
+    end
+  end
+
   defp collect_broadcasts(event) do
     receive do
       %Phoenix.Socket.Broadcast{event: ^event, payload: payload} ->
