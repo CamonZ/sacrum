@@ -347,13 +347,14 @@ Never derive permanent task or run failure from the latest `StepExecution.status
 
 ### Timestamp Stamping Invariants
 
-Timestamps are stamped **exclusively by the orchestrator** (ExecutionDispatcher and TaskCompletion). They are never set by user mutations.
+Task lifecycle timestamps are stamped by the workflow/run state transitions that
+own the relevant lifecycle boundary.
 
 **`started_at`** — Stamped in `ExecutionDispatcher.create_and_dispatch/4` when the task first dispatches (if currently nil).
 - Idempotent: subsequent dispatches do not re-stamp; the timestamp persists for the task's lifetime
 - Represents the first moment the orchestrator began work on the task
 
-**`completed_at`** — Stamped in `TaskCompletion.handle_completion/1` when the task reaches the final step of a terminal workflow and the latest StepExecution is completed (if currently nil).
+**`completed_at`** — Stamped when the task enters a terminal step in a terminal workflow (if currently nil). This happens through `TaskCompletion.handle_completion/1` for orchestrated runs, and through `TaskWorkflows.assign_workflow/2`, `advance_to_step/2`, or `move_to_step/2` for manual workflow assignment/movement into a terminal position.
 - Idempotent: retries or repeated completions do not re-stamp
 - Represents the task's transition to the :done state
 
@@ -361,7 +362,7 @@ Timestamps are stamped **exclusively by the orchestrator** (ExecutionDispatcher 
 
 Operations that change derivation inputs run the position update and the status refresh in the same `Ecto.Multi`/transaction, using `Status.changeset/1` as the second step:
 
-- `TaskWorkflows.assign_workflow / unassign_workflow / advance_to_step / move_to_step` — wraps the position update and compatibility status refresh in one transaction; broadcasts after commit
+- `TaskWorkflows.assign_workflow / unassign_workflow / advance_to_step / move_to_step` — wraps the position update, terminal-position `completed_at` stamping, and compatibility status refresh in one transaction; broadcasts after commit
 - `TaskCompletion.handle_completion/1` — wraps `completed_at` stamping and status refresh in one transaction
 - `ExecutionDispatcher.create_and_dispatch/4` — stamps `started_at` without deriving an active task status from the started attempt
 
