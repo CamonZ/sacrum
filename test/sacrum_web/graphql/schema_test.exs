@@ -5993,7 +5993,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
     end
 
     test "creates artifact with optional data field", %{conn: conn, user: user, project: project} do
-      data_json = ~S|{"key": "value"}|
+      data_json = ~S|"{\"key\":\"value\"}"|
 
       result =
         conn
@@ -6017,7 +6017,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
       assert data = result["data"]["createArtifact"]
       assert data["id"] != nil
-      assert data["data"] == data_json
+      assert data["data"] == %{"key" => "value"}
     end
 
     test "createArtifactLink links artifact to task", %{conn: conn, user: user, project: project} do
