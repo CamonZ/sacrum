@@ -4,9 +4,7 @@ defmodule Sacrum.Accounts.ArtifactsTest do
   alias Sacrum.Accounts.Artifacts
   alias Sacrum.Repo.Users
   alias Sacrum.Repo.Projects
-  alias Sacrum.Repo.Artifacts, as: ArtifactsRepo
   alias Sacrum.Repo.ArtifactLinks
-  alias Sacrum.Repo.Schemas.Artifact
 
   @valid_user_attrs %{
     email: "test@example.com",
