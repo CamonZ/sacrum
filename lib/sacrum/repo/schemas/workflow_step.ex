@@ -33,6 +33,9 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
   @create_fields ~w(name goal agents skills agent_config is_final step_order step_type prompt output_schema)a
   @update_fields ~w(name goal agents skills agent_config is_final step_order step_type prompt output_schema)a
 
+  @spec step_types() :: [String.t()]
+  def step_types, do: @step_types
+
   @spec create_changeset(t(), map()) :: Ecto.Changeset.t()
   def create_changeset(step, attrs) do
     step

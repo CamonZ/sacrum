@@ -2070,17 +2070,73 @@ defmodule SacrumWeb.Graphql.SchemaTest do
               status: "running"
               model: "claude-sonnet"
               modelProvider: "anthropic"
-            ) { id stepName status model modelProvider taskId }
+            ) { id stepName stepType status model modelProvider taskId }
           }
         """)
         |> json_response(200)
 
       data = result["data"]["createStepExecution"]
       assert data["stepName"] == "analysis"
+      assert data["stepType"] == "execute"
       assert data["status"] == "running"
       assert data["model"] == "claude-sonnet"
       assert data["modelProvider"] == "anthropic"
       assert data["taskId"] == task.id
+    end
+
+    test "createStepExecution derives stepType from stepId and rejects spoofed values", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+
+      {:ok, step} =
+        Accounts.WorkflowSteps.insert(wf, %{
+          name: "Human input",
+          step_type: "human_input"
+        })
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createStepExecution(
+              taskId: "#{task.id}"
+              workflowId: "#{wf.id}"
+              stepId: "#{step.id}"
+              stepName: "manual alias"
+              stepType: "human_input"
+            ) { id stepId stepName stepType }
+          }
+        """)
+        |> json_response(200)
+
+      data = result["data"]["createStepExecution"]
+      assert data["stepId"] == step.id
+      assert data["stepName"] == "manual alias"
+      assert data["stepType"] == "human_input"
+
+      spoofed =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createStepExecution(
+              taskId: "#{task.id}"
+              workflowId: "#{wf.id}"
+              stepId: "#{step.id}"
+              stepName: "manual alias"
+              stepType: "execute"
+            ) { id stepType }
+          }
+        """)
+        |> json_response(200)
+
+      assert [%{"message" => message}] = spoofed["errors"]
+      assert message =~ "must match the referenced workflow step"
     end
 
     test "updates a step execution", %{conn: conn, user: user, project: project} do
@@ -2155,13 +2211,14 @@ defmodule SacrumWeb.Graphql.SchemaTest do
             runStep(
               taskId: "#{task.id}"
               stepId: "#{step.id}"
-            ) { id stepName status taskId taskRunId }
+            ) { id stepName stepType status taskId taskRunId }
           }
         """)
         |> json_response(200)
 
       data = result["data"]["runStep"]
       assert data["stepName"] == "step_1"
+      assert data["stepType"] == "execute"
       # ExecutionDispatcher creates executions in "started" status
       assert data["status"] == "started"
       assert data["taskId"] == task.id
@@ -2172,6 +2229,42 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert task_run.task_id == task.id
       assert task_run.status == :executing
       assert task_run.latest_step_execution_id == data["id"]
+    end
+
+    test "runStep persists and exposes a non-default workflow step type", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+
+      {:ok, step} =
+        Accounts.WorkflowSteps.insert(wf, %{
+          name: "Route decision",
+          step_type: "route"
+        })
+
+      {:ok, _task} = Sacrum.Repo.TaskWorkflows.assign_workflow(task, wf)
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            runStep(
+              taskId: "#{task.id}"
+              stepId: "#{step.id}"
+            ) { id stepName stepType status taskId }
+          }
+        """)
+        |> json_response(200)
+
+      data = result["data"]["runStep"]
+      assert data["stepName"] == "Route decision"
+      assert data["stepType"] == "route"
+      assert data["status"] == "started"
+      assert data["taskId"] == task.id
     end
 
     test "runStep reuses an existing active root TaskRun", %{
@@ -4540,6 +4633,46 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       data = result["data"]["stepExecution"]
       assert data["id"] == exec.id
       assert data["handoff"] == %{"context" => "data", "nested" => %{"key" => "value"}}
+    end
+
+    test "stepExecution query exposes the stored stepType snapshot after workflow step changes",
+         %{
+           conn: conn,
+           user: user,
+           project: project
+         } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+
+      {:ok, step} =
+        Accounts.WorkflowSteps.insert(wf, %{
+          name: "Snapshot step",
+          step_type: "evaluate"
+        })
+
+      {:ok, exec} =
+        Accounts.StepExecutions.insert(user.id, %{
+          task_id: task.id,
+          workflow_id: wf.id,
+          step_id: step.id,
+          project_id: project.id,
+          step_name: step.name,
+          status: "completed"
+        })
+
+      {:ok, _updated_step} = Accounts.WorkflowSteps.update(step, %{step_type: "execute"})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql(~s|{ stepExecution(id: "#{exec.id}") { id stepId stepName stepType } }|)
+        |> json_response(200)
+
+      data = result["data"]["stepExecution"]
+      assert data["id"] == exec.id
+      assert data["stepId"] == step.id
+      assert data["stepName"] == "Snapshot step"
+      assert data["stepType"] == "evaluate"
     end
 
     test "stepExecution field returns nil for handoff when not set", %{

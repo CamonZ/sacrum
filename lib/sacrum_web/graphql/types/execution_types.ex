@@ -78,7 +78,9 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
     field :id, :id
     field :task_id, :id
     field :task_run_id, :id
+    field :step_id, :id
     field :step_name, :string
+    field :step_type, :string
     field :status, :string
     field :context, :json
     field :prompt, :string
@@ -258,7 +260,9 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
     field :create_step_execution, :step_execution do
       arg(:task_id, non_null(:uuid4))
       arg(:workflow_id, non_null(:uuid4))
+      arg(:step_id, :uuid4)
       arg(:step_name, non_null(:string))
+      arg(:step_type, :string)
       arg(:status, :string)
       arg(:context, :json)
       arg(:prompt, :string)

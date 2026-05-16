@@ -210,6 +210,7 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContractTest do
       :workflow_id,
       :step_id,
       :project_id,
+      :step_type,
       :status,
       :handoff,
       :updated_at

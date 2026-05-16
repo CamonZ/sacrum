@@ -37,6 +37,7 @@ defmodule Sacrum.Repo.StepExecutionsTest do
                  task_id: task.id,
                  workflow_id: workflow.id,
                  step_name: "review",
+                 step_type: "evaluate",
                  status: "completed",
                  model: "claude-3",
                  input_tokens: 100,
@@ -45,8 +46,35 @@ defmodule Sacrum.Repo.StepExecutionsTest do
 
       assert execution.task_id == task.id
       assert execution.step_name == "review"
+      assert execution.step_type == "evaluate"
       assert execution.status == "completed"
       assert execution.model == "claude-3"
+    end
+
+    test "defaults step_type to execute and rejects invalid values" do
+      {workflow, project, user} = create_workflow()
+      task = create_task(project, user.id)
+
+      assert {:ok, %StepExecution{} = execution} =
+               StepExecutions.insert(workflow.user_id, %{
+                 project_id: project.id,
+                 task_id: task.id,
+                 workflow_id: workflow.id,
+                 step_name: "manual"
+               })
+
+      assert execution.step_type == "execute"
+
+      assert {:error, changeset} =
+               StepExecutions.insert(workflow.user_id, %{
+                 project_id: project.id,
+                 task_id: task.id,
+                 workflow_id: workflow.id,
+                 step_name: "manual",
+                 step_type: "bogus"
+               })
+
+      assert %{step_type: ["is invalid"]} = errors_on(changeset)
     end
 
     test "rejects missing task_id" do

@@ -1003,6 +1003,7 @@ defmodule SacrumWeb.ProjectChannelTest do
       step_id: Ecto.UUID.generate(),
       project_id: project.id,
       step_name: "Test Step",
+      step_type: "execute",
       status: "pending",
       context: nil,
       prompt: nil,

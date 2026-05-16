@@ -119,6 +119,24 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
   describe "create_and_dispatch/3 — Liquid template rendering" do
     setup [:setup_dispatch_context]
 
+    test "persists the source workflow step_type on dispatched executions", ctx do
+      step =
+        create_step(ctx.user, ctx.workflow, %{
+          "name" => "Human approval",
+          "step_type" => "human_input",
+          "prompt" => "wait for human"
+        })
+
+      task = create_task(ctx.user, ctx.project)
+      task = assign_workflow(task, ctx.workflow)
+      task = PromptRenderer.preload_for_rendering(task)
+
+      {:ok, exec} = create_and_dispatch(ctx, task, step)
+
+      assert exec.step_name == "Human approval"
+      assert exec.step_type == "human_input"
+    end
+
     test "renders {{ task.title }} in step prompt", ctx do
       step = create_step(ctx.user, ctx.workflow, %{"prompt" => "Working on: {{ task.title }}"})
       task = create_task(ctx.user, ctx.project)

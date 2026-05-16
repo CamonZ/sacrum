@@ -12,6 +12,7 @@ defmodule Sacrum.Accounts.StepExecutions do
     preloads: [],
     default_order: [asc: :inserted_at]
 
+  alias Sacrum.Accounts.WorkflowSteps
   alias Sacrum.Orchestrator.ExecutionEvents
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{StepExecution, TaskRun, WorkflowStep}
@@ -25,13 +26,75 @@ defmodule Sacrum.Accounts.StepExecutions do
   """
   @spec insert(String.t(), map()) :: {:ok, StepExecution.t()} | {:error, Ecto.Changeset.t()}
   def insert(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
-    task_id = Map.get(attrs, "task_id") || Map.get(attrs, :task_id)
-    project_id = Map.get(attrs, "project_id") || Map.get(attrs, :project_id)
+    with {:ok, attrs} <- put_derived_step_type(user_id, attrs) do
+      task_id = attr(attrs, :task_id)
+      project_id = attr(attrs, :project_id)
 
-    %StepExecution{user_id: user_id, task_id: task_id, project_id: project_id}
-    |> StepExecution.create_changeset(attrs)
-    |> Repo.insert()
+      %StepExecution{user_id: user_id, task_id: task_id, project_id: project_id}
+      |> StepExecution.create_changeset(attrs)
+      |> Repo.insert()
+    end
   end
+
+  @spec put_derived_step_type(String.t(), map()) :: {:ok, map()} | {:error, Ecto.Changeset.t()}
+  defp put_derived_step_type(user_id, attrs) do
+    case attr(attrs, :step_id) do
+      nil ->
+        {:ok, attrs}
+
+      step_id ->
+        with {:ok, %WorkflowStep{} = step} <-
+               WorkflowSteps.get_by(user_id, conditions: [id: step_id]),
+             :ok <- validate_step_scope(attrs, step) do
+          validate_step_type_match(attrs, step.step_type)
+        end
+    end
+  end
+
+  defp validate_step_scope(attrs, %WorkflowStep{} = step) do
+    workflow_id = attr(attrs, :workflow_id)
+
+    if is_nil(workflow_id) or workflow_id == step.workflow_id do
+      :ok
+    else
+      {:error,
+       attrs
+       |> changeset_with_step_type(step.step_type)
+       |> Ecto.Changeset.add_error(:step_id, "must belong to the referenced workflow")}
+    end
+  end
+
+  defp validate_step_type_match(attrs, step_type) do
+    case attr(attrs, :step_type) do
+      nil ->
+        {:ok, put_step_type(attrs, step_type)}
+
+      ^step_type ->
+        {:ok, put_step_type(attrs, step_type)}
+
+      _other ->
+        changeset =
+          attrs
+          |> changeset_with_step_type(step_type)
+          |> Ecto.Changeset.add_error(:step_type, "must match the referenced workflow step")
+
+        {:error, changeset}
+    end
+  end
+
+  defp changeset_with_step_type(attrs, step_type) do
+    StepExecution.create_changeset(%StepExecution{}, put_step_type(attrs, step_type))
+  end
+
+  defp put_step_type(attrs, step_type) do
+    if string_keyed?(attrs),
+      do: Map.put(attrs, "step_type", step_type),
+      else: Map.put(attrs, :step_type, step_type)
+  end
+
+  defp attr(attrs, key), do: Map.get(attrs, key) || Map.get(attrs, Atom.to_string(key))
+
+  defp string_keyed?(attrs), do: Enum.any?(attrs, fn {key, _value} -> is_binary(key) end)
 
   @doc """
   Update an existing step execution.

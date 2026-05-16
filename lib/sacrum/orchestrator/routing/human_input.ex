@@ -180,6 +180,7 @@ defmodule Sacrum.Orchestrator.Routing.HumanInput do
           workflow_id: task.workflow_id,
           step_id: step.id,
           step_name: step.name,
+          step_type: step.step_type,
           status: "waiting",
           prompt: rendered_prompt
         },
@@ -204,6 +205,7 @@ defmodule Sacrum.Orchestrator.Routing.HumanInput do
         workflow_id: task.workflow_id,
         step_id: step.id,
         step_name: step.name,
+        step_type: step.step_type,
         status: "waiting",
         handoff: handoff
       }
