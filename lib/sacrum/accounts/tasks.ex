@@ -47,7 +47,7 @@ defmodule Sacrum.Accounts.Tasks do
     - `:level` - filter by task level
     - `:parent_id` - filter by parent task
     - `:blocked` - when false, exclude tasks with incomplete dependencies
-    - `:search` - text search on title/description
+    - `:search` - text search on title, description, or UUID prefix
     - `:status` - compatibility filter over persisted task status. New derivations
       write `"ready"` or `"done"`; use TaskRun queries for active run lifecycle.
     - `:tags` - filter by tags

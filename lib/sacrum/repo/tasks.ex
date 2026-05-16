@@ -35,7 +35,7 @@ defmodule Sacrum.Repo.Tasks do
     - `:priority` - filter by task priority
     - `:parent_id` - filter by parent task (via hierarchy)
     - `:blocked` - when false, exclude tasks with incomplete dependencies
-    - `:search` - text search on title/description
+    - `:search` - text search on title, description, or UUID prefix
     - `:status` - compatibility filter over persisted task status. New derivations
       write `"ready"` or `"done"`; use TaskRun queries for active run lifecycle.
     - `:step_id` - filter by workflow step ID
@@ -154,7 +154,9 @@ defmodule Sacrum.Repo.Tasks do
 
   defp apply_filter(query, :search, term) do
     pattern = "%#{term}%"
-    where(query, [t], ilike(t.title, ^pattern) or ilike(t.description, ^pattern))
+    text_search = dynamic([t], ilike(t.title, ^pattern) or ilike(t.description, ^pattern))
+
+    where(query, ^search_filter(term, text_search))
   end
 
   defp apply_filter(query, :status, nil), do: query
@@ -195,6 +197,38 @@ defmodule Sacrum.Repo.Tasks do
   end
 
   defp apply_filter(query, :archived, true), do: query
+
+  defp search_filter(term, text_search) do
+    case Ecto.UUID.cast(term) do
+      {:ok, uuid} ->
+        dynamic([t], ^text_search or t.id == ^uuid)
+
+      :error ->
+        search_prefix_filter(term, text_search)
+    end
+  end
+
+  defp search_prefix_filter(term, text_search) do
+    if uuid_prefix_search_term?(term) do
+      prefix_length = String.length(term)
+      normalized_prefix = String.downcase(term)
+
+      dynamic(
+        [t],
+        ^text_search or
+          fragment("left(?::text, ?)", t.id, ^prefix_length) == ^normalized_prefix
+      )
+    else
+      text_search
+    end
+  end
+
+  defp uuid_prefix_search_term?(term) when is_binary(term) do
+    Regex.match?(
+      ~r/\A[0-9a-f]{1,8}(-[0-9a-f]{0,4}(-[0-9a-f]{0,4}(-[0-9a-f]{0,4}(-[0-9a-f]{0,12})?)?)?)?\z/i,
+      term
+    )
+  end
 
   @spec find_by_uuid_prefix(String.t(), String.t(), String.t()) ::
           {:ok, Task.t()}

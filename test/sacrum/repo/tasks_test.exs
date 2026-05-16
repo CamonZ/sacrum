@@ -330,6 +330,19 @@ defmodule Sacrum.Repo.TasksTest do
       assert length(tasks) == 2
     end
 
+    test "filters by UUID prefix" do
+      user = create_user()
+      project = create_project(user)
+      {:ok, matching_task} = Tasks.insert(project, %{title: "Matching Task"})
+      {:ok, unrelated_task} = Tasks.insert(project, %{title: "Unrelated Task"})
+
+      prefix = String.slice(matching_task.id, 0, 12)
+      tasks = Tasks.list_tasks(conditions: [project_id: project.id, search: prefix])
+
+      assert Enum.map(tasks, & &1.id) == [matching_task.id]
+      refute Enum.any?(tasks, &(&1.id == unrelated_task.id))
+    end
+
     test "filters by step_id" do
       user = create_user()
       project = create_project(user)
