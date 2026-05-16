@@ -3877,6 +3877,59 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       refute "Task B" in titles
     end
 
+    test "filters by search (full UUID match) within project scope", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, matching_task} =
+        Accounts.Tasks.insert(user.id, project.id, %{title: "Matching UUID"})
+
+      {:ok, other_project} = Accounts.Projects.insert(user.id, %{name: "Other Project"})
+
+      {:ok, _same_user_other_project_task} =
+        Accounts.Tasks.insert(user.id, other_project.id, %{title: "Other Project UUID"})
+
+      other_user = create_user(%{email: "other-uuid@example.com", username: "otheruuid"})
+      {:ok, other_user_project} = Accounts.Projects.insert(other_user.id, %{name: "Other User"})
+
+      {:ok, _other_user_task} =
+        Accounts.Tasks.insert(other_user.id, other_user_project.id, %{title: "Other User UUID"})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          { tasks(projectId: "#{project.id}", search: "#{matching_task.id}") { id title } }
+        """)
+        |> json_response(200)
+
+      assert [%{"id" => id, "title" => "Matching UUID"}] = result["data"]["tasks"]
+      assert id == matching_task.id
+    end
+
+    test "filters by search (UUID prefix match)", %{conn: conn, user: user, project: project} do
+      {:ok, matching_task} =
+        Accounts.Tasks.insert(user.id, project.id, %{title: "Matching UUID Prefix"})
+
+      {:ok, unrelated_task} =
+        Accounts.Tasks.insert(user.id, project.id, %{title: "Unrelated UUID Prefix"})
+
+      prefix = String.slice(matching_task.id, 0, 12)
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          { tasks(projectId: "#{project.id}", search: "#{prefix}") { id title } }
+        """)
+        |> json_response(200)
+
+      task_ids = Enum.map(result["data"]["tasks"], & &1["id"])
+      assert task_ids == [matching_task.id]
+      refute unrelated_task.id in task_ids
+    end
+
     test "filters by workflow_id", %{conn: conn, user: user, project: project} do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
       {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "S1", step_order: 1})
