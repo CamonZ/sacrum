@@ -43,5 +43,8 @@ defmodule Sacrum.Repo.Schemas.TaskSection do
     |> validate_inclusion(:section_type, @allowed_section_types)
     |> foreign_key_constraint(:task_id)
     |> foreign_key_constraint(:project_id)
+    |> unique_constraint(:section_order,
+      name: :task_sections_unique_order_per_task_and_type
+    )
   end
 end
