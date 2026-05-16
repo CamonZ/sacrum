@@ -13,10 +13,20 @@ defmodule Sacrum.Repo.TaskSectionsTest do
   }
 
   defp setup_task do
-    {:ok, user} = Users.insert(@valid_user_attrs)
+    {:ok, user} = Users.insert(unique_user_attrs())
     {:ok, project} = Projects.insert(user, %{name: "Test Project"})
     {:ok, task} = Tasks.insert(project, %{title: "Test Task"})
     task
+  end
+
+  defp unique_user_attrs do
+    unique = System.unique_integer([:positive])
+
+    %{
+      @valid_user_attrs
+      | email: "test-#{unique}@example.com",
+        username: "testuser#{unique}"
+    }
   end
 
   describe "insert/2" do
@@ -38,6 +48,82 @@ defmodule Sacrum.Repo.TaskSectionsTest do
       errors = errors_on(changeset)
       assert errors[:section_type]
       assert errors[:content]
+    end
+
+    test "rejects duplicate non-null section_order for the same task and section_type" do
+      task = setup_task()
+
+      attrs = %{section_type: "checklist_item", content: "First", section_order: 1}
+      {:ok, first_section} = TaskSections.insert(task, attrs)
+
+      assert {:error, changeset} =
+               TaskSections.insert(task, %{attrs | content: "Second"})
+
+      assert %{section_order: ["has already been taken"]} = errors_on(changeset)
+      assert first_section.section_order == 1
+    end
+
+    test "allows repeated nil section_order for the same task and section_type" do
+      task = setup_task()
+
+      {:ok, first_section} =
+        TaskSections.insert(task, %{
+          section_type: "checklist_item",
+          content: "First unordered item",
+          section_order: nil
+        })
+
+      {:ok, second_section} =
+        TaskSections.insert(task, %{
+          section_type: "checklist_item",
+          content: "Second unordered item",
+          section_order: nil
+        })
+
+      assert is_nil(first_section.section_order)
+      assert is_nil(second_section.section_order)
+      assert first_section.id != second_section.id
+    end
+
+    test "allows the same non-null section_order for different tasks" do
+      first_task = setup_task()
+      second_task = setup_task()
+
+      {:ok, first_section} =
+        TaskSections.insert(first_task, %{
+          section_type: "goal",
+          content: "First task goal",
+          section_order: 1
+        })
+
+      {:ok, second_section} =
+        TaskSections.insert(second_task, %{
+          section_type: "goal",
+          content: "Second task goal",
+          section_order: 1
+        })
+
+      assert first_section.task_id == first_task.id
+      assert second_section.task_id == second_task.id
+      assert first_section.section_order == second_section.section_order
+    end
+
+    test "allows the same non-null section_order for different section types" do
+      task = setup_task()
+
+      {:ok, goal_section} =
+        TaskSections.insert(task, %{section_type: "goal", content: "Goal", section_order: 1})
+
+      {:ok, criterion_section} =
+        TaskSections.insert(task, %{
+          section_type: "testing_criterion",
+          content: "Criterion",
+          section_order: 1
+        })
+
+      assert goal_section.task_id == criterion_section.task_id
+      assert goal_section.section_type != criterion_section.section_type
+      assert goal_section.section_order == criterion_section.section_order
     end
   end
 
