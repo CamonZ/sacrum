@@ -82,6 +82,8 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
   @step_execution_payload_keys ~w(
     id task_id task_run_id workflow_id step_id project_id step_name status context prompt output
     transition_result model model_provider input_tokens output_tokens cost duration_ms handoff
+    session_input_tokens session_cache_read_input_tokens session_output_tokens session_total_tokens
+    context_window_input_tokens context_window_cache_read_input_tokens context_window_total_tokens
     inserted_at updated_at
   )a
 
@@ -140,7 +142,7 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
   )a
 
   @session_log_payload_keys ~w(
-    id step_execution_id project_id content inserted_at updated_at
+    id step_execution_id project_id content format inserted_at updated_at
   )a
 
   @session_log_event_payload_keys [:schema_version | @session_log_payload_keys]

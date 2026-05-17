@@ -335,11 +335,19 @@ query TaskRunTrace($rootTaskRunId: Uuid4!) {
       output
       transitionResult
       handoff
+      sessionInputTokens
+      sessionCacheReadInputTokens
+      sessionOutputTokens
+      sessionTotalTokens
+      contextWindowInputTokens
+      contextWindowCacheReadInputTokens
+      contextWindowTotalTokens
       insertedAt
       updatedAt
       sessionLogs {
         id
         content
+        format
         insertedAt
       }
     }
@@ -347,6 +355,7 @@ query TaskRunTrace($rootTaskRunId: Uuid4!) {
       id
       stepExecutionId
       content
+      format
       insertedAt
     }
   }

@@ -47,6 +47,34 @@ defmodule Sacrum.Accounts.StepExecutionsTest do
       assert execution.task_id == task.id
       assert execution.step_name == "In Progress"
     end
+
+    test "casts expanded token counters and preserves zero values" do
+      user = create_user()
+      {project, task, workflow} = create_task_with_workflow(user)
+
+      assert {:ok, %StepExecution{} = execution} =
+               StepExecutions.insert(user.id, %{
+                 "task_id" => task.id,
+                 "project_id" => project.id,
+                 "workflow_id" => workflow.id,
+                 "step_name" => "In Progress",
+                 "session_input_tokens" => 0,
+                 "session_cache_read_input_tokens" => 30,
+                 "session_output_tokens" => 10,
+                 "session_total_tokens" => 40,
+                 "context_window_input_tokens" => 0,
+                 "context_window_cache_read_input_tokens" => 30,
+                 "context_window_total_tokens" => 40
+               })
+
+      assert execution.session_input_tokens == 0
+      assert execution.session_cache_read_input_tokens == 30
+      assert execution.session_output_tokens == 10
+      assert execution.session_total_tokens == 40
+      assert execution.context_window_input_tokens == 0
+      assert execution.context_window_cache_read_input_tokens == 30
+      assert execution.context_window_total_tokens == 40
+    end
   end
 
   describe "get_by/2" do
@@ -150,6 +178,38 @@ defmodule Sacrum.Accounts.StepExecutionsTest do
       # unchanged fields preserved
       assert updated.step_name == "draft"
       assert updated.task_id == task.id
+    end
+
+    test "updates expanded token counters and preserves zero values" do
+      user = create_user()
+      {project, task, workflow} = create_task_with_workflow(user)
+
+      {:ok, execution} =
+        StepExecutions.insert(user.id, %{
+          "task_id" => task.id,
+          "project_id" => project.id,
+          "workflow_id" => workflow.id,
+          "step_name" => "draft"
+        })
+
+      assert {:ok, updated} =
+               StepExecutions.update(execution, %{
+                 "session_input_tokens" => 150,
+                 "session_cache_read_input_tokens" => 0,
+                 "session_output_tokens" => 40,
+                 "session_total_tokens" => 190,
+                 "context_window_input_tokens" => 150,
+                 "context_window_cache_read_input_tokens" => 0,
+                 "context_window_total_tokens" => 190
+               })
+
+      assert updated.session_input_tokens == 150
+      assert updated.session_cache_read_input_tokens == 0
+      assert updated.session_output_tokens == 40
+      assert updated.session_total_tokens == 190
+      assert updated.context_window_input_tokens == 150
+      assert updated.context_window_cache_read_input_tokens == 0
+      assert updated.context_window_total_tokens == 190
     end
 
     test "does not allow changing task_id" do
