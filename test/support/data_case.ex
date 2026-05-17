@@ -55,4 +55,15 @@ defmodule Sacrum.DataCase do
       end)
     end)
   end
+
+  def route_schema_with_handoff(keys) do
+    properties = Map.new(keys, &{&1, %{"type" => "string"}})
+
+    Sacrum.Repo.Schemas.WorkflowStep.routing_contract_schema(%{
+      "type" => "object",
+      "properties" => properties,
+      "required" => keys,
+      "additionalProperties" => false
+    })
+  end
 end

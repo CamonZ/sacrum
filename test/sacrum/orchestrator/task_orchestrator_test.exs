@@ -965,7 +965,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       assert task.current_step_id == route_step.id
     end
 
-    test "route output with valid handoff map passes validation" do
+    test "route output with handoff matching custom schema passes validation" do
       user = create_user()
       project = create_project(user)
 
@@ -976,7 +976,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
           name: "route_step",
           step_order: 1,
           is_final: false,
-          step_type: "route"
+          step_type: "route",
+          output_schema: route_schema_with_handoff(["data"])
         })
 
       dest_step =
@@ -1071,7 +1072,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
           name: "route_step",
           step_order: 1,
           is_final: false,
-          step_type: "route"
+          step_type: "route",
+          output_schema: route_schema_with_handoff(["data"])
         })
 
       dest_step =
@@ -1188,6 +1190,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
           step_order: 1,
           is_final: false,
           step_type: "route",
+          output_schema: route_schema_with_handoff(["approved_by", "priority"]),
           prompt: "Route the task"
         })
 
@@ -1340,6 +1343,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
           step_order: 1,
           is_final: true,
           step_type: "route",
+          output_schema: route_schema_with_handoff(["transferred_from", "data"]),
           prompt: "Route to workflow 2"
         })
 
@@ -1426,7 +1430,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
           name: "route_step",
           step_order: 1,
           is_final: true,
-          step_type: "route"
+          step_type: "route",
+          output_schema: route_schema_with_handoff(["cross_workflow"])
         })
 
       {:ok, _} = Accounts.Workflows.update(workflow1, %{initial_step_id: route_step.id})
@@ -1520,7 +1525,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
           name: "route_step",
           step_order: 1,
           is_final: false,
-          step_type: "route"
+          step_type: "route",
+          output_schema: route_schema_with_handoff(["data"])
         })
 
       dest_step =
@@ -1771,7 +1777,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
           name: "route_step",
           step_order: 1,
           is_final: false,
-          step_type: "route"
+          step_type: "route",
+          output_schema: route_schema_with_handoff(["feedback"])
         })
 
       dest_step =

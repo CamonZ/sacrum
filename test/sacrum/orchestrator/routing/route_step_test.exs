@@ -186,7 +186,13 @@ defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
       user = create_user()
       project = create_project(user)
       workflow = create_workflow(user, project, %{auto_advance: false})
-      current_step = create_step(user, workflow, %{"name" => "route_step", "step_order" => 1})
+
+      current_step =
+        create_step(user, workflow, %{
+          "name" => "route_step",
+          "step_order" => 1,
+          "output_schema" => route_schema_with_handoff(["review"])
+        })
 
       next_step =
         create_step(user, workflow, %{
