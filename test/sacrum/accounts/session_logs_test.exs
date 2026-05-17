@@ -6,8 +6,9 @@ defmodule Sacrum.Accounts.SessionLogsTest do
   alias Sacrum.Accounts.Workflows
   alias Sacrum.Accounts.Tasks
   alias Sacrum.Accounts.Projects
+  alias Sacrum.Repo
   alias Sacrum.Repo.Users
-  alias Sacrum.Repo.Schemas.SessionLog
+  alias Sacrum.Repo.Schemas.{SessionLog, StepExecution}
 
   @valid_user_attrs %{
     email: "test@example.com",
@@ -53,6 +54,86 @@ defmodule Sacrum.Accounts.SessionLogsTest do
       assert log.project_id == project.id
       assert log.step_execution_id == execution.id
       assert log.content == "Session started"
+      assert log.format == "anthropic"
+    end
+
+    test "accepts only supported provider formats" do
+      changeset =
+        SessionLog.create_changeset(%SessionLog{}, %{
+          "step_execution_id" => Ecto.UUID.generate(),
+          "content" => "Session started",
+          "format" => "anthropic"
+        })
+
+      assert changeset.valid?
+
+      changeset =
+        SessionLog.create_changeset(%SessionLog{}, %{
+          "step_execution_id" => Ecto.UUID.generate(),
+          "content" => "Session started",
+          "format" => "codex"
+        })
+
+      assert %{format: ["is invalid"]} = errors_on(changeset)
+    end
+
+    test "rolls up Anthropic usage into the owning step execution" do
+      user = create_user()
+      {project, execution} = create_step_execution(user)
+
+      assert {:ok, %SessionLog{}} =
+               SessionLogs.insert(user.id, %{
+                 "step_execution_id" => execution.id,
+                 "project_id" => project.id,
+                 "format" => "anthropic",
+                 "content" =>
+                   Jason.encode!(%{
+                     "usage" => %{
+                       "input_tokens" => 100,
+                       "cache_creation_input_tokens" => 20,
+                       "cache_read_input_tokens" => 30,
+                       "output_tokens" => 40
+                     }
+                   })
+               })
+
+      reloaded = Repo.get!(StepExecution, execution.id)
+      assert reloaded.session_input_tokens == 150
+      assert reloaded.session_cache_read_input_tokens == 30
+      assert reloaded.session_output_tokens == 40
+      assert reloaded.session_total_tokens == 190
+      assert reloaded.context_window_input_tokens == 150
+      assert reloaded.context_window_cache_read_input_tokens == 30
+      assert reloaded.context_window_total_tokens == 190
+    end
+
+    test "rolls up OpenAI usage without requiring cache creation tokens" do
+      user = create_user()
+      {project, execution} = create_step_execution(user)
+
+      assert {:ok, %SessionLog{}} =
+               SessionLogs.insert(user.id, %{
+                 "step_execution_id" => execution.id,
+                 "project_id" => project.id,
+                 "format" => "openai",
+                 "content" =>
+                   Jason.encode!(%{
+                     "usage" => %{
+                       "input_tokens" => 100,
+                       "input_token_details" => %{"cached_tokens" => 30},
+                       "output_tokens" => 25
+                     }
+                   })
+               })
+
+      reloaded = Repo.get!(StepExecution, execution.id)
+      assert reloaded.session_input_tokens == 100
+      assert reloaded.session_cache_read_input_tokens == 30
+      assert reloaded.session_output_tokens == 25
+      assert reloaded.session_total_tokens == 125
+      assert reloaded.context_window_input_tokens == 100
+      assert reloaded.context_window_cache_read_input_tokens == 30
+      assert reloaded.context_window_total_tokens == 125
     end
   end
 

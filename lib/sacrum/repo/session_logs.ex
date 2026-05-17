@@ -20,6 +20,7 @@ defmodule Sacrum.Repo.SessionLogs do
   import Ecto.Query
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.SessionLog
+  alias Sacrum.SessionLogRollups
 
   @doc """
   Insert a new session log with user_id.
@@ -30,9 +31,21 @@ defmodule Sacrum.Repo.SessionLogs do
     step_execution_id = Map.get(attrs, "step_execution_id") || Map.get(attrs, :step_execution_id)
     project_id = Map.get(attrs, "project_id") || Map.get(attrs, :project_id)
 
-    %SessionLog{user_id: user_id, step_execution_id: step_execution_id, project_id: project_id}
-    |> SessionLog.create_changeset(attrs)
-    |> Repo.insert()
+    Repo.transaction(fn ->
+      with {:ok, log} <-
+             %SessionLog{
+               user_id: user_id,
+               step_execution_id: step_execution_id,
+               project_id: project_id
+             }
+             |> SessionLog.create_changeset(attrs)
+             |> Repo.insert(),
+           {:ok, _execution} <- SessionLogRollups.rollup_step_execution(log) do
+        log
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
   end
 
   defoverridable insert: 2

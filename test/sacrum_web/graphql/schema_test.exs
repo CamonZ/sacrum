@@ -2107,7 +2107,18 @@ defmodule SacrumWeb.Graphql.SchemaTest do
               output: "Done"
               inputTokens: 100
               outputTokens: 50
-            ) { id status output inputTokens outputTokens }
+              sessionInputTokens: 150
+              sessionCacheReadInputTokens: 30
+              sessionOutputTokens: 50
+              sessionTotalTokens: 200
+              contextWindowInputTokens: 150
+              contextWindowCacheReadInputTokens: 30
+              contextWindowTotalTokens: 200
+            ) {
+              id status output inputTokens outputTokens
+              sessionInputTokens sessionCacheReadInputTokens sessionOutputTokens sessionTotalTokens
+              contextWindowInputTokens contextWindowCacheReadInputTokens contextWindowTotalTokens
+            }
           }
         """)
         |> json_response(200)
@@ -2117,6 +2128,13 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["output"] == "Done"
       assert data["inputTokens"] == 100
       assert data["outputTokens"] == 50
+      assert data["sessionInputTokens"] == 150
+      assert data["sessionCacheReadInputTokens"] == 30
+      assert data["sessionOutputTokens"] == 50
+      assert data["sessionTotalTokens"] == 200
+      assert data["contextWindowInputTokens"] == 150
+      assert data["contextWindowCacheReadInputTokens"] == 30
+      assert data["contextWindowTotalTokens"] == 200
     end
 
     test "runStep creates and dispatches a StepExecution", %{
@@ -2619,14 +2637,47 @@ defmodule SacrumWeb.Graphql.SchemaTest do
             createSessionLog(
               stepExecutionId: "#{exec.id}"
               content: "Log entry content"
-            ) { id content stepExecutionId }
+              format: "anthropic"
+            ) { id content format stepExecutionId }
           }
         """)
         |> json_response(200)
 
       data = result["data"]["createSessionLog"]
       assert data["content"] == "Log entry content"
+      assert data["format"] == "anthropic"
       assert data["stepExecutionId"] == exec.id
+    end
+
+    test "rejects unsupported session log format", %{conn: conn, user: user, project: project} do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+
+      {:ok, exec} =
+        Accounts.StepExecutions.insert(user.id, %{
+          task_id: task.id,
+          workflow_id: wf.id,
+          project_id: project.id,
+          step_name: "step_1"
+        })
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createSessionLog(
+              stepExecutionId: "#{exec.id}"
+              content: "Log entry content"
+              format: "codex"
+            ) { id content format }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["createSessionLog"] == nil
+      assert [%{"message" => message}] = result["errors"]
+      assert message =~ "format"
     end
   end
 
@@ -2656,13 +2707,14 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         conn
         |> authenticate(user)
         |> graphql("""
-          { sessionLogs(stepExecutionId: "#{exec.id}") { id content } }
+          { sessionLogs(stepExecutionId: "#{exec.id}") { id content format } }
         """)
         |> json_response(200)
 
       assert [found] = result["data"]["sessionLogs"]
       assert found["id"] == log.id
       assert found["content"] == "A log"
+      assert found["format"] == "anthropic"
     end
   end
 
@@ -4357,9 +4409,20 @@ defmodule SacrumWeb.Graphql.SchemaTest do
               context: "#{context_json}"
               prompt: "Analyze this"
               transitionResult: "approved"
+              sessionInputTokens: 0
+              sessionCacheReadInputTokens: 12
+              sessionOutputTokens: 8
+              sessionTotalTokens: 20
+              contextWindowInputTokens: 0
+              contextWindowCacheReadInputTokens: 12
+              contextWindowTotalTokens: 20
               cost: "0.05"
               durationMs: 1500
-            ) { id stepName status context prompt transitionResult cost durationMs }
+            ) {
+              id stepName status context prompt transitionResult cost durationMs
+              sessionInputTokens sessionCacheReadInputTokens sessionOutputTokens sessionTotalTokens
+              contextWindowInputTokens contextWindowCacheReadInputTokens contextWindowTotalTokens
+            }
           }
         """)
         |> json_response(200)
@@ -4371,6 +4434,13 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["prompt"] == "Analyze this"
       assert data["transitionResult"] == "approved"
       assert data["durationMs"] == 1500
+      assert data["sessionInputTokens"] == 0
+      assert data["sessionCacheReadInputTokens"] == 12
+      assert data["sessionOutputTokens"] == 8
+      assert data["sessionTotalTokens"] == 20
+      assert data["contextWindowInputTokens"] == 0
+      assert data["contextWindowCacheReadInputTokens"] == 12
+      assert data["contextWindowTotalTokens"] == 20
     end
 
     test "createStepExecution rejects handoff argument (not exposed to mutations)", %{

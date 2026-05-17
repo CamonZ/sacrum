@@ -10,7 +10,6 @@ defmodule Sacrum.Accounts.SessionLogs do
     preloads: [],
     default_order: [asc: :inserted_at]
 
-  alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.SessionLog
 
   @doc """
@@ -19,11 +18,6 @@ defmodule Sacrum.Accounts.SessionLogs do
   """
   @spec insert(String.t(), map()) :: {:ok, SessionLog.t()} | {:error, Ecto.Changeset.t()}
   def insert(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
-    step_execution_id = Map.get(attrs, "step_execution_id") || Map.get(attrs, :step_execution_id)
-    project_id = Map.get(attrs, "project_id") || Map.get(attrs, :project_id)
-
-    %SessionLog{user_id: user_id, step_execution_id: step_execution_id, project_id: project_id}
-    |> SessionLog.create_changeset(attrs)
-    |> Repo.insert()
+    RepoModule.insert(user_id, attrs)
   end
 end

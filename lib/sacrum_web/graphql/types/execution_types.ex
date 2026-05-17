@@ -88,6 +88,13 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
     field :model_provider, :string
     field :input_tokens, :integer
     field :output_tokens, :integer
+    field :session_input_tokens, :integer
+    field :session_cache_read_input_tokens, :integer
+    field :session_output_tokens, :integer
+    field :session_total_tokens, :integer
+    field :context_window_input_tokens, :integer
+    field :context_window_cache_read_input_tokens, :integer
+    field :context_window_total_tokens, :integer
     field :cost, :decimal
     field :duration_ms, :integer
     field :handoff, :json
@@ -119,6 +126,7 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
   object :session_log do
     field :id, :id
     field :content, :string
+    field :format, :string
     field :inserted_at, :datetime
     field :updated_at, :datetime
 
@@ -260,6 +268,13 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
       arg(:model_provider, :string)
       arg(:input_tokens, :integer)
       arg(:output_tokens, :integer)
+      arg(:session_input_tokens, :integer)
+      arg(:session_cache_read_input_tokens, :integer)
+      arg(:session_output_tokens, :integer)
+      arg(:session_total_tokens, :integer)
+      arg(:context_window_input_tokens, :integer)
+      arg(:context_window_cache_read_input_tokens, :integer)
+      arg(:context_window_total_tokens, :integer)
       arg(:cost, :decimal)
       arg(:duration_ms, :integer)
 
@@ -287,6 +302,13 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
       arg(:model_provider, :string)
       arg(:input_tokens, :integer)
       arg(:output_tokens, :integer)
+      arg(:session_input_tokens, :integer)
+      arg(:session_cache_read_input_tokens, :integer)
+      arg(:session_output_tokens, :integer)
+      arg(:session_total_tokens, :integer)
+      arg(:context_window_input_tokens, :integer)
+      arg(:context_window_cache_read_input_tokens, :integer)
+      arg(:context_window_total_tokens, :integer)
       arg(:cost, :decimal)
       arg(:duration_ms, :integer)
 
@@ -316,6 +338,7 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
     field :create_session_log, :session_log do
       arg(:step_execution_id, non_null(:uuid4))
       arg(:content, non_null(:string))
+      arg(:format, :string)
 
       resolve(fn args, %{context: %{current_user: user}} ->
         exec_id = Map.get(args, :step_execution_id)

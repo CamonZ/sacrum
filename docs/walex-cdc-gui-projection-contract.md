@@ -59,13 +59,13 @@ instead of silently applying a payload with an unsupported shape.
 | `step_transition_deleted` | Relation change | `step_transitions` delete before image. | Full edge tombstone with `id`, `from_step_id`, `to_step_id`, `label`, `project_id`, and timestamps so clients can remove by id or endpoints without a transition cache. |
 | `workflow_transition_created` | Relation change | `workflow_transitions` insert after image. | Full edge row: `id`, endpoints, optional `target_step_id`, `label`, `project_id`, timestamps. |
 | `workflow_transition_deleted` | Relation change | `workflow_transitions` delete before image. | Full edge row, allowing clients to remove by id or endpoints. |
-| `step_execution_created` | Entity projection | `step_executions` insert after image. | Full execution row including task/run/workflow/step/project ids, status, prompt/output, transition result, model metadata, cost, duration, handoff, timestamps. |
+| `step_execution_created` | Entity projection | `step_executions` insert after image. | Full execution row including task/run/workflow/step/project ids, status, prompt/output, transition result, model metadata, legacy and expanded token counters, cost, duration, handoff, timestamps. |
 | `step_execution_status_changed` | Status projection | `step_executions` update after image with before `status`. | Same full execution row. This updates attempt history only; clients must not infer terminal run state from it. |
 | `task_run_created` | Entity projection | `task_runs` insert after image plus server-side run-control enrichment inputs. | Full TaskRun row plus `run_controls` with server-derived `runnable`, `stoppable`, reason fields, and `active_run`. |
 | `task_run_updated` | Status projection | `task_runs` update after image with before `status` and `latest_step_execution_id`, plus server-side run-control enrichment inputs. | Same full TaskRun row plus replacement `run_controls`; clients should prefer these controls over local recomputation. |
 | `task_run_step_changed` | Semantic delta | Derived from `tasks` and `task_runs`; see below. | `{task_run_id, task_id, from_step_id, to_step_id, status, level}`. |
 | `task_step_changed` | Semantic delta | Derived from `tasks`; see below. | `{task_id, from_step_id, to_step_id, workflow_id, level}`. |
-| `session_log_created` | Entity projection | `session_logs` insert after image. | Full log row: `id`, `step_execution_id`, `project_id`, `content`, timestamps. |
+| `session_log_created` | Entity projection | `session_logs` insert after image. | Full log row: `id`, `step_execution_id`, `project_id`, `content`, `format`, timestamps. |
 | `section_created` | Entity projection | `task_sections` insert after image. | Full section row: `id`, `task_id`, `project_id`, type/content/order/done fields, timestamps. |
 | `section_updated` | Entity projection | `task_sections` update after image. | Same full section row. |
 | `section_deleted` | Entity projection | `task_sections` delete before image. | `{id, task_id}` tombstone. |

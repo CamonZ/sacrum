@@ -551,27 +551,35 @@ defmodule SacrumWeb.ProjectChannel do
 
   defp step_execution_payload(execution) do
     version_payload(%{
-      id: execution.id,
-      task_id: execution.task_id,
-      task_run_id: execution.task_run_id,
-      workflow_id: execution.workflow_id,
-      step_id: execution.step_id,
-      project_id: execution.project_id,
-      step_name: execution.step_name,
-      status: execution.status,
-      context: execution.context,
-      prompt: execution.prompt,
-      output: execution.output,
-      transition_result: execution.transition_result,
-      model: execution.model,
-      model_provider: execution.model_provider,
-      input_tokens: execution.input_tokens,
-      output_tokens: execution.output_tokens,
-      cost: if(execution.cost, do: Decimal.to_string(execution.cost)),
-      duration_ms: execution.duration_ms,
-      handoff: execution.handoff,
-      inserted_at: execution.inserted_at,
-      updated_at: execution.updated_at
+      id: field_value(execution, :id),
+      task_id: field_value(execution, :task_id),
+      task_run_id: field_value(execution, :task_run_id),
+      workflow_id: field_value(execution, :workflow_id),
+      step_id: field_value(execution, :step_id),
+      project_id: field_value(execution, :project_id),
+      step_name: field_value(execution, :step_name),
+      status: field_value(execution, :status),
+      context: field_value(execution, :context),
+      prompt: field_value(execution, :prompt),
+      output: field_value(execution, :output),
+      transition_result: field_value(execution, :transition_result),
+      model: field_value(execution, :model),
+      model_provider: field_value(execution, :model_provider),
+      input_tokens: field_value(execution, :input_tokens),
+      output_tokens: field_value(execution, :output_tokens),
+      session_input_tokens: field_value(execution, :session_input_tokens),
+      session_cache_read_input_tokens: field_value(execution, :session_cache_read_input_tokens),
+      session_output_tokens: field_value(execution, :session_output_tokens),
+      session_total_tokens: field_value(execution, :session_total_tokens),
+      context_window_input_tokens: field_value(execution, :context_window_input_tokens),
+      context_window_cache_read_input_tokens:
+        field_value(execution, :context_window_cache_read_input_tokens),
+      context_window_total_tokens: field_value(execution, :context_window_total_tokens),
+      cost: decimal_string(field_value(execution, :cost)),
+      duration_ms: field_value(execution, :duration_ms),
+      handoff: field_value(execution, :handoff),
+      inserted_at: field_value(execution, :inserted_at),
+      updated_at: field_value(execution, :updated_at)
     })
   end
 
@@ -622,10 +630,16 @@ defmodule SacrumWeb.ProjectChannel do
       step_execution_id: log.step_execution_id,
       project_id: log.project_id,
       content: log.content,
+      format: field_value(log, :format),
       inserted_at: log.inserted_at,
       updated_at: log.updated_at
     })
   end
+
+  defp field_value(resource, field) when is_map(resource), do: Map.get(resource, field)
+  defp decimal_string(nil), do: nil
+  defp decimal_string(%Decimal{} = decimal), do: Decimal.to_string(decimal)
+  defp decimal_string(value), do: value
 
   defp section_payload(section) do
     version_payload(%{
