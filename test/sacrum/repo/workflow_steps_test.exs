@@ -193,7 +193,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       assert %{output_schema: ["is invalid"]} = errors_on(changeset)
     end
 
-    test "route steps auto-set routing contract schema on create" do
+    test "route steps auto-set strict routing contract schema on create" do
       workflow = create_workflow()
 
       attrs = Map.merge(@valid_attrs, %{step_type: "route"})
@@ -201,21 +201,8 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       assert {:ok, %WorkflowStep{step_type: "route"} = step} =
                WorkflowSteps.insert(workflow, attrs)
 
-      expected_schema = %{
-        "type" => "object",
-        "properties" => %{
-          "transition_to" => %{"type" => "string"},
-          "transition_type" => %{
-            "type" => "string",
-            "enum" => ["intra_workflow", "inter_workflow"]
-          },
-          "handoff" => %{"type" => "object"}
-        },
-        "required" => ["transition_to", "transition_type"],
-        "additionalProperties" => false
-      }
-
-      assert step.output_schema == expected_schema
+      assert step.output_schema == WorkflowStep.routing_contract_schema()
+      refute Map.has_key?(step.output_schema["properties"], "handoff")
     end
 
     test "route steps reject custom output_schema that doesn't match routing contract" do
@@ -309,22 +296,20 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       assert %{output_schema: _} = errors_on(changeset)
     end
 
-    test "route steps accept routing contract schema with optional handoff property" do
+    test "route steps accept routing contract schema with strict handoff property" do
       workflow = create_workflow()
 
-      schema_with_handoff = %{
+      handoff_schema = %{
         "type" => "object",
         "properties" => %{
-          "transition_to" => %{"type" => "string"},
-          "transition_type" => %{
-            "type" => "string",
-            "enum" => ["intra_workflow", "inter_workflow"]
-          },
-          "handoff" => %{"type" => "object"}
+          "summary" => %{"type" => "string"},
+          "notes" => %{"type" => ["string", "null"]}
         },
-        "required" => ["transition_to", "transition_type"],
+        "required" => ["summary", "notes"],
         "additionalProperties" => false
       }
+
+      schema_with_handoff = WorkflowStep.routing_contract_schema(handoff_schema)
 
       attrs = Map.merge(@valid_attrs, %{step_type: "route", output_schema: schema_with_handoff})
 
@@ -332,6 +317,94 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
                WorkflowSteps.insert(workflow, attrs)
 
       assert returned_schema == schema_with_handoff
+    end
+
+    test "route steps reject handoff schema missing additionalProperties false" do
+      workflow = create_workflow()
+
+      invalid_schema =
+        WorkflowStep.routing_contract_schema(%{
+          "type" => "object",
+          "properties" => %{"summary" => %{"type" => "string"}},
+          "required" => ["summary"]
+        })
+
+      attrs = Map.merge(@valid_attrs, %{step_type: "route", output_schema: invalid_schema})
+
+      assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
+      assert %{output_schema: [message]} = errors_on(changeset)
+      assert String.contains?(message, "additionalProperties must be false")
+    end
+
+    test "route steps reject handoff schema missing required keys for declared properties" do
+      workflow = create_workflow()
+
+      invalid_schema =
+        WorkflowStep.routing_contract_schema(%{
+          "type" => "object",
+          "properties" => %{
+            "summary" => %{"type" => "string"},
+            "priority" => %{"type" => "string"}
+          },
+          "required" => ["summary"],
+          "additionalProperties" => false
+        })
+
+      attrs = Map.merge(@valid_attrs, %{step_type: "route", output_schema: invalid_schema})
+
+      assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
+      assert %{output_schema: [message]} = errors_on(changeset)
+      assert String.contains?(message, "required must list every declared property")
+    end
+
+    test "route steps reject object schemas inside handoff arrays unless they are strict" do
+      workflow = create_workflow()
+
+      invalid_schema =
+        WorkflowStep.routing_contract_schema(%{
+          "type" => "object",
+          "properties" => %{
+            "items" => %{
+              "type" => "array",
+              "items" => %{
+                "type" => "object",
+                "properties" => %{"summary" => %{"type" => "string"}},
+                "required" => ["summary"]
+              }
+            }
+          },
+          "required" => ["items"],
+          "additionalProperties" => false
+        })
+
+      attrs = Map.merge(@valid_attrs, %{step_type: "route", output_schema: invalid_schema})
+
+      assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
+      assert %{output_schema: [message]} = errors_on(changeset)
+      assert String.contains?(message, "handoff.items.items.additionalProperties must be false")
+    end
+
+    test "route steps accept nullable strict handoff schema" do
+      workflow = create_workflow()
+
+      schema_with_nullable_handoff =
+        WorkflowStep.routing_contract_schema(%{
+          "type" => ["null", "object"],
+          "properties" => %{"summary" => %{"type" => "string"}},
+          "required" => ["summary"],
+          "additionalProperties" => false
+        })
+
+      attrs =
+        Map.merge(@valid_attrs, %{
+          step_type: "route",
+          output_schema: schema_with_nullable_handoff
+        })
+
+      assert {:ok, %WorkflowStep{output_schema: returned_schema}} =
+               WorkflowSteps.insert(workflow, attrs)
+
+      assert returned_schema == schema_with_nullable_handoff
     end
 
     test "route steps reject handoff property with wrong type in output schema" do
@@ -347,7 +420,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
           },
           "handoff" => %{"type" => "string"}
         },
-        "required" => ["transition_to", "transition_type"],
+        "required" => ["transition_to", "transition_type", "handoff"],
         "additionalProperties" => false
       }
 
@@ -371,7 +444,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
           "handoff" => %{"type" => "object"},
           "unknown_field" => %{"type" => "string"}
         },
-        "required" => ["transition_to", "transition_type"],
+        "required" => ["transition_to", "transition_type", "handoff"],
         "additionalProperties" => false
       }
 
@@ -381,26 +454,13 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       assert String.contains?(message, "routing contract schema")
     end
 
-    test "route steps auto-set schema including handoff stays consistent on update" do
+    test "route steps auto-set strict schema stays consistent on update" do
       workflow = create_workflow()
 
       attrs = Map.merge(@valid_attrs, %{step_type: "route"})
       {:ok, step} = WorkflowSteps.insert(workflow, attrs)
 
-      # Route steps should have auto-set the correct schema with handoff
-      expected_schema = %{
-        "type" => "object",
-        "properties" => %{
-          "transition_to" => %{"type" => "string"},
-          "transition_type" => %{
-            "type" => "string",
-            "enum" => ["intra_workflow", "inter_workflow"]
-          },
-          "handoff" => %{"type" => "object"}
-        },
-        "required" => ["transition_to", "transition_type"],
-        "additionalProperties" => false
-      }
+      expected_schema = WorkflowStep.routing_contract_schema()
 
       assert step.output_schema == expected_schema
 

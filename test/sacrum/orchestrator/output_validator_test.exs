@@ -161,6 +161,46 @@ defmodule Sacrum.Orchestrator.OutputValidatorTest do
                OutputValidator.validate_routing_contract(output)
     end
 
+    test "accepts handoff matching a custom strict route schema" do
+      schema =
+        Sacrum.Repo.Schemas.WorkflowStep.routing_contract_schema(%{
+          "type" => "object",
+          "properties" => %{
+            "summary" => %{"type" => "string"},
+            "priority" => %{"type" => "string"}
+          },
+          "required" => ["summary", "priority"],
+          "additionalProperties" => false
+        })
+
+      output = %{
+        "transition_to" => Ecto.UUID.generate(),
+        "transition_type" => "intra_workflow",
+        "handoff" => %{"summary" => "ready", "priority" => "high"}
+      }
+
+      assert :ok = OutputValidator.validate_routing_contract(output, schema)
+    end
+
+    test "rejects handoff that does not match a custom strict route schema" do
+      schema =
+        Sacrum.Repo.Schemas.WorkflowStep.routing_contract_schema(%{
+          "type" => "object",
+          "properties" => %{"summary" => %{"type" => "string"}},
+          "required" => ["summary"],
+          "additionalProperties" => false
+        })
+
+      output = %{
+        "transition_to" => Ecto.UUID.generate(),
+        "transition_type" => "intra_workflow",
+        "handoff" => %{"summary" => "ready", "extra" => "nope"}
+      }
+
+      assert {:error, {:validation_failed, _}} =
+               OutputValidator.validate_routing_contract(output, schema)
+    end
+
     test "rejects non-map output" do
       assert {:error, {:invalid_output_type, _}} =
                OutputValidator.validate_routing_contract("not a map")

@@ -35,12 +35,12 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
   state transition tuple.
   """
   @spec handle_route_step_transition(FSMData.t(), struct()) :: fsm_transition()
-  def handle_route_step_transition(data, _current_step) do
+  def handle_route_step_transition(data, current_step) do
     task_id = data.task.id
 
     with {:ok, execution} <- get_latest_completed_execution(task_id),
          {:ok, decoded} <- RouteDecision.parse_route_output(execution.output),
-         :ok <- OutputValidator.validate_routing_contract(decoded),
+         :ok <- OutputValidator.validate_routing_contract(decoded, current_step.output_schema),
          {:ok, %{dest_id: dest_id, transition_type: transition_type, handoff: handoff}} <-
            RouteDecision.extract_routing_data(decoded),
          {:ok, route_plan} <- prepare_route_plan(data, dest_id, transition_type, handoff),
