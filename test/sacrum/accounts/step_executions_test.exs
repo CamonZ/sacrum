@@ -75,6 +75,52 @@ defmodule Sacrum.Accounts.StepExecutionsTest do
       assert execution.context_window_cache_read_input_tokens == 30
       assert execution.context_window_total_tokens == 40
     end
+
+    test "derives step_type from string-keyed step_id attrs and returns changeset on spoof" do
+      user = create_user()
+      {project, task, workflow} = create_task_with_workflow(user)
+
+      {:ok, step} =
+        WorkflowSteps.insert(workflow, %{
+          name: "Human Input",
+          step_type: "human_input"
+        })
+
+      attrs = %{
+        "task_id" => task.id,
+        "project_id" => project.id,
+        "workflow_id" => workflow.id,
+        "step_id" => step.id,
+        "step_name" => "Human Input",
+        "step_type" => "execute"
+      }
+
+      assert {:error, changeset} = StepExecutions.insert(user.id, attrs)
+      assert %{step_type: ["must match the referenced workflow step"]} = errors_on(changeset)
+    end
+
+    test "rejects step_id from a different workflow" do
+      user = create_user()
+      {project, task, workflow} = create_task_with_workflow(user)
+      {:ok, other_workflow} = Workflows.insert(user.id, project.id, %{name: "Other Workflow"})
+
+      {:ok, other_step} =
+        WorkflowSteps.insert(other_workflow, %{
+          name: "Other Step",
+          step_type: "route"
+        })
+
+      assert {:error, changeset} =
+               StepExecutions.insert(user.id, %{
+                 task_id: task.id,
+                 project_id: project.id,
+                 workflow_id: workflow.id,
+                 step_id: other_step.id,
+                 step_name: "Other Step"
+               })
+
+      assert %{step_id: ["must belong to the referenced workflow"]} = errors_on(changeset)
+    end
   end
 
   describe "get_by/2" do

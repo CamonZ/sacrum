@@ -8,6 +8,7 @@ defmodule Sacrum.Repo.Schemas.StepExecution do
 
   schema "step_executions" do
     field :step_name, :string
+    field :step_type, :string, default: "execute"
     field :status, :string
     field :context, :map, default: %{}
     field :prompt, :string
@@ -41,7 +42,8 @@ defmodule Sacrum.Repo.Schemas.StepExecution do
   end
 
   @token_fields ~w(input_tokens output_tokens session_input_tokens session_cache_read_input_tokens session_output_tokens session_total_tokens context_window_input_tokens context_window_cache_read_input_tokens context_window_total_tokens)a
-  @create_fields ~w(task_id task_run_id step_name status context prompt output transition_result model model_provider cost duration_ms workflow_id step_id handoff)a ++
+  @valid_step_types Sacrum.Repo.Schemas.WorkflowStep.step_types()
+  @create_fields ~w(task_id task_run_id step_name step_type status context prompt output transition_result model model_provider cost duration_ms workflow_id step_id handoff)a ++
                    @token_fields
   @update_fields ~w(task_run_id step_name status context prompt output transition_result model model_provider cost duration_ms handoff)a ++
                    @token_fields
@@ -50,7 +52,8 @@ defmodule Sacrum.Repo.Schemas.StepExecution do
   def create_changeset(execution, attrs) do
     execution
     |> cast(attrs, @create_fields)
-    |> validate_required([:task_id, :step_name])
+    |> validate_required([:task_id, :step_name, :step_type])
+    |> validate_inclusion(:step_type, @valid_step_types)
     |> foreign_key_constraint(:task_run_id)
     |> foreign_key_constraint(:task_id)
     |> foreign_key_constraint(:workflow_id)

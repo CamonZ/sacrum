@@ -152,6 +152,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
       workflow_id: task.workflow_id,
       step_id: step.id,
       step_name: step.name,
+      step_type: step.step_type,
       status: attrs.status,
       handoff: attrs[:handoff],
       prompt: attrs[:prompt],
@@ -169,6 +170,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
           workflow_id: task.workflow_id,
           step_id: step.id,
           step_name: step.name,
+          step_type: step.step_type,
           status: "started"
         },
         overrides

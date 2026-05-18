@@ -420,6 +420,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
                %StepExecution{
                  step_id: step_id,
                  step_name: "human_input",
+                 step_type: "human_input",
                  status: "waiting",
                  output: nil,
                  prompt: "Approve Integration Task"

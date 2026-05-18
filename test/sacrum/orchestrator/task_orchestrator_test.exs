@@ -2920,6 +2920,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
       assert length(waiting_executions) == 1
       waiting_exec = hd(waiting_executions)
+      assert waiting_exec.step_type == "wait_children"
       assert waiting_exec.handoff["child_ids"] == [child_task.id]
 
       {:ok, parent_run} = Accounts.TaskRuns.get_active_for_task(user.id, parent_task.id)

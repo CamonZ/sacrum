@@ -90,10 +90,11 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
   @spec enter_waiting_state(FSMData.t(), [binary()], [Task.t()]) ::
           {:ok, map()} | {:error, term()}
   defp enter_waiting_state(data, child_ids, children) do
-    step_name =
+    step =
       case data.steps[data.task.current_step_id] do
-        %{name: name} -> name
-        _ -> Repo.get!(WorkflowStep, data.task.current_step_id).name
+        %WorkflowStep{} = step -> step
+        %{name: _name, step_type: _step_type} = step -> step
+        _ -> Repo.get!(WorkflowStep, data.task.current_step_id)
       end
 
     attrs = %{
@@ -101,7 +102,8 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
       task_run_id: data.task_run_id,
       workflow_id: data.task.workflow_id,
       step_id: data.task.current_step_id,
-      step_name: step_name,
+      step_name: step.name,
+      step_type: step.step_type,
       status: "waiting",
       handoff: %{"child_ids" => child_ids}
     }

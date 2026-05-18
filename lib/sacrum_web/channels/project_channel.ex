@@ -558,6 +558,7 @@ defmodule SacrumWeb.ProjectChannel do
       step_id: field_value(execution, :step_id),
       project_id: field_value(execution, :project_id),
       step_name: field_value(execution, :step_name),
+      step_type: field_value(execution, :step_type),
       status: field_value(execution, :status),
       context: field_value(execution, :context),
       prompt: field_value(execution, :prompt),
