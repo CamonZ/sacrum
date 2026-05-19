@@ -25,23 +25,6 @@ When given a ticket to implement, you MUST follow this exact sequence:
 - Implement the changes incrementally, testing as you go
 - Follow existing code patterns and project conventions
 
-### Tidewave Availability Gate
-
-- The parent `/implement` workflow is responsible for starting the worktree Phoenix app and the stable Tidewave MCP proxy before this agent is launched
-- Before changing ticket code, verify Tidewave is callable with `project_eval` and evaluate `File.cwd!()`
-- Confirm the `File.cwd!()` result is the assigned worktree path before trusting any Tidewave result
-- If `project_eval` is unavailable or points at the wrong working directory, stop immediately and report the setup problem. Do not defer this to the final summary
-- Do not try to make Tidewave available from inside this already-running agent session. Starting the proxy after the session starts will not expose a missing MCP tool to this session
-
-### Tidewave Verification Loop
-
-- When creating a new helper or changing meaningful function behavior, start with the function callable as public (`def`) long enough to verify it directly through Tidewave `project_eval`
-- Use representative inputs to confirm the return values, tagged tuples, errors, structs, and edge-case shapes match the intended contract
-- Once the function's behavior is confirmed, decide whether it is truly part of the module's public API. If it is only an implementation detail, convert it to private (`defp`) before finishing
-- After converting it to private, verify the behavior again through the nearest public caller and add or update ExUnit tests at that public boundary
-- Never leave a function public only because it was convenient to test through Tidewave
-- Treat Tidewave checks as development-time verification, not a substitute for ExUnit. Important cases must still be captured in tests before finishing
-
 ## Important Rules
 
 1. **Do not commit automatically** - Always show the user the changes using `git diff --color=always` and ask for approval before committing
