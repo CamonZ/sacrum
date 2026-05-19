@@ -140,8 +140,8 @@ defmodule Sacrum.Repo.AttentionTest do
           project_id: project.id,
           step_name: "Execute Step",
           status: "completed",
-          input_tokens: 60_000,
-          output_tokens: 45_000
+          context_window_input_tokens: 60_000,
+          context_window_total_tokens: 105_000
         })
 
       rows = context_window_pressure(project.id)
@@ -155,6 +155,30 @@ defmodule Sacrum.Repo.AttentionTest do
       assert row.workflow_name == "Test Workflow"
       assert row.step_name == "Execute Step"
       assert row.detail =~ "105.0k tok"
+    end
+
+    test "context_window_pressure: ignores high session totals when current window is below threshold",
+         %{
+           user: user,
+           project: project,
+           workflow: workflow,
+           execute_step: execute_step
+         } do
+      {:ok, task} = Tasks.insert(project, %{title: "Cached Session Task", user_id: user.id})
+
+      {:ok, _} =
+        StepExecutions.insert(user.id, %{
+          task_id: task.id,
+          workflow_id: workflow.id,
+          step_id: execute_step.id,
+          project_id: project.id,
+          step_name: "Execute Step",
+          status: "completed",
+          session_total_tokens: 3_500_000,
+          context_window_total_tokens: 80_000
+        })
+
+      assert context_window_pressure(project.id) == []
     end
 
     test "context_window_pressure: formats tokens correctly for million threshold", %{

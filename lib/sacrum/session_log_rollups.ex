@@ -47,9 +47,9 @@ defmodule Sacrum.SessionLogRollups do
         token_count(execution.session_cache_read_input_tokens) + usage.cache_read_input_tokens,
       session_output_tokens: token_count(execution.session_output_tokens) + usage.output_tokens,
       session_total_tokens: token_count(execution.session_total_tokens) + usage.total_tokens,
-      context_window_input_tokens: usage.input_tokens,
-      context_window_cache_read_input_tokens: usage.cache_read_input_tokens,
-      context_window_total_tokens: usage.total_tokens
+      context_window_input_tokens: usage.context_window_input_tokens,
+      context_window_cache_read_input_tokens: usage.context_window_cache_read_input_tokens,
+      context_window_total_tokens: usage.context_window_total_tokens
     }
   end
 
@@ -73,7 +73,10 @@ defmodule Sacrum.SessionLogRollups do
       input_tokens: total_input,
       cache_read_input_tokens: cache_read,
       output_tokens: output,
-      total_tokens: total_input + output
+      total_tokens: total_input + output,
+      context_window_input_tokens: total_input,
+      context_window_cache_read_input_tokens: cache_read,
+      context_window_total_tokens: total_input + output
     }
   end
 
@@ -81,12 +84,16 @@ defmodule Sacrum.SessionLogRollups do
     input = integer(usage["input_tokens"] || usage["prompt_tokens"])
     cache_read = openai_cache_read_tokens(usage)
     output = integer(usage["output_tokens"] || usage["completion_tokens"])
+    context_window_input = max(input - cache_read, 0)
 
     %{
       input_tokens: input,
       cache_read_input_tokens: cache_read,
       output_tokens: output,
-      total_tokens: total_tokens(usage, input, output)
+      total_tokens: total_tokens(usage, input, output),
+      context_window_input_tokens: context_window_input,
+      context_window_cache_read_input_tokens: 0,
+      context_window_total_tokens: context_window_input + output
     }
   end
 
@@ -100,6 +107,9 @@ defmodule Sacrum.SessionLogRollups do
 
   defp openai_cache_read_tokens(usage) do
     cond do
+      is_integer(usage["cached_input_tokens"]) ->
+        usage["cached_input_tokens"]
+
       is_integer(usage["cache_read_input_tokens"]) ->
         usage["cache_read_input_tokens"]
 

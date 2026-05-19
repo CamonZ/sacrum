@@ -26,7 +26,7 @@ defmodule Sacrum.Repo.PulseTest do
     workflow
   end
 
-  defp create_workflow_step(user, workflow, attrs \\ %{name: "Step 1", is_final: false}) do
+  defp create_workflow_step(_user, workflow, attrs \\ %{name: "Step 1", is_final: false}) do
     {:ok, step} =
       Repo.WorkflowSteps.insert(workflow, %{
         name: Map.get(attrs, :name, "Step 1"),
@@ -36,7 +36,7 @@ defmodule Sacrum.Repo.PulseTest do
     step
   end
 
-  defp create_task(user, project, attrs \\ %{title: "Test Task"}) do
+  defp create_task(_user, project, attrs \\ %{title: "Test Task"}) do
     {:ok, task} =
       Repo.Tasks.insert(project, %{
         title: Map.get(attrs, :title, "Test Task")
