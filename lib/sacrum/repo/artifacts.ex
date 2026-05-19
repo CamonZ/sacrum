@@ -10,6 +10,7 @@ defmodule Sacrum.Repo.Artifacts do
 
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.Artifact
+  alias Sacrum.Repo.Schemas.ArtifactLink
   alias Sacrum.Repo.Schemas.Project
 
   @default_limit 50
@@ -32,14 +33,51 @@ defmodule Sacrum.Repo.Artifacts do
   def list_public_for_project(user_id, project_id, opts \\ [])
       when is_user_project_scope(user_id, project_id) and is_options(opts) do
     Artifact
-    |> where(
+    |> where_public_in_scope(user_id, project_id)
+    |> apply_public_artifact_order()
+    |> apply_limit(opts)
+    |> Repo.all()
+  end
+
+  @spec list_public_for_subject(String.t(), String.t(), String.t(), String.t(), keyword()) :: [
+          Artifact.t()
+        ]
+  def list_public_for_subject(user_id, project_id, subject_type, subject_id, opts \\ [])
+      when is_user_project_scope(user_id, project_id) and is_binary(subject_type) and
+             is_binary(subject_id) and is_options(opts) do
+    Artifact
+    |> join(:inner, [artifact], link in ArtifactLink, on: link.artifact_id == artifact.id)
+    |> where_public_in_scope(user_id, project_id)
+    |> where_subject_link_in_scope(user_id, project_id, subject_type, subject_id)
+    |> apply_public_artifact_order()
+    |> apply_limit(opts)
+    |> Repo.all()
+  end
+
+  defp where_public_in_scope(query, user_id, project_id) do
+    where(
+      query,
       [artifact],
       artifact.user_id == ^user_id and artifact.project_id == ^project_id and
         artifact.visibility == "public" and artifact.redaction_state in ^@public_redaction_states
     )
-    |> order_by([artifact], desc: artifact.inserted_at, desc: artifact.id)
-    |> limit(^limit_option(opts))
-    |> Repo.all()
+  end
+
+  defp where_subject_link_in_scope(query, user_id, project_id, subject_type, subject_id) do
+    where(
+      query,
+      [_artifact, link],
+      link.user_id == ^user_id and link.project_id == ^project_id and
+        link.subject_type == ^subject_type and link.subject_id == ^subject_id
+    )
+  end
+
+  defp apply_public_artifact_order(query) do
+    order_by(query, [artifact], desc: artifact.inserted_at, desc: artifact.id)
+  end
+
+  defp apply_limit(query, opts) do
+    limit(query, ^limit_option(opts))
   end
 
   defp project_exists?(user_id, project_id) do
