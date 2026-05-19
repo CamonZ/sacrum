@@ -26,7 +26,8 @@ defmodule Sacrum.Repo.Migrations.CreateArtifactLinks do
     create index(:artifact_links, [:project_id, :relationship_kind, :inserted_at])
 
     create constraint(:artifact_links, :artifact_links_subject_type_check,
-             check: "subject_type IN ('task', 'task_section', 'chat_session')"
+             check:
+               "subject_type IN ('task', 'task_section', 'chat_session', 'workflow', 'task_run', 'step_execution')"
            )
 
     create constraint(:artifact_links, :artifact_links_relationship_kind_check,

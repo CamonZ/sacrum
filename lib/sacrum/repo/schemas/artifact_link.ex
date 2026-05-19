@@ -6,7 +6,7 @@ defmodule Sacrum.Repo.Schemas.ArtifactLink do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @subject_types ~w(task task_section chat_session)
+  @subject_types ~w(task task_section chat_session workflow task_run step_execution)
   @relationship_kinds ~w(attached_to evidence_for produced_by source_for result_of supersedes)
 
   @create_fields ~w(subject_type subject_id relationship_kind metadata)a

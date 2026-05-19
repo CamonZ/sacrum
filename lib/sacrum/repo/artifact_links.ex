@@ -12,8 +12,11 @@ defmodule Sacrum.Repo.ArtifactLinks do
   alias Sacrum.Repo.Schemas.Artifact
   alias Sacrum.Repo.Schemas.ArtifactLink
   alias Sacrum.Repo.Schemas.ChatSession
+  alias Sacrum.Repo.Schemas.StepExecution
   alias Sacrum.Repo.Schemas.Task
+  alias Sacrum.Repo.Schemas.TaskRun
   alias Sacrum.Repo.Schemas.TaskSection
+  alias Sacrum.Repo.Schemas.Workflow
 
   @spec insert(String.t(), String.t(), String.t(), map()) ::
           {:ok, ArtifactLink.t()}
@@ -123,6 +126,36 @@ defmodule Sacrum.Repo.ArtifactLinks do
       [session],
       session.id == ^subject_id and session.user_id == ^user_id and
         session.project_id == ^project_id
+    )
+    |> Repo.exists?()
+  end
+
+  defp subject_exists?(user_id, project_id, "workflow", subject_id) do
+    Workflow
+    |> where(
+      [workflow],
+      workflow.id == ^subject_id and workflow.user_id == ^user_id and
+        workflow.project_id == ^project_id
+    )
+    |> Repo.exists?()
+  end
+
+  defp subject_exists?(user_id, project_id, "task_run", subject_id) do
+    TaskRun
+    |> where(
+      [task_run],
+      task_run.id == ^subject_id and task_run.user_id == ^user_id and
+        task_run.project_id == ^project_id
+    )
+    |> Repo.exists?()
+  end
+
+  defp subject_exists?(user_id, project_id, "step_execution", subject_id) do
+    StepExecution
+    |> where(
+      [execution],
+      execution.id == ^subject_id and execution.user_id == ^user_id and
+        execution.project_id == ^project_id
     )
     |> Repo.exists?()
   end

@@ -38,7 +38,14 @@ defmodule Sacrum.Repo.Schemas.ArtifactLinkTest do
     end
 
     test "accepts supported subject and relationship values" do
-      for subject_type <- ["task", "task_section", "chat_session"],
+      for subject_type <- [
+            "task",
+            "task_section",
+            "chat_session",
+            "workflow",
+            "task_run",
+            "step_execution"
+          ],
           relationship_kind <- ["evidence_for", "attached_to"] do
         changeset =
           artifact_link()
