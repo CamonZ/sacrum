@@ -64,4 +64,24 @@ defmodule Sacrum.Accounts.ChatSessions do
       when is_session_scope(user_id, project_id, chat_session_id) do
     update_session(user_id, project_id, chat_session_id, %{status: status})
   end
+
+  @spec artifact_provenance_link_attrs(ChatSession.t(), keyword()) :: map()
+  def artifact_provenance_link_attrs(%ChatSession{} = session, opts \\ []) when is_list(opts) do
+    relationship_kind = Keyword.get(opts, :relationship_kind, "attached_to")
+    source_message_id = Keyword.get(opts, :source_message_id)
+
+    provenance = %{
+      user_id: session.user_id,
+      project_id: session.project_id,
+      chat_session_id: session.id,
+      source_message_id: source_message_id
+    }
+
+    %{
+      subject_type: "chat_session",
+      subject_id: session.id,
+      relationship_kind: to_string(relationship_kind),
+      metadata: %{"provenance" => provenance}
+    }
+  end
 end

@@ -34,6 +34,14 @@ defmodule SacrumWeb.Graphql.Types.SectionTypes do
     field :code_refs, list_of(:code_ref) do
       resolve(dataloader(Accounts.CodeRefs))
     end
+
+    field :artifacts, list_of(:artifact) do
+      resolve(&resolve_section_artifacts/3)
+    end
+
+    field :evidence, list_of(:artifact) do
+      resolve(&resolve_section_artifacts/3)
+    end
   end
 
   object :code_ref do
@@ -163,5 +171,12 @@ defmodule SacrumWeb.Graphql.Types.SectionTypes do
         Accounts.CodeRefs.delete_task_refs(user.id, task_id)
       end)
     end
+  end
+
+  defp resolve_section_artifacts(section, _args, %{context: %{current_user: user}}) do
+    artifacts =
+      Accounts.Artifacts.list_for_subject(user.id, section.project_id, "task_section", section.id)
+
+    {:ok, artifacts}
   end
 end
