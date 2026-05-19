@@ -15,6 +15,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
     ExecutionPool,
     FSMData,
     OutputValidator,
+    Scheduler,
     TaskCompletion,
     WorkflowGraph
   }
@@ -22,7 +23,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
   alias Sacrum.Orchestrator.Routing.{InterWorkflow, IntraWorkflow, RouteDecision}
   alias Sacrum.Orchestrator.TaskRuns.{Completion, Lookup}
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.StepExecution
+  alias Sacrum.Repo.Schemas.{StepExecution, WorkflowStep}
   alias Sacrum.Repo.TaskWorkflows
 
   @typep fsm_transition ::
@@ -57,13 +58,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
       ExecutionPool.release_slot(data.slot_id)
       new_data = %{data | slot_id: nil, pending_handoff: handoff}
 
-      case transition_type do
-        "intra_workflow" ->
-          IntraWorkflow.handle_intra_route_continuation(new_data, updated_task)
-
-        "inter_workflow" ->
-          InterWorkflow.handle_inter_route_continuation(new_data, task_id, updated_task)
-      end
+      handle_route_continuation(new_data, task_id, updated_task, transition_type, route_plan)
     else
       {:error, reason} ->
         Logger.error(
@@ -78,32 +73,89 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
   @spec prepare_route_plan(FSMData.t(), binary(), String.t(), map() | nil) ::
           {:ok, map()} | {:error, term()}
   defp prepare_route_plan(data, dest_id, "intra_workflow", handoff) do
-    with {:ok, _dest_step} <- IntraWorkflow.validate_destination_step(data, dest_id),
+    with {:ok, dest_step} <- IntraWorkflow.validate_destination_step(data, dest_id),
          :ok <- IntraWorkflow.validate_step_transition_exists(data.task.current_step_id, dest_id),
          {:ok, changeset} <-
            TaskWorkflows.advance_to_step_changeset(data.task, dest_id,
              skip_orchestrator_check: true
            ) do
       preview_task = Ecto.Changeset.apply_changes(changeset)
-      decision = TaskCompletion.next_state_decision(preview_task.current_step_id, data)
+      terminal_completion? = TaskCompletion.terminal_route_destination?(data.workflow, dest_step)
 
-      {:ok, %{task_changeset: changeset, decision: decision, handoff: handoff}}
+      decision =
+        if terminal_completion? do
+          {:stop, :normal, TaskCompletion.terminal_route_completed_attrs(dest_step.id)}
+        else
+          TaskCompletion.next_state_decision(preview_task.current_step_id, data)
+        end
+
+      {:ok,
+       %{
+         task_changeset: changeset,
+         decision: decision,
+         handoff: handoff,
+         terminal_completion?: terminal_completion?
+       }}
     end
   end
 
   defp prepare_route_plan(data, dest_id, "inter_workflow", handoff) do
     with {:ok, dest_workflow} <- InterWorkflow.validate_destination_workflow(data, dest_id),
          :ok <- InterWorkflow.validate_workflow_transition_exists(data.task.workflow_id, dest_id),
-         target_step_id <- InterWorkflow.get_target_step_for_workflow_transition(data, dest_id),
-         {:ok, changeset} <-
-           InterWorkflow.assign_destination_workflow_changeset(
+         {:ok, %{changeset: changeset, target_step: target_step}} <-
+           InterWorkflow.assign_destination_workflow_plan(
              data.task,
              dest_workflow,
-             target_step_id,
-             handoff
-           ),
-         preview_task = Ecto.Changeset.apply_changes(changeset),
-         {:ok, workflow, steps, transitions} <-
+             InterWorkflow.get_target_step_for_workflow_transition(data, dest_id)
+           ) do
+      preview_task = Ecto.Changeset.apply_changes(changeset)
+
+      terminal_completion? =
+        TaskCompletion.terminal_route_destination?(dest_workflow, target_step)
+
+      with {:ok, decision} <-
+             inter_workflow_next_state_decision(
+               data,
+               preview_task,
+               target_step,
+               terminal_completion?
+             ) do
+        {:ok,
+         %{
+           task_changeset: changeset,
+           decision: decision,
+           handoff: handoff,
+           terminal_completion?: terminal_completion?
+         }}
+      end
+    end
+  end
+
+  @spec handle_route_continuation(FSMData.t(), binary(), struct(), String.t(), map()) ::
+          fsm_transition()
+  defp handle_route_continuation(new_data, task_id, updated_task, _transition_type, %{
+         terminal_completion?: true
+       }) do
+    :ok = Scheduler.notify_task_completed(task_id, %{status: "completed"})
+    {:stop, :normal, %{new_data | task: updated_task}}
+  end
+
+  defp handle_route_continuation(new_data, _task_id, updated_task, "intra_workflow", _route_plan) do
+    IntraWorkflow.handle_intra_route_continuation(new_data, updated_task)
+  end
+
+  defp handle_route_continuation(new_data, task_id, updated_task, "inter_workflow", _route_plan) do
+    InterWorkflow.handle_inter_route_continuation(new_data, task_id, updated_task)
+  end
+
+  @spec inter_workflow_next_state_decision(FSMData.t(), struct(), WorkflowStep.t(), boolean()) ::
+          {:ok, tuple()} | {:error, term()}
+  defp inter_workflow_next_state_decision(_data, _preview_task, target_step, true) do
+    {:ok, {:stop, :normal, TaskCompletion.terminal_route_completed_attrs(target_step.id)}}
+  end
+
+  defp inter_workflow_next_state_decision(data, preview_task, _target_step, false) do
+    with {:ok, workflow, steps, transitions} <-
            WorkflowGraph.load_workflow_and_graph(data.user_id, preview_task) do
       decision_data = %{
         data
@@ -113,9 +165,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
           transitions: transitions
       }
 
-      decision = TaskCompletion.next_state_decision(preview_task.current_step_id, decision_data)
-
-      {:ok, %{task_changeset: changeset, decision: decision, handoff: handoff}}
+      {:ok, TaskCompletion.next_state_decision(preview_task.current_step_id, decision_data)}
     end
   end
 
@@ -129,7 +179,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
              |> Repo.update(),
            {:ok, updated_task} <- Repo.update(route_plan.task_changeset),
            {:ok, changes} <-
-             maybe_mark_task_run_completed(data, route_plan.decision, %{
+             maybe_finish_route_task_and_run(data, updated_task, route_plan, %{
                route_execution: route_execution,
                task: updated_task
              }) do
@@ -138,6 +188,18 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
         {:error, reason} -> Repo.rollback(reason)
       end
     end)
+  end
+
+  @spec maybe_finish_route_task_and_run(FSMData.t(), struct(), map(), map()) ::
+          {:ok, map()} | {:error, term()}
+  defp maybe_finish_route_task_and_run(data, updated_task, %{terminal_completion?: true}, changes) do
+    with {:ok, task_run} <- fetch_optional_task_run(Map.get(data, :task_run_id)) do
+      TaskCompletion.complete_terminal_route(task_run, updated_task, changes)
+    end
+  end
+
+  defp maybe_finish_route_task_and_run(data, _updated_task, route_plan, changes) do
+    maybe_mark_task_run_completed(data, route_plan.decision, changes)
   end
 
   @spec maybe_mark_task_run_completed(FSMData.t(), tuple(), map()) ::
@@ -162,6 +224,10 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
       {:ok, Map.put(changes, :task_run, task_run)}
     end
   end
+
+  @spec fetch_optional_task_run(binary() | nil) :: {:ok, nil | struct()} | {:error, term()}
+  defp fetch_optional_task_run(nil), do: {:ok, nil}
+  defp fetch_optional_task_run(task_run_id), do: Lookup.fetch(task_run_id)
 
   @spec get_latest_completed_execution(binary()) ::
           {:ok, StepExecution.t()} | {:error, :no_completed_execution}

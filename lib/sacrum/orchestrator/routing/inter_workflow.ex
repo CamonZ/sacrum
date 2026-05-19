@@ -140,10 +140,27 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflow do
   @spec assign_destination_workflow_changeset(struct(), struct(), String.t() | nil, map() | nil) ::
           {:ok, Ecto.Changeset.t()} | {:error, term()}
   def assign_destination_workflow_changeset(task, dest_workflow, target_step_id, _handoff) do
+    with {:ok, %{changeset: changeset}} <-
+           assign_destination_workflow_plan(task, dest_workflow, target_step_id) do
+      {:ok, changeset}
+    end
+  end
+
+  @doc """
+  Builds the destination workflow assignment changeset and returns the resolved
+  target step for callers that need to plan the next orchestrator state.
+  """
+  @spec assign_destination_workflow_plan(struct(), struct(), String.t() | nil) ::
+          {:ok, %{changeset: Ecto.Changeset.t(), target_step: struct()}} | {:error, term()}
+  def assign_destination_workflow_plan(task, dest_workflow, target_step_id) do
     dest_workflow = Repo.preload(dest_workflow, :workflow_steps)
 
     with {:ok, target_step} <- resolve_target_step(dest_workflow, target_step_id) do
-      {:ok, Task.assign_workflow_changeset(task, dest_workflow.id, target_step.id)}
+      {:ok,
+       %{
+         changeset: Task.assign_workflow_changeset(task, dest_workflow.id, target_step.id),
+         target_step: target_step
+       }}
     end
   end
 

@@ -9,7 +9,7 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
   alias Sacrum.Orchestrator.FSMData
   alias Sacrum.Orchestrator.TaskRuns.{Completion, Lookup}
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.TaskRun
+  alias Sacrum.Repo.Schemas.{TaskRun, Workflow, WorkflowStep}
   alias Sacrum.Tasks.Status
 
   @doc """
@@ -100,6 +100,48 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
         "current_step_id" => next_step_id
       }
     }
+  end
+
+  @doc """
+  Returns true when a route destination is the final step of a final workflow.
+  """
+  @spec terminal_route_destination?(Workflow.t() | struct(), WorkflowStep.t()) :: boolean()
+  def terminal_route_destination?(%{is_final: true}, %WorkflowStep{is_final: true}), do: true
+  def terminal_route_destination?(_workflow, _step), do: false
+
+  @doc """
+  Stop decision attrs for terminal route completion.
+  """
+  @spec terminal_route_completed_attrs(binary()) :: map()
+  def terminal_route_completed_attrs(step_id) do
+    %{
+      outcome_kind: "completed",
+      outcome_context: %{
+        "reason" => "terminal_route",
+        "current_step_id" => step_id
+      }
+    }
+  end
+
+  @doc """
+  Marks a routed terminal destination as a completed task and active run.
+
+  Call this inside the caller's route transaction after the route decision and
+  task movement have been persisted.
+  """
+  @spec complete_terminal_route(TaskRun.t() | nil, struct(), map()) ::
+          {:ok, map()} | {:error, term()}
+  def complete_terminal_route(task_run, task, changes) do
+    with {:ok, refreshed} <- Repo.update(completion_changeset(task)) do
+      maybe_mark_task_run_completed(
+        task_run,
+        terminal_route_completed_attrs(refreshed.current_step_id),
+        %{
+          changes
+          | task: refreshed
+        }
+      )
+    end
   end
 
   @spec completion_changeset(struct()) :: Ecto.Changeset.t()
