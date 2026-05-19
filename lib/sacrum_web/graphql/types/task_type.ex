@@ -97,6 +97,10 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
       resolve(dataloader(Accounts.TaskRuns))
     end
 
+    field :artifacts, list_of(:artifact) do
+      resolve(&resolve_task_artifacts/3)
+    end
+
     field :run_controls, :task_run_controls do
       resolve(fn task, _args, %{context: %{current_user: user}} ->
         batch({RunControls, :for_tasks, user.id}, task, fn results ->
@@ -352,6 +356,11 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
     field :section_order, :integer
     field :done, :boolean
     field :done_at, :datetime
+  end
+
+  defp resolve_task_artifacts(task, _args, %{context: %{current_user: user}}) do
+    artifacts = Accounts.Artifacts.list_for_subject(user.id, task.project_id, "task", task.id)
+    {:ok, artifacts}
   end
 
   defp check_fsm_mutation_allowed(task_id, api_token, mutation_name, user) do

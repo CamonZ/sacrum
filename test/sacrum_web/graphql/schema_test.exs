@@ -4,6 +4,8 @@ defmodule SacrumWeb.Graphql.SchemaTest do
   alias Sacrum.Accounts
   alias Sacrum.Orchestrator.TaskFSMSupervisor
   alias Sacrum.Orchestrator.TaskRegistry
+  alias Sacrum.Repo.ArtifactLinks
+  alias Sacrum.Repo.Artifacts, as: ArtifactsRepo
 
   defp graphql(conn, query) do
     post(conn, "/graphql", %{"query" => query})
@@ -13,6 +15,37 @@ defmodule SacrumWeb.Graphql.SchemaTest do
     user = create_user()
     {:ok, project} = Accounts.Projects.insert(user.id, %{name: "Test Project"})
     %{user: user, project: project}
+  end
+
+  defp create_artifact(user, project, attrs \\ %{}) do
+    attrs =
+      Map.merge(
+        %{
+          artifact_type: "plan",
+          artifact_state: "draft",
+          visibility: "public",
+          redaction_state: "not_needed",
+          title: "GraphQL artifact",
+          content: "Public artifact content",
+          data: %{"internal" => "resolver must not expose this payload"},
+          storage_ref: "blob://graphql-artifact"
+        },
+        attrs
+      )
+
+    {:ok, artifact} = ArtifactsRepo.insert(user.id, project.id, attrs)
+    artifact
+  end
+
+  defp link_artifact(user, project, artifact, subject_type, subject_id, relationship_kind) do
+    {:ok, link} =
+      ArtifactLinks.insert(user.id, project.id, artifact.id, %{
+        subject_type: subject_type,
+        subject_id: subject_id,
+        relationship_kind: relationship_kind
+      })
+
+    link
   end
 
   describe "authentication" do
@@ -4867,6 +4900,81 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert s["content"] == "Hello"
     end
 
+    test "resolves task -> artifacts through the public artifact service", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task with artifacts"})
+
+      public_artifact =
+        create_artifact(user, project, %{
+          artifact_type: "task_summary",
+          artifact_state: "approved",
+          title: "Visible task artifact",
+          content: "Safe task-level artifact"
+        })
+
+      redacted_artifact =
+        create_artifact(user, project, %{
+          artifact_type: "task_summary",
+          artifact_state: "approved",
+          redaction_state: "redacted",
+          title: "Redacted task artifact",
+          content: "Redacted but public"
+        })
+
+      internal_artifact =
+        create_artifact(user, project, %{
+          artifact_type: "internal_trace",
+          artifact_state: "draft",
+          visibility: "internal",
+          title: "Internal task artifact",
+          content: "Must stay hidden"
+        })
+
+      for artifact <- [public_artifact, redacted_artifact, internal_artifact] do
+        link_artifact(user, project, artifact, "task", task.id, "attached_to")
+      end
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          {
+            task(id: "#{task.id}") {
+              artifacts {
+                id
+                artifactType
+                artifactState
+                redactionState
+                title
+                content
+              }
+            }
+          }
+        """)
+        |> json_response(200)
+
+      artifact_ids = Enum.map(result["data"]["task"]["artifacts"], & &1["id"])
+
+      assert public_artifact.id in artifact_ids
+      assert redacted_artifact.id in artifact_ids
+      refute internal_artifact.id in artifact_ids
+
+      assert Enum.all?(result["data"]["task"]["artifacts"], fn artifact ->
+               MapSet.new(Map.keys(artifact)) ==
+                 MapSet.new([
+                   "artifactState",
+                   "artifactType",
+                   "content",
+                   "id",
+                   "redactionState",
+                   "title"
+                 ])
+             end)
+    end
+
     test "resolves task -> codeRefs", %{conn: conn, user: user, project: project} do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
 
@@ -5073,6 +5181,80 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert [cr] = s["codeRefs"]
       assert cr["id"] == ref.id
       assert cr["path"] == "lib/foo.ex"
+    end
+
+    test "resolves testing criterion section artifacts and evidence links", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+
+      {:ok, section} =
+        Accounts.Sections.insert(user.id, %{
+          task_id: task.id,
+          project_id: project.id,
+          section_type: "testing_criterion",
+          content: "Unit test proves artifact evidence is exposed."
+        })
+
+      attached_artifact =
+        create_artifact(user, project, %{
+          artifact_type: "test_output",
+          artifact_state: "approved",
+          title: "Attached section artifact"
+        })
+
+      evidence_artifact =
+        create_artifact(user, project, %{
+          artifact_type: "test_output",
+          artifact_state: "approved",
+          title: "Evidence section artifact"
+        })
+
+      internal_artifact =
+        create_artifact(user, project, %{
+          artifact_type: "test_output",
+          artifact_state: "draft",
+          visibility: "internal",
+          title: "Internal section artifact"
+        })
+
+      link_artifact(user, project, attached_artifact, "task_section", section.id, "attached_to")
+      link_artifact(user, project, evidence_artifact, "task_section", section.id, "evidence_for")
+      link_artifact(user, project, internal_artifact, "task_section", section.id, "evidence_for")
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          {
+            task(id: "#{task.id}") {
+              sections {
+                id
+                sectionType
+                artifacts { id title }
+                evidence { id title }
+              }
+            }
+          }
+        """)
+        |> json_response(200)
+
+      [found_section] = result["data"]["task"]["sections"]
+      assert found_section["id"] == section.id
+      assert found_section["sectionType"] == "testing_criterion"
+
+      artifact_ids = Enum.map(found_section["artifacts"], & &1["id"])
+      evidence_ids = Enum.map(found_section["evidence"], & &1["id"])
+
+      assert attached_artifact.id in artifact_ids
+      assert evidence_artifact.id in artifact_ids
+      refute internal_artifact.id in artifact_ids
+
+      assert attached_artifact.id in evidence_ids
+      assert evidence_artifact.id in evidence_ids
+      refute internal_artifact.id in evidence_ids
     end
 
     test "resolves code_ref -> task, section, project", %{
