@@ -746,8 +746,6 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
               artifactState
               title
               content
-              data
-              storageRef
               redactionState
               insertedAt
               updatedAt
@@ -776,17 +774,25 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
       assert public["artifactState"] == "draft"
       assert public["title"] == "Public plan"
       assert public["content"] == "User-safe planning output."
-
-      assert public["data"] == %{
-               "source" => "chat",
-               "chat_session_id" => session.id,
-               "visibility_reason" => "reviewed"
-             }
-
-      assert public["storageRef"] == "artifact://chat-session/public-plan"
       assert public["redactionState"] == "not_needed"
       assert is_binary(public["insertedAt"])
       assert is_binary(public["updatedAt"])
+
+      refute Map.has_key?(public, "data")
+
+      assert Enum.all?(artifacts, fn artifact ->
+               MapSet.new(Map.keys(artifact)) ==
+                 MapSet.new([
+                   "artifactState",
+                   "artifactType",
+                   "content",
+                   "id",
+                   "insertedAt",
+                   "redactionState",
+                   "title",
+                   "updatedAt"
+                 ])
+             end)
 
       assert redacted =
                Enum.find(artifacts, &(&1["id"] == redacted_artifact.id))

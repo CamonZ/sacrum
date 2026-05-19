@@ -65,15 +65,16 @@ defmodule SacrumWeb.Graphql.SchemaTest do
   end
 
   describe "artifact field shape" do
-    test "task artifact selections expose public fields without internal payload data" do
+    test "artifact type exposes only the public redaction-safe contract fields" do
       artifact_fields =
         SacrumWeb.Graphql.Schema
         |> Absinthe.Schema.lookup_type(:artifact)
         |> Map.fetch!(:fields)
+        |> Map.delete(:__typename)
         |> Map.keys()
         |> MapSet.new()
 
-      assert MapSet.subset?(
+      assert artifact_fields ==
                MapSet.new([
                  :id,
                  :artifact_type,
@@ -81,14 +82,13 @@ defmodule SacrumWeb.Graphql.SchemaTest do
                  :redaction_state,
                  :title,
                  :content,
-                 :storage_ref,
                  :inserted_at,
                  :updated_at
-               ]),
-               artifact_fields
-             )
+               ])
 
+      refute MapSet.member?(artifact_fields, :project_id)
       refute MapSet.member?(artifact_fields, :data)
+      refute MapSet.member?(artifact_fields, :storage_ref)
     end
   end
 
@@ -4940,7 +4940,9 @@ defmodule SacrumWeb.Graphql.SchemaTest do
           artifact_type: "task_summary",
           artifact_state: "approved",
           title: "Visible task artifact",
-          content: "Safe task-level artifact"
+          content: "Safe task-level artifact",
+          data: %{"internal_prompt" => "do not expose"},
+          storage_ref: "artifact://internal/task-summary"
         })
 
       redacted_artifact =
@@ -4961,7 +4963,16 @@ defmodule SacrumWeb.Graphql.SchemaTest do
           content: "Must stay hidden"
         })
 
-      for artifact <- [public_artifact, redacted_artifact, internal_artifact] do
+      blocked_artifact =
+        create_artifact(user, project, %{
+          artifact_type: "raw_tool_result",
+          artifact_state: "draft",
+          redaction_state: "blocked",
+          title: "Blocked task artifact",
+          content: "Must stay hidden"
+        })
+
+      for artifact <- [public_artifact, redacted_artifact, internal_artifact, blocked_artifact] do
         link_artifact(user, project, artifact, "task", task.id, "attached_to")
       end
 
@@ -4989,6 +5000,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert public_artifact.id in artifact_ids
       assert redacted_artifact.id in artifact_ids
       refute internal_artifact.id in artifact_ids
+      refute blocked_artifact.id in artifact_ids
 
       assert Enum.all?(result["data"]["task"]["artifacts"], fn artifact ->
                MapSet.new(Map.keys(artifact)) ==
@@ -5237,7 +5249,18 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         create_artifact(user, project, %{
           artifact_type: "test_output",
           artifact_state: "approved",
-          title: "Evidence section artifact"
+          title: "Evidence section artifact",
+          data: %{"raw_tool_result" => "do not expose"},
+          storage_ref: "artifact://internal/section-evidence"
+        })
+
+      redacted_artifact =
+        create_artifact(user, project, %{
+          artifact_type: "test_output",
+          artifact_state: "approved",
+          redaction_state: "redacted",
+          title: "Redacted section artifact",
+          content: "Public evidence with sensitive details removed"
         })
 
       internal_artifact =
@@ -5248,9 +5271,19 @@ defmodule SacrumWeb.Graphql.SchemaTest do
           title: "Internal section artifact"
         })
 
+      blocked_artifact =
+        create_artifact(user, project, %{
+          artifact_type: "test_output",
+          artifact_state: "draft",
+          redaction_state: "blocked",
+          title: "Blocked section artifact"
+        })
+
       link_artifact(user, project, attached_artifact, "task_section", section.id, "attached_to")
       link_artifact(user, project, evidence_artifact, "task_section", section.id, "evidence_for")
+      link_artifact(user, project, redacted_artifact, "task_section", section.id, "evidence_for")
       link_artifact(user, project, internal_artifact, "task_section", section.id, "evidence_for")
+      link_artifact(user, project, blocked_artifact, "task_section", section.id, "evidence_for")
 
       result =
         conn
@@ -5261,8 +5294,8 @@ defmodule SacrumWeb.Graphql.SchemaTest do
               sections {
                 id
                 sectionType
-                artifacts { id title }
-                evidence { id title }
+                artifacts { id artifactType artifactState redactionState title content }
+                evidence { id artifactType artifactState redactionState title content }
               }
             }
           }
@@ -5278,11 +5311,27 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
       assert attached_artifact.id in artifact_ids
       assert evidence_artifact.id in artifact_ids
+      assert redacted_artifact.id in artifact_ids
       refute internal_artifact.id in artifact_ids
+      refute blocked_artifact.id in artifact_ids
 
       assert attached_artifact.id in evidence_ids
       assert evidence_artifact.id in evidence_ids
+      assert redacted_artifact.id in evidence_ids
       refute internal_artifact.id in evidence_ids
+      refute blocked_artifact.id in evidence_ids
+
+      assert Enum.all?(found_section["artifacts"] ++ found_section["evidence"], fn artifact ->
+               MapSet.new(Map.keys(artifact)) ==
+                 MapSet.new([
+                   "artifactState",
+                   "artifactType",
+                   "content",
+                   "id",
+                   "redactionState",
+                   "title"
+                 ])
+             end)
     end
 
     test "resolves code_ref -> task, section, project", %{
