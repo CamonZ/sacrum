@@ -5,7 +5,7 @@ defmodule SacrumWeb.Graphql.Types.ChatTypes do
 
   use Absinthe.Schema.Notation
 
-  alias Sacrum.Accounts.LiveChat
+  alias Sacrum.Accounts.{Artifacts, LiveChat}
   alias Sacrum.Chat.PublicEvents
   alias Sacrum.ChatSessions.Status, as: ChatSessionStatus
   alias SacrumWeb.Graphql.ChangesetErrors
@@ -27,6 +27,12 @@ defmodule SacrumWeb.Graphql.Types.ChatTypes do
     field :public_metadata, :json
     field :inserted_at, :datetime
     field :updated_at, :datetime
+
+    field :artifacts, list_of(:artifact) do
+      resolve(fn session, _args, %{context: %{current_user: user}} ->
+        {:ok, Artifacts.list_for_subject(user.id, session.project_id, "chat_session", session.id)}
+      end)
+    end
 
     field :messages, list_of(:chat_message) do
       arg(:limit, :integer)

@@ -2,7 +2,7 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
   use SacrumWeb.ConnCase
 
   alias Sacrum.Accounts
-  alias Sacrum.Accounts.{ChatEvents, ChatSessions, LiveChat}
+  alias Sacrum.Accounts.{Artifacts, ChatEvents, ChatSessions, LiveChat}
   alias Sacrum.Chat.{Inference.Result, PublicEvents}
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{ChatEvent, ChatMessage, ChatSession}
@@ -350,7 +350,7 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
       assert first_send["errors"] == nil
 
       assert_receive {:fake_provider_called, provider_pid, [%{role: "user", content: "first"}]},
-                     1_000
+                     2_000
 
       second_send =
         graphql_result(conn, user, """
@@ -380,7 +380,7 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
                         %{role: "assistant", content: "Assistant response from GraphQL runner"},
                         %{role: "user", content: "second"}
                       ]},
-                     1_000
+                     2_000
 
       send(second_provider_pid, :release_fake_provider)
 
@@ -518,6 +518,12 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
 
       assert message_result["errors"] == nil
       message_id = message_result["data"]["sendChatMessage"]["id"]
+
+      assert_receive {:fake_provider_called, provider_pid,
+                      [%{role: "user", content: "remove this transcript"}]},
+                     1_000
+
+      await_graphql_runner_completion(session_id, provider_pid)
 
       public_event_ids =
         chat_event_ids_for_session(user.id, project.id, session_id)
@@ -657,6 +663,137 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
       assert older["publicMetadata"] == %{"label" => "older"}
     end
 
+    test "chatSession exposes only public redaction-safe artifacts linked to the session", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, session} = ChatSessions.insert(user.id, project.id, %{session_kind: "planning"})
+      {:ok, other_session} = ChatSessions.insert(user.id, project.id, %{session_kind: "planning"})
+
+      {:ok, %{artifact: public_artifact}} =
+        Artifacts.create_and_link(
+          user.id,
+          project.id,
+          chat_artifact_attrs(%{
+            title: "Public plan",
+            content: "User-safe planning output.",
+            data: %{
+              "source" => "chat",
+              "chat_session_id" => session.id,
+              "visibility_reason" => "reviewed"
+            },
+            storage_ref: "artifact://chat-session/public-plan"
+          }),
+          chat_session_artifact_link_attrs(session.id, %{
+            relationship_kind: "produced_by",
+            metadata: %{"provenance" => "chat_session"}
+          })
+        )
+
+      {:ok, %{artifact: redacted_artifact}} =
+        Artifacts.create_and_link(
+          user.id,
+          project.id,
+          chat_artifact_attrs(%{
+            title: "Redacted public summary",
+            content: "Sensitive details removed.",
+            redaction_state: "redacted"
+          }),
+          chat_session_artifact_link_attrs(session.id)
+        )
+
+      {:ok, %{artifact: internal_artifact}} =
+        Artifacts.create_and_link(
+          user.id,
+          project.id,
+          chat_artifact_attrs(%{
+            title: "Internal trace",
+            visibility: "internal",
+            content: "operator-only tool trace"
+          }),
+          chat_session_artifact_link_attrs(session.id)
+        )
+
+      {:ok, %{artifact: blocked_artifact}} =
+        Artifacts.create_and_link(
+          user.id,
+          project.id,
+          chat_artifact_attrs(%{
+            title: "Blocked redaction",
+            redaction_state: "blocked",
+            content: "not safe for public API"
+          }),
+          chat_session_artifact_link_attrs(session.id)
+        )
+
+      {:ok, %{artifact: other_session_artifact}} =
+        Artifacts.create_and_link(
+          user.id,
+          project.id,
+          chat_artifact_attrs(%{title: "Other session plan"}),
+          chat_session_artifact_link_attrs(other_session.id)
+        )
+
+      result =
+        graphql_result(conn, user, """
+        {
+          chatSession(projectId: "#{project.id}", id: "#{session.id}") {
+            id
+            artifacts {
+              id
+              artifactType
+              artifactState
+              title
+              content
+              data
+              storageRef
+              redactionState
+              insertedAt
+              updatedAt
+            }
+          }
+        }
+        """)
+
+      assert result["errors"] == nil
+      assert found_session = result["data"]["chatSession"]
+      assert found_session["id"] == session.id
+
+      artifacts = found_session["artifacts"]
+      artifact_ids = Enum.map(artifacts, & &1["id"])
+
+      assert public_artifact.id in artifact_ids
+      assert redacted_artifact.id in artifact_ids
+      refute internal_artifact.id in artifact_ids
+      refute blocked_artifact.id in artifact_ids
+      refute other_session_artifact.id in artifact_ids
+
+      assert public =
+               Enum.find(artifacts, &(&1["id"] == public_artifact.id))
+
+      assert public["artifactType"] == "plan"
+      assert public["artifactState"] == "draft"
+      assert public["title"] == "Public plan"
+      assert public["content"] == "User-safe planning output."
+
+      assert public["data"] == %{
+               "source" => "chat",
+               "chat_session_id" => session.id,
+               "visibility_reason" => "reviewed"
+             }
+
+      assert public["storageRef"] == "artifact://chat-session/public-plan"
+      assert public["redactionState"] == "not_needed"
+      assert is_binary(public["insertedAt"])
+      assert is_binary(public["updatedAt"])
+
+      assert redacted =
+               Enum.find(artifacts, &(&1["id"] == redacted_artifact.id))
+
+      assert redacted["redactionState"] == "redacted"
+    end
+
     test "chatSessions respects and clamps limit through LiveChat", %{
       conn: conn,
       user: user,
@@ -745,5 +882,31 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
 
   defp assert_registry_empty(session_id, 0) do
     assert [] = Sacrum.ChatSessionRegistry.lookup(session_id)
+  end
+
+  defp chat_artifact_attrs(attrs) do
+    Map.merge(
+      %{
+        artifact_type: "plan",
+        artifact_state: "draft",
+        visibility: "public",
+        redaction_state: "not_needed",
+        title: "Chat plan",
+        content: "Plan generated by the chat session.",
+        data: %{}
+      },
+      attrs
+    )
+  end
+
+  defp chat_session_artifact_link_attrs(session_id, attrs \\ %{}) do
+    Map.merge(
+      %{
+        subject_type: "chat_session",
+        subject_id: session_id,
+        relationship_kind: "attached_to"
+      },
+      attrs
+    )
   end
 end

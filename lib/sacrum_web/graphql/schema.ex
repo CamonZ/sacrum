@@ -10,6 +10,7 @@ defmodule SacrumWeb.Graphql.Schema do
   import_types(SacrumWeb.Graphql.Types.ProjectType)
   import_types(SacrumWeb.Graphql.Types.WorkflowType)
   import_types(SacrumWeb.Graphql.Types.WorkflowStepType)
+  import_types(SacrumWeb.Graphql.Types.ArtifactTypes)
   import_types(SacrumWeb.Graphql.Types.TaskType)
   import_types(SacrumWeb.Graphql.Types.SectionTypes)
   import_types(SacrumWeb.Graphql.Types.TransitionTypes)
