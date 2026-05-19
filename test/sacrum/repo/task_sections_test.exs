@@ -215,4 +215,30 @@ defmodule Sacrum.Repo.TaskSectionsTest do
       assert section.task_id == task.id
     end
   end
+
+  describe "artifact link subject helpers" do
+    test "builds testing_criterion artifact subjects for evidence and attachment links" do
+      task = setup_task()
+
+      {:ok, section} =
+        TaskSections.insert(task, %{
+          section_type: "testing_criterion",
+          content: "The implementation preserves artifact provenance."
+        })
+
+      section_id = section.id
+
+      assert %{
+               subject_type: "task_section",
+               subject_id: ^section_id,
+               relationship_kind: "evidence_for"
+             } = TaskSections.artifact_link_subject(section, :evidence_for)
+
+      assert %{
+               subject_type: "task_section",
+               subject_id: ^section_id,
+               relationship_kind: "attached_to"
+             } = TaskSections.artifact_link_subject(section, :attached_to)
+    end
+  end
 end

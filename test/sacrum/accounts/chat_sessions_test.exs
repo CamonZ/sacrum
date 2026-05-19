@@ -151,6 +151,41 @@ defmodule Sacrum.Accounts.ChatSessionsTest do
     end
   end
 
+  describe "artifact provenance helpers" do
+    test "preserves scoped chat-session provenance arguments for artifact links" do
+      session = %ChatSession{
+        id: Ecto.UUID.generate(),
+        user_id: Ecto.UUID.generate(),
+        project_id: Ecto.UUID.generate(),
+        session_kind: "planning",
+        status: :queued
+      }
+
+      source_message_id = Ecto.UUID.generate()
+      session_id = session.id
+      user_id = session.user_id
+      project_id = session.project_id
+
+      assert %{
+               subject_type: "chat_session",
+               subject_id: ^session_id,
+               relationship_kind: "attached_to",
+               metadata: %{
+                 "provenance" => %{
+                   user_id: ^user_id,
+                   project_id: ^project_id,
+                   chat_session_id: ^session_id,
+                   source_message_id: ^source_message_id
+                 }
+               }
+             } =
+               ChatSessions.artifact_provenance_link_attrs(session,
+                 relationship_kind: "attached_to",
+                 source_message_id: source_message_id
+               )
+    end
+  end
+
   describe "scoped reads and status transitions" do
     setup [:setup_chat_project]
 

@@ -13,7 +13,6 @@ defmodule SacrumWeb.Graphql.Types.ArtifactTypes do
     field :redaction_state, :string
     field :title, :string
     field :content, :string
-    field :data, :json
     field :storage_ref, :string
     field :inserted_at, :datetime
     field :updated_at, :datetime

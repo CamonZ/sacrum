@@ -42,4 +42,14 @@ defmodule Sacrum.Repo.TaskSections do
   def delete(%TaskSection{} = section) do
     Repo.delete(section)
   end
+
+  @spec artifact_link_subject(TaskSection.t(), atom() | String.t()) :: map()
+  def artifact_link_subject(%TaskSection{} = section, relationship_kind)
+      when is_atom(relationship_kind) or is_binary(relationship_kind) do
+    %{
+      subject_type: "task_section",
+      subject_id: section.id,
+      relationship_kind: to_string(relationship_kind)
+    }
+  end
 end

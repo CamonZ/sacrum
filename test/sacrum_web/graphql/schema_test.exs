@@ -17,7 +17,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
     %{user: user, project: project}
   end
 
-  defp create_artifact(user, project, attrs \\ %{}) do
+  defp create_artifact(user, project, attrs) do
     attrs =
       Map.merge(
         %{
@@ -61,6 +61,34 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         |> graphql("{ projects { id } }")
 
       assert conn.status == 401
+    end
+  end
+
+  describe "artifact field shape" do
+    test "task artifact selections expose public fields without internal payload data" do
+      artifact_fields =
+        SacrumWeb.Graphql.Schema
+        |> Absinthe.Schema.lookup_type(:artifact)
+        |> Map.fetch!(:fields)
+        |> Map.keys()
+        |> MapSet.new()
+
+      assert MapSet.subset?(
+               MapSet.new([
+                 :id,
+                 :artifact_type,
+                 :artifact_state,
+                 :redaction_state,
+                 :title,
+                 :content,
+                 :storage_ref,
+                 :inserted_at,
+                 :updated_at
+               ]),
+               artifact_fields
+             )
+
+      refute MapSet.member?(artifact_fields, :data)
     end
   end
 
