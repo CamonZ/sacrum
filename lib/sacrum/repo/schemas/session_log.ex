@@ -35,4 +35,11 @@ defmodule Sacrum.Repo.Schemas.SessionLog do
     |> foreign_key_constraint(:project_id)
     |> check_constraint(:format, name: :session_logs_format_check)
   end
+
+  @spec update_changeset(t(), map()) :: Ecto.Changeset.t()
+  def update_changeset(log, attrs) do
+    log
+    |> cast(attrs, [:content])
+    |> validate_required([:content])
+  end
 end

@@ -9,6 +9,7 @@ defmodule Sacrum.Repo.SessionLogs do
   - `get_by/1` returns `{:ok, log}` or `{:error, :not_found}`
   - `all/0` returns `[log]`
   - `insert/1` returns `{:ok, log}` or `{:error, changeset}`
+  - `update/2` returns `{:ok, log}` or `{:error, changeset}`
 
   ## Preload Strategy
 
@@ -42,6 +43,24 @@ defmodule Sacrum.Repo.SessionLogs do
              |> Repo.insert(),
            {:ok, _execution} <- SessionLogRollups.rollup_step_execution(log) do
         log
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  @doc """
+  Update an existing session log and refresh the owning step execution rollups.
+  """
+  @spec update(SessionLog.t(), map()) :: {:ok, SessionLog.t()} | {:error, Ecto.Changeset.t()}
+  def update(%SessionLog{} = log, attrs) when is_map(attrs) do
+    Repo.transaction(fn ->
+      with {:ok, updated_log} <-
+             log
+             |> SessionLog.update_changeset(attrs)
+             |> Repo.update(),
+           {:ok, _execution} <- SessionLogRollups.recompute_step_execution(updated_log) do
+        updated_log
       else
         {:error, reason} -> Repo.rollback(reason)
       end

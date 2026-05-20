@@ -2833,6 +2833,91 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert [%{"message" => message}] = result["errors"]
       assert message =~ "format"
     end
+
+    test "updates a session log content while preserving format", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+
+      {:ok, exec} =
+        Accounts.StepExecutions.insert(user.id, %{
+          task_id: task.id,
+          workflow_id: wf.id,
+          project_id: project.id,
+          step_name: "step_1"
+        })
+
+      {:ok, log} =
+        Accounts.SessionLogs.insert(user.id, %{
+          step_execution_id: exec.id,
+          project_id: project.id,
+          content: "Original content",
+          format: "openai"
+        })
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            updateSessionLog(
+              id: "#{log.id}"
+              content: "Corrected content"
+            ) { id content format stepExecutionId }
+          }
+        """)
+        |> json_response(200)
+
+      data = result["data"]["updateSessionLog"]
+      assert data["id"] == log.id
+      assert data["content"] == "Corrected content"
+      assert data["format"] == "openai"
+      assert data["stepExecutionId"] == exec.id
+    end
+
+    test "rejects cross-user session log updates", %{conn: conn, user: user} do
+      other_user =
+        create_user(%{email: "session-log-other@example.com", username: "sessionlogother"})
+
+      {:ok, other_project} = Accounts.Projects.insert(other_user.id, %{name: "Other Project"})
+      {:ok, other_task} = Accounts.Tasks.insert(other_user.id, other_project.id, %{title: "Task"})
+      {:ok, other_wf} = Accounts.Workflows.insert(other_user.id, other_project.id, %{name: "WF"})
+
+      {:ok, other_exec} =
+        Accounts.StepExecutions.insert(other_user.id, %{
+          task_id: other_task.id,
+          workflow_id: other_wf.id,
+          project_id: other_project.id,
+          step_name: "step_1"
+        })
+
+      {:ok, other_log} =
+        Accounts.SessionLogs.insert(other_user.id, %{
+          step_execution_id: other_exec.id,
+          project_id: other_project.id,
+          content: "Other user content"
+        })
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            updateSessionLog(
+              id: "#{other_log.id}"
+              content: "Attempted overwrite"
+            ) { id content format }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["updateSessionLog"] == nil
+      assert [%{"message" => message}] = result["errors"]
+      assert message =~ "not_found"
+    end
   end
 
   describe "session log queries" do

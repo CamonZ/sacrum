@@ -354,6 +354,23 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
       end)
     end
 
+    field :update_session_log, :session_log do
+      arg(:id, non_null(:uuid4))
+      arg(:content, non_null(:string))
+
+      resolve(fn %{id: id, content: content}, %{context: %{current_user: user}} ->
+        with {:ok, log} <- Accounts.SessionLogs.get_by(user.id, conditions: [id: id]) do
+          case Accounts.SessionLogs.update(log, %{content: content}) do
+            {:error, %Ecto.Changeset{} = changeset} ->
+              {:error, ChangesetErrors.format(changeset)}
+
+            result ->
+              result
+          end
+        end
+      end)
+    end
+
     field :run_step, :step_execution do
       arg(:task_id, non_null(:uuid4))
       arg(:step_id, non_null(:uuid4))

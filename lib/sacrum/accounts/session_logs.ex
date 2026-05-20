@@ -20,4 +20,12 @@ defmodule Sacrum.Accounts.SessionLogs do
   def insert(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
     RepoModule.insert(user_id, attrs)
   end
+
+  @doc """
+  Update an existing session log.
+  """
+  @spec update(SessionLog.t(), map()) :: {:ok, SessionLog.t()} | {:error, Ecto.Changeset.t()}
+  def update(%SessionLog{} = log, attrs) when is_map(attrs) do
+    RepoModule.update(log, attrs)
+  end
 end
