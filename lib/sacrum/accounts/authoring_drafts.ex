@@ -21,6 +21,7 @@ defmodule Sacrum.Accounts.AuthoringDrafts do
   @append_fields ~w(assumptions open_questions proposed_approach candidate_work_units apply_targets)
   @replace_fields ~w(
     state_machine_id state_machine_entrypoint current_state revision source_chat
+    knowns unknowns starter_shape
   )
 
   @spec upsert_for_chat_session(String.t(), String.t(), String.t(), map()) ::
@@ -38,18 +39,47 @@ defmodule Sacrum.Accounts.AuthoringDrafts do
 
     with {:ok, state_machine_id} <- fetch_state_machine_id(normalized_patch),
          {:ok, chat_session} <- ChatSessions.get_session(user_id, project_id, chat_session_id) do
-      Repo.transaction(fn ->
-        chat_session
-        |> upsert_draft(state_machine_id, normalized_patch)
-        |> persist_result()
-      end)
+      upsert_for_chat_session(chat_session, normalized_patch, state_machine_id)
     end
+  end
+
+  @spec upsert_for_chat_session(ChatSession.t(), map()) ::
+          {:ok, %{artifact: Artifact.t(), link: ArtifactLink.t()}}
+          | {:error, Ecto.Changeset.t()}
+          | {:error, :missing_state_machine_id}
+  def upsert_for_chat_session(%ChatSession{} = chat_session, patch) when is_map(patch) do
+    normalized_patch = stringify_keys(patch)
+
+    with {:ok, state_machine_id} <- fetch_state_machine_id(normalized_patch) do
+      upsert_for_chat_session(chat_session, normalized_patch, state_machine_id)
+    end
+  end
+
+  @spec get_for_chat_session(ChatSession.t(), String.t()) ::
+          {:ok, %{artifact: Artifact.t(), link: ArtifactLink.t()}} | {:error, :not_found}
+  def get_for_chat_session(%ChatSession{} = chat_session, state_machine_id)
+      when is_binary(state_machine_id) do
+    case existing_draft(chat_session, state_machine_id) do
+      nil -> {:error, :not_found}
+      {artifact, link} -> {:ok, %{artifact: artifact, link: link}}
+    end
+  end
+
+  defp upsert_for_chat_session(%ChatSession{} = chat_session, normalized_patch, state_machine_id) do
+    Repo.transaction(fn ->
+      chat_session
+      |> upsert_draft(state_machine_id, normalized_patch)
+      |> persist_result()
+    end)
   end
 
   defp upsert_draft(%ChatSession{} = chat_session, state_machine_id, patch) do
     case existing_draft(chat_session, state_machine_id) do
-      nil -> create_draft(chat_session, patch)
-      {artifact, link} -> update_draft(artifact, link, patch)
+      nil ->
+        create_draft(chat_session, resolve_patch_revision(patch, nil))
+
+      {artifact, link} ->
+        update_draft(artifact, link, resolve_patch_revision(patch, artifact))
     end
   end
 
@@ -62,6 +92,29 @@ defmodule Sacrum.Accounts.AuthoringDrafts do
       _ -> {:error, :missing_state_machine_id}
     end
   end
+
+  defp resolve_patch_revision(%{"revision" => :next} = patch, artifact) do
+    revision = next_revision(artifact)
+
+    patch
+    |> Map.put("revision", revision)
+    |> put_source_chat_turn(revision)
+  end
+
+  defp resolve_patch_revision(patch, _artifact), do: patch
+
+  defp next_revision(%Artifact{data: %{"revision" => revision}}) when is_integer(revision) do
+    revision + 1
+  end
+
+  defp next_revision(_artifact_or_nil), do: 1
+
+  defp put_source_chat_turn(%{"source_chat" => source_chat} = patch, revision)
+       when is_integer(revision) and is_map(source_chat) do
+    put_in(patch, ["source_chat", "turn_index"], revision)
+  end
+
+  defp put_source_chat_turn(patch, _revision), do: patch
 
   defp create_draft(%ChatSession{} = chat_session, patch) do
     Artifacts.create_and_link(
