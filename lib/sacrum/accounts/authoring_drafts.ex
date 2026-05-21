@@ -18,10 +18,13 @@ defmodule Sacrum.Accounts.AuthoringDrafts do
   @redaction_state "not_needed"
   @subject_type "chat_session"
   @relationship_kind "produced_by"
-  @append_fields ~w(assumptions open_questions proposed_approach candidate_work_units apply_targets)
+  @append_fields ~w(
+    assumptions open_questions proposed_approach candidate_work_units apply_targets revision_notes
+  )
   @replace_fields ~w(
     state_machine_id state_machine_entrypoint current_state revision source_chat
-    knowns unknowns starter_shape
+    knowns unknowns initial_state template trigger
+    workflows steps prompts output_schema transitions validation_expectations
   )
 
   @spec upsert_for_chat_session(String.t(), String.t(), String.t(), map()) ::
@@ -79,7 +82,11 @@ defmodule Sacrum.Accounts.AuthoringDrafts do
         create_draft(chat_session, resolve_patch_revision(patch, nil))
 
       {artifact, link} ->
-        update_draft(artifact, link, resolve_patch_revision(patch, artifact))
+        if already_applied?(artifact, patch) do
+          {:ok, %{artifact: artifact, link: link}}
+        else
+          update_draft(artifact, link, resolve_patch_revision(patch, artifact))
+        end
     end
   end
 
@@ -150,6 +157,21 @@ defmodule Sacrum.Accounts.AuthoringDrafts do
   end
 
   defp source_message_id(_patch), do: nil
+
+  defp already_applied?(
+         %Artifact{
+           data: %{
+             "current_state" => current_state,
+             "source_chat" => %{"source_message_id" => source_message_id}
+           }
+         },
+         patch
+       )
+       when is_binary(source_message_id) do
+    source_message_id(patch) == source_message_id and patch["current_state"] == current_state
+  end
+
+  defp already_applied?(_artifact, _patch), do: false
 
   defp update_draft(%Artifact{} = artifact, %ArtifactLink{} = link, patch) do
     next_data = draft_data(artifact.data || %{}, patch)

@@ -24,6 +24,7 @@ defmodule Sacrum.DataCase do
       import Ecto.Changeset
       import Ecto.Query
       import Sacrum.DataCase
+      import Sacrum.TestSupport.AuthoringFixtures
     end
   end
 

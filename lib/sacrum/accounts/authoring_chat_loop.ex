@@ -7,12 +7,19 @@ defmodule Sacrum.Accounts.AuthoringChatLoop do
   records, or GUI command events.
   """
 
-  alias Sacrum.Accounts.{AuthoringDrafts, ChatSessions, LiveChat}
-  alias Sacrum.Repo.Schemas.{Artifact, ChatSession}
+  alias Sacrum.Accounts.{
+    AuthoringDrafts,
+    AuthoringTemplateLookup,
+    ChatSessions,
+    InitialAuthoringDraftRenderer,
+    LiveChat
+  }
+
+  alias Sacrum.Chat.Inference
+  alias Sacrum.Repo.Schemas.{Artifact, AuthoringTemplate, ChatSession}
 
   @state_machine_id "authoring_chat_loop"
   @feature_exploration "feature_exploration"
-  @code_factory_starter_example "code_factory_starter_example"
 
   @type response :: %{
           assistant_text: String.t(),
@@ -37,6 +44,20 @@ defmodule Sacrum.Accounts.AuthoringChatLoop do
     end
   end
 
+  @spec apply_inference_result(ChatSession.t(), Inference.Result.t()) :: :ok | {:error, term()}
+  def apply_inference_result(%ChatSession{} = session, %Inference.Result{} = inference_result) do
+    apply_inference_metadata(session, inference_result.internal_metadata || %{})
+  end
+
+  @spec apply_inference_metadata(ChatSession.t(), map()) :: :ok | {:error, term()}
+  def apply_inference_metadata(%ChatSession{} = session, metadata) when is_map(metadata) do
+    case get_in(metadata, ["authoring_tool_intent"]) do
+      nil -> :ok
+      %{} = intent -> apply_authoring_intent(session, intent)
+      _intent -> {:error, :invalid_authoring_tool_intent}
+    end
+  end
+
   defp transition_for_intent(%{"name" => "authoring.start_feature_exploration"} = intent) do
     arguments = arguments(intent)
     unknowns = list_argument(arguments, "unknowns")
@@ -50,23 +71,6 @@ defmodule Sacrum.Accounts.AuthoringChatLoop do
        unknowns: unknowns,
        open_questions: unknowns,
        assistant_text: feature_exploration_text(unknowns)
-     }}
-  end
-
-  defp transition_for_intent(%{"name" => "authoring.start_code_factory_example"}) do
-    {:ok,
-     %{
-       current_state: @code_factory_starter_example,
-       entrypoint: @code_factory_starter_example,
-       revision: 1,
-       starter_shape: %{
-         "kind" => "code_factory_example",
-         "goal" => "Create one task from a user request",
-         "inputs" => [%{"name" => "feature_request", "type" => "text"}],
-         "outputs" => [%{"kind" => "task_draft", "count" => 1}]
-       },
-       assistant_text:
-         "I started a code-factory starter draft for one task-draft output from one text input."
      }}
   end
 
@@ -90,6 +94,38 @@ defmodule Sacrum.Accounts.AuthoringChatLoop do
 
   defp transition_for_intent(_intent), do: {:error, :unsupported_authoring_intent}
 
+  defp apply_authoring_intent(%ChatSession{} = session, %{"action" => "start_authoring"} = intent) do
+    request = Map.take(intent, request_fields())
+
+    with {:ok, template} <-
+           AuthoringTemplateLookup.get_template(authoring_context(session), request),
+         {:ok, rendered} <-
+           InitialAuthoringDraftRenderer.render(template,
+             state_machine_id: Map.get(intent, "state_machine_id"),
+             initial_state: Map.get(intent, "initial_state"),
+             revision: %{number: 1},
+             tool: Map.get(intent, "tool")
+           ),
+         patch <- start_authoring_patch(session, intent, rendered),
+         {:ok, _result} <- AuthoringDrafts.upsert_for_chat_session(session, patch) do
+      :ok
+    end
+  end
+
+  defp apply_authoring_intent(
+         %ChatSession{} = session,
+         %{"action" => "revise_authoring"} = intent
+       ) do
+    with {:ok, %{artifact: draft}} <-
+           AuthoringDrafts.get_for_chat_session(session, Map.get(intent, "state_machine_id")),
+         patch <- revise_authoring_patch(session, intent, draft),
+         {:ok, _result} <- AuthoringDrafts.upsert_for_chat_session(session, patch) do
+      :ok
+    end
+  end
+
+  defp apply_authoring_intent(_session, _intent), do: {:error, :unsupported_authoring_action}
+
   defp build_patch(%ChatSession{} = session, transition, opts) do
     %{
       state_machine_id: @state_machine_id,
@@ -105,7 +141,57 @@ defmodule Sacrum.Accounts.AuthoringChatLoop do
     |> maybe_put(:knowns, Map.get(transition, :knowns))
     |> maybe_put(:unknowns, Map.get(transition, :unknowns))
     |> maybe_put(:open_questions, Map.get(transition, :open_questions))
-    |> maybe_put(:starter_shape, Map.get(transition, :starter_shape))
+  end
+
+  defp start_authoring_patch(%ChatSession{} = session, intent, rendered) do
+    rendered.payload
+    |> Map.merge(%{
+      state_machine_id: rendered.state_machine_id,
+      state_machine_entrypoint: rendered.state_machine_entrypoint,
+      current_state: rendered.initial_state,
+      revision: rendered.revision,
+      source_chat: source_chat(session, intent, rendered.revision),
+      template: rendered.template
+    })
+    |> maybe_put(:open_questions, Map.get(intent, "open_questions"))
+  end
+
+  defp revise_authoring_patch(%ChatSession{} = session, intent, %Artifact{} = draft) do
+    revision = next_chat_feedback_revision(draft)
+
+    %{
+      state_machine_id: Map.get(intent, "state_machine_id"),
+      current_state: Map.get(intent, "current_state"),
+      revision: revision,
+      source_chat: source_chat(session, intent, revision)
+    }
+    |> maybe_put(:candidate_work_units, Map.get(intent, "candidate_work_units"))
+    |> maybe_put(:revision_notes, present_list(Map.get(intent, "feedback", "")))
+  end
+
+  defp source_chat(%ChatSession{} = session, intent, revision) do
+    %{
+      chat_session_id: session.id,
+      source_message_id: Map.get(intent, "source_message_id"),
+      turn_index: revision_value(revision)
+    }
+  end
+
+  defp next_chat_feedback_revision(%Artifact{} = draft) do
+    %{source: "chat_feedback", value: revision_value(draft.data["revision"]) + 1}
+  end
+
+  defp revision_value(%{"value" => value}) when is_integer(value), do: value
+  defp revision_value(%{value: value}) when is_integer(value), do: value
+  defp revision_value(value) when is_integer(value), do: value
+  defp revision_value(_value), do: 0
+
+  defp authoring_context(%ChatSession{} = session) do
+    %{user_id: session.user_id, project_id: session.project_id}
+  end
+
+  defp request_fields do
+    Enum.map(AuthoringTemplate.classification_fields(), &Atom.to_string/1)
   end
 
   defp state_from_draft(%Artifact{} = draft) do

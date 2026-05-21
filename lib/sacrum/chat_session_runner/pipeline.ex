@@ -12,7 +12,7 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
   internal inference completion records.
   """
 
-  alias Sacrum.Accounts.{ChatEvents, ChatMessages, ChatSessions}
+  alias Sacrum.Accounts.{AuthoringChatLoop, ChatEvents, ChatMessages, ChatSessions}
   alias Sacrum.Chat.{Inference, InferenceEvents, PublicEvents}
   alias Sacrum.ChatSessions.Status, as: ChatSessionStatus
   alias Sacrum.Repo
@@ -134,6 +134,7 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
     with {:ok, message} <- ensure_message(session, attrs),
          {:ok, _event} <- ensure_public_message_event(session, message),
          {:ok, _event} <- append_inference_completed_event(session, message, inference_result),
+         :ok <- AuthoringChatLoop.apply_inference_result(session, inference_result),
          {:ok, _events} <-
            checkpoint_step(session, :append_assistant, %{
              "assistant_message_id" => message.id,
@@ -148,7 +149,8 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
   def resume_assistant_message(%ChatSession{} = session, %ChatMessage{} = message) do
     with {:ok, session} <- refresh_runnable_session(session),
          {:ok, _event} <- ensure_public_message_event(session, message),
-         {:ok, _event} <- ensure_resumed_inference_completed_event(session, message),
+         {:ok, event} <- ensure_resumed_inference_completed_event(session, message),
+         :ok <- apply_resumed_authoring_intent(session, event),
          {:ok, _events} <-
            checkpoint_step(session, :append_assistant, %{
              "assistant_message_id" => message.id,
@@ -398,6 +400,12 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
       {:ok, event} -> {:ok, event}
       {:error, :not_found} -> ChatEvents.append_to_session(session, attrs)
     end
+  end
+
+  defp apply_resumed_authoring_intent(%ChatSession{} = session, %ChatEvent{} = event) do
+    metadata = get_in(event.internal_payload || %{}, ["metadata"]) || %{}
+
+    AuthoringChatLoop.apply_inference_metadata(session, metadata)
   end
 
   @spec checkpoint_step(ChatSession.t(), atom(), map()) ::

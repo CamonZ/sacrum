@@ -12,7 +12,7 @@ defmodule Sacrum.ChatSessionRunner.PipelineTest do
 
   use Sacrum.DataCase
 
-  alias Sacrum.Accounts.{ChatMessages, ChatSessions, LiveChat, Projects}
+  alias Sacrum.Accounts.{ChatEvents, ChatMessages, ChatSessions, LiveChat, Projects}
   alias Sacrum.Chat.Inference.Result
   alias Sacrum.Chat.InferenceEvents
   alias Sacrum.ChatSessionRunner.Pipeline
@@ -367,6 +367,51 @@ defmodule Sacrum.ChatSessionRunner.PipelineTest do
       checkpoint = checkpoint_events(ctx.session.id, "append_assistant")
       assert length(checkpoint.all) == 2
       assert checkpoint.public.public_payload["resumed"] == true
+    end
+
+    test "applies stored authoring tool intent when resuming an assistant message", ctx do
+      insert_code_factory_template!()
+      ctx = transition_running(ctx)
+
+      {:ok, assistant} =
+        ChatMessages.append_to_session(ctx.session, %{
+          role: :assistant,
+          content: "Resumed code factory draft",
+          content_format: :markdown,
+          client_message_id: "#{@assistant_client_message_id_prefix}:#{ctx.user_message.id}",
+          metadata: %{"provider" => "pipeline-stub", "model" => "pipeline-test"}
+        })
+
+      {:ok, _event} =
+        ChatEvents.append_to_session(ctx.session, %{
+          event_type: InferenceEvents.event_type(:inference_completed),
+          visibility: :internal,
+          public_payload: %{},
+          internal_payload: %{
+            "assistant_message_id" => assistant.id,
+            "metadata" => %{
+              "authoring_tool_intent" => code_factory_start_intent(ctx.user_message.id)
+            }
+          }
+        })
+
+      assert {:ok, _session, ^assistant} =
+               Pipeline.resume_assistant_message(ctx.session, assistant)
+
+      assert [draft] = authoring_drafts_for_session(ctx)
+      assert draft.data["state_machine_id"] == "code_factory_creation"
+      assert draft.data["current_state"] == "collect_workflow_goal"
+      assert draft.data["revision"] == %{"source" => "authoring_template", "value" => 1}
+      assert [%{"key" => "implementation"}] = draft.data["workflows"]
+      assert [%{"from" => "implementation"}] = draft.data["transitions"]
+      assert "Every workflow has an initial step." in draft.data["validation_expectations"]
+
+      assert {:ok, _session, ^assistant} =
+               Pipeline.resume_assistant_message(ctx.session, assistant)
+
+      assert [same_draft] = authoring_drafts_for_session(ctx)
+      assert same_draft.id == draft.id
+      assert same_draft.data["revision"] == %{"source" => "authoring_template", "value" => 1}
     end
   end
 

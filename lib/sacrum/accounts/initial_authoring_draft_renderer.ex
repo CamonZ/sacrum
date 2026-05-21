@@ -58,7 +58,8 @@ defmodule Sacrum.Accounts.InitialAuthoringDraftRenderer do
     workflows
   )a
   @payload_key_lookup Map.new(@payload_keys, &{Atom.to_string(&1), &1})
-  @type error_reason :: :not_found | {:missing_option, atom()} | {:missing_template_field, atom()}
+  @type error_reason ::
+          :not_found | {:missing_option, atom()} | {:missing_template_field, atom()}
 
   @spec render(map(), keyword()) :: {:ok, map()} | {:error, error_reason()}
   def render(template, opts) when is_map(template) and is_list(opts) do
@@ -132,6 +133,13 @@ defmodule Sacrum.Accounts.InitialAuthoringDraftRenderer do
     case Keyword.fetch(opts, key) do
       {:ok, value} when not is_nil(value) -> {:ok, value}
       _ -> {:error, {:missing_option, key}}
+    end
+  end
+
+  defp fetch_template(template, :payload) do
+    case template_value(template, :payload) do
+      payload when is_map(payload) -> {:ok, payload}
+      _ -> {:error, {:missing_template_field, :payload}}
     end
   end
 

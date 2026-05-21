@@ -2,6 +2,7 @@ defmodule Sacrum.Accounts.AuthoringChatLoopTest do
   use Sacrum.DataCase, async: true
 
   alias Sacrum.Accounts.{AuthoringChatLoop, AuthoringDrafts, ChatMessages, LiveChat, Projects}
+  alias Sacrum.Chat.Inference.Result
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.Artifact
   alias Sacrum.Repo.Users
@@ -78,44 +79,59 @@ defmodule Sacrum.Accounts.AuthoringChatLoopTest do
       assert draft.data["source_chat"]["source_message_id"] == user_message.id
     end
 
-    test "creates one code-factory example draft with a minimal starter shape and summary text",
-         %{user: user, project: project, session: session, user_message: user_message} do
-      intent = %{
-        "name" => "authoring.start_code_factory_example",
-        "arguments" => %{
-          "request" => "Show a simple code factory example for creating one task"
-        }
-      }
+    test "creates and revises one code-factory example draft from template-backed structured payloads",
+         %{session: session, user_message: user_message} do
+      insert_code_factory_template!()
 
-      assert {:ok, response} =
-               AuthoringChatLoop.handle_tool_intent(
-                 user.id,
-                 project.id,
-                 session.id,
-                 intent,
-                 source_message_id: user_message.id
-               )
+      start_result = authoring_result(code_factory_start_intent(user_message.id))
 
-      assert response.assistant_text =~ "code-factory"
-      assert response.assistant_text =~ "starter"
-      assert response.state.current_state == "code_factory_starter_example"
-      assert response.state.entrypoint == "code_factory_starter_example"
+      assert :ok = AuthoringChatLoop.apply_inference_result(session, start_result)
 
       assert {:ok, %{artifact: draft}} =
-               AuthoringDrafts.get_for_chat_session(session, "authoring_chat_loop")
+               AuthoringDrafts.get_for_chat_session(session, "code_factory_creation")
 
-      assert draft.id == response.draft.id
-      assert draft.data["state_machine_id"] == "authoring_chat_loop"
-      assert draft.data["state_machine_entrypoint"] == "code_factory_starter_example"
-      assert draft.data["current_state"] == "code_factory_starter_example"
-      assert draft.data["revision"] == 1
+      assert draft.data["state_machine_id"] == "code_factory_creation"
+      assert draft.data["state_machine_entrypoint"] == "start_code_factory_creation"
+      assert draft.data["current_state"] == "collect_workflow_goal"
+      assert draft.data["revision"] == %{"source" => "authoring_template", "value" => 1}
 
-      assert draft.data["starter_shape"] == %{
-               "kind" => "code_factory_example",
-               "goal" => "Create one task from a user request",
-               "inputs" => [%{"name" => "feature_request", "type" => "text"}],
-               "outputs" => [%{"kind" => "task_draft", "count" => 1}]
-             }
+      assert [%{"key" => "implementation", "steps" => [%{"key" => "work"}]}] =
+               draft.data["workflows"]
+
+      assert [%{"target_step" => "verification.review"}] = draft.data["transitions"]
+
+      assert "Every prompt uses guarded Liquid variables." in draft.data[
+               "validation_expectations"
+             ]
+
+      refute Map.has_key?(draft.data, "starter_shape")
+
+      revise_result =
+        authoring_result(%{
+          "action" => "revise_authoring",
+          "state_machine_id" => "code_factory_creation",
+          "current_state" => "refine_workflow_recipe",
+          "source_message_id" => user_message.id,
+          "feedback" => "Have review require tests."
+        })
+
+      assert :ok = AuthoringChatLoop.apply_inference_result(session, revise_result)
+
+      assert {:ok, %{artifact: revised_draft}} =
+               AuthoringDrafts.get_for_chat_session(session, "code_factory_creation")
+
+      assert revised_draft.id == draft.id
+      assert revised_draft.data["current_state"] == "refine_workflow_recipe"
+      assert revised_draft.data["revision"] == %{"source" => "chat_feedback", "value" => 2}
+      assert revised_draft.data["workflows"] == draft.data["workflows"]
+      assert revised_draft.data["revision_notes"] == ["Have review require tests."]
+    end
+
+    test "rejects unsupported structured authoring actions", %{session: session} do
+      result = authoring_result(%{"action" => "delete_authoring"})
+
+      assert {:error, :unsupported_authoring_action} =
+               AuthoringChatLoop.apply_inference_result(session, result)
     end
 
     test "updates the existing draft when the user answers the follow-up",
@@ -214,5 +230,14 @@ defmodule Sacrum.Accounts.AuthoringChatLoopTest do
       refute Map.has_key?(intent["arguments"], "draft_id")
       refute Map.has_key?(intent["arguments"], "revision")
     end
+  end
+
+  defp authoring_result(intent) do
+    %Result{
+      content: "Authoring intent",
+      content_format: :markdown,
+      public_metadata: %{},
+      internal_metadata: %{"authoring_tool_intent" => intent}
+    }
   end
 end

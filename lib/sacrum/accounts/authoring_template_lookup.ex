@@ -9,6 +9,16 @@ defmodule Sacrum.Accounts.AuthoringTemplateLookup do
 
   @app_scope_project_id nil
   @excluded_listing_kinds ~w(entrypoint step_template)
+  @default_work_breakdown_request %{
+    run_kind: "work_breakdown",
+    artifact_type: "task_draft",
+    template_kind: "starter_draft",
+    state_machine_entrypoint: "start_work_breakdown_authoring"
+  }
+  @default_work_breakdown_template Map.merge(@default_work_breakdown_request, %{
+                                     name: "work_breakdown_authoring",
+                                     payload: %{}
+                                   })
 
   @type context :: %{required(:user_id) => String.t(), required(:project_id) => String.t()}
   @type request :: %{
@@ -29,9 +39,11 @@ defmodule Sacrum.Accounts.AuthoringTemplateLookup do
   @spec get_template(context(), request()) :: {:ok, template_payload()} | {:error, :not_found}
   def get_template(%{user_id: user_id, project_id: project_id}, request)
       when is_binary(user_id) and is_binary(project_id) and is_map(request) do
-    with {:ok, _project} <- Projects.get_by(user_id, conditions: [id: project_id]),
-         {:ok, template} <- resolve_template(project_id, request) do
-      {:ok, present_template(template)}
+    with {:ok, _project} <- Projects.get_by(user_id, conditions: [id: project_id]) do
+      case resolve_template(project_id, request) do
+        {:ok, template} -> {:ok, present_template(template)}
+        {:error, :not_found} -> default_template(request)
+      end
     end
   end
 
@@ -112,4 +124,19 @@ defmodule Sacrum.Accounts.AuthoringTemplateLookup do
       payload: template.payload
     }
   end
+
+  defp default_template(request) do
+    if requested_template?(request, @default_work_breakdown_request) do
+      {:ok, @default_work_breakdown_template}
+    else
+      {:error, :not_found}
+    end
+  end
+
+  defp requested_template?(request, expected) do
+    Enum.all?(expected, fn {key, value} -> request_value(request, key) == value end)
+  end
+
+  defp request_value(request, key),
+    do: Map.get(request, key) || Map.get(request, Atom.to_string(key))
 end

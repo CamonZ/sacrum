@@ -8,7 +8,13 @@ defmodule Sacrum.Accounts.LiveChat do
   transactions so committed messages remain the source of truth.
   """
 
-  alias Sacrum.Accounts.{ChatEvents, ChatMessages, ChatSessions}
+  alias Sacrum.Accounts.{
+    AuthoringChatLoop,
+    ChatEvents,
+    ChatMessages,
+    ChatSessions
+  }
+
   alias Sacrum.Chat.{Inference, InferenceEvents, PublicEvents}
   alias Sacrum.ChatSessionRunner.Pipeline, as: RunnerPipeline
   alias Sacrum.ChatSessions.Status, as: ChatSessionStatus
@@ -195,7 +201,8 @@ defmodule Sacrum.Accounts.LiveChat do
              ChatEvents.append_to_session(
                session,
                InferenceEvents.inference_completed_attrs(message, inference_result)
-             ) do
+             ),
+           :ok <- AuthoringChatLoop.apply_inference_result(session, inference_result) do
         {message, public_event}
       else
         {:error, reason} -> Repo.rollback(reason)
