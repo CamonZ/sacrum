@@ -11,7 +11,6 @@ defmodule Sacrum.Repo.Schemas.Workflow do
     field :description, :string
     field :initial_step_id, :binary_id
     field :metadata, :map, default: %{}
-    field :auto_advance, :boolean, default: false
     field :display_order, :integer
     field :is_default, :boolean, default: false
     field :is_final, :boolean, default: false
@@ -25,8 +24,8 @@ defmodule Sacrum.Repo.Schemas.Workflow do
     timestamps(type: :utc_datetime_usec)
   end
 
-  @create_fields ~w(name description metadata auto_advance display_order is_default is_final kanban_column user_id)a
-  @update_fields ~w(name description metadata auto_advance display_order is_default is_final initial_step_id kanban_column)a
+  @create_fields ~w(name description metadata display_order is_default is_final kanban_column user_id)a
+  @update_fields ~w(name description metadata display_order is_default is_final initial_step_id kanban_column)a
 
   @spec create_changeset(t(), map()) :: Ecto.Changeset.t()
   def create_changeset(workflow, attrs) do

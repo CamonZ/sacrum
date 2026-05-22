@@ -32,8 +32,7 @@ defmodule Sacrum.Orchestrator.WorkflowGraphTest do
   defp create_workflow(user, project) do
     {:ok, workflow} =
       Accounts.Workflows.insert(user.id, project.id, %{
-        name: "Test Workflow",
-        auto_advance: false
+        name: "Test Workflow"
       })
 
     workflow

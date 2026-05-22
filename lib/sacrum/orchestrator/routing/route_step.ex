@@ -21,7 +21,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
   }
 
   alias Sacrum.Orchestrator.Routing.{InterWorkflow, IntraWorkflow, RouteDecision}
-  alias Sacrum.Orchestrator.TaskRuns.{Completion, Lookup}
+  alias Sacrum.Orchestrator.TaskRuns.Lookup
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{StepExecution, WorkflowStep}
   alias Sacrum.Repo.TaskWorkflows
@@ -199,30 +199,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
   end
 
   defp maybe_finish_route_task_and_run(data, _updated_task, route_plan, changes) do
-    maybe_mark_task_run_completed(data, route_plan.decision, changes)
-  end
-
-  @spec maybe_mark_task_run_completed(FSMData.t(), tuple(), map()) ::
-          {:ok, map()} | {:error, term()}
-  defp maybe_mark_task_run_completed(_data, {:next_state, _state}, changes), do: {:ok, changes}
-  defp maybe_mark_task_run_completed(_data, {:failed, _reason}, changes), do: {:ok, changes}
-
-  defp maybe_mark_task_run_completed(data, {:stop, _reason, attrs}, changes) do
-    case Map.get(data, :task_run_id) do
-      nil -> {:ok, changes}
-      task_run_id -> mark_task_run_completed(task_run_id, attrs, changes)
-    end
-  end
-
-  @spec mark_task_run_completed(binary(), map(), map()) :: {:ok, map()} | {:error, term()}
-  defp mark_task_run_completed(task_run_id, attrs, changes) do
-    with {:ok, task_run} <- Lookup.fetch(task_run_id),
-         {:ok, task_run} <-
-           task_run
-           |> Completion.changeset(attrs)
-           |> Repo.update() do
-      {:ok, Map.put(changes, :task_run, task_run)}
-    end
+    TaskCompletion.maybe_mark_task_run_completed_for_decision(data, route_plan.decision, changes)
   end
 
   @spec fetch_optional_task_run(binary() | nil) :: {:ok, nil | struct()} | {:error, term()}

@@ -30,8 +30,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
 
   defp create_workflow(user, project, attrs \\ %{}) do
     default_attrs = %{
-      name: "Test Workflow",
-      auto_advance: false
+      name: "Test Workflow"
     }
 
     {:ok, workflow} =
@@ -122,10 +121,10 @@ defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
       %{pool: pool}
     end
 
-    test "intra-workflow happy path: routes to non-final step and auto-advances", %{pool: pool} do
+    test "intra-workflow happy path: routes to non-final step and continues", %{pool: pool} do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, %{auto_advance: true})
+      workflow = create_workflow(user, project, %{})
       current_step = create_step(user, workflow, %{"name" => "step_1", "step_order" => 1})
 
       next_step =
@@ -189,7 +188,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
          %{pool: pool} do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, %{auto_advance: false})
+      workflow = create_workflow(user, project, %{})
 
       current_step =
         create_step(user, workflow, %{
@@ -202,7 +201,8 @@ defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
         create_step(user, workflow, %{
           "name" => "manual_review",
           "step_order" => 2,
-          "is_final" => false
+          "is_final" => false,
+          "prompt" => nil
         })
 
       create_transition(user, current_step, next_step)
@@ -264,7 +264,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
       assert completed_run.outcome_kind == "step_completed"
 
       assert completed_run.outcome_context == %{
-               "reason" => "auto_advance_disabled",
+               "reason" => "promptless_destination_step",
                "current_step_id" => next_step.id
              }
 
@@ -276,7 +276,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
     } do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, %{auto_advance: false, is_final: true})
+      workflow = create_workflow(user, project, %{is_final: true})
       dependent_workflow = create_workflow(user, project, %{name: "Dependent Workflow"})
 
       current_step = create_step(user, workflow, %{"name" => "route_step", "step_order" => 1})
@@ -579,7 +579,14 @@ defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
       to_workflow = create_workflow(user, project, %{name: "To Workflow", is_final: true})
 
       from_step = create_step(user, from_workflow, %{"name" => "route_step"})
-      to_step = create_step(user, to_workflow, %{"name" => "review", "is_final" => false})
+
+      to_step =
+        create_step(user, to_workflow, %{
+          "name" => "review",
+          "is_final" => false,
+          "prompt" => nil
+        })
+
       create_workflow_transition(user, from_workflow, to_workflow, to_step)
 
       task = create_task(user, project, from_workflow)
@@ -623,7 +630,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
       completed_run = Repo.get!(TaskRun, task_run.id)
       assert completed_run.status == :completed
       assert completed_run.outcome_kind == "step_completed"
-      assert completed_run.outcome_context["reason"] == "auto_advance_disabled"
+      assert completed_run.outcome_context["reason"] == "promptless_destination_step"
       assert completed_run.outcome_context["current_step_id"] == to_step.id
     end
 

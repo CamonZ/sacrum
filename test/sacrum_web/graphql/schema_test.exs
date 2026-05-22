@@ -4333,7 +4333,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
   describe "workflow field coverage" do
     setup [:setup_user_and_project]
 
-    test "returns initialStepId, metadata, autoAdvance, displayOrder fields", %{
+    test "returns initialStepId, metadata, displayOrder fields", %{
       conn: conn,
       user: user,
       project: project
@@ -4345,7 +4345,6 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         Accounts.Workflows.update(wf, %{
           initial_step_id: step.id,
           metadata: %{"key" => "value"},
-          auto_advance: true,
           display_order: 5
         })
 
@@ -4354,7 +4353,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         |> authenticate(user)
         |> graphql("""
           { workflow(id: "#{wf.id}") {
-            id initialStepId metadata autoAdvance displayOrder
+            id initialStepId metadata displayOrder
           } }
         """)
         |> json_response(200)
@@ -4362,11 +4361,10 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       data = result["data"]["workflow"]
       assert data["initialStepId"] == step.id
       assert data["metadata"] == %{"key" => "value"}
-      assert data["autoAdvance"] == true
       assert data["displayOrder"] == 5
     end
 
-    test "createWorkflow with autoAdvance and displayOrder", %{
+    test "createWorkflow with displayOrder", %{
       conn: conn,
       user: user,
       project: project
@@ -4379,16 +4377,14 @@ defmodule SacrumWeb.Graphql.SchemaTest do
             createWorkflow(
               projectId: "#{project.id}"
               name: "Full WF"
-              autoAdvance: true
               displayOrder: 3
-            ) { id name autoAdvance displayOrder }
+            ) { id name displayOrder }
           }
         """)
         |> json_response(200)
 
       data = result["data"]["createWorkflow"]
       assert data["name"] == "Full WF"
-      assert data["autoAdvance"] == true
       assert data["displayOrder"] == 3
     end
 

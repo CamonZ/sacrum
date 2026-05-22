@@ -41,11 +41,10 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
     project
   end
 
-  defp create_workflow(user, project, opts) do
+  defp create_workflow(user, project) do
     {:ok, workflow} =
       Accounts.Workflows.insert(user.id, project.id, %{
-        name: "Integration Workflow",
-        auto_advance: Keyword.get(opts, :auto_advance, true)
+        name: "Integration Workflow"
       })
 
     workflow
@@ -94,11 +93,9 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
 
   defp setup_linear_workflow(opts) do
     step_count = Keyword.get(opts, :step_count, 3)
-    auto_advance = Keyword.get(opts, :auto_advance, true)
-
     user = create_user()
     project = create_project(user)
-    workflow = create_workflow(user, project, auto_advance: auto_advance)
+    workflow = create_workflow(user, project)
 
     steps =
       for i <- 1..step_count do
@@ -123,13 +120,12 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
   end
 
   defp setup_human_input_workflow(opts) do
-    auto_advance = Keyword.get(opts, :auto_advance, true)
     next_final? = Keyword.get(opts, :next_final?, false)
     next_prompt = Keyword.get(opts, :next_prompt, "After human input")
 
     user = create_user()
     project = create_project(user)
-    workflow = create_workflow(user, project, auto_advance: auto_advance)
+    workflow = create_workflow(user, project)
 
     schema = %{
       "type" => "object",
@@ -573,7 +569,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
   describe "transition to next step on daemon completion" do
     test "creates a new started execution and broadcasts run_step for step_2" do
       %{user: user, project: project, steps: [_s1, s2, _s3], task: task} =
-        setup_linear_workflow(step_count: 3, auto_advance: true)
+        setup_linear_workflow(step_count: 3)
 
       subscribe_project(project.id)
 
@@ -603,7 +599,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
   describe "stop then restart" do
     test "marks in-flight execution cancelled, leaves current_step intact, and re-dispatches the same step on restart" do
       %{user: user, project: project, steps: [s1 | _], task: task} =
-        setup_linear_workflow(step_count: 3, auto_advance: true)
+        setup_linear_workflow(step_count: 3)
 
       subscribe_project(project.id)
 
@@ -737,7 +733,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
 
     test "successful completion resets the retry counter so the next step gets a full retry budget" do
       %{user: user, project: project, steps: [s1, s2, _s3], task: task} =
-        setup_linear_workflow(step_count: 3, auto_advance: true)
+        setup_linear_workflow(step_count: 3)
 
       pid = start_orchestrator(task, user)
       wait_for_state(pid, :executing)

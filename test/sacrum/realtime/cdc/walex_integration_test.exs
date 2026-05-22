@@ -93,7 +93,6 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
       {:ok, workflow} =
         Workflows.insert(project, %{
           name: "CDC workflow",
-          auto_advance: false,
           display_order: 2
         })
 
@@ -794,7 +793,6 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
     {:ok, workflow} =
       Workflows.insert(project, %{
         name: "CDC support workflow #{suffix}",
-        auto_advance: false,
         display_order: 10
       })
 

@@ -11,7 +11,7 @@ vtb workflow add "Implementation" --step Coding:sonnet --step Testing:haiku --st
 # With description and options
 vtb workflow add "Code Review" -d "Review and approval" \
   --step Review:sonnet --step Approved:haiku \
-  --auto-advance --kanban-column "In Review"
+  --kanban-column "In Review"
 
 # Mark as default for new tasks
 vtb workflow add "Standard" --step Backlog:sonnet --step Done:haiku --default
@@ -23,7 +23,6 @@ vtb workflow add "Standard" --step Backlog:sonnet --step Done:haiku --default
 vtb workflow list
 vtb workflow show <id>
 vtb workflow update <id> --name "Dev"
-vtb workflow update <id> --auto-advance       # or --no-auto-advance
 vtb workflow update <id> --kanban-column "Active"
 vtb workflow update <id> --default
 vtb workflow delete <id>                      # No assigned tasks allowed

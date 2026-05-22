@@ -24,11 +24,10 @@ defmodule Sacrum.OrchestratorTest do
     project
   end
 
-  defp create_workflow(user, project, opts) do
+  defp create_workflow(user, project, opts \\ []) do
     {:ok, workflow} =
       Accounts.Workflows.insert(user.id, project.id, %{
-        name: Keyword.get(opts, :name, "Test Workflow"),
-        auto_advance: Keyword.get(opts, :auto_advance, false)
+        name: Keyword.get(opts, :name, "Test Workflow")
       })
 
     workflow
@@ -99,7 +98,7 @@ defmodule Sacrum.OrchestratorTest do
     test "returns {:ok, :stopped} when an orchestrator exists and terminates the registered pid" do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, auto_advance: false)
+      workflow = create_workflow(user, project)
       _step = create_step(user, workflow, %{})
       task = create_task(user, project)
       task = assign_workflow_to_task(task, workflow)
@@ -122,7 +121,7 @@ defmodule Sacrum.OrchestratorTest do
     test "is idempotent: calling stop twice on the same task succeeds both times" do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, auto_advance: false)
+      workflow = create_workflow(user, project)
       _step = create_step(user, workflow, %{})
       task = create_task(user, project)
       task = assign_workflow_to_task(task, workflow)
@@ -135,7 +134,7 @@ defmodule Sacrum.OrchestratorTest do
     test "stops a durable active TaskRun when no FSM is registered" do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, auto_advance: false)
+      workflow = create_workflow(user, project)
       _step = create_step(user, workflow, %{})
       task = create_task(user, project)
       task = assign_workflow_to_task(task, workflow)
@@ -154,7 +153,7 @@ defmodule Sacrum.OrchestratorTest do
     setup do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, auto_advance: false)
+      workflow = create_workflow(user, project)
       _step = create_step(user, workflow, %{})
       task = create_task(user, project) |> assign_workflow_to_task(workflow)
 

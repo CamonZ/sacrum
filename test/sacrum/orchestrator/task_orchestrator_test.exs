@@ -28,11 +28,11 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     project
   end
 
-  defp create_workflow(user, project, opts) do
+  defp create_workflow(user, project, opts \\ []) do
     {:ok, workflow} =
       Accounts.Workflows.insert(user.id, project.id, %{
         name: Keyword.get(opts, :name, "Test Workflow"),
-        auto_advance: Keyword.get(opts, :auto_advance, false)
+        is_final: Keyword.get(opts, :is_final, false)
       })
 
     workflow
@@ -91,19 +91,26 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
   end
 
   defp setup_linear_workflow(opts) do
-    auto_advance = Keyword.get(opts, :auto_advance, true)
     step_count = Keyword.get(opts, :step_count, 3)
 
     user = create_user()
     project = create_project(user)
-    workflow = create_workflow(user, project, auto_advance: auto_advance)
+    workflow = create_workflow(user, project)
 
     steps =
       for i <- 1..step_count do
+        prompt =
+          if Keyword.get(opts, :promptless_after_first, false) and i > 1 do
+            nil
+          else
+            "Run step for task {task_id}"
+          end
+
         create_step(user, workflow, %{
           name: "step_#{i}",
           step_order: i,
-          is_final: i == step_count
+          is_final: i == step_count,
+          prompt: prompt
         })
       end
 
@@ -297,10 +304,10 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     end
   end
 
-  describe "multi-step auto-advance workflow" do
+  describe "multi-step prompted continuation workflow" do
     test "advances through all steps to completion" do
       %{user: user, project: project, steps: [s1, s2, s3], task: task} =
-        setup_linear_workflow(auto_advance: true, step_count: 3)
+        setup_linear_workflow(step_count: 3)
 
       pid = start_orchestrator(task, user)
 
@@ -309,7 +316,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       assert reload_task(task).current_step_id == s1.id
       simulate_daemon_completion(task.id, project.id, "step 1 done")
 
-      # Step 2: auto-advances to awaiting_execution -> executing
+      # Step 2: continues to awaiting_execution -> executing
       wait_for_state(pid, :executing)
       assert reload_task(task).current_step_id == s2.id
       simulate_daemon_completion(task.id, project.id, "step 2 done")
@@ -326,7 +333,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
     test "creates step executions for each step including the final one" do
       %{user: user, project: project, task: task} =
-        setup_linear_workflow(auto_advance: true, step_count: 3)
+        setup_linear_workflow(step_count: 3)
 
       pid = start_orchestrator(task, user)
 
@@ -352,7 +359,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
     test "updates task current_step_id at each transition" do
       %{user: user, project: project, steps: [s1, s2, s3], task: task} =
-        setup_linear_workflow(auto_advance: true, step_count: 3)
+        setup_linear_workflow(step_count: 3)
 
       pid = start_orchestrator(task, user)
 
@@ -373,9 +380,9 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
   end
 
   describe "final step dispatch" do
-    test "auto_advance workflow dispatches the final step and only completes after its StepExecution finishes" do
+    test "prompted workflow dispatches the final step and only completes after its StepExecution finishes" do
       %{user: user, project: project, steps: [s1, _s2, s3], task: task} =
-        setup_linear_workflow(auto_advance: true, step_count: 3)
+        setup_linear_workflow(step_count: 3)
 
       pid = start_orchestrator(task, user)
 
@@ -406,10 +413,10 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       assert Enum.all?(executions, &(&1.status == "completed"))
     end
 
-    test "wait_children with no children advances and dispatches the final step under auto_advance" do
+    test "wait_children with no children advances and dispatches the final step when prompted" do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, auto_advance: true)
+      workflow = create_workflow(user, project)
 
       wait_step =
         create_step(user, workflow, %{
@@ -455,10 +462,10 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     end
   end
 
-  describe "non-auto-advance workflow" do
+  describe "non-prompted continuation workflow" do
     test "stops after completing and transitioning to next step" do
       %{user: user, project: project, steps: [_s1, s2, _s3], task: task} =
-        setup_linear_workflow(auto_advance: false, step_count: 3)
+        setup_linear_workflow(step_count: 3, promptless_after_first: true)
 
       pid = start_orchestrator(task, user)
       wait_for_state(pid, :executing)
@@ -470,6 +477,46 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       assert reload_task(task).current_step_id == s2.id
       # Task should NOT be completed
       assert reload_task(task).completed_at == nil
+    end
+
+    test "completes at a promptless final sink step in a final workflow without executing it" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project, is_final: true)
+
+      active_step =
+        create_step(user, workflow, %{
+          name: "active_step",
+          step_order: 1,
+          is_final: false,
+          prompt: "Run active step"
+        })
+
+      sink_step =
+        create_step(user, workflow, %{
+          name: "done_sink",
+          step_order: 2,
+          is_final: true,
+          prompt: nil
+        })
+
+      create_transition(user, active_step, sink_step)
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: active_step.id})
+
+      task = create_task(user, project) |> assign_workflow_to_task(workflow)
+
+      pid = start_orchestrator(task, user)
+      wait_for_state(pid, :executing)
+      simulate_daemon_completion(task.id, project.id)
+      wait_for_exit(pid)
+
+      task = reload_task(task)
+      assert task.current_step_id == sink_step.id
+      assert task.completed_at != nil
+
+      executions = get_all_executions(task.id)
+      assert Enum.any?(executions, &(&1.step_id == active_step.id))
+      refute Enum.any?(executions, &(&1.step_id == sink_step.id))
     end
   end
 
@@ -501,7 +548,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     test "routes task to destination step within same workflow" do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, auto_advance: false)
+      workflow = create_workflow(user, project)
 
       # Create steps: route_step -> dest_step (no connection), plus other_step for structure
       route_step =
@@ -517,7 +564,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
           name: "dest_step",
           step_order: 2,
           is_final: false,
-          step_type: "execute"
+          step_type: "execute",
+          prompt: nil
         })
 
       other_step =
@@ -552,7 +600,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
       simulate_daemon_completion(task.id, project.id, route_output)
 
-      # Orchestrator should stop (no auto_advance)
+      # Orchestrator should stop (promptless destination)
       wait_for_exit(pid)
 
       # Task should now be at dest_step
@@ -564,7 +612,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     test "fails when route step output has invalid destination in same workflow" do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, auto_advance: false)
+      workflow = create_workflow(user, project)
 
       route_step =
         create_step(user, workflow, %{
@@ -618,7 +666,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       project = create_project(user)
 
       # Workflow 1: has route step
-      workflow1 = create_workflow(user, project, auto_advance: false)
+      workflow1 = create_workflow(user, project)
 
       route_step =
         create_step(user, workflow1, %{
@@ -631,14 +679,15 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       {:ok, _} = Accounts.Workflows.update(workflow1, %{initial_step_id: route_step.id})
 
       # Workflow 2: has multiple steps
-      workflow2 = create_workflow(user, project, auto_advance: false)
+      workflow2 = create_workflow(user, project)
 
       step2_1 =
         create_step(user, workflow2, %{
           name: "step2_1",
           step_order: 1,
           is_final: false,
-          step_type: "execute"
+          step_type: "execute",
+          prompt: nil
         })
 
       _step2_2 =
@@ -646,7 +695,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
           name: "step2_2",
           step_order: 2,
           is_final: true,
-          step_type: "execute"
+          step_type: "execute",
+          prompt: nil
         })
 
       {:ok, _} = Accounts.Workflows.update(workflow2, %{initial_step_id: step2_1.id})
@@ -691,7 +741,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       project = create_project(user)
 
       # Workflow 1: has route step
-      workflow1 = create_workflow(user, project, auto_advance: false)
+      workflow1 = create_workflow(user, project)
 
       route_step =
         create_step(user, workflow1, %{
@@ -704,7 +754,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       {:ok, _} = Accounts.Workflows.update(workflow1, %{initial_step_id: route_step.id})
 
       # Workflow 2: has multiple steps
-      workflow2 = create_workflow(user, project, auto_advance: false)
+      workflow2 = create_workflow(user, project)
 
       step2_1 =
         create_step(user, workflow2, %{
@@ -719,7 +769,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
           name: "step2_2",
           step_order: 2,
           is_final: true,
-          step_type: "execute"
+          step_type: "execute",
+          prompt: nil
         })
 
       {:ok, _} = Accounts.Workflows.update(workflow2, %{initial_step_id: step2_1.id})
@@ -750,7 +801,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
       wait_for_exit(pid)
 
-      # workflow2 has auto_advance=false, so the orchestrator stops at the
+      # workflow2 has promptless, so the orchestrator stops at the
       # final step instead of dispatching it; completed_at stays nil.
       task = reload_task(task)
       assert task.workflow_id == workflow2.id
@@ -765,7 +816,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       project2 = create_project(user2)
 
       # Workflow 1 in project1
-      workflow1 = create_workflow(user1, project1, auto_advance: false)
+      workflow1 = create_workflow(user1, project1)
 
       route_step =
         create_step(user1, workflow1, %{
@@ -778,7 +829,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       {:ok, _} = Accounts.Workflows.update(workflow1, %{initial_step_id: route_step.id})
 
       # Workflow 2 in project2 (different project!)
-      workflow2 = create_workflow(user2, project2, auto_advance: false)
+      workflow2 = create_workflow(user2, project2)
 
       step2 =
         create_step(user2, workflow2, %{
@@ -817,7 +868,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       user = create_user()
       project = create_project(user)
 
-      workflow1 = create_workflow(user, project, auto_advance: false)
+      workflow1 = create_workflow(user, project)
 
       route_step =
         create_step(user, workflow1, %{
@@ -829,7 +880,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
       {:ok, _} = Accounts.Workflows.update(workflow1, %{initial_step_id: route_step.id})
 
-      workflow2 = create_workflow(user, project, auto_advance: false)
+      workflow2 = create_workflow(user, project)
 
       step2 =
         create_step(user, workflow2, %{
@@ -872,7 +923,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       user = create_user()
       project = create_project(user)
 
-      workflow = create_workflow(user, project, auto_advance: false)
+      workflow = create_workflow(user, project)
 
       route_step =
         create_step(user, workflow, %{
@@ -887,7 +938,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
           name: "dest_step",
           step_order: 2,
           is_final: true,
-          step_type: "execute"
+          step_type: "execute",
+          prompt: nil
         })
 
       create_transition(user, route_step, dest_step)
@@ -927,7 +979,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       user = create_user()
       project = create_project(user)
 
-      workflow = create_workflow(user, project, auto_advance: false)
+      workflow = create_workflow(user, project)
 
       route_step =
         create_step(user, workflow, %{
@@ -942,7 +994,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
           name: "dest_step",
           step_order: 2,
           is_final: true,
-          step_type: "execute"
+          step_type: "execute",
+          prompt: nil
         })
 
       create_transition(user, route_step, dest_step)
@@ -969,7 +1022,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       user = create_user()
       project = create_project(user)
 
-      workflow = create_workflow(user, project, auto_advance: false)
+      workflow = create_workflow(user, project)
 
       route_step =
         create_step(user, workflow, %{
@@ -985,7 +1038,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
           name: "dest_step",
           step_order: 2,
           is_final: true,
-          step_type: "execute"
+          step_type: "execute",
+          prompt: nil
         })
 
       create_transition(user, route_step, dest_step)
@@ -1018,7 +1072,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       user = create_user()
       project = create_project(user)
 
-      workflow = create_workflow(user, project, auto_advance: false)
+      workflow = create_workflow(user, project)
 
       route_step =
         create_step(user, workflow, %{
@@ -1033,7 +1087,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
           name: "dest_step",
           step_order: 2,
           is_final: true,
-          step_type: "execute"
+          step_type: "execute",
+          prompt: nil
         })
 
       create_transition(user, route_step, dest_step)
@@ -1065,7 +1120,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       user = create_user()
       project = create_project(user)
 
-      workflow = create_workflow(user, project, auto_advance: false)
+      workflow = create_workflow(user, project)
 
       route_step =
         create_step(user, workflow, %{
@@ -1081,7 +1136,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
           name: "dest_step",
           step_order: 2,
           is_final: true,
-          step_type: "execute"
+          step_type: "execute",
+          prompt: nil
         })
 
       create_transition(user, route_step, dest_step)
@@ -1116,7 +1172,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     test "completed eval step output is available to destination steps" do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, auto_advance: false)
+      workflow = create_workflow(user, project)
 
       eval_step =
         create_step(user, workflow, %{
@@ -1141,7 +1197,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
           name: "final_step",
           step_order: 3,
           is_final: true,
-          step_type: "execute"
+          step_type: "execute",
+          prompt: nil
         })
 
       create_transition(user, eval_step, dest_step)
@@ -1158,23 +1215,23 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       eval_output = "Task is complex and needs review"
       simulate_daemon_completion(task.id, project.id, eval_output)
 
-      # With auto_advance false, orchestrator stops after transitioning to dest_step
+      wait_for_state(pid, :executing)
+      assert reload_task(task).current_step_id == dest_step.id
+
+      simulate_daemon_completion(task.id, project.id, "destination done")
       wait_for_exit(pid)
 
-      # Task should advance to destination step
       task = reload_task(task)
-      assert task.current_step_id == dest_step.id
+      assert task.current_step_id == final_step.id
 
-      # Verify the eval step has the output persisted
       executions = get_all_executions(task.id)
-      # Only eval_step has an execution (dest_step is not dispatched since orchestrator stops)
-      assert length(executions) == 1
       eval_exec = Enum.find(executions, &(&1.step_name == "eval_step"))
       assert eval_exec.status == "completed"
       assert eval_exec.output == eval_output
 
-      # Verify destination execution has the eval output available in its context
-      # (if it were to be executed, which it's not in this test)
+      dest_exec = Enum.find(executions, &(&1.step_name == "dest_step"))
+      assert dest_exec.status == "completed"
+      assert dest_exec.prompt =~ eval_output
     end
   end
 
@@ -1182,7 +1239,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     test "route step handoff appears in destination step prompt" do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, auto_advance: true)
+      workflow = create_workflow(user, project)
 
       route_step =
         create_step(user, workflow, %{
@@ -1262,7 +1319,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     test "route step without handoff still allows destination execution" do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, auto_advance: true)
+      workflow = create_workflow(user, project)
 
       route_step =
         create_step(user, workflow, %{
@@ -1335,7 +1392,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       project = create_project(user)
 
       # Workflow 1: has route step
-      workflow1 = create_workflow(user, project, auto_advance: false, name: "Workflow 1")
+      workflow1 = create_workflow(user, project, name: "Workflow 1")
 
       route_step =
         create_step(user, workflow1, %{
@@ -1350,7 +1407,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       {:ok, _} = Accounts.Workflows.update(workflow1, %{initial_step_id: route_step.id})
 
       # Workflow 2: destination workflow with initial step (non-final)
-      workflow2 = create_workflow(user, project, auto_advance: true, name: "Workflow 2")
+      workflow2 = create_workflow(user, project, name: "Workflow 2")
 
       dest_step =
         create_step(user, workflow2, %{
@@ -1423,7 +1480,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       project = create_project(user)
 
       # Workflow 1: route step
-      workflow1 = create_workflow(user, project, auto_advance: false, name: "Workflow 1")
+      workflow1 = create_workflow(user, project, name: "Workflow 1")
 
       route_step =
         create_step(user, workflow1, %{
@@ -1436,8 +1493,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
       {:ok, _} = Accounts.Workflows.update(workflow1, %{initial_step_id: route_step.id})
 
-      # Workflow 2: has multiple steps with auto-advance
-      workflow2 = create_workflow(user, project, auto_advance: true, name: "Workflow 2")
+      # Workflow 2: has multiple steps with prompted continuation
+      workflow2 = create_workflow(user, project, name: "Workflow 2")
 
       step2_1 =
         create_step(user, workflow2, %{
@@ -1518,7 +1575,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     test "persists route decision to transition_result on successful intra-workflow routing" do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, auto_advance: false)
+      workflow = create_workflow(user, project)
 
       route_step =
         create_step(user, workflow, %{
@@ -1534,7 +1591,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
           name: "dest_step",
           step_order: 2,
           is_final: true,
-          step_type: "execute"
+          step_type: "execute",
+          prompt: nil
         })
 
       create_transition(user, route_step, dest_step)
@@ -1580,7 +1638,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       project = create_project(user)
 
       # Workflow 1: has route step
-      workflow1 = create_workflow(user, project, auto_advance: false)
+      workflow1 = create_workflow(user, project)
 
       route_step =
         create_step(user, workflow1, %{
@@ -1593,14 +1651,15 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       {:ok, _} = Accounts.Workflows.update(workflow1, %{initial_step_id: route_step.id})
 
       # Workflow 2: has a step
-      workflow2 = create_workflow(user, project, auto_advance: false)
+      workflow2 = create_workflow(user, project)
 
       dest_step =
         create_step(user, workflow2, %{
           name: "dest_step",
           step_order: 1,
           is_final: true,
-          step_type: "execute"
+          step_type: "execute",
+          prompt: nil
         })
 
       {:ok, _} = Accounts.Workflows.update(workflow2, %{initial_step_id: dest_step.id})
@@ -1654,7 +1713,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, auto_advance: false)
+      workflow = create_workflow(user, project)
 
       route_step =
         create_step(user, workflow, %{
@@ -1669,7 +1728,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
           name: "dest_step",
           step_order: 2,
           is_final: true,
-          step_type: "execute"
+          step_type: "execute",
+          prompt: nil
         })
 
       # Intentionally omit the StepTransition so validate_step_transition_exists fails
@@ -1706,7 +1766,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, auto_advance: false)
+      workflow = create_workflow(user, project)
 
       route_step =
         create_step(user, workflow, %{
@@ -1770,7 +1830,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, auto_advance: false)
+      workflow = create_workflow(user, project)
 
       route_step =
         create_step(user, workflow, %{
@@ -1786,7 +1846,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
           name: "dest_step",
           step_order: 2,
           is_final: true,
-          step_type: "execute"
+          step_type: "execute",
+          prompt: nil
         })
 
       create_transition(user, route_step, dest_step)
@@ -1822,7 +1883,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     test "semantic error in route step transition goes to :failed without retrying" do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, auto_advance: false)
+      workflow = create_workflow(user, project)
 
       route_step =
         create_step(user, workflow, %{
@@ -1922,13 +1983,13 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     end
 
     defp setup_wait_children_parent do
-      build_wait_children_parent(auto_advance: false)
+      build_wait_children_parent()
     end
 
-    defp build_wait_children_parent(opts) do
+    defp build_wait_children_parent(_opts \\ []) do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, auto_advance: Keyword.fetch!(opts, :auto_advance))
+      workflow = create_workflow(user, project)
 
       wait_step = create_wait_children_step(user, workflow)
 
@@ -1936,7 +1997,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "final_step",
           step_order: 2,
-          is_final: true
+          is_final: true,
+          prompt: nil
         })
 
       create_transition(user, wait_step, final_step)
@@ -1959,7 +2021,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     test "on entry to wait_children, schedules all children and creates waiting execution" do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, auto_advance: false)
+      workflow = create_workflow(user, project)
 
       # Create wait_children step
       wait_step = create_wait_children_step(user, workflow)
@@ -1968,7 +2030,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "final_step",
           step_order: 2,
-          is_final: true
+          is_final: true,
+          prompt: nil
         })
 
       create_transition(user, wait_step, final_step)
@@ -1980,7 +2043,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       parent_task = assign_workflow_to_task(parent_task, workflow)
 
       # Create children with workflows
-      child_workflow_1 = create_workflow(user, project, auto_advance: true)
+      child_workflow_1 = create_workflow(user, project)
 
       child_step_1 =
         create_step(user, child_workflow_1, %{
@@ -1994,7 +2057,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       child_task_1 = create_child_task(user, project, parent_task)
       child_task_1 = assign_workflow_to_task(child_task_1, child_workflow_1)
 
-      child_workflow_2 = create_workflow(user, project, auto_advance: true)
+      child_workflow_2 = create_workflow(user, project)
 
       child_step_2 =
         create_step(user, child_workflow_2, %{
@@ -2043,7 +2106,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     test "parent orchestrator exits after entering wait_children (no process in TaskRegistry)" do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, auto_advance: false)
+      workflow = create_workflow(user, project)
 
       wait_step = create_wait_children_step(user, workflow)
 
@@ -2051,7 +2114,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "final_step",
           step_order: 2,
-          is_final: true
+          is_final: true,
+          prompt: nil
         })
 
       create_transition(user, wait_step, final_step)
@@ -2061,7 +2125,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       parent_task = create_task(user, project, %{title: "Parent Task"})
       parent_task = assign_workflow_to_task(parent_task, workflow)
 
-      child_workflow = create_workflow(user, project, auto_advance: true)
+      child_workflow = create_workflow(user, project)
 
       child_step =
         create_step(user, child_workflow, %{
@@ -2092,7 +2156,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     test "when non-last child reaches done, no parent orchestrator starts" do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, auto_advance: false)
+      workflow = create_workflow(user, project)
 
       wait_step = create_wait_children_step(user, workflow)
 
@@ -2100,7 +2164,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "final_step",
           step_order: 2,
-          is_final: true
+          is_final: true,
+          prompt: nil
         })
 
       create_transition(user, wait_step, final_step)
@@ -2111,7 +2176,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       parent_task = assign_workflow_to_task(parent_task, workflow)
 
       # Create two children
-      child_workflow_1 = create_workflow(user, project, auto_advance: true)
+      child_workflow_1 = create_workflow(user, project)
 
       child_step_1 =
         create_step(user, child_workflow_1, %{
@@ -2125,7 +2190,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       child_task_1 = create_child_task(user, project, parent_task)
       child_task_1 = assign_workflow_to_task(child_task_1, child_workflow_1)
 
-      child_workflow_2 = create_workflow(user, project, auto_advance: true)
+      child_workflow_2 = create_workflow(user, project)
 
       child_step_2 =
         create_step(user, child_workflow_2, %{
@@ -2163,7 +2228,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     test "when last child reaches done, parent orchestrator resumes and advances" do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, auto_advance: false)
+      workflow = create_workflow(user, project)
 
       wait_step = create_wait_children_step(user, workflow)
 
@@ -2182,7 +2247,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       parent_task = assign_workflow_to_task(parent_task, workflow)
 
       # Create single child
-      child_workflow = create_workflow(user, project, auto_advance: true)
+      child_workflow = create_workflow(user, project)
 
       child_step =
         create_step(user, child_workflow, %{
@@ -2231,7 +2296,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     test "when child parks in Human Review, parent stays parked" do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, auto_advance: false)
+      workflow = create_workflow(user, project)
 
       wait_step = create_wait_children_step(user, workflow)
 
@@ -2250,7 +2315,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       parent_task = assign_workflow_to_task(parent_task, workflow)
 
       # Create child with waiting execution (parked in Human Review)
-      child_workflow = create_workflow(user, project, auto_advance: true)
+      child_workflow = create_workflow(user, project)
 
       child_step =
         create_step(user, child_workflow, %{
@@ -2310,7 +2375,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       user = create_user()
       project = create_project(user)
 
-      workflow = create_workflow(user, project, auto_advance: true)
+      workflow = create_workflow(user, project)
 
       step =
         create_step(user, workflow, %{
@@ -2355,7 +2420,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       project = create_project(user)
 
       # Create parent workflow with wait_children
-      parent_workflow = create_workflow(user, project, auto_advance: false)
+      parent_workflow = create_workflow(user, project)
       parent_wait_step = create_wait_children_step(user, parent_workflow)
 
       parent_final_step =
@@ -2375,7 +2440,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       parent_task = assign_workflow_to_task(parent_task, parent_workflow)
 
       # Create child workflow with wait_children
-      child_workflow = create_workflow(user, project, auto_advance: false)
+      child_workflow = create_workflow(user, project)
       child_wait_step = create_wait_children_step(user, child_workflow)
 
       child_final_step =
@@ -2395,7 +2460,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       child_task = assign_workflow_to_task(child_task, child_workflow)
 
       # Create grandchild workflow (leaf)
-      leaf_workflow = create_workflow(user, project, auto_advance: true)
+      leaf_workflow = create_workflow(user, project)
 
       leaf_step =
         create_step(user, leaf_workflow, %{
@@ -2415,7 +2480,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
       # Both the parent and the middle child should have persisted waiting
       # StepExecutions and exited their orchestrator processes. The leaf's
-      # auto_advance workflow has no wait_children step, so it runs to completion.
+      # prompted workflow has no wait_children step, so it runs to completion.
       parent_waiting =
         Repo.all(
           from(e in StepExecution,
@@ -2513,7 +2578,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     test "crash safety: killing parent before child completion wake preserves pause state" do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, auto_advance: false)
+      workflow = create_workflow(user, project)
 
       wait_step = create_wait_children_step(user, workflow)
 
@@ -2531,7 +2596,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       parent_task = create_task(user, project, %{title: "Parent Task"})
       parent_task = assign_workflow_to_task(parent_task, workflow)
 
-      child_workflow = create_workflow(user, project, auto_advance: true)
+      child_workflow = create_workflow(user, project)
 
       child_step =
         create_step(user, child_workflow, %{
@@ -2577,7 +2642,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     test "no duplicate parent orchestrator when one already registered" do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, auto_advance: false)
+      workflow = create_workflow(user, project)
 
       wait_step = create_wait_children_step(user, workflow)
 
@@ -2595,7 +2660,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       parent_task = create_task(user, project, %{title: "Parent Task"})
       parent_task = assign_workflow_to_task(parent_task, workflow)
 
-      child_workflow = create_workflow(user, project, auto_advance: true)
+      child_workflow = create_workflow(user, project)
 
       child_step =
         create_step(user, child_workflow, %{
@@ -2618,6 +2683,9 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         Repo.update(Ecto.Changeset.change(child_task, %{completed_at: DateTime.utc_now()}))
 
       # Start a new orchestrator for parent (simulating race condition)
+      previous_trap_exit = Process.flag(:trap_exit, true)
+      on_exit(fn -> Process.flag(:trap_exit, previous_trap_exit) end)
+
       {:ok, _pid1} = TaskOrchestrator.start_link(task_id: parent_task.id, user_id: user.id)
       Process.sleep(100)
 
@@ -2636,7 +2704,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     test "satisfied wait_children transition marks waiting execution as completed" do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, auto_advance: false)
+      workflow = create_workflow(user, project)
 
       wait_step = create_wait_children_step(user, workflow)
 
@@ -2644,7 +2712,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "final_step",
           step_order: 2,
-          is_final: true
+          is_final: true,
+          prompt: nil
         })
 
       create_transition(user, wait_step, final_step)
@@ -2654,7 +2723,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       parent_task = create_task(user, project, %{title: "Parent Task"})
       parent_task = assign_workflow_to_task(parent_task, workflow)
 
-      child_workflow_1 = create_workflow(user, project, auto_advance: true)
+      child_workflow_1 = create_workflow(user, project)
 
       child_step_1 =
         create_step(user, child_workflow_1, %{
@@ -2712,7 +2781,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     test "wait_children still advances parent even if child completed_at is set (all_done_and_not_parked check)" do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, auto_advance: false)
+      workflow = create_workflow(user, project)
 
       wait_step = create_wait_children_step(user, workflow)
 
@@ -2730,7 +2799,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       parent_task = create_task(user, project, %{title: "Parent Task"})
       parent_task = assign_workflow_to_task(parent_task, workflow)
 
-      child_workflow_1 = create_workflow(user, project, auto_advance: true)
+      child_workflow_1 = create_workflow(user, project)
 
       child_step_1 =
         create_step(user, child_workflow_1, %{
@@ -2776,7 +2845,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       user = create_user()
       project = create_project(user)
 
-      source_workflow = create_workflow(user, project, auto_advance: false)
+      source_workflow = create_workflow(user, project)
 
       source_step =
         create_step(user, source_workflow, %{
@@ -2787,7 +2856,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
       {:ok, _} = Accounts.Workflows.update(source_workflow, %{initial_step_id: source_step.id})
 
-      dest_workflow = create_workflow(user, project, auto_advance: false)
+      dest_workflow = create_workflow(user, project)
 
       dest_step =
         create_step(user, dest_workflow, %{
@@ -2894,7 +2963,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       %{user: user, project: project, parent_task: parent_task, wait_step: wait_step} =
         setup_wait_children_parent()
 
-      child_workflow = create_workflow(user, project, auto_advance: true)
+      child_workflow = create_workflow(user, project)
 
       child_step =
         create_step(user, child_workflow, %{
@@ -2937,7 +3006,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
   describe "task run step persistence" do
     test "run start persists queued and executing run state" do
       %{user: user, project: project, steps: [first_step], task: task} =
-        setup_linear_workflow(auto_advance: true, step_count: 1)
+        setup_linear_workflow(step_count: 1)
 
       {:ok, queued_run} =
         Accounts.TaskRuns.insert(user.id, project.id, task.id, %{status: :queued})
@@ -2953,7 +3022,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
     test "task step movement during an active run persists the task step" do
       %{user: user, project: project, steps: [s1, s2, _s3], task: task} =
-        setup_linear_workflow(auto_advance: true, step_count: 3)
+        setup_linear_workflow(step_count: 3)
 
       {:ok, task_run} =
         Accounts.TaskRuns.insert(user.id, project.id, task.id, %{status: :executing})
@@ -2967,7 +3036,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
     test "terminal TaskRun updates persist terminal run state" do
       %{user: user, project: project, steps: [s1, _s2, _s3], task: task} =
-        setup_linear_workflow(auto_advance: false, step_count: 3)
+        setup_linear_workflow(step_count: 3)
 
       for status <- [:completed, :stopped, :failed] do
         {:ok, running_run} =
@@ -2990,7 +3059,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     test "wait_children waiting StepExecution is persisted" do
       %{user: user, project: project, parent_task: parent_task} = setup_wait_children_parent()
 
-      child_workflow = create_workflow(user, project, auto_advance: true)
+      child_workflow = create_workflow(user, project)
 
       child_step =
         create_step(user, child_workflow, %{
