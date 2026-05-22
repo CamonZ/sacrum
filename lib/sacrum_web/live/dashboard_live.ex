@@ -1,9 +1,9 @@
-defmodule SacrumWeb.TracesLive do
+defmodule SacrumWeb.DashboardLive do
   use SacrumWeb, :live_view
 
   @impl true
   def mount(_params, _session, socket) do
-    {:ok, assign(socket, page_title: "Traces")}
+    {:ok, assign(socket, page_title: "Dashboard")}
   end
 
   @impl true
@@ -12,9 +12,9 @@ defmodule SacrumWeb.TracesLive do
     <Layouts.app_shell
       flash={@flash}
       current_user={@current_user}
-      active={:traces}
+      active={:dashboard}
     >
-      <div class="p-6 text-text-muted text-sm">Traces coming soon.</div>
+      <div id="dashboard" class="min-h-full" aria-label="Dashboard"></div>
     </Layouts.app_shell>
     """
   end

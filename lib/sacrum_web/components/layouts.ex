@@ -89,10 +89,7 @@ defmodule SacrumWeb.Layouts do
   end
 
   @nav_items [
-    {:command_center, "Command Center", "hero-squares-2x2", "/command-center"},
-    {:task_browser, "Task Browser", "hero-clipboard-document-list", "/tasks"},
-    {:workflow_browser, "Workflow Browser", "hero-rectangle-group", "/workflows"},
-    {:traces, "Traces", "hero-bolt", "/traces"}
+    {:dashboard, "Dashboard", "hero-home", "/dashboard"}
   ]
 
   @doc """
@@ -102,7 +99,6 @@ defmodule SacrumWeb.Layouts do
   attr :flash, :map, required: true
   attr :current_user, :map, required: true
   attr :active, :atom, required: true, doc: "active left-nav surface"
-  attr :chat_expanded, :boolean, default: false
   slot :inner_block, required: true
 
   @spec app_shell(map()) :: Phoenix.LiveView.Rendered.t()
@@ -145,30 +141,6 @@ defmodule SacrumWeb.Layouts do
         </nav>
 
         <main class="flex-1 overflow-auto">{render_slot(@inner_block)}</main>
-
-        <aside class={[
-          "border-l border-border bg-surface transition-[width] duration-200 flex flex-col",
-          if(@chat_expanded, do: "w-64", else: "w-12")
-        ]}>
-          <div class="h-12 flex items-center justify-center flex-shrink-0">
-            <button
-              type="button"
-              title={if @chat_expanded, do: "Collapse chat", else: "Expand chat"}
-              phx-click="toggle-chat"
-              class="cursor-pointer w-8 h-8 rounded-lg flex items-center justify-center transition-all border border-border hover:border-accent hover:bg-surface-raised"
-            >
-              <.icon name="hero-chat-bubble-left-right" class="w-4 h-4" />
-            </button>
-          </div>
-          <%= if @chat_expanded do %>
-            <div class="flex-1 flex flex-col overflow-hidden p-4 gap-4">
-              <h3 class="text-sm font-semibold">Chat</h3>
-              <div class="flex-1 bg-surface-raised border border-border rounded-lg p-4 flex items-center justify-center">
-                <p class="text-xs text-text-muted text-center">Chat panel coming soon</p>
-              </div>
-            </div>
-          <% end %>
-        </aside>
       </div>
 
       <.flash_group flash={@flash} />
