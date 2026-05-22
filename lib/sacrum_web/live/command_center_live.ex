@@ -21,18 +21,12 @@ defmodule SacrumWeb.CommandCenterLive do
       socket
       |> assign(
         page_title: "Command Center",
-        has_projects: projects != [],
-        chat_expanded: false
+        has_projects: projects != []
       )
       |> assign_pulse_metrics(Pulse.get_all_metrics())
       |> load_attention_rows()
 
     {:ok, socket}
-  end
-
-  @impl true
-  def handle_event("toggle-chat", _params, socket) do
-    {:noreply, update(socket, :chat_expanded, &(!&1))}
   end
 
   @impl true

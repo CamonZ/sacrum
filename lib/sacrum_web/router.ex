@@ -47,10 +47,7 @@ defmodule SacrumWeb.Router do
 
     live_session :authenticated,
       on_mount: {SacrumWeb.Live.Hooks.AssignCurrentUser, :require_authenticated} do
-      live "/command-center", CommandCenterLive
-      live "/tasks", TaskBrowserLive
-      live "/workflows", WorkflowBrowserLive
-      live "/traces", TracesLive
+      live "/dashboard", DashboardLive
     end
   end
 
