@@ -98,7 +98,7 @@ defmodule Sacrum.Repo.Attention do
   end
 
   @doc """
-  Get context-window pressure: step_executions with cumulative tokens >100k,
+  Get context-window pressure: step_executions with context-window tokens >100k,
   especially those recurring (appearing multiple times for same task+step).
   """
   @spec context_window_pressure(binary() | nil) :: [attention_row()]
@@ -106,11 +106,17 @@ defmodule Sacrum.Repo.Attention do
     base_query()
     |> where(
       [se, _t, _w, _p, _ws],
-      coalesce(se.input_tokens, 0) + coalesce(se.output_tokens, 0) >
-        ^@context_window_threshold
+      coalesce(
+        se.context_window_total_tokens,
+        coalesce(se.input_tokens, 0) + coalesce(se.output_tokens, 0)
+      ) > ^@context_window_threshold
     )
     |> select_merge([se], %{
-      token_count: coalesce(se.input_tokens, 0) + coalesce(se.output_tokens, 0)
+      token_count:
+        coalesce(
+          se.context_window_total_tokens,
+          coalesce(se.input_tokens, 0) + coalesce(se.output_tokens, 0)
+        )
     })
     |> scope_query(project_id)
     |> Repo.all()

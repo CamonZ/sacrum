@@ -189,7 +189,7 @@ defmodule SacrumWeb.CommandCenterLiveTest do
     end
 
     test "pulse metrics are greyed out when socket is disconnected", %{conn: conn} do
-      {:ok, view, html} = live(conn, "/command-center")
+      {:ok, _view, html} = live(conn, "/command-center")
 
       # Initially connected, should have full opacity
       assert html =~ "opacity-100"

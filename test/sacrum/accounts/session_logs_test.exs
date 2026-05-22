@@ -107,7 +107,37 @@ defmodule Sacrum.Accounts.SessionLogsTest do
       assert reloaded.context_window_total_tokens == 190
     end
 
-    test "rolls up OpenAI usage without requiring cache creation tokens" do
+    test "rolls up OpenAI usage while splitting session totals from context window usage" do
+      user = create_user()
+      {project, execution} = create_step_execution(user)
+
+      assert {:ok, %SessionLog{}} =
+               SessionLogs.insert(user.id, %{
+                 "step_execution_id" => execution.id,
+                 "project_id" => project.id,
+                 "format" => "openai",
+                 "content" =>
+                   Jason.encode!(%{
+                     "type" => "turn.completed",
+                     "usage" => %{
+                       "input_tokens" => 1_000,
+                       "cached_input_tokens" => 925,
+                       "output_tokens" => 25
+                     }
+                   })
+               })
+
+      reloaded = Repo.get!(StepExecution, execution.id)
+      assert reloaded.session_input_tokens == 1_000
+      assert reloaded.session_cache_read_input_tokens == 925
+      assert reloaded.session_output_tokens == 25
+      assert reloaded.session_total_tokens == 1_025
+      assert reloaded.context_window_input_tokens == 75
+      assert reloaded.context_window_cache_read_input_tokens == 0
+      assert reloaded.context_window_total_tokens == 100
+    end
+
+    test "rolls OpenAI session counters up while replacing context window counters" do
       user = create_user()
       {project, execution} = create_step_execution(user)
 
@@ -126,14 +156,29 @@ defmodule Sacrum.Accounts.SessionLogsTest do
                    })
                })
 
+      assert {:ok, %SessionLog{}} =
+               SessionLogs.insert(user.id, %{
+                 "step_execution_id" => execution.id,
+                 "project_id" => project.id,
+                 "format" => "openai",
+                 "content" =>
+                   Jason.encode!(%{
+                     "usage" => %{
+                       "input_tokens" => 60,
+                       "prompt_tokens_details" => %{"cached_tokens" => 50},
+                       "output_tokens" => 15
+                     }
+                   })
+               })
+
       reloaded = Repo.get!(StepExecution, execution.id)
-      assert reloaded.session_input_tokens == 100
-      assert reloaded.session_cache_read_input_tokens == 30
-      assert reloaded.session_output_tokens == 25
-      assert reloaded.session_total_tokens == 125
-      assert reloaded.context_window_input_tokens == 100
-      assert reloaded.context_window_cache_read_input_tokens == 30
-      assert reloaded.context_window_total_tokens == 125
+      assert reloaded.session_input_tokens == 160
+      assert reloaded.session_cache_read_input_tokens == 80
+      assert reloaded.session_output_tokens == 40
+      assert reloaded.session_total_tokens == 200
+      assert reloaded.context_window_input_tokens == 10
+      assert reloaded.context_window_cache_read_input_tokens == 0
+      assert reloaded.context_window_total_tokens == 25
     end
   end
 
