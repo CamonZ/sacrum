@@ -68,7 +68,7 @@ defmodule Sacrum.GenericRepo do
         - `:preloads` - list of associations to preload
 
       Also accepts flat keyword clauses for backward compatibility:
-        `get_by(short_id: "abc")` is equivalent to `get_by(conditions: [short_id: "abc"])`
+        `get_by(slug: "abc")` is equivalent to `get_by(conditions: [slug: "abc"])`
 
       Returns `{:ok, record}` or `{:error, :not_found}`.
       """

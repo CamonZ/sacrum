@@ -121,11 +121,11 @@ All query functions accept structured opts with `:conditions`, `:preloads`, and 
 
 ```elixir
 # Structured opts
-Tasks.get_by(conditions: [short_id: "x123"], preloads: [:sections])
+Tasks.get_by(conditions: [id: task_id], preloads: [:sections])
 Tasks.all(conditions: [project_id: pid], order_by: [asc: :inserted_at])
 
 # Flat clauses (backward compat)
-Tasks.get_by(short_id: "x123")
+Tasks.get_by(id: task_id)
 ```
 
 ### Repo Specialization
@@ -274,8 +274,6 @@ defmodule Sacrum.Repo.Schemas.Task do
     |> cast(attrs, @create_fields)
     |> validate_required([:title])
     |> cast_assoc(:sections, with: &section_changeset/2)
-    |> maybe_generate_short_id()
-    |> unique_constraint(:short_id)
     |> foreign_key_constraint(:project_id)
   end
 
@@ -441,7 +439,7 @@ Preloading is always caller-managed. No repo module auto-preloads associations.
 {:ok, task} = Repo.Tasks.get(task_id, preloads: [:sections, :project])
 
 # Via get_by
-{:ok, task} = Repo.Tasks.get_by(conditions: [short_id: "x123"], preloads: [:sections])
+{:ok, task} = Repo.Tasks.get_by(conditions: [id: task_id], preloads: [:sections])
 
 # Explicit after fetch
 task = Repo.preload(task, [:sections, project: [:users]])

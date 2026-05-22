@@ -38,7 +38,6 @@ defmodule Sacrum.Repo.Schemas.Task do
   ]
 
   schema "tasks" do
-    field :short_id, :string
     field :title, :string
     field :description, :string
     field :level, :string, default: "task"
@@ -98,8 +97,6 @@ defmodule Sacrum.Repo.Schemas.Task do
         |> Ecto.Changeset.put_change(:project_id, project_id)
       end
     )
-    |> maybe_generate_short_id()
-    |> unique_constraint(:short_id)
     |> foreign_key_constraint(:project_id)
     |> foreign_key_constraint(:parent_id)
     |> foreign_key_constraint(:workflow_id)
@@ -132,16 +129,5 @@ defmodule Sacrum.Repo.Schemas.Task do
     |> change(%{workflow_id: workflow_id, current_step_id: current_step_id})
     |> foreign_key_constraint(:workflow_id)
     |> foreign_key_constraint(:current_step_id)
-  end
-
-  defp maybe_generate_short_id(changeset) do
-    case get_field(changeset, :short_id) do
-      nil -> put_change(changeset, :short_id, generate_short_id())
-      _ -> changeset
-    end
-  end
-
-  defp generate_short_id do
-    "x" <> Base.encode16(:crypto.strong_rand_bytes(3), case: :lower)
   end
 end

@@ -27,7 +27,7 @@ defmodule Sacrum.Repo.TasksTest do
   end
 
   describe "insert/2" do
-    test "creates task with valid attrs and auto-generates short_id" do
+    test "creates task with valid attrs" do
       user = create_user()
       project = create_project(user)
 
@@ -36,19 +36,7 @@ defmodule Sacrum.Repo.TasksTest do
       assert task.title == "My Task"
       assert task.description == "A description"
       assert task.project_id == project.id
-      assert task.short_id =~ ~r/^x[a-f0-9]{6}$/
-    end
-
-    test "generates unique 7-char hex short_id prefixed with x" do
-      user = create_user()
-      project = create_project(user)
-
-      {:ok, t1} = Tasks.insert(project, %{title: "Task 1"})
-      {:ok, t2} = Tasks.insert(project, %{title: "Task 2"})
-
-      assert t1.short_id =~ ~r/^x[a-f0-9]{6}$/
-      assert t2.short_id =~ ~r/^x[a-f0-9]{6}$/
-      assert t1.short_id != t2.short_id
+      refute Map.has_key?(task, :short_id)
     end
 
     test "rejects missing title" do
@@ -99,7 +87,7 @@ defmodule Sacrum.Repo.TasksTest do
     end
   end
 
-  describe "get/1 and get_by_short_id/1" do
+  describe "get/1" do
     test "get/1 returns task by id" do
       user = create_user()
       project = create_project(user)
@@ -107,15 +95,6 @@ defmodule Sacrum.Repo.TasksTest do
 
       assert {:ok, %Task{id: id}} = Tasks.get(task.id)
       assert id == task.id
-    end
-
-    test "get_by/1 returns task by short_id" do
-      user = create_user()
-      project = create_project(user)
-      {:ok, task} = Tasks.insert(project, %{title: "Test"})
-
-      assert {:ok, %Task{short_id: sid}} = Tasks.get_by(conditions: [short_id: task.short_id])
-      assert sid == task.short_id
     end
 
     test "get/1 returns :not_found for missing id" do

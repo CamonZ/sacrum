@@ -32,7 +32,7 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
   @schema_version 1
 
   @task_payload_keys ~w(
-    id short_id title description level priority tags needs_human_review review_comment
+    id title description level priority tags needs_human_review review_comment
     rejection_reason revision_feedback started_at completed_at project_id workflow_id
     current_step_id parent_id status archived worktree inserted_at updated_at
   )a

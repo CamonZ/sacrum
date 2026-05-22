@@ -81,7 +81,7 @@ The API is exposed via **GraphQL** at `/graphql` (GraphiQL playground available 
 | Query | Arguments | Description |
 |-------|-----------|-------------|
 | `tasks` | `project_id!`, `level`, `parent_id`, `status`, `tags`, `search`, `workflow_id`, `root_only`, `blocked` | List tasks with filters |
-| `task` | `id!` | Single task by ID (accepts UUID or short_id) |
+| `task` | `id!` | Single task by canonical UUID |
 | `listReady` | `project_id!` | Tasks with no incomplete blockers |
 | `findPath` | `from_id!`, `to_id!` | Shortest dependency path between tasks |
 

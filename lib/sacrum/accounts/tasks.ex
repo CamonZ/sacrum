@@ -18,7 +18,7 @@ defmodule Sacrum.Accounts.Tasks do
   alias Sacrum.Repo.Tasks, as: TasksRepo
 
   @doc """
-  Find a task by UUID or short_id within a user's scope.
+  Find a task by UUID within a user's scope.
   """
   @spec find(String.t(), String.t()) :: {:ok, Task.t()} | {:error, :not_found}
   def find(user_id, id) when is_binary(user_id) do
@@ -27,7 +27,7 @@ defmodule Sacrum.Accounts.Tasks do
         get_by(user_id, conditions: [id: id], preloads: [:parent])
 
       :error ->
-        get_by(user_id, conditions: [short_id: id], preloads: [:parent])
+        {:error, :not_found}
     end
   end
 

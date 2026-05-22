@@ -128,7 +128,7 @@ test "creates a task", %{conn: conn, user: user, project: project} do
           level: "high"
           priority: "urgent"
           tags: ["bug", "critical"]
-        ) { id title description level priority tags shortId }
+        ) { id title description level priority tags }
       }
     """)
     |> json_response(200)
@@ -196,7 +196,7 @@ describe "insert/2" do
 
     assert task.title == "My Task"
     assert task.project_id == project.id
-    assert task.short_id =~ ~r/^x[a-f0-9]{6}$/
+    refute Map.has_key?(task, :short_id)
   end
 
   test "rejects missing title" do
@@ -334,7 +334,6 @@ defp build_task(project) do
   now = DateTime.utc_now()
   %{
     id: Ecto.UUID.generate(),
-    short_id: "xabc123",
     title: "Test Task",
     project_id: project.id,
     inserted_at: now,
