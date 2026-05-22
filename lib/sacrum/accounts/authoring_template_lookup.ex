@@ -9,13 +9,17 @@ defmodule Sacrum.Accounts.AuthoringTemplateLookup do
 
   @app_scope_project_id nil
   @excluded_listing_kinds ~w(entrypoint step_template)
-  @default_work_breakdown_request %{
+  @work_breakdown_starter_request %{
     run_kind: "work_breakdown",
     artifact_type: "task_draft",
     template_kind: "starter_draft",
     state_machine_entrypoint: "start_work_breakdown_authoring"
   }
-  @default_work_breakdown_template Map.merge(@default_work_breakdown_request, %{
+  @work_breakdown_supporting_template_payload_keys %{
+    "section_template" => ~w(required_sections required_section_templates),
+    "validation_policy" => ~w(validation_expectations)
+  }
+  @default_work_breakdown_template Map.merge(@work_breakdown_starter_request, %{
                                      name: "work_breakdown_authoring",
                                      payload: %{}
                                    })
@@ -41,8 +45,11 @@ defmodule Sacrum.Accounts.AuthoringTemplateLookup do
       when is_binary(user_id) and is_binary(project_id) and is_map(request) do
     with {:ok, _project} <- Projects.get_by(user_id, conditions: [id: project_id]) do
       case resolve_template(project_id, request) do
-        {:ok, template} -> {:ok, present_template(template)}
-        {:error, :not_found} -> default_template(request)
+        {:ok, template} ->
+          {:ok, maybe_enrich_template(present_template(template), project_id, request)}
+
+        {:error, :not_found} ->
+          default_template(request)
       end
     end
   end
@@ -77,7 +84,7 @@ defmodule Sacrum.Accounts.AuthoringTemplateLookup do
   end
 
   defp put_template_summary(template_kind, templates, project_id, request) do
-    case resolve_template(project_id, Map.put(request, :template_kind, template_kind)) do
+    case resolve_template(project_id, request_with_template_kind(request, template_kind)) do
       {:ok, template} ->
         Map.put(templates, template_kind, present_template_summary(template))
 
@@ -125,8 +132,40 @@ defmodule Sacrum.Accounts.AuthoringTemplateLookup do
     }
   end
 
+  defp maybe_enrich_template(template, project_id, request) do
+    if requested_template?(request, @work_breakdown_starter_request) do
+      Map.update!(
+        template,
+        :payload,
+        &Map.merge(&1, supporting_templates_payload(project_id, request))
+      )
+    else
+      template
+    end
+  end
+
+  defp supporting_templates_payload(project_id, request) do
+    Enum.reduce(@work_breakdown_supporting_template_payload_keys, %{}, fn {template_kind, keys},
+                                                                          payload ->
+      Map.merge(payload, supporting_template_payload(project_id, request, template_kind, keys))
+    end)
+  end
+
+  defp supporting_template_payload(project_id, request, template_kind, keys) do
+    case resolve_template(project_id, request_with_template_kind(request, template_kind)) do
+      {:ok, template} -> Map.take(template.payload, keys)
+      {:error, :not_found} -> %{}
+    end
+  end
+
+  defp request_with_template_kind(request, template_kind) do
+    request
+    |> Map.drop([:template_kind, "template_kind"])
+    |> Map.put(:template_kind, template_kind)
+  end
+
   defp default_template(request) do
-    if requested_template?(request, @default_work_breakdown_request) do
+    if requested_template?(request, @work_breakdown_starter_request) do
       {:ok, @default_work_breakdown_template}
     else
       {:error, :not_found}

@@ -24,7 +24,8 @@ defmodule Sacrum.Accounts.AuthoringDrafts do
   @replace_fields ~w(
     state_machine_id state_machine_entrypoint current_state revision source_chat
     knowns unknowns initial_state template trigger
-    workflows steps prompts output_schema transitions validation_expectations
+    workflows steps prompts output_schema transitions required_sections
+    required_section_templates validation_expectations
   )
 
   @spec upsert_for_chat_session(String.t(), String.t(), String.t(), map()) ::

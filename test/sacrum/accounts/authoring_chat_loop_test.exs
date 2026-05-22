@@ -127,6 +127,65 @@ defmodule Sacrum.Accounts.AuthoringChatLoopTest do
       assert revised_draft.data["revision_notes"] == ["Have review require tests."]
     end
 
+    test "starts a work-breakdown ticket draft with internally rendered section templates and validation expectations",
+         %{session: session, user_message: user_message} do
+      insert_work_breakdown_authoring_templates!()
+
+      start_result = authoring_result(feature_start_intent(user_message.id))
+
+      assert :ok = AuthoringChatLoop.apply_inference_result(session, start_result)
+
+      assert {:ok, %{artifact: draft}} =
+               AuthoringDrafts.get_for_chat_session(session, "feature_authoring")
+
+      assert draft.data["state_machine_id"] == "feature_authoring"
+      assert draft.data["state_machine_entrypoint"] == "start_work_breakdown_authoring"
+      assert draft.data["current_state"] == "discovery"
+      assert draft.data["revision"] == %{"source" => "authoring_template", "value" => 1}
+
+      assert draft.data["template"] == %{
+               "name" => "work_breakdown_authoring_starter_draft",
+               "run_kind" => "work_breakdown",
+               "artifact_type" => "task_draft",
+               "template_kind" => "starter_draft"
+             }
+
+      assert [%{"title" => "Define parent outcome", "level" => "ticket"}] =
+               draft.data["candidate_work_units"]
+
+      assert draft.data["required_sections"] == [
+               %{"key" => "desired_behavior", "title" => "Desired Behavior", "required" => true},
+               %{"key" => "testing_criteria", "title" => "Testing Criteria", "required" => true}
+             ]
+
+      assert draft.data["required_section_templates"] == [
+               %{
+                 "key" => "desired_behavior",
+                 "title" => "Desired Behavior",
+                 "required" => true,
+                 "applies_to" => ["ticket", "task"],
+                 "template" => "Describe the externally visible behavior this work must deliver."
+               },
+               %{
+                 "key" => "testing_criteria",
+                 "title" => "Testing Criteria",
+                 "required" => true,
+                 "applies_to" => ["ticket", "task"],
+                 "template" => "List concrete checks that prove the behavior works."
+               }
+             ]
+
+      assert draft.data["validation_expectations"] == [
+               "Every candidate unit has desired behavior.",
+               "Every candidate unit has testing criteria.",
+               "Required section templates are persisted for apply validation."
+             ]
+
+      refute Map.has_key?(draft.data, "available_templates")
+      refute Map.has_key?(draft.data, "template_catalog")
+      refute Map.has_key?(draft.data, "scope")
+    end
+
     test "rejects unsupported structured authoring actions", %{session: session} do
       result = authoring_result(%{"action" => "delete_authoring"})
 

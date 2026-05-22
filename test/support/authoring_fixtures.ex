@@ -18,6 +18,59 @@ defmodule Sacrum.TestSupport.AuthoringFixtures do
     template
   end
 
+  def insert_work_breakdown_authoring_templates! do
+    starter =
+      insert_work_breakdown_template!("starter_draft", %{
+        "state_machine_entrypoint" => "start_work_breakdown_authoring",
+        "apply_target" => "task_tree",
+        "candidate_work_units" => [
+          %{
+            "title" => "Define parent outcome",
+            "level" => "ticket",
+            "desired_behavior" => "State the behavior the breakdown must deliver.",
+            "testing_criteria" => ["Parent scope is clear enough to judge child coverage."]
+          }
+        ]
+      })
+
+    section_template =
+      insert_work_breakdown_template!("section_template", %{
+        "scope" => %{"project_id" => nil},
+        "required_sections" => [
+          %{"key" => "desired_behavior", "title" => "Desired Behavior", "required" => true},
+          %{"key" => "testing_criteria", "title" => "Testing Criteria", "required" => true}
+        ],
+        "required_section_templates" => [
+          %{
+            "key" => "desired_behavior",
+            "title" => "Desired Behavior",
+            "required" => true,
+            "applies_to" => ["ticket", "task"],
+            "template" => "Describe the externally visible behavior this work must deliver."
+          },
+          %{
+            "key" => "testing_criteria",
+            "title" => "Testing Criteria",
+            "required" => true,
+            "applies_to" => ["ticket", "task"],
+            "template" => "List concrete checks that prove the behavior works."
+          }
+        ]
+      })
+
+    validation_policy =
+      insert_work_breakdown_template!("validation_policy", %{
+        "scope" => %{"project_id" => nil},
+        "validation_expectations" => [
+          "Every candidate unit has desired behavior.",
+          "Every candidate unit has testing criteria.",
+          "Required section templates are persisted for apply validation."
+        ]
+      })
+
+    %{starter: starter, section_template: section_template, validation_policy: validation_policy}
+  end
+
   def code_factory_start_intent(source_message_id, overrides \\ %{}) do
     Map.merge(
       %{
@@ -107,6 +160,20 @@ defmodule Sacrum.TestSupport.AuthoringFixtures do
         "Every prompt uses guarded Liquid variables."
       ]
     }
+  end
+
+  defp insert_work_breakdown_template!(template_kind, payload) do
+    {:ok, template} =
+      AuthoringTemplates.insert(%{
+        run_kind: "work_breakdown",
+        artifact_type: "task_draft",
+        template_kind: template_kind,
+        state_machine_entrypoint: "start_work_breakdown_authoring",
+        name: "work_breakdown_authoring_#{template_kind}",
+        payload: payload
+      })
+
+    template
   end
 
   defp deep_merge(left, right) when is_map(left) and is_map(right) do
