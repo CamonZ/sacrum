@@ -25,7 +25,6 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
 
   object :task do
     field :id, :id
-    field :short_id, :string
     field :title, :string
     field :description, :string
     field :level, :string

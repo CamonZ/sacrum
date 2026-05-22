@@ -919,7 +919,6 @@ defmodule SacrumWeb.ProjectChannelTest do
 
     %{
       id: Ecto.UUID.generate(),
-      short_id: "xabc123",
       title: "Test Task",
       description: "A task",
       level: "task",

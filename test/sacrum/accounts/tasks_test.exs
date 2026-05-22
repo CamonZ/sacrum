@@ -126,14 +126,13 @@ defmodule Sacrum.Accounts.TasksTest do
       assert {:error, :not_found} = Tasks.find(user2.id, task.id)
     end
 
-    test "finds task by short_id" do
+    test "returns not found for non-UUID identifiers" do
       user = create_user()
       project = create_project(user)
 
-      {:ok, task} = Tasks.insert(user.id, project.id, %{title: "My Task"})
+      {:ok, _task} = Tasks.insert(user.id, project.id, %{title: "My Task"})
 
-      assert {:ok, found} = Tasks.find(user.id, task.short_id)
-      assert found.id == task.id
+      assert {:error, :not_found} = Tasks.find(user.id, "xabc123")
     end
   end
 

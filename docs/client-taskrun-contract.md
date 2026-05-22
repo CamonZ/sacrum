@@ -165,7 +165,6 @@ Use this shape for task list rows and task detail headers:
 query TaskList($projectId: Uuid4!) {
   tasks(projectId: $projectId) {
     id
-    shortId
     title
     status
     workflowId

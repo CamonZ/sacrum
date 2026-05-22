@@ -121,7 +121,6 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContractTest do
     assert_payload_includes("task_updated", [
       :schema_version,
       :id,
-      :short_id,
       :title,
       :project_id,
       :workflow_id,

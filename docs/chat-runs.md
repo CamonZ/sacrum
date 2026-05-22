@@ -449,7 +449,7 @@ query ChatRuns($projectId: Uuid4!, $archived: Boolean, $limit: Int, $after: Date
     status
     lastMessageAt
     activeChatSession { id status startedAt }
-    createdTasks { id shortId title }
+    createdTasks { id title }
   }
 }
 
@@ -465,7 +465,7 @@ query ChatRun($id: Uuid4!) {
       relationshipKind
       sourceMessageId
       sourceArtifactId
-      task { id shortId title }
+      task { id title }
     }
   }
 }
@@ -486,7 +486,6 @@ Task detail should expose the originating chat run link:
 query TaskOrigin($taskId: Uuid4!) {
   task(id: $taskId) {
     id
-    shortId
     title
     chatOrigin {
       id
@@ -600,7 +599,6 @@ mutation ApproveArtifact($input: ApproveArtifactInput!) {
     }
     createdTasks {
       id
-      shortId
       title
     }
     taskLinks {

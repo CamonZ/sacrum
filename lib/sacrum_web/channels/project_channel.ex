@@ -390,7 +390,6 @@ defmodule SacrumWeb.ProjectChannel do
   defp task_payload(task) do
     version_payload(%{
       id: task.id,
-      short_id: task.short_id,
       title: task.title,
       description: task.description,
       level: task.level,

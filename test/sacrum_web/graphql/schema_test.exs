@@ -217,14 +217,13 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         conn
         |> authenticate(user)
         |> graphql("""
-          { tasks(projectId: "#{project.id}") { id title shortId } }
+          { tasks(projectId: "#{project.id}") { id title } }
         """)
         |> json_response(200)
 
       assert [found] = result["data"]["tasks"]
       assert found["id"] == task.id
       assert found["title"] == "Task 1"
-      assert found["shortId"] != nil
     end
 
     test "filters tasks by level", %{conn: conn, user: user, project: project} do
@@ -287,7 +286,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
               level: "epic"
               priority: "urgent"
               tags: ["bug", "critical"]
-            ) { id title description level priority tags shortId }
+            ) { id title description level priority tags }
           }
         """)
         |> json_response(200)
@@ -298,7 +297,6 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["level"] == "epic"
       assert data["priority"] == "urgent"
       assert data["tags"] == ["bug", "critical"]
-      assert data["shortId"] != nil
     end
 
     test "creates a task with worktree field", %{conn: conn, user: user, project: project} do
