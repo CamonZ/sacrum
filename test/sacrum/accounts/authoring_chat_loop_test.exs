@@ -61,7 +61,7 @@ defmodule Sacrum.Accounts.AuthoringChatLoopTest do
       assert response.assistant_text =~ "What user-visible behavior should change first?"
       assert response.state.current_state == "collect_feature_scope"
       assert response.state.state_machine_id == "feature_exploration"
-      assert response.state.entrypoint == "start_minimal_feature_exploration"
+      assert response.state.state_machine_entrypoint == "start_minimal_feature_exploration"
       assert response.state.draft_id == response.draft.id
       assert response.state.revision == %{"source" => "authoring_template", "value" => 1}
 

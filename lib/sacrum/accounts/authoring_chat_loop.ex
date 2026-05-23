@@ -241,7 +241,7 @@ defmodule Sacrum.Accounts.AuthoringChatLoop do
 
     %{
       state_machine_id: draft.data["state_machine_id"],
-      entrypoint: draft.data["state_machine_entrypoint"],
+      state_machine_entrypoint: draft.data["state_machine_entrypoint"],
       current_state: draft.data["current_state"],
       draft_id: draft.id,
       revision: revision,
