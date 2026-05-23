@@ -144,8 +144,16 @@ defmodule Sacrum.Accounts.AuthoringChatLoop do
   defp start_authoring(%ChatSession{} = session, intent) do
     with {:ok, rendered} <- render_initial_authoring(session, intent),
          patch <- start_authoring_patch(session, intent, rendered),
+         patch <- preserve_existing_revision(session, intent, patch),
          {:ok, %{artifact: draft}} <- AuthoringDrafts.upsert_for_chat_session(session, patch) do
       {:ok, %{artifact: draft, patch: patch}}
+    end
+  end
+
+  defp preserve_existing_revision(session, intent, patch) do
+    case AuthoringDrafts.get_for_chat_session(session, Map.get(intent, "state_machine_id")) do
+      {:ok, _existing} -> Map.delete(patch, :revision)
+      {:error, :not_found} -> patch
     end
   end
 
