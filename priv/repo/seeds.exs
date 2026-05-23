@@ -192,6 +192,57 @@ starter_drafts = [
   }
 ]
 
+work_breakdown_required_section_templates = [
+  %{
+    key: "desired_behavior",
+    title: "Desired Behavior",
+    required: true,
+    applies_to: ["ticket", "task"],
+    template: "Describe the externally visible behavior this work must deliver."
+  },
+  %{
+    key: "testing_criteria",
+    title: "Testing Criteria",
+    required: true,
+    applies_to: ["ticket", "task"],
+    template: "List concrete checks that prove the behavior works."
+  }
+]
+
+work_breakdown_supporting_record_base = %{
+  run_kind: "work_breakdown",
+  artifact_type: "task_draft",
+  state_machine_entrypoint: "start_work_breakdown_authoring"
+}
+
+work_breakdown_supporting_records = [
+  Map.merge(work_breakdown_supporting_record_base, %{
+    template_kind: "section_template",
+    name: "work_breakdown_authoring_sections",
+    payload: %{
+      scope: %{project_id: nil},
+      required_sections:
+        Enum.map(
+          work_breakdown_required_section_templates,
+          &Map.take(&1, [:key, :title, :required])
+        ),
+      required_section_templates: work_breakdown_required_section_templates
+    }
+  }),
+  Map.merge(work_breakdown_supporting_record_base, %{
+    template_kind: "validation_policy",
+    name: "work_breakdown_authoring_validation",
+    payload: %{
+      scope: %{project_id: nil},
+      validation_expectations: [
+        "Every candidate unit has desired behavior.",
+        "Every candidate unit has testing criteria.",
+        "Required section templates are persisted for apply validation."
+      ]
+    }
+  })
+]
+
 code_factory_records = [
   %{
     run_kind: "code_factory",
@@ -346,7 +397,7 @@ code_factory_records = [
   }
 ]
 
-for attrs <- starter_drafts ++ code_factory_records do
+for attrs <- starter_drafts ++ work_breakdown_supporting_records ++ code_factory_records do
   changeset = AuthoringTemplate.create_changeset(%AuthoringTemplate{}, attrs)
 
   Repo.insert!(

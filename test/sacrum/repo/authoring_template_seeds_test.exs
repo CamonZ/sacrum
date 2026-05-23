@@ -40,6 +40,12 @@ defmodule Sacrum.Repo.AuthoringTemplateSeedsTest do
     artifact_type: "workflow_draft",
     state_machine_entrypoint: "start_code_factory_creation"
   }
+  @work_breakdown_classification %{
+    run_kind: "work_breakdown",
+    artifact_type: "task_draft",
+    state_machine_entrypoint: "start_work_breakdown_authoring"
+  }
+  @work_breakdown_required_section_keys ["desired_behavior", "testing_criteria"]
 
   setup do
     Code.eval_file("priv/repo/seeds.exs")
@@ -87,6 +93,49 @@ defmodule Sacrum.Repo.AuthoringTemplateSeedsTest do
                  )
                end)
       end
+    end
+  end
+
+  describe "work-breakdown supporting seed records" do
+    test "ships app-owned section templates and validation policy for task authoring" do
+      assert {:ok, section_template} =
+               AuthoringTemplates.get_by_classification_and_name(
+                 Map.put(@work_breakdown_classification, :template_kind, "section_template"),
+                 "work_breakdown_authoring_sections"
+               )
+
+      assert %{
+               "required_sections" => required_sections,
+               "required_section_templates" => required_section_templates
+             } = section_template.payload
+
+      assert Enum.map(required_sections, & &1["key"]) == @work_breakdown_required_section_keys
+
+      assert Enum.map(required_section_templates, & &1["key"]) ==
+               @work_breakdown_required_section_keys
+
+      for template <- required_section_templates do
+        assert template["key"] in @work_breakdown_required_section_keys
+        assert is_binary(template["title"]) and template["title"] != ""
+        assert template["required"] == true
+        assert "ticket" in template["applies_to"]
+        assert "task" in template["applies_to"]
+        assert is_binary(template["template"]) and template["template"] != ""
+      end
+
+      assert {:ok, validation_policy} =
+               AuthoringTemplates.get_by_classification_and_name(
+                 Map.put(@work_breakdown_classification, :template_kind, "validation_policy"),
+                 "work_breakdown_authoring_validation"
+               )
+
+      assert %{"validation_expectations" => validation_expectations} =
+               validation_policy.payload
+
+      assert is_list(validation_expectations)
+      assert length(validation_expectations) >= 2
+      assert Enum.any?(validation_expectations, &String.contains?(&1, "desired behavior"))
+      assert Enum.any?(validation_expectations, &String.contains?(&1, "testing criteria"))
     end
   end
 
