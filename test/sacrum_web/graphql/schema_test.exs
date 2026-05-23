@@ -756,8 +756,8 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       # before any stopOrchestrator call kills the process mid-checkout.
       Ecto.Adapters.SQL.Sandbox.allow(Sacrum.Repo, self(), pid1)
       Ecto.Adapters.SQL.Sandbox.allow(Sacrum.Repo, self(), pid2)
-      :sys.get_state(pid1)
-      :sys.get_state(pid2)
+      :sys.get_state(pid1, 30_000)
+      :sys.get_state(pid2, 30_000)
 
       auth_conn = authenticate(conn, user)
 

@@ -57,8 +57,13 @@ defmodule Sacrum.Orchestrator.ExecutionPool do
   # Server Callbacks
 
   @impl true
-  def init(_opts) do
-    max_concurrent = Application.get_env(:sacrum, :max_concurrent_executions, 5)
+  def init(opts) do
+    max_concurrent =
+      Keyword.get(
+        opts,
+        :max_concurrent,
+        Application.get_env(:sacrum, :max_concurrent_executions, 5)
+      )
 
     state = %{
       max_concurrent: max_concurrent,

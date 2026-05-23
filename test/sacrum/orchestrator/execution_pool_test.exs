@@ -6,7 +6,7 @@ defmodule Sacrum.Orchestrator.ExecutionPoolTest do
   setup do
     # Start an isolated pool instance so tests don't conflict with the global pool
     pool = :"pool_#{System.unique_integer([:positive])}"
-    {:ok, pid} = ExecutionPool.start_link(name: pool)
+    {:ok, pid} = ExecutionPool.start_link(name: pool, max_concurrent: 5)
     on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
     %{pool: pool}
   end
