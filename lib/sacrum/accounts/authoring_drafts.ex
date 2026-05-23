@@ -80,13 +80,13 @@ defmodule Sacrum.Accounts.AuthoringDrafts do
   defp upsert_draft(%ChatSession{} = chat_session, state_machine_id, patch) do
     case existing_draft(chat_session, state_machine_id) do
       nil ->
-        create_draft(chat_session, resolve_patch_revision(patch, nil))
+        create_draft(chat_session, patch)
 
       {artifact, link} ->
         if already_applied?(artifact, patch) do
           {:ok, %{artifact: artifact, link: link}}
         else
-          update_draft(artifact, link, resolve_patch_revision(patch, artifact))
+          update_draft(artifact, link, patch)
         end
     end
   end
@@ -100,29 +100,6 @@ defmodule Sacrum.Accounts.AuthoringDrafts do
       _ -> {:error, :missing_state_machine_id}
     end
   end
-
-  defp resolve_patch_revision(%{"revision" => :next} = patch, artifact) do
-    revision = next_revision(artifact)
-
-    patch
-    |> Map.put("revision", revision)
-    |> put_source_chat_turn(revision)
-  end
-
-  defp resolve_patch_revision(patch, _artifact), do: patch
-
-  defp next_revision(%Artifact{data: %{"revision" => revision}}) when is_integer(revision) do
-    revision + 1
-  end
-
-  defp next_revision(_artifact_or_nil), do: 1
-
-  defp put_source_chat_turn(%{"source_chat" => source_chat} = patch, revision)
-       when is_integer(revision) and is_map(source_chat) do
-    put_in(patch, ["source_chat", "turn_index"], revision)
-  end
-
-  defp put_source_chat_turn(patch, _revision), do: patch
 
   defp create_draft(%ChatSession{} = chat_session, patch) do
     Artifacts.create_and_link(
