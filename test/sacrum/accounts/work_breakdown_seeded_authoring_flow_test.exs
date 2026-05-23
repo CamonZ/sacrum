@@ -1,52 +1,13 @@
 defmodule Sacrum.Accounts.WorkBreakdownSeededAuthoringFlowTest do
   use Sacrum.DataCase, async: false
 
-  alias Sacrum.Accounts.{LiveChat, Projects}
-  alias Sacrum.Chat.Inference.Result
-  alias Sacrum.Repo.Users
+  alias Sacrum.Accounts.LiveChat
+  alias Sacrum.TestSupport.AuthoringIntentProvider
 
   @required_section_keys ["desired_behavior", "testing_criteria"]
 
-  defmodule AuthoringIntentProvider do
-    @behaviour Sacrum.Chat.Inference.Provider
-
-    @impl true
-    def generate(messages, opts) do
-      if test_pid = Keyword.get(opts, :test_pid) do
-        send(test_pid, {:authoring_provider_messages, messages})
-      end
-
-      {:ok,
-       %Result{
-         content: Keyword.fetch!(opts, :content),
-         content_format: :markdown,
-         public_metadata: %{
-           "provider" => "fake",
-           "model" => "authoring-intent-model"
-         },
-         internal_metadata: %{
-           "authoring_tool_intent" => Keyword.fetch!(opts, :authoring_tool_intent)
-         }
-       }}
-    end
-  end
-
   setup do
-    Code.eval_file("priv/repo/seeds.exs")
-
-    suffix = System.unique_integer([:positive])
-
-    {:ok, user} =
-      Users.insert(%{
-        email: "work-breakdown-seeded-#{suffix}@example.com",
-        username: "work_breakdown_seeded_#{suffix}",
-        password: "password123"
-      })
-
-    {:ok, project} = Projects.insert(user.id, %{name: "Seeded Work Breakdown"})
-    {:ok, session} = LiveChat.create_session(user.id, project.id, %{})
-
-    %{user: user, project: project, session: session}
+    seeded_authoring_session!("work-breakdown-seeded", "Seeded Work Breakdown")
   end
 
   test "starts a seeded work-breakdown draft with internal templates and validation expectations",
@@ -62,16 +23,7 @@ defmodule Sacrum.Accounts.WorkBreakdownSeededAuthoringFlowTest do
                provider: AuthoringIntentProvider,
                test_pid: self(),
                content: "I started a work-breakdown draft. Which behavior must ship first?",
-               authoring_tool_intent: %{
-                 "action" => "start_authoring",
-                 "run_kind" => "work_breakdown",
-                 "artifact_type" => "task_draft",
-                 "template_kind" => "starter_draft",
-                 "state_machine_entrypoint" => "start_work_breakdown_authoring",
-                 "state_machine_id" => "work_breakdown_authoring",
-                 "initial_state" => "collect_parent_scope",
-                 "source_message_id" => user_message.id
-               }
+               authoring_tool_intent: work_breakdown_start_intent(user_message.id)
              )
 
     assert_receive {:authoring_provider_messages, _messages}

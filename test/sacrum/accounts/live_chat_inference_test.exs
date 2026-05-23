@@ -6,6 +6,7 @@ defmodule Sacrum.Accounts.LiveChatInferenceTest do
   alias Sacrum.Repo.ChatEvents, as: ChatEventsRepo
   alias Sacrum.Repo.Schemas.ChatEvent
   alias Sacrum.Repo.Users
+  alias Sacrum.TestSupport.AuthoringIntentProvider
 
   defmodule FakeProvider do
     @behaviour Sacrum.Chat.Inference.Provider
@@ -48,30 +49,6 @@ defmodule Sacrum.Accounts.LiveChatInferenceTest do
              "usage" => %{"total_tokens" => 12}
            },
            "api_key" => "sk-internal-secret"
-         }
-       }}
-    end
-  end
-
-  defmodule AuthoringIntentProvider do
-    @behaviour Sacrum.Chat.Inference.Provider
-
-    @impl true
-    def generate(messages, opts) do
-      if test_pid = Keyword.get(opts, :test_pid) do
-        send(test_pid, {:authoring_provider_messages, messages})
-      end
-
-      {:ok,
-       %Result{
-         content: Keyword.fetch!(opts, :content),
-         content_format: :markdown,
-         public_metadata: %{
-           "provider" => "fake",
-           "model" => "authoring-intent-model"
-         },
-         internal_metadata: %{
-           "authoring_tool_intent" => Keyword.fetch!(opts, :authoring_tool_intent)
          }
        }}
     end

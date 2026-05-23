@@ -98,6 +98,7 @@ defmodule Sacrum.Accounts.AuthoringChatLoop do
       source_chat: source_chat(session, intent, rendered.revision),
       template: rendered.template
     })
+    |> maybe_put(:trigger, Map.get(rendered, :trigger))
     |> maybe_put(:open_questions, Map.get(intent, "open_questions"))
   end
 

@@ -61,8 +61,8 @@ defmodule Sacrum.Accounts.InitialAuthoringDraftRenderer do
     validation_expectations
     workflow
     workflows
-  )a
-  @payload_key_lookup Map.new(@payload_keys, &{Atom.to_string(&1), &1})
+  )
+  @payload_key_lookup Map.new(@payload_keys, &{&1, String.to_atom(&1)})
   @type error_reason ::
           :not_found | {:missing_option, atom()} | {:missing_template_field, atom()}
 

@@ -1,9 +1,18 @@
 defmodule Sacrum.TestSupport.AuthoringFixtures do
   @moduledoc false
 
-  alias Sacrum.Accounts.Artifacts
+  alias Sacrum.Accounts.{Artifacts, LiveChat, Projects}
   alias Sacrum.Repo.AuthoringTemplates
+  alias Sacrum.Repo.Users
 
+  @work_breakdown %{
+    run_kind: "work_breakdown",
+    artifact_type: "task_draft",
+    template_kind: "starter_draft",
+    state_machine_entrypoint: "start_work_breakdown_authoring",
+    state_machine_id: "work_breakdown_authoring",
+    initial_state: "collect_parent_scope"
+  }
   @code_factory %{
     run_kind: "code_factory",
     artifact_type: "workflow_draft",
@@ -109,6 +118,31 @@ defmodule Sacrum.TestSupport.AuthoringFixtures do
     %{starter: starter, section_template: section_template, validation_policy: validation_policy}
   end
 
+  def seeded_authoring_session!(prefix, project_name) do
+    Code.eval_file("priv/repo/seeds.exs")
+
+    suffix = System.unique_integer([:positive])
+    username_prefix = String.replace(prefix, "-", "_")
+
+    {:ok, user} =
+      Users.insert(%{
+        email: "#{prefix}-#{suffix}@example.com",
+        username: "#{username_prefix}_#{suffix}",
+        password: "password123"
+      })
+
+    {:ok, project} = Projects.insert(user.id, %{name: project_name})
+    {:ok, session} = LiveChat.create_session(user.id, project.id, %{})
+
+    %{user: user, project: project, session: session}
+  end
+
+  def work_breakdown_start_intent(source_message_id, overrides \\ %{}) do
+    @work_breakdown
+    |> start_authoring_intent(source_message_id, %{})
+    |> Map.merge(overrides)
+  end
+
   def code_factory_start_intent(source_message_id, overrides \\ %{}) do
     @code_factory
     |> start_authoring_intent(source_message_id, %{"tool" => "workflow.create_from_recipe"})
@@ -144,6 +178,10 @@ defmodule Sacrum.TestSupport.AuthoringFixtures do
   def authoring_drafts_for_session(%{user: user, project: project, session: session}) do
     authoring_drafts_for_session(user, project, session)
   end
+
+  def workflow_by_key(workflows, key), do: Enum.find(workflows, &(&1["key"] == key))
+
+  def step_by_key(steps, key), do: Enum.find(steps, &(&1["key"] == key))
 
   def code_factory_template_payload do
     %{
@@ -276,4 +314,32 @@ defmodule Sacrum.TestSupport.AuthoringFixtures do
   end
 
   defp deep_merge(_left, right), do: right
+end
+
+defmodule Sacrum.TestSupport.AuthoringIntentProvider do
+  @moduledoc false
+
+  @behaviour Sacrum.Chat.Inference.Provider
+
+  alias Sacrum.Chat.Inference.Result
+
+  @impl true
+  def generate(messages, opts) do
+    if test_pid = Keyword.get(opts, :test_pid) do
+      send(test_pid, {:authoring_provider_messages, messages})
+    end
+
+    {:ok,
+     %Result{
+       content: Keyword.fetch!(opts, :content),
+       content_format: :markdown,
+       public_metadata: %{
+         "provider" => "fake",
+         "model" => "authoring-intent-model"
+       },
+       internal_metadata: %{
+         "authoring_tool_intent" => Keyword.fetch!(opts, :authoring_tool_intent)
+       }
+     }}
+  end
 end

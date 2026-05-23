@@ -11,6 +11,12 @@ defmodule Sacrum.Accounts.AuthoringTemplateLookupTest do
     template_kind: "starter_draft",
     state_machine_entrypoint: "start_goal_exploration"
   }
+  @code_factory_request %{
+    run_kind: "code_factory",
+    artifact_type: "workflow_draft",
+    template_kind: "starter_draft",
+    state_machine_entrypoint: "start_code_factory_creation"
+  }
 
   defp create_user(prefix) do
     suffix = System.unique_integer([:positive])
@@ -126,6 +132,102 @@ defmodule Sacrum.Accounts.AuthoringTemplateLookupTest do
 
       assert {:error, :not_found} =
                AuthoringTemplateLookup.get_template(lookup_context(user, project), @request)
+    end
+
+    test "composes code-factory workflow recipe and prompt templates into the starter draft" do
+      user = create_user("authoring-template-code-factory")
+      project = create_project(user, "Composed Code Factory Templates")
+
+      insert_code_factory_template!(%{
+        template_kind: "starter_draft",
+        name: "project_code_factory_creation",
+        payload: %{
+          "scope" => %{"project_id" => project.id},
+          "apply_target" => "workflow_bundle",
+          "validation_expectations" => ["Starter expectations remain present."]
+        }
+      })
+
+      insert_code_factory_template!(%{
+        template_kind: "workflow_recipe",
+        name: "project_code_factory_workflows",
+        payload: %{
+          "scope" => %{"project_id" => project.id},
+          "validation_expectations" => ["Route steps emit schema-constrained transition output."],
+          "workflows" => [
+            %{
+              "key" => "implementation",
+              "steps" => [
+                %{"key" => "implement", "type" => "work"},
+                %{
+                  "key" => "route",
+                  "type" => "route",
+                  "output_schema" => %{"type" => "object"},
+                  "transitions_to" => ["verification.review"]
+                }
+              ]
+            }
+          ],
+          "transitions" => [
+            %{
+              "from" => "implementation",
+              "to" => "verification",
+              "label" => "ready_for_review",
+              "target_step" => "verification.review"
+            }
+          ]
+        }
+      })
+
+      insert_code_factory_template!(%{
+        template_kind: "prompt_template",
+        name: "project_code_factory_step_prompts",
+        payload: %{
+          "scope" => %{"project_id" => project.id},
+          "rules" => %{
+            "guard_variables" => "Guard every optional variable or section before printing it.",
+            "schema_directive" =>
+              "Eval and route prompts must ask for JSON matching workflow.output_schema."
+          },
+          "prompts" => [
+            %{
+              "workflow" => "implementation",
+              "step" => "implement",
+              "requires_output_schema_directive" => false,
+              "template" =>
+                "{% if task.desired_behavior %}Implement {{ task.desired_behavior }}.{% endif %}"
+            },
+            %{
+              "workflow" => "implementation",
+              "step" => "route",
+              "requires_output_schema_directive" => true,
+              "template" =>
+                "{% if workflow.output_schema %}Output JSON matching {{ workflow.output_schema }}.{% endif %}"
+            }
+          ]
+        }
+      })
+
+      assert {:ok, template} =
+               AuthoringTemplateLookup.get_template(
+                 lookup_context(user, project),
+                 @code_factory_request
+               )
+
+      assert %{"workflows" => [workflow], "transitions" => [_transition]} = template.payload
+      assert workflow["key"] == "implementation"
+
+      assert [%{"prompt" => implement_prompt}, %{"output_schema" => route_schema} = route_step] =
+               workflow["steps"]
+
+      assert String.contains?(implement_prompt, "{% if task.desired_behavior %}")
+      assert route_step["prompt"] =~ "{{ workflow.output_schema }}"
+      assert route_schema == %{"type" => "object"}
+      assert template.payload["rules"]["guard_variables"] =~ "Guard every optional variable"
+
+      assert "Route steps emit schema-constrained transition output." in template.payload[
+               "validation_expectations"
+             ]
     end
   end
 
