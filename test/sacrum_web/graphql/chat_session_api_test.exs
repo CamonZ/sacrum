@@ -143,7 +143,7 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
       assert message["metadata"] == %{}
 
       assert_receive {:fake_provider_called, provider_pid,
-                      [%{role: "user", content: "Plan the next step"}]},
+                      [%{role: "system"}, %{role: "user", content: "Plan the next step"}]},
                      1_000
 
       await_graphql_runner_completion(session["id"], provider_pid)
@@ -225,6 +225,7 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
 
       assert_receive {:fake_provider_called, second_provider_pid,
                       [
+                        %{role: "system"},
                         %{role: "user", content: "Plan the next step"},
                         %{role: "assistant", content: "Assistant response from GraphQL runner"},
                         %{role: "user", content: "What can you tell me about yourself?"}
@@ -349,7 +350,8 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
 
       assert first_send["errors"] == nil
 
-      assert_receive {:fake_provider_called, provider_pid, [%{role: "user", content: "first"}]},
+      assert_receive {:fake_provider_called, provider_pid,
+                      [%{role: "system"}, %{role: "user", content: "first"}]},
                      2_000
 
       second_send =
@@ -376,6 +378,7 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
 
       assert_receive {:fake_provider_called, second_provider_pid,
                       [
+                        %{role: "system"},
                         %{role: "user", content: "first"},
                         %{role: "assistant", content: "Assistant response from GraphQL runner"},
                         %{role: "user", content: "second"}
@@ -520,7 +523,7 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
       message_id = message_result["data"]["sendChatMessage"]["id"]
 
       assert_receive {:fake_provider_called, provider_pid,
-                      [%{role: "user", content: "remove this transcript"}]},
+                      [%{role: "system"}, %{role: "user", content: "remove this transcript"}]},
                      1_000
 
       await_graphql_runner_completion(session_id, provider_pid)

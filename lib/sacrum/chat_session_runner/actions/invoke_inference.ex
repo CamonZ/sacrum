@@ -1,7 +1,14 @@
 defmodule Sacrum.ChatSessionRunner.Actions.InvokeInference do
   @moduledoc """
   Calls the Sacrum inference boundary for a chat session and emits the
-  append-assistant signal with the inference result attached.
+  verify-authoring signal with the inference result attached.
+
+  Before delegating to `Pipeline.invoke_inference/3`, this action enriches the
+  caller-provided `inference_opts` with the authoring system prompt and the
+  `start_authoring`/`revise_authoring` tool specs so the producer side of the
+  authoring loop is actually wired through to the LLM. Callers may still
+  override either option (tests inject `:provider`, for example, and may pass
+  their own `:system_prompt` or `:tools`).
   """
 
   use Jido.Action,
@@ -16,7 +23,8 @@ defmodule Sacrum.ChatSessionRunner.Actions.InvokeInference do
       inference_opts: [type: :any, default: []]
     ]
 
-  alias Sacrum.Accounts.ChatMessages
+  alias Sacrum.Accounts.{AuthoringDrafts, ChatMessages}
+  alias Sacrum.Chat.{AuthoringSystemPrompt, AuthoringTools}
   alias Sacrum.ChatSessionRunner.Actions
   alias Sacrum.ChatSessionRunner.Actions.Failure
   alias Sacrum.ChatSessionRunner.Pipeline
@@ -28,14 +36,19 @@ defmodule Sacrum.ChatSessionRunner.Actions.InvokeInference do
     with {:ok, session} <- Pipeline.fetch_session(params.chat_session_id),
          {:continue, session} <- Pipeline.ensure_runnable(session),
          {:ok, messages} <- ChatMessages.list_for_session(session, include_private: true),
+         turn_message_id = turn_message_id(messages),
          {:ok, session, result} <-
-           Pipeline.invoke_inference(session, messages, params.inference_opts) do
+           Pipeline.invoke_inference(
+             session,
+             messages,
+             enrich_inference_opts(session, messages, params.inference_opts, turn_message_id)
+           ) do
       directive =
-        Actions.emit(Signals.append_assistant(), %{
+        Actions.emit(Signals.verify_authoring(), %{
           chat_session_id: session.id,
           engine_session_ref: params.engine_session_ref,
           inference_opts: params.inference_opts,
-          turn_message_id: turn_message_id(messages),
+          turn_message_id: turn_message_id,
           inference_result: result
         })
 
@@ -45,6 +58,28 @@ defmodule Sacrum.ChatSessionRunner.Actions.InvokeInference do
       {:error, reason} -> Failure.fail(params, reason)
     end
   end
+
+  defp enrich_inference_opts(session, messages, inference_opts, turn_message_id)
+       when is_list(inference_opts) do
+    active_draft = AuthoringDrafts.get_latest_for_chat_session(session)
+    user_turn_count = Enum.count(messages, &(&1.role == :user))
+
+    system_prompt =
+      AuthoringSystemPrompt.build(%{
+        active_draft: active_draft,
+        user_turn_count: user_turn_count
+      })
+
+    inference_opts
+    |> Keyword.put_new(:system_prompt, system_prompt)
+    |> Keyword.put_new(:tools, AuthoringTools.all())
+    |> maybe_put_new_source_message_id(turn_message_id)
+  end
+
+  defp maybe_put_new_source_message_id(opts, nil), do: opts
+
+  defp maybe_put_new_source_message_id(opts, message_id) when is_binary(message_id),
+    do: Keyword.put_new(opts, :source_message_id, message_id)
 
   defp turn_message_id(messages) do
     messages

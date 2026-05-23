@@ -39,7 +39,7 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
     @impl true
     def generate(messages, opts) do
       if test_pid = Keyword.get(opts, :test_pid) do
-        send(test_pid, {:stub_provider_called, messages})
+        send(test_pid, {:stub_provider_called, messages, opts})
       end
 
       content = Keyword.get(opts, :content, "Stub assistant output")
@@ -49,7 +49,8 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
          content: content,
          content_format: :markdown,
          public_metadata: %{"provider" => "stub", "model" => "actions-test"},
-         internal_metadata: %{"trace_id" => "actions-test"}
+         internal_metadata:
+           Map.merge(%{"trace_id" => "actions-test"}, Keyword.get(opts, :internal_metadata, %{}))
        }}
     end
   end
@@ -282,7 +283,7 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
   describe "InvokeInference.run/2" do
     setup [:create_session_with_message]
 
-    test "calls the configured provider and emits append_assistant with the result", ctx do
+    test "calls the configured provider and emits verify_authoring with the result", ctx do
       {:ok, _running} =
         Sacrum.Accounts.ChatSessions.transition_status(
           ctx.user.id,
@@ -304,10 +305,69 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
       assert {:ok, %{step: :invoke_inference}, [%Directive.Emit{} = emit]} =
                InvokeInference.run(params, %{})
 
-      assert_received {:stub_provider_called, [%{role: "user", content: "Hello from unit tests"}]}
+      assert_received {:stub_provider_called, messages, _opts}
 
-      assert emit.signal.type == Signals.append_assistant()
+      assert [
+               %{role: "system", content: _system_prompt},
+               %{role: "user", content: "Hello from unit tests"}
+             ] = messages
+
+      assert emit.signal.type == Signals.verify_authoring()
       assert %Result{content: "Generated answer"} = emit.signal.data.inference_result
+    end
+
+    test "injects the authoring system prompt and tools into inference_opts", ctx do
+      {:ok, _running} =
+        Sacrum.Accounts.ChatSessions.transition_status(
+          ctx.user.id,
+          ctx.project.id,
+          ctx.session.id,
+          :running
+        )
+
+      params = %{
+        chat_session_id: ctx.session.id,
+        engine_session_ref: ctx.engine_session_ref,
+        inference_opts: [provider: StubProvider, test_pid: self()]
+      }
+
+      assert {:ok, %{step: :invoke_inference}, [_emit]} = InvokeInference.run(params, %{})
+
+      assert_received {:stub_provider_called, [system_msg | _rest], opts}
+      assert %{role: "system", content: system_prompt} = system_msg
+      assert system_prompt =~ "Vertebrae authoring assistant"
+      assert Keyword.get(opts, :system_prompt) == system_prompt
+
+      tools = Keyword.fetch!(opts, :tools)
+      tool_names = Enum.map(tools, fn %{"function" => %{"name" => name}} -> name end)
+      assert "start_authoring" in tool_names
+      assert "revise_authoring" in tool_names
+    end
+
+    test "caller-supplied :system_prompt and :tools win over the defaults", ctx do
+      {:ok, _running} =
+        Sacrum.Accounts.ChatSessions.transition_status(
+          ctx.user.id,
+          ctx.project.id,
+          ctx.session.id,
+          :running
+        )
+
+      params = %{
+        chat_session_id: ctx.session.id,
+        engine_session_ref: ctx.engine_session_ref,
+        inference_opts: [
+          provider: StubProvider,
+          test_pid: self(),
+          system_prompt: "caller-owned prompt",
+          tools: []
+        ]
+      }
+
+      assert {:ok, %{step: :invoke_inference}, [_emit]} = InvokeInference.run(params, %{})
+
+      assert_received {:stub_provider_called, [%{content: "caller-owned prompt"} | _], opts}
+      assert Keyword.get(opts, :tools) == []
     end
   end
 

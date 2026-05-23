@@ -9,11 +9,16 @@ defmodule Sacrum.Chat.Inference.OpenRouter do
 
   @behaviour Sacrum.Chat.Inference.Provider
 
+  require Logger
+
+  alias Sacrum.Chat.AuthoringTools
   alias Sacrum.Chat.Inference
   alias Sacrum.Chat.Inference.Actions.OpenRouterChat
   alias Sacrum.Chat.Inference.Result
 
   @default_base_url "https://openrouter.ai/api/v1"
+  @default_tool_choice "auto"
+  @tool_only_assistant_placeholder "(starting Vertebrae authoring draft…)"
 
   @impl true
   def generate(messages, opts \\ []) when is_list(messages) do
@@ -21,9 +26,29 @@ defmodule Sacrum.Chat.Inference.OpenRouter do
 
     with :ok <- validate_config(config),
          {:ok, action_result} <- run_jido_action(messages, config, opts) do
-      {:ok, normalize_action_result(action_result, config)}
+      source_message_id = source_message_id_from(opts, messages)
+      {:ok, normalize_action_result(action_result, config, source_message_id)}
     end
   end
+
+  defp source_message_id_from(opts, messages) do
+    case Keyword.get(opts, :source_message_id) do
+      id when is_binary(id) and id != "" ->
+        id
+
+      _ ->
+        messages
+        |> Enum.reverse()
+        |> Enum.find(&user_message?/1)
+        |> message_id()
+    end
+  end
+
+  defp user_message?(message),
+    do: Map.get(message, :role) == "user" or Map.get(message, "role") == "user"
+
+  defp message_id(%{} = msg), do: Map.get(msg, :id) || Map.get(msg, "id")
+  defp message_id(_), do: nil
 
   @spec configured?(keyword()) :: boolean()
   def configured?(opts \\ []) do
@@ -35,6 +60,9 @@ defmodule Sacrum.Chat.Inference.OpenRouter do
 
   defp run_jido_action(messages, config, opts) do
     timeout = Keyword.get(opts, :timeout, config.timeout)
+    tools = Keyword.get(opts, :tools)
+    tool_choice = Keyword.get(opts, :tool_choice, @default_tool_choice)
+    response_format = Keyword.get(opts, :response_format)
 
     params =
       %{
@@ -53,6 +81,9 @@ defmodule Sacrum.Chat.Inference.OpenRouter do
       )
       |> maybe_put(:provider_options, Keyword.get(opts, :provider_options))
       |> maybe_put(:timeout, timeout)
+      |> maybe_put(:tools, tools)
+      |> maybe_put_tool_choice(tool_choice, tools)
+      |> maybe_put(:response_format, response_format)
 
     case Jido.Exec.run(OpenRouterChat, params, %{}, timeout: timeout) do
       {:ok, result} -> {:ok, result}
@@ -60,26 +91,48 @@ defmodule Sacrum.Chat.Inference.OpenRouter do
     end
   end
 
-  defp normalize_action_result(result, config) do
+  defp maybe_put_tool_choice(map, _tool_choice, nil), do: map
+  defp maybe_put_tool_choice(map, _tool_choice, []), do: map
+
+  defp maybe_put_tool_choice(map, tool_choice, _tools),
+    do: Map.put(map, :tool_choice, tool_choice)
+
+  @doc false
+  @spec normalize_action_result(map(), map(), String.t() | nil) :: Result.t()
+  def normalize_action_result(result, config, source_message_id) do
     model = fetch_result(result, :model) || config.model
 
-    metadata = action_metadata(result, model)
+    metadata = action_metadata(result, model, source_message_id)
+    content = content_for_result(fetch_result(result, :text), metadata.internal)
 
     %Result{
-      content: fetch_result(result, :text),
+      content: content,
       content_format: :markdown,
       public_metadata: metadata.public,
       internal_metadata: metadata.internal
     }
   end
 
-  defp action_metadata(result, model) do
+  defp content_for_result(text, internal_metadata) do
+    cond do
+      is_binary(text) and String.trim(text) != "" ->
+        text
+
+      Map.has_key?(internal_metadata, "authoring_tool_intent") ->
+        @tool_only_assistant_placeholder
+
+      true ->
+        text
+    end
+  end
+
+  defp action_metadata(result, model, source_message_id) do
     usage = normalized_usage(fetch_result(result, :usage) || %{})
     finish_reason = normalize_value(fetch_result(result, :finish_reason))
 
     %{
       public: public_metadata(model, usage, finish_reason),
-      internal: internal_metadata(result, model, usage, finish_reason)
+      internal: internal_metadata(result, model, usage, finish_reason, source_message_id)
     }
   end
 
@@ -93,7 +146,7 @@ defmodule Sacrum.Chat.Inference.OpenRouter do
     maybe_put_string(metadata, "finish_reason", finish_reason)
   end
 
-  defp internal_metadata(result, model, usage, finish_reason) do
+  defp internal_metadata(result, model, usage, finish_reason, source_message_id) do
     provider_metadata = fetch_result(result, :provider_metadata) || %{}
 
     %{
@@ -104,7 +157,100 @@ defmodule Sacrum.Chat.Inference.OpenRouter do
     }
     |> maybe_put_string("reasoning", reasoning_metadata(result))
     |> maybe_put_string("finish_reason", finish_reason)
+    |> maybe_put_authoring_tool_intent(result, source_message_id)
   end
+
+  defp maybe_put_authoring_tool_intent(metadata, result, source_message_id) do
+    case extract_authoring_tool_intent(result, source_message_id) do
+      nil -> metadata
+      intent -> Map.put(metadata, "authoring_tool_intent", intent)
+    end
+  end
+
+  defp extract_authoring_tool_intent(result, source_message_id) do
+    case fetch_result(result, :tool_calls) do
+      [_ | _] = list -> pick_authoring_intent(list, source_message_id)
+      _ -> nil
+    end
+  end
+
+  defp pick_authoring_intent(list, source_message_id) do
+    list
+    |> Enum.flat_map(&List.wrap(parse_authoring_tool_call(&1, source_message_id)))
+    |> case do
+      [] -> nil
+      [intent] -> intent
+      [intent | extras] -> log_extra_intents_and_keep(intent, extras)
+    end
+  end
+
+  defp log_extra_intents_and_keep(intent, extras) do
+    Logger.warning(fn ->
+      "[chat.inference.open_router] received #{length(extras) + 1} authoring tool_calls " <>
+        "in one response; keeping the first and dropping the rest"
+    end)
+
+    intent
+  end
+
+  defp parse_authoring_tool_call(tool_call, source_message_id) do
+    case tool_call_name(tool_call) do
+      nil -> nil
+      name -> intent_for_known_name(name, tool_call, source_message_id)
+    end
+  end
+
+  defp intent_for_known_name(name, tool_call, source_message_id) do
+    if AuthoringTools.known_function_name?(name) do
+      build_intent(name, tool_call_arguments(tool_call), source_message_id)
+    else
+      log_unknown_tool_call(name)
+      nil
+    end
+  end
+
+  defp log_unknown_tool_call(name) do
+    Logger.warning(fn ->
+      "[chat.inference.open_router] dropping tool_call for unknown function " <> inspect(name)
+    end)
+  end
+
+  defp build_intent(name, arguments, source_message_id) do
+    intent =
+      arguments
+      |> Map.put("action", name)
+      |> maybe_put_string("source_message_id", source_message_id)
+
+    Logger.debug(fn ->
+      keys = intent |> Map.keys() |> Enum.sort()
+      "[chat.inference.open_router] parsed tool_call name=#{name} arg_keys=#{inspect(keys)}"
+    end)
+
+    intent
+  end
+
+  defp tool_call_name(%{"function" => %{"name" => name}}), do: name
+  defp tool_call_name(%{function: %{name: name}}), do: name
+  defp tool_call_name(%{"name" => name}), do: name
+  defp tool_call_name(%{name: name}), do: name
+  defp tool_call_name(_), do: nil
+
+  defp tool_call_arguments(%{"function" => %{"arguments" => args}}), do: decode_arguments(args)
+  defp tool_call_arguments(%{function: %{arguments: args}}), do: decode_arguments(args)
+  defp tool_call_arguments(%{"arguments" => args}), do: decode_arguments(args)
+  defp tool_call_arguments(%{arguments: args}), do: decode_arguments(args)
+  defp tool_call_arguments(_), do: %{}
+
+  defp decode_arguments(args) when is_map(args) and not is_struct(args), do: normalize_value(args)
+
+  defp decode_arguments(args) when is_binary(args) do
+    case Jason.decode(args) do
+      {:ok, decoded} when is_map(decoded) -> decoded
+      _ -> %{}
+    end
+  end
+
+  defp decode_arguments(_), do: %{}
 
   defp fetch_result(result, key) when is_atom(key) do
     Map.get(result, key) || Map.get(result, Atom.to_string(key))

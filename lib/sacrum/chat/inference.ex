@@ -7,6 +7,8 @@ defmodule Sacrum.Chat.Inference do
   the assistant result back into Sacrum-owned data.
   """
 
+  require Logger
+
   alias Sacrum.Chat.Inference.Result
   alias Sacrum.Repo.Schemas.ChatMessage
 
@@ -19,12 +21,44 @@ defmodule Sacrum.Chat.Inference do
   def generate(messages, opts \\ []) when is_list(messages) do
     provider = Keyword.get(opts, :provider, configured_provider())
     provider_opts = Keyword.delete(opts, :provider)
+    system_prompt = Keyword.get(provider_opts, :system_prompt)
+    tools = Keyword.get(provider_opts, :tools)
 
-    with {:ok, normalized_messages} <- normalize_messages(messages),
-         {:ok, result} <- provider.generate(normalized_messages, provider_opts) do
-      normalize_result(result)
+    with {:ok, normalized_messages} <- normalize_messages(messages) do
+      normalized_messages = prepend_system_prompt(normalized_messages, system_prompt)
+      log_producer_boundary(system_prompt, tools)
+
+      with {:ok, result} <- provider.generate(normalized_messages, provider_opts) do
+        normalize_result(result)
+      end
     end
   end
+
+  defp prepend_system_prompt(messages, system_prompt)
+       when is_binary(system_prompt) and system_prompt != "" do
+    case messages do
+      [%{role: "system"} | _rest] -> messages
+      _ -> [%{role: "system", content: system_prompt} | messages]
+    end
+  end
+
+  defp prepend_system_prompt(messages, _system_prompt), do: messages
+
+  defp log_producer_boundary(nil, nil), do: :ok
+
+  defp log_producer_boundary(system_prompt, tools) do
+    prompt_size = if is_binary(system_prompt), do: byte_size(system_prompt), else: 0
+    tool_names = if is_list(tools), do: Enum.map(tools, &tool_name/1), else: []
+
+    Logger.debug(fn ->
+      "[chat.inference] producer boundary system_prompt_bytes=#{prompt_size} " <>
+        "estimated_tokens=#{div(prompt_size, 4)} tools=#{inspect(tool_names)}"
+    end)
+  end
+
+  defp tool_name(%{"function" => %{"name" => name}}), do: name
+  defp tool_name(%{function: %{name: name}}), do: name
+  defp tool_name(other), do: inspect(other)
 
   @spec normalize_messages([ChatMessage.t() | map()]) :: {:ok, [map()]} | {:error, term()}
   def normalize_messages(messages) when is_list(messages) do
