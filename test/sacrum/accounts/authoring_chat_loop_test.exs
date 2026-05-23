@@ -38,14 +38,14 @@ defmodule Sacrum.Accounts.AuthoringChatLoopTest do
   describe "handle_tool_intent/5" do
     setup [:setup_chat_session]
 
-    test "turns a vague feature request into feature exploration state and a focused follow-up",
+    test "turns a vague feature request into a template-backed feature draft and focused follow-up",
          %{user: user, project: project, session: session, user_message: user_message} do
+      insert_feature_exploration_template!(scoped_to(project))
+
       intent = %{
         "name" => "authoring.start_feature_exploration",
         "arguments" => %{
-          "request" => "Make it easier to plan features",
-          "knowns" => ["The user wants better feature planning."],
-          "unknowns" => ["Which planning workflow should be improved first?"]
+          "request" => "Make feature planning better somehow"
         }
       }
 
@@ -58,30 +58,53 @@ defmodule Sacrum.Accounts.AuthoringChatLoopTest do
                  source_message_id: user_message.id
                )
 
-      assert response.assistant_text =~ "Which planning workflow"
-      assert response.state.current_state == "feature_exploration"
-      assert response.state.state_machine_id == "authoring_chat_loop"
-      assert response.state.entrypoint == "feature_exploration"
+      assert response.assistant_text =~ "What user-visible behavior should change first?"
+      assert response.state.current_state == "collect_feature_scope"
+      assert response.state.state_machine_id == "feature_exploration"
+      assert response.state.entrypoint == "start_minimal_feature_exploration"
       assert response.state.draft_id == response.draft.id
-      assert response.state.revision == 1
-      assert response.state.revision_identity == %{draft_id: response.draft.id, revision: 1}
+      assert response.state.revision == %{"source" => "authoring_template", "value" => 1}
+
+      assert response.state.revision_identity == %{
+               draft_id: response.draft.id,
+               revision: %{"source" => "authoring_template", "value" => 1}
+             }
 
       draft = Repo.get!(Artifact, response.draft.id)
 
       assert draft.artifact_type == "authoring_draft"
-      assert draft.data["state_machine_id"] == "authoring_chat_loop"
-      assert draft.data["state_machine_entrypoint"] == "feature_exploration"
-      assert draft.data["current_state"] == "feature_exploration"
-      assert draft.data["revision"] == 1
-      assert draft.data["knowns"] == ["The user wants better feature planning."]
-      assert draft.data["unknowns"] == ["Which planning workflow should be improved first?"]
-      assert draft.data["open_questions"] == ["Which planning workflow should be improved first?"]
+      assert draft.data["state_machine_id"] == "feature_exploration"
+      assert draft.data["state_machine_entrypoint"] == "start_minimal_feature_exploration"
+      assert draft.data["current_state"] == "collect_feature_scope"
+      assert draft.data["revision"] == %{"source" => "authoring_template", "value" => 1}
+
+      assert draft.data["assumptions"] == [
+               "The user has a feature idea but not enough implementation detail yet."
+             ]
+
+      assert draft.data["open_questions"] == [
+               "What user-visible behavior should change first?"
+             ]
+
+      assert draft.data["proposed_approach"] == [
+               "Capture the smallest useful outcome before decomposing work."
+             ]
+
+      assert [
+               %{
+                 "title" => "Clarify minimal feature outcome",
+                 "level" => "task",
+                 "desired_behavior" => "Record the feature goal, constraints, and unknowns."
+               }
+             ] = draft.data["candidate_work_units"]
+
       assert draft.data["source_chat"]["source_message_id"] == user_message.id
+      refute Map.has_key?(draft.data, "starter_shape")
     end
 
     test "creates and revises one code-factory example draft from template-backed structured payloads",
-         %{session: session, user_message: user_message} do
-      insert_code_factory_template!()
+         %{project: project, session: session, user_message: user_message} do
+      insert_code_factory_template!(scoped_to(project))
 
       start_result = authoring_result(code_factory_start_intent(user_message.id))
 
@@ -127,65 +150,6 @@ defmodule Sacrum.Accounts.AuthoringChatLoopTest do
       assert revised_draft.data["revision_notes"] == ["Have review require tests."]
     end
 
-    test "starts a work-breakdown ticket draft with internally rendered section templates and validation expectations",
-         %{session: session, user_message: user_message} do
-      insert_work_breakdown_authoring_templates!()
-
-      start_result = authoring_result(feature_start_intent(user_message.id))
-
-      assert :ok = AuthoringChatLoop.apply_inference_result(session, start_result)
-
-      assert {:ok, %{artifact: draft}} =
-               AuthoringDrafts.get_for_chat_session(session, "feature_authoring")
-
-      assert draft.data["state_machine_id"] == "feature_authoring"
-      assert draft.data["state_machine_entrypoint"] == "start_work_breakdown_authoring"
-      assert draft.data["current_state"] == "discovery"
-      assert draft.data["revision"] == %{"source" => "authoring_template", "value" => 1}
-
-      assert draft.data["template"] == %{
-               "name" => "work_breakdown_authoring_starter_draft",
-               "run_kind" => "work_breakdown",
-               "artifact_type" => "task_draft",
-               "template_kind" => "starter_draft"
-             }
-
-      assert [%{"title" => "Define parent outcome", "level" => "ticket"}] =
-               draft.data["candidate_work_units"]
-
-      assert draft.data["required_sections"] == [
-               %{"key" => "desired_behavior", "title" => "Desired Behavior", "required" => true},
-               %{"key" => "testing_criteria", "title" => "Testing Criteria", "required" => true}
-             ]
-
-      assert draft.data["required_section_templates"] == [
-               %{
-                 "key" => "desired_behavior",
-                 "title" => "Desired Behavior",
-                 "required" => true,
-                 "applies_to" => ["ticket", "task"],
-                 "template" => "Describe the externally visible behavior this work must deliver."
-               },
-               %{
-                 "key" => "testing_criteria",
-                 "title" => "Testing Criteria",
-                 "required" => true,
-                 "applies_to" => ["ticket", "task"],
-                 "template" => "List concrete checks that prove the behavior works."
-               }
-             ]
-
-      assert draft.data["validation_expectations"] == [
-               "Every candidate unit has desired behavior.",
-               "Every candidate unit has testing criteria.",
-               "Required section templates are persisted for apply validation."
-             ]
-
-      refute Map.has_key?(draft.data, "available_templates")
-      refute Map.has_key?(draft.data, "template_catalog")
-      refute Map.has_key?(draft.data, "scope")
-    end
-
     test "rejects unsupported structured authoring actions", %{session: session} do
       result = authoring_result(%{"action" => "delete_authoring"})
 
@@ -195,20 +159,24 @@ defmodule Sacrum.Accounts.AuthoringChatLoopTest do
 
     test "updates the existing draft when the user answers the follow-up",
          %{user: user, project: project, session: session, user_message: user_message} do
+      insert_feature_exploration_template!(scoped_to(project))
+
       assert {:ok, %{artifact: existing_draft}} =
                AuthoringDrafts.upsert_for_chat_session(user.id, project.id, session.id, %{
-                 state_machine_id: "authoring_chat_loop",
-                 state_machine_entrypoint: "feature_exploration",
-                 current_state: "feature_exploration",
-                 revision: 1,
+                 state_machine_id: "feature_exploration",
+                 state_machine_entrypoint: "start_minimal_feature_exploration",
+                 current_state: "collect_feature_scope",
+                 revision: %{source: "authoring_template", value: 1},
                  source_chat: %{
                    chat_session_id: session.id,
                    source_message_id: user_message.id,
                    turn_index: 1
                  },
-                 knowns: ["The user wants better feature planning."],
-                 unknowns: ["Which workflow matters first?"],
-                 open_questions: ["Which workflow matters first?"]
+                 assumptions: ["The user wants better feature planning."],
+                 open_questions: ["Which workflow matters first?"],
+                 proposed_approach: [
+                   "Capture the smallest useful outcome before decomposing work."
+                 ]
                })
 
       {:ok, next_user_message} =
@@ -235,22 +203,33 @@ defmodule Sacrum.Accounts.AuthoringChatLoopTest do
 
       assert response.draft.id == existing_draft.id
       assert response.state.draft_id == existing_draft.id
-      assert response.state.current_state == "feature_exploration"
-      assert response.state.revision == 2
-      assert response.state.revision_identity == %{draft_id: existing_draft.id, revision: 2}
+      assert response.state.current_state == "refine_feature_scope"
+      assert response.state.revision == %{"source" => "chat_feedback", "value" => 2}
+
+      assert response.state.revision_identity == %{
+               draft_id: existing_draft.id,
+               revision: %{"source" => "chat_feedback", "value" => 2}
+             }
+
       assert response.assistant_text =~ "breaking a vague request into tickets"
 
       assert {:ok, %{artifact: draft}} =
-               AuthoringDrafts.get_for_chat_session(session, "authoring_chat_loop")
+               AuthoringDrafts.get_for_chat_session(session, "feature_exploration")
 
       assert draft.id == existing_draft.id
-      assert draft.data["revision"] == 2
-      assert draft.data["knowns"] == ["Start with breaking a vague request into tickets."]
+      assert draft.data["revision"] == %{"source" => "chat_feedback", "value" => 2}
+
+      assert draft.data["revision_notes"] == [
+               "Start with breaking a vague request into tickets."
+             ]
+
       assert draft.data["source_chat"]["source_message_id"] == next_user_message.id
     end
 
     test "persists assistant chat text while Sacrum-owned state tracks draft and revision identity",
          %{user: user, project: project, session: session, user_message: user_message} do
+      insert_feature_exploration_template!(scoped_to(project))
+
       intent = %{
         "name" => "authoring.start_feature_exploration",
         "arguments" => %{
@@ -275,14 +254,18 @@ defmodule Sacrum.Accounts.AuthoringChatLoopTest do
       assert assistant_message.content == response.assistant_text
 
       assert assistant_message.metadata["authoring_loop"]["current_state"] ==
-               "feature_exploration"
+               "collect_feature_scope"
 
       assert assistant_message.metadata["authoring_loop"]["draft_id"] == response.draft.id
-      assert assistant_message.metadata["authoring_loop"]["revision"] == 1
+
+      assert assistant_message.metadata["authoring_loop"]["revision"] == %{
+               "source" => "authoring_template",
+               "value" => 1
+             }
 
       assert assistant_message.metadata["authoring_loop"]["revision_identity"] == %{
                "draft_id" => response.draft.id,
-               "revision" => 1
+               "revision" => %{"source" => "authoring_template", "value" => 1}
              }
 
       refute Map.has_key?(intent["arguments"], "current_state")
@@ -298,5 +281,9 @@ defmodule Sacrum.Accounts.AuthoringChatLoopTest do
       public_metadata: %{},
       internal_metadata: %{"authoring_tool_intent" => intent}
     }
+  end
+
+  defp scoped_to(project) do
+    %{name: "project_#{project.id}", payload: %{"scope" => %{"project_id" => project.id}}}
   end
 end

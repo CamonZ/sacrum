@@ -18,8 +18,33 @@ defmodule Sacrum.Accounts.AuthoringChatLoop do
   alias Sacrum.Chat.Inference
   alias Sacrum.Repo.Schemas.{Artifact, AuthoringTemplate, ChatSession}
 
-  @state_machine_id "authoring_chat_loop"
   @feature_exploration "feature_exploration"
+  @feature_exploration_revise_intent %{
+    "state_machine_id" => @feature_exploration,
+    "current_state" => "refine_feature_scope",
+    assistant_prefix: "I updated the feature exploration draft with:"
+  }
+  @tool_start_authoring_intents %{
+    "authoring.start_feature_exploration" => %{
+      request: %{
+        "run_kind" => "feature_exploration",
+        "artifact_type" => "task_draft",
+        "template_kind" => "starter_draft",
+        "state_machine_entrypoint" => "start_minimal_feature_exploration",
+        "state_machine_id" => @feature_exploration,
+        "initial_state" => "collect_feature_scope"
+      },
+      assistant_prefix: "I started a feature exploration draft."
+    }
+  }
+  @tool_revise_authoring_intents Map.new(
+                                   ~w(
+                                     authoring.continue_feature_exploration
+                                     authoring.resume_feature_exploration
+                                     authoring.revise_feature_exploration
+                                   ),
+                                   &{&1, @feature_exploration_revise_intent}
+                                 )
 
   @type response :: %{
           assistant_text: String.t(),
@@ -33,12 +58,9 @@ defmodule Sacrum.Accounts.AuthoringChatLoop do
       when is_binary(user_id) and is_binary(project_id) and is_binary(chat_session_id) and
              is_map(intent) and is_list(opts) do
     with {:ok, session} <- ChatSessions.get_session(user_id, project_id, chat_session_id),
-         {:ok, transition} <- transition_for_intent(intent),
-         patch <- build_patch(session, transition, opts),
-         {:ok, %{artifact: draft}} <-
-           AuthoringDrafts.upsert_for_chat_session(session, patch) do
+         {:ok, draft, assistant_text} <- apply_tool_intent(session, intent, opts) do
       state = state_from_draft(draft)
-      response = %{assistant_text: assistant_text(transition), draft: draft, state: state}
+      response = %{assistant_text: assistant_text, draft: draft, state: state}
 
       maybe_persist_assistant(session, response, opts)
     end
@@ -58,56 +80,52 @@ defmodule Sacrum.Accounts.AuthoringChatLoop do
     end
   end
 
-  defp transition_for_intent(%{"name" => "authoring.start_feature_exploration"} = intent) do
-    arguments = arguments(intent)
-    unknowns = list_argument(arguments, "unknowns")
-
-    {:ok,
-     %{
-       current_state: @feature_exploration,
-       entrypoint: @feature_exploration,
-       revision: 1,
-       knowns: list_argument(arguments, "knowns"),
-       unknowns: unknowns,
-       open_questions: unknowns,
-       assistant_text: feature_exploration_text(unknowns)
-     }}
+  defp apply_tool_intent(%ChatSession{} = session, %{"name" => name} = intent, opts) do
+    case fetch_tool_start_authoring_intent(name) do
+      {:ok, entrypoint} -> start_tool_authoring(session, entrypoint, intent, opts)
+      {:error, :not_found} -> revise_tool_authoring(session, intent, opts)
+    end
   end
 
-  defp transition_for_intent(%{"name" => name} = intent)
-       when name in [
-              "authoring.continue_feature_exploration",
-              "authoring.resume_feature_exploration",
-              "authoring.revise_feature_exploration"
-            ] do
+  defp apply_tool_intent(_session, _intent, _opts),
+    do: {:error, :unsupported_authoring_intent}
+
+  defp start_tool_authoring(%ChatSession{} = session, entrypoint, intent, opts) do
+    arguments = arguments(intent)
+
+    authoring_intent =
+      Map.merge(entrypoint.request, %{
+        "action" => "start_authoring",
+        "source_message_id" => Keyword.get(opts, :source_message_id),
+        "open_questions" => list_argument(arguments, "unknowns")
+      })
+
+    with {:ok, %{artifact: draft, patch: patch}} <- start_authoring(session, authoring_intent) do
+      {:ok, draft,
+       start_authoring_text(entrypoint.assistant_prefix, Map.get(patch, :open_questions, []))}
+    end
+  end
+
+  defp revise_tool_authoring(%ChatSession{} = session, %{"name" => name} = intent, opts) do
     response = string_argument(arguments(intent), "response")
 
-    {:ok,
-     %{
-       current_state: @feature_exploration,
-       entrypoint: @feature_exploration,
-       revision: :next,
-       knowns: present_list(response),
-       assistant_text: "I updated the feature exploration draft with: #{response}"
-     }}
+    with {:ok, entrypoint} <- fetch_tool_revise_authoring_intent(name),
+         authoring_intent <-
+           Map.merge(entrypoint, %{
+             "action" => "revise_authoring",
+             "source_message_id" => Keyword.get(opts, :source_message_id),
+             "feedback" => response
+           }),
+         {:ok, %{artifact: draft}} <- revise_authoring(session, authoring_intent) do
+      {:ok, draft, "#{entrypoint.assistant_prefix} #{response}"}
+    end
   end
 
-  defp transition_for_intent(_intent), do: {:error, :unsupported_authoring_intent}
+  defp revise_tool_authoring(_session, _intent, _opts),
+    do: {:error, :unsupported_authoring_intent}
 
   defp apply_authoring_intent(%ChatSession{} = session, %{"action" => "start_authoring"} = intent) do
-    request = Map.take(intent, request_fields())
-
-    with {:ok, template} <-
-           AuthoringTemplateLookup.get_template(authoring_context(session), request),
-         {:ok, rendered} <-
-           InitialAuthoringDraftRenderer.render(template,
-             state_machine_id: Map.get(intent, "state_machine_id"),
-             initial_state: Map.get(intent, "initial_state"),
-             revision: %{number: 1},
-             tool: Map.get(intent, "tool")
-           ),
-         patch <- start_authoring_patch(session, intent, rendered),
-         {:ok, _result} <- AuthoringDrafts.upsert_for_chat_session(session, patch) do
+    with {:ok, _result} <- start_authoring(session, intent) do
       :ok
     end
   end
@@ -116,31 +134,43 @@ defmodule Sacrum.Accounts.AuthoringChatLoop do
          %ChatSession{} = session,
          %{"action" => "revise_authoring"} = intent
        ) do
-    with {:ok, %{artifact: draft}} <-
-           AuthoringDrafts.get_for_chat_session(session, Map.get(intent, "state_machine_id")),
-         patch <- revise_authoring_patch(session, intent, draft),
-         {:ok, _result} <- AuthoringDrafts.upsert_for_chat_session(session, patch) do
+    with {:ok, _result} <- revise_authoring(session, intent) do
       :ok
     end
   end
 
   defp apply_authoring_intent(_session, _intent), do: {:error, :unsupported_authoring_action}
 
-  defp build_patch(%ChatSession{} = session, transition, opts) do
-    %{
-      state_machine_id: @state_machine_id,
-      state_machine_entrypoint: transition.entrypoint,
-      current_state: transition.current_state,
-      revision: transition.revision,
-      source_chat: %{
-        chat_session_id: session.id,
-        source_message_id: Keyword.get(opts, :source_message_id),
-        turn_index: transition.revision
-      }
-    }
-    |> maybe_put(:knowns, Map.get(transition, :knowns))
-    |> maybe_put(:unknowns, Map.get(transition, :unknowns))
-    |> maybe_put(:open_questions, Map.get(transition, :open_questions))
+  defp start_authoring(%ChatSession{} = session, intent) do
+    with {:ok, rendered} <- render_initial_authoring(session, intent),
+         patch <- start_authoring_patch(session, intent, rendered),
+         {:ok, %{artifact: draft}} <- AuthoringDrafts.upsert_for_chat_session(session, patch) do
+      {:ok, %{artifact: draft, patch: patch}}
+    end
+  end
+
+  defp revise_authoring(%ChatSession{} = session, intent) do
+    with {:ok, %{artifact: draft}} <-
+           AuthoringDrafts.get_for_chat_session(session, Map.get(intent, "state_machine_id")),
+         patch <- revise_authoring_patch(session, intent, draft),
+         {:ok, %{artifact: revised_draft}} <-
+           AuthoringDrafts.upsert_for_chat_session(session, patch) do
+      {:ok, %{artifact: revised_draft, patch: patch}}
+    end
+  end
+
+  defp render_initial_authoring(%ChatSession{} = session, intent) do
+    request = Map.take(intent, request_fields())
+
+    with {:ok, template} <-
+           AuthoringTemplateLookup.get_template_for_session(session, request) do
+      InitialAuthoringDraftRenderer.render(template,
+        state_machine_id: Map.get(intent, "state_machine_id"),
+        initial_state: Map.get(intent, "initial_state"),
+        revision: %{number: 1},
+        tool: Map.get(intent, "tool")
+      )
+    end
   end
 
   defp start_authoring_patch(%ChatSession{} = session, intent, rendered) do
@@ -186,10 +216,6 @@ defmodule Sacrum.Accounts.AuthoringChatLoop do
   defp revision_value(value) when is_integer(value), do: value
   defp revision_value(_value), do: 0
 
-  defp authoring_context(%ChatSession{} = session) do
-    %{user_id: session.user_id, project_id: session.project_id}
-  end
-
   defp request_fields do
     Enum.map(AuthoringTemplate.classification_fields(), &Atom.to_string/1)
   end
@@ -206,8 +232,6 @@ defmodule Sacrum.Accounts.AuthoringChatLoop do
       revision_identity: %{draft_id: draft.id, revision: revision}
     }
   end
-
-  defp assistant_text(%{assistant_text: assistant_text}), do: assistant_text
 
   defp maybe_persist_assistant(%ChatSession{} = session, response, opts) do
     if Keyword.get(opts, :persist_assistant, false) do
@@ -231,12 +255,27 @@ defmodule Sacrum.Accounts.AuthoringChatLoop do
     end
   end
 
-  defp feature_exploration_text([question | _rest]) do
-    "I started a feature exploration draft. #{question}"
+  defp fetch_tool_start_authoring_intent(name) do
+    fetch_tool_intent(@tool_start_authoring_intents, name, :not_found)
   end
 
-  defp feature_exploration_text([]) do
-    "I started a feature exploration draft. What outcome should this improve first?"
+  defp fetch_tool_revise_authoring_intent(name) do
+    fetch_tool_intent(@tool_revise_authoring_intents, name, :unsupported_authoring_intent)
+  end
+
+  defp fetch_tool_intent(intents, name, missing_reason) do
+    case Map.fetch(intents, name) do
+      {:ok, entrypoint} -> {:ok, entrypoint}
+      :error -> {:error, missing_reason}
+    end
+  end
+
+  defp start_authoring_text(prefix, [question | _rest]) do
+    "#{prefix} #{question}"
+  end
+
+  defp start_authoring_text(prefix, []) do
+    "#{prefix} What outcome should this improve first?"
   end
 
   defp arguments(%{"arguments" => arguments}) when is_map(arguments), do: arguments

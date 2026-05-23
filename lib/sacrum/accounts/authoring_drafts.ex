@@ -23,7 +23,7 @@ defmodule Sacrum.Accounts.AuthoringDrafts do
   )
   @replace_fields ~w(
     state_machine_id state_machine_entrypoint current_state revision source_chat
-    knowns unknowns initial_state template trigger
+    knowns unknowns initial_state template trigger apply_target
     workflows steps prompts output_schema transitions required_sections
     required_section_templates validation_expectations
   )

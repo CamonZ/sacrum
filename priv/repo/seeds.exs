@@ -107,6 +107,48 @@ starter_drafts = [
     }
   },
   %{
+    run_kind: "investigation_session",
+    artifact_type: "investigation_draft",
+    template_kind: "starter_draft",
+    state_machine_entrypoint: "start_investigation_session_authoring",
+    name: "investigation_session_authoring",
+    payload: %{
+      state_machine_entrypoint: "start_investigation_session_authoring",
+      apply_target: "investigation_session",
+      apply_targets: ["investigation_session"],
+      assumptions: [
+        "The user needs to understand a behavior before deciding implementation work.",
+        "The investigation should preserve uncertainty until evidence is collected."
+      ],
+      open_questions: [
+        "Which runtime path or user-visible symptom should be inspected first?",
+        "What evidence would distinguish a product gap from an implementation bug?"
+      ],
+      proposed_approach: [
+        "Trace the smallest observable path from trigger to stored state.",
+        "Record findings as candidate follow-up work only after evidence exists."
+      ],
+      candidate_work_units: [
+        %{
+          title: "Trace investigation path",
+          level: "task",
+          desired_behavior: "Identify the source, update path, and observed failure mode.",
+          testing_criteria: ["Investigation notes cite concrete code or runtime evidence."]
+        },
+        %{
+          title: "Define validation expectation",
+          level: "task",
+          desired_behavior: "State how the suspected behavior should be confirmed or ruled out.",
+          testing_criteria: ["Draft includes at least one executable validation expectation."]
+        }
+      ],
+      validation_expectations: [
+        "Assumptions and open questions remain explicit.",
+        "Candidate work units are evidence-backed and scoped to an apply target."
+      ]
+    }
+  },
+  %{
     run_kind: "code_factory",
     artifact_type: "workflow_draft",
     template_kind: "starter_draft",

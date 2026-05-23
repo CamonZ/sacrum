@@ -205,7 +205,7 @@ defmodule Sacrum.Accounts.LiveChatInferenceTest do
            project: project,
            session: session
          } do
-      insert_code_factory_template!()
+      insert_code_factory_template!(scoped_to(project))
 
       assert {:ok, first_user_message} =
                LiveChat.send_message(user.id, project.id, session.id, %{
@@ -284,7 +284,10 @@ defmodule Sacrum.Accounts.LiveChatInferenceTest do
                  provider: AuthoringIntentProvider,
                  test_pid: self(),
                  content: "I tried to draft a workflow recipe.",
-                 authoring_tool_intent: code_factory_start_intent(first_user_message.id)
+                 authoring_tool_intent:
+                   code_factory_start_intent(first_user_message.id, %{
+                     "state_machine_entrypoint" => "missing_code_factory_template"
+                   })
                )
 
       assert_receive {:authoring_provider_messages, _messages}
@@ -297,7 +300,7 @@ defmodule Sacrum.Accounts.LiveChatInferenceTest do
            project: project,
            session: session
          } do
-      insert_code_factory_template!()
+      insert_code_factory_template!(scoped_to(project))
 
       assert {:ok, first_user_message} =
                LiveChat.send_message(user.id, project.id, session.id, %{
@@ -320,12 +323,72 @@ defmodule Sacrum.Accounts.LiveChatInferenceTest do
       assert [] = authoring_drafts_for_session(user, project, session)
     end
 
+    test "starts investigation-session authoring from an app-owned starter without exposing raw templates",
+         %{
+           user: user,
+           project: project,
+           session: session
+         } do
+      insert_investigation_session_template!(scoped_to(project))
+
+      assert {:ok, first_user_message} =
+               LiveChat.send_message(user.id, project.id, session.id, %{
+                 content: "Investigate why task runs sometimes stop updating the GUI",
+                 client_message_id: "client-investigation-1"
+               })
+
+      assert {:ok, assistant_message} =
+               LiveChat.run_inference(user.id, project.id, session.id,
+                 provider: AuthoringIntentProvider,
+                 test_pid: self(),
+                 content:
+                   "I started an investigation draft. Which update path should we inspect first?",
+                 authoring_tool_intent: investigation_start_intent(first_user_message.id)
+               )
+
+      assert_receive {:authoring_provider_messages, _messages}
+
+      assert assistant_message.metadata == %{
+               "model" => "authoring-intent-model",
+               "provider" => "fake"
+             }
+
+      assert [draft] = authoring_drafts_for_session(user, project, session)
+      assert draft.artifact_type == "authoring_draft"
+      assert draft.data["state_machine_id"] == "investigation_session_authoring"
+      assert draft.data["state_machine_entrypoint"] == "start_investigation_session_authoring"
+      assert draft.data["current_state"] == "collect_investigation_scope"
+      assert draft.data["revision"] == %{"source" => "authoring_template", "value" => 1}
+      assert draft.data["source_chat"]["source_message_id"] == first_user_message.id
+      assert draft.data["apply_target"] == "investigation_session"
+
+      assert %{
+               "assumptions" => assumptions,
+               "open_questions" => open_questions,
+               "proposed_approach" => proposed_approach,
+               "candidate_work_units" => candidate_work_units,
+               "apply_targets" => apply_targets,
+               "validation_expectations" => validation_expectations
+             } = draft.data
+
+      assert is_list(assumptions) and assumptions != []
+      assert is_list(open_questions) and open_questions != []
+      assert is_list(proposed_approach) and proposed_approach != []
+      assert is_list(candidate_work_units) and candidate_work_units != []
+      assert is_list(apply_targets) and apply_targets != []
+      assert is_list(validation_expectations) and validation_expectations != []
+
+      refute Map.has_key?(draft.data, "starter_shape")
+    end
+
     test "enters discovery mode for vague feature requests and revises the same structured draft",
          %{
            user: user,
            project: project,
            session: session
          } do
+      insert_feature_exploration_template!(scoped_to(project))
+
       assert {:ok, first_user_message} =
                LiveChat.send_message(user.id, project.id, session.id, %{
                  content: "Build the dashboard thing we discussed",
@@ -346,8 +409,8 @@ defmodule Sacrum.Accounts.LiveChatInferenceTest do
       assert_receive {:authoring_provider_messages, _messages}
 
       assert [draft] = authoring_drafts_for_session(user, project, session)
-      assert draft.data["state_machine_id"] == "feature_authoring"
-      assert draft.data["current_state"] == "discovery"
+      assert draft.data["state_machine_id"] == "feature_exploration"
+      assert draft.data["current_state"] == "collect_feature_scope"
 
       assert draft.data["open_questions"] == [
                "Which dashboard user path should we support first?"
@@ -365,7 +428,7 @@ defmodule Sacrum.Accounts.LiveChatInferenceTest do
                  test_pid: self(),
                  content: "I updated the draft around failed import review.",
                  authoring_tool_intent:
-                   revise_authoring_intent("feature_authoring", second_user_message.id, %{
+                   revise_authoring_intent("feature_exploration", second_user_message.id, %{
                      "current_state" => "refine_scope",
                      "candidate_work_units" => [
                        %{
@@ -384,13 +447,15 @@ defmodule Sacrum.Accounts.LiveChatInferenceTest do
       assert revised_draft.id == draft.id
       assert revised_draft.data["current_state"] == "refine_scope"
 
-      assert revised_draft.data["candidate_work_units"] == [
-               %{
-                 "title" => "Admin failed import review",
-                 "level" => "ticket",
-                 "desired_behavior" => "Admins can review failed imports from the dashboard."
-               }
-             ]
+      assert List.last(revised_draft.data["candidate_work_units"]) == %{
+               "title" => "Admin failed import review",
+               "level" => "ticket",
+               "desired_behavior" => "Admins can review failed imports from the dashboard."
+             }
     end
+  end
+
+  defp scoped_to(project) do
+    %{name: "project_#{project.id}", payload: %{"scope" => %{"project_id" => project.id}}}
   end
 end

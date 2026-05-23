@@ -25,6 +25,13 @@ defmodule Sacrum.Repo.AuthoringTemplateSeedsTest do
       state_machine_entrypoint: "start_code_factory_creation",
       name: "code_factory_creation",
       apply_target: "workflow_bundle"
+    },
+    %{
+      run_kind: "investigation_session",
+      artifact_type: "investigation_draft",
+      state_machine_entrypoint: "start_investigation_session_authoring",
+      name: "investigation_session_authoring",
+      apply_target: "investigation_session"
     }
   ]
 

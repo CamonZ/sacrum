@@ -5,7 +5,7 @@ defmodule Sacrum.Accounts.AuthoringTemplateLookup do
 
   alias Sacrum.Accounts.Projects
   alias Sacrum.Repo.AuthoringTemplates
-  alias Sacrum.Repo.Schemas.AuthoringTemplate
+  alias Sacrum.Repo.Schemas.{AuthoringTemplate, ChatSession}
 
   @app_scope_project_id nil
   @excluded_listing_kinds ~w(entrypoint step_template)
@@ -19,10 +19,6 @@ defmodule Sacrum.Accounts.AuthoringTemplateLookup do
     "section_template" => ~w(required_sections required_section_templates),
     "validation_policy" => ~w(validation_expectations)
   }
-  @default_work_breakdown_template Map.merge(@work_breakdown_starter_request, %{
-                                     name: "work_breakdown_authoring",
-                                     payload: %{}
-                                   })
 
   @type context :: %{required(:user_id) => String.t(), required(:project_id) => String.t()}
   @type request :: %{
@@ -43,14 +39,18 @@ defmodule Sacrum.Accounts.AuthoringTemplateLookup do
   @spec get_template(context(), request()) :: {:ok, template_payload()} | {:error, :not_found}
   def get_template(%{user_id: user_id, project_id: project_id}, request)
       when is_binary(user_id) and is_binary(project_id) and is_map(request) do
-    with {:ok, _project} <- Projects.get_by(user_id, conditions: [id: project_id]) do
-      case resolve_template(project_id, request) do
-        {:ok, template} ->
-          {:ok, maybe_enrich_template(present_template(template), project_id, request)}
+    with {:ok, _project} <- Projects.get_by(user_id, conditions: [id: project_id]),
+         {:ok, template} <- resolve_template(project_id, request) do
+      {:ok, maybe_enrich_template(present_template(template), project_id, request)}
+    end
+  end
 
-        {:error, :not_found} ->
-          default_template(request)
-      end
+  @spec get_template_for_session(ChatSession.t(), request()) ::
+          {:ok, template_payload()} | {:error, :not_found}
+  def get_template_for_session(%ChatSession{project_id: project_id}, request)
+      when is_map(request) do
+    with {:ok, template} <- resolve_template(project_id, request) do
+      {:ok, maybe_enrich_template(present_template(template), project_id, request)}
     end
   end
 
@@ -162,14 +162,6 @@ defmodule Sacrum.Accounts.AuthoringTemplateLookup do
     request
     |> Map.drop([:template_kind, "template_kind"])
     |> Map.put(:template_kind, template_kind)
-  end
-
-  defp default_template(request) do
-    if requested_template?(request, @work_breakdown_starter_request) do
-      {:ok, @default_work_breakdown_template}
-    else
-      {:error, :not_found}
-    end
   end
 
   defp requested_template?(request, expected) do

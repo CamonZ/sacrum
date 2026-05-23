@@ -92,7 +92,7 @@ defmodule Sacrum.Accounts.AuthoringTemplateLookupTest do
              }
     end
 
-    test "returns a deterministic fallback template when no project-specific record exists" do
+    test "returns the deterministic app-scoped template when no project-specific record exists" do
       user = create_user("authoring-template-fallback")
       project = create_project(user, "Authoring Template Fallback")
 
@@ -118,6 +118,14 @@ defmodule Sacrum.Accounts.AuthoringTemplateLookupTest do
 
       assert template.name == "aa-primary-default"
       assert template.payload == fallback_payload
+    end
+
+    test "returns not found when no persisted template matches the request" do
+      user = create_user("authoring-template-missing")
+      project = create_project(user, "Missing Authoring Template")
+
+      assert {:error, :not_found} =
+               AuthoringTemplateLookup.get_template(lookup_context(user, project), @request)
     end
 
     test "returns all applicable internal template kinds as structured data" do
