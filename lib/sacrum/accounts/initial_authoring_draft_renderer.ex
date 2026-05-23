@@ -24,6 +24,7 @@ defmodule Sacrum.Accounts.InitialAuthoringDraftRenderer do
     desired_behavior
     final
     from
+    guard_variables
     initial_step
     key
     kind
@@ -43,9 +44,12 @@ defmodule Sacrum.Accounts.InitialAuthoringDraftRenderer do
     required_section_templates
     requires_output_schema_directive
     rules
+    schema_directive
     scope
+    step
     steps
     target_step
+    task_scope
     template_kind
     template
     testing_criteria
@@ -55,6 +59,7 @@ defmodule Sacrum.Accounts.InitialAuthoringDraftRenderer do
     transitions_to
     type
     validation_expectations
+    workflow
     workflows
   )a
   @payload_key_lookup Map.new(@payload_keys, &{Atom.to_string(&1), &1})
