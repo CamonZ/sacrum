@@ -34,6 +34,13 @@ defmodule Sacrum.Repo.ArtifactLinks do
     end
   end
 
+  @spec update(ArtifactLink.t(), map()) :: {:ok, ArtifactLink.t()} | {:error, Ecto.Changeset.t()}
+  def update(%ArtifactLink{} = artifact_link, attrs) when is_attrs(attrs) do
+    artifact_link
+    |> ArtifactLink.update_changeset(attrs)
+    |> Repo.update()
+  end
+
   @spec list_by_subject(String.t(), String.t(), String.t(), String.t()) :: [ArtifactLink.t()]
   def list_by_subject(user_id, project_id, subject_type, subject_id)
       when is_user_project_scope(user_id, project_id) and is_binary(subject_type) and

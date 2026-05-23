@@ -29,6 +29,13 @@ defmodule Sacrum.Repo.Artifacts do
     end
   end
 
+  @spec update(Artifact.t(), map()) :: {:ok, Artifact.t()} | {:error, Ecto.Changeset.t()}
+  def update(%Artifact{} = artifact, attrs) when is_attrs(attrs) do
+    artifact
+    |> Artifact.update_changeset(attrs)
+    |> Repo.update()
+  end
+
   @spec list_public_for_project(String.t(), String.t(), keyword()) :: [Artifact.t()]
   def list_public_for_project(user_id, project_id, opts \\ [])
       when is_user_project_scope(user_id, project_id) and is_options(opts) do
