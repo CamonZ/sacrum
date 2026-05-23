@@ -8,7 +8,6 @@ defmodule Sacrum.Accounts.AuthoringTemplateLookup do
   alias Sacrum.Repo.Schemas.{AuthoringTemplate, ChatSession}
 
   @app_scope_project_id nil
-  @excluded_listing_kinds ~w(entrypoint step_template)
   @work_breakdown_starter_request %{
     run_kind: "work_breakdown",
     artifact_type: "task_draft",
@@ -54,15 +53,6 @@ defmodule Sacrum.Accounts.AuthoringTemplateLookup do
     end
   end
 
-  @spec list_applicable_templates(context(), request()) ::
-          {:ok, %{String.t() => %{name: String.t(), payload: map()}}} | {:error, :not_found}
-  def list_applicable_templates(%{user_id: user_id, project_id: project_id}, request)
-      when is_binary(user_id) and is_binary(project_id) and is_map(request) do
-    with {:ok, _project} <- Projects.get_by(user_id, conditions: [id: project_id]) do
-      {:ok, list_templates_by_kind(project_id, request)}
-    end
-  end
-
   defp resolve_template(project_id, request) do
     template =
       request
@@ -74,22 +64,6 @@ defmodule Sacrum.Accounts.AuthoringTemplateLookup do
     case template do
       %AuthoringTemplate{} = template -> {:ok, template}
       nil -> {:error, :not_found}
-    end
-  end
-
-  defp list_templates_by_kind(project_id, request) do
-    AuthoringTemplate.template_kinds()
-    |> Enum.reject(&(&1 in @excluded_listing_kinds))
-    |> Enum.reduce(%{}, &put_template_summary(&1, &2, project_id, request))
-  end
-
-  defp put_template_summary(template_kind, templates, project_id, request) do
-    case resolve_template(project_id, request_with_template_kind(request, template_kind)) do
-      {:ok, template} ->
-        Map.put(templates, template_kind, present_template_summary(template))
-
-      {:error, :not_found} ->
-        templates
     end
   end
 
@@ -120,13 +94,6 @@ defmodule Sacrum.Accounts.AuthoringTemplateLookup do
       artifact_type: template.artifact_type,
       template_kind: template.template_kind,
       state_machine_entrypoint: template.state_machine_entrypoint,
-      name: template.name,
-      payload: template.payload
-    }
-  end
-
-  defp present_template_summary(%AuthoringTemplate{} = template) do
-    %{
       name: template.name,
       payload: template.payload
     }

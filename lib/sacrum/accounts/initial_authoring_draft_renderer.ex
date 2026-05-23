@@ -87,21 +87,6 @@ defmodule Sacrum.Accounts.InitialAuthoringDraftRenderer do
     end
   end
 
-  @spec render_for_tool_entrypoint([map()], keyword()) :: {:ok, map()} | {:error, error_reason()}
-  def render_for_tool_entrypoint(templates, opts) when is_list(templates) and is_list(opts) do
-    with {:ok, entrypoint} <- fetch_opt(opts, :state_machine_entrypoint),
-         {:ok, template} <- find_template_for_entrypoint(templates, entrypoint) do
-      render(template, opts)
-    end
-  end
-
-  defp find_template_for_entrypoint(templates, entrypoint) do
-    case Enum.find(templates, &(template_value(&1, :state_machine_entrypoint) == entrypoint)) do
-      nil -> {:error, :not_found}
-      template -> {:ok, template}
-    end
-  end
-
   defp render_template_metadata(template) do
     Map.new(@template_keys, fn key -> {key, template_value(template, key)} end)
   end

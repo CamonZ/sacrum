@@ -114,50 +114,6 @@ defmodule Sacrum.Accounts.InitialAuthoringDraftRendererTest do
     end
   end
 
-  describe "render_for_tool_entrypoint/2" do
-    test "selects the matching template for a tool-triggered state-machine entrypoint" do
-      templates = [
-        work_breakdown_template(),
-        code_factory_recipe_template()
-      ]
-
-      assert {:ok, draft} =
-               InitialAuthoringDraftRenderer.render_for_tool_entrypoint(templates,
-                 tool: "workflow.create_from_recipe",
-                 state_machine_entrypoint: "start_code_factory_creation",
-                 state_machine_id: "code_factory_creation",
-                 initial_state: "collect_workflow_goal",
-                 revision: %{"number" => 7, "reason" => "tool-triggered authoring"}
-               )
-
-      assert draft.persisted? == false
-      assert draft.state_machine_id == "code_factory_creation"
-      assert draft.state_machine_entrypoint == "start_code_factory_creation"
-      assert draft.initial_state == "collect_workflow_goal"
-
-      assert draft.revision == %{
-               source: "authoring_template",
-               value: 7,
-               reason: "tool-triggered authoring"
-             }
-
-      assert draft.trigger == %{tool: "workflow.create_from_recipe"}
-      assert draft.template.name == "code_factory_creation"
-      refute Map.has_key?(draft.revision, :number)
-      refute Map.has_key?(draft.revision, "number")
-
-      assert draft.payload.workflows
-             |> workflow_by_key("implementation")
-             |> Map.fetch!(:initial_step) ==
-               "work"
-
-      assert draft.payload.workflows
-             |> workflow_by_key("implementation")
-             |> Map.fetch!(:auto_advance) ==
-               true
-    end
-  end
-
   defp work_breakdown_template do
     %{
       run_kind: "work_breakdown",

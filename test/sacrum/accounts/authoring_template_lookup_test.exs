@@ -127,44 +127,6 @@ defmodule Sacrum.Accounts.AuthoringTemplateLookupTest do
       assert {:error, :not_found} =
                AuthoringTemplateLookup.get_template(lookup_context(user, project), @request)
     end
-
-    test "returns all applicable internal template kinds as structured data" do
-      user = create_user("authoring-template-kinds")
-      project = create_project(user, "Authoring Template Kinds")
-
-      expected_payloads = %{
-        "authoring_rules" => %{"rules" => [%{"id" => "ask-before-assuming"}]},
-        "starter_draft" => %{"draft" => %{"title" => "Discovery"}},
-        "section_template" => %{"sections" => [%{"kind" => "goal"}]},
-        "workflow_recipe" => %{"workflow" => %{"name" => "Backlog"}},
-        "prompt_template" => %{"template" => "Use {{ task.title }}"},
-        "route_schema" => %{"schema" => %{"type" => "object"}},
-        "validation_policy" => %{"required_sections" => ["goal"]}
-      }
-
-      for {template_kind, payload} <- expected_payloads do
-        insert_template!(
-          template_kind: template_kind,
-          name: "default-#{template_kind}",
-          payload: payload
-        )
-      end
-
-      assert {:ok, templates} =
-               AuthoringTemplateLookup.list_applicable_templates(
-                 lookup_context(user, project),
-                 Map.take(@request, [:run_kind, :artifact_type, :state_machine_entrypoint])
-               )
-
-      assert MapSet.new(Map.keys(templates)) == MapSet.new(Map.keys(expected_payloads))
-
-      for {template_kind, payload} <- expected_payloads do
-        assert templates[template_kind] == %{
-                 name: "default-#{template_kind}",
-                 payload: payload
-               }
-      end
-    end
   end
 
   describe "authenticated project boundary" do
