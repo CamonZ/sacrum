@@ -150,8 +150,9 @@ defmodule Sacrum.Accounts.AuthoringChatLoop do
   end
 
   defp revise_authoring(%ChatSession{} = session, intent) do
-    with {:ok, %{artifact: draft}} <-
-           AuthoringDrafts.get_for_chat_session(session, Map.get(intent, "state_machine_id")),
+    with {:ok, state_machine_id} <- fetch_intent_string(intent, "state_machine_id"),
+         {:ok, %{artifact: draft}} <-
+           AuthoringDrafts.get_for_chat_session(session, state_machine_id),
          patch <- revise_authoring_patch(session, intent, draft),
          {:ok, %{artifact: revised_draft}} <-
            AuthoringDrafts.upsert_for_chat_session(session, patch) do
@@ -218,6 +219,13 @@ defmodule Sacrum.Accounts.AuthoringChatLoop do
 
   defp request_fields do
     Enum.map(AuthoringTemplate.classification_fields(), &Atom.to_string/1)
+  end
+
+  defp fetch_intent_string(intent, key) do
+    case Map.get(intent, key) do
+      value when is_binary(value) and value != "" -> {:ok, value}
+      _ -> {:error, {:missing_intent_field, key}}
+    end
   end
 
   defp state_from_draft(%Artifact{} = draft) do
