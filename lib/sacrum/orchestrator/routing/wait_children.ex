@@ -164,14 +164,17 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
 
   @spec schedule_all_children([{Task.t(), TaskRun.t()}]) :: :ok | {:error, term()}
   defp schedule_all_children(child_runs) do
+    incomplete_child_runs =
+      Enum.filter(child_runs, fn {child, _} -> is_nil(child.completed_at) end)
+
     blocked =
-      child_runs
+      incomplete_child_runs
       |> Enum.map(fn {child, _} -> child.id end)
       |> TaskDependencies.incomplete_direct_blocker_task_ids()
       |> MapSet.new()
 
-    child_runs
-    |> Enum.reject(fn {child, _} -> MapSet.member?(blocked, child.id) end)
+    incomplete_child_runs
+    |> Enum.filter(fn {child, _} -> not MapSet.member?(blocked, child.id) end)
     |> Enum.reduce_while(:ok, fn {child, task_run}, _acc ->
       case start_child_orchestrator(child, task_run) do
         :ok -> {:cont, :ok}

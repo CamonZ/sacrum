@@ -9,6 +9,7 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildrenTest do
 
   alias Sacrum.Accounts
   alias Sacrum.Orchestrator
+  alias Sacrum.Orchestrator.TaskCompletion
   alias Sacrum.Orchestrator.{FSMData, TaskRegistry}
   alias Sacrum.Orchestrator.Routing.WaitChildren
   alias Sacrum.Repo
@@ -17,6 +18,34 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildrenTest do
   import Ecto.Query
 
   describe "handle_wait_children_entry/1 with dependencies" do
+    test "keeps completed children in handoff but starts only incomplete children" do
+      ctx = setup_workflows()
+      parent = create_parent(ctx)
+
+      completed_child =
+        ctx
+        |> create_child(parent, "Completed Child")
+        |> complete_task()
+
+      incomplete_child = create_child(ctx, parent, "Incomplete Child")
+
+      track_orchestrator_cleanup([parent.id, completed_child.id, incomplete_child.id])
+
+      data = build_parent_fsm_data(ctx, parent)
+      assert {:stop_parent, _} = WaitChildren.handle_wait_children_entry(data)
+
+      Process.sleep(80)
+
+      assert Registry.lookup(TaskRegistry, completed_child.id) == [],
+             "completed_child must remain in handoff but must not be started"
+
+      assert Registry.lookup(TaskRegistry, incomplete_child.id) != [],
+             "incomplete_child should be dispatched at fan-out"
+
+      child_ids = waiting_handoff_child_ids(parent.id)
+      assert Enum.sort(child_ids) == Enum.sort([completed_child.id, incomplete_child.id])
+    end
+
     test "dispatches only children whose blockers are complete" do
       ctx = setup_workflows()
       parent = create_parent(ctx)
@@ -235,6 +264,11 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildrenTest do
 
   defp add_dependency(task, depends_on) do
     {:ok, _} = Repo.TaskDependencies.add_dependency(task, depends_on)
+  end
+
+  defp complete_task(task) do
+    {:ok, task} = Repo.update(TaskCompletion.completion_changeset(task))
+    task
   end
 
   defp waiting_handoff_child_ids(parent_id) do
