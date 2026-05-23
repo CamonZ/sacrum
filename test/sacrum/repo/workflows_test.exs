@@ -40,7 +40,6 @@ defmodule Sacrum.Repo.WorkflowsTest do
       assert workflow.name == "Default Workflow"
       assert workflow.description == "The default workflow"
       assert workflow.project_id == project.id
-      assert workflow.auto_advance == false
       assert workflow.is_default == false
       assert workflow.metadata == %{}
     end
@@ -62,14 +61,12 @@ defmodule Sacrum.Repo.WorkflowsTest do
       attrs =
         Map.merge(@valid_attrs, %{
           name: "Custom Workflow",
-          auto_advance: true,
           is_default: false,
           display_order: 1,
           metadata: %{"color" => "blue"}
         })
 
       assert {:ok, %Workflow{} = workflow} = Workflows.insert(project, attrs)
-      assert workflow.auto_advance == true
       assert workflow.is_default == false
       assert workflow.display_order == 1
       assert workflow.metadata == %{"color" => "blue"}
@@ -193,16 +190,15 @@ defmodule Sacrum.Repo.WorkflowsTest do
       assert updated.description == "New desc"
     end
 
-    test "updates auto_advance and is_default" do
+    test "ignores stale auto_advance attrs" do
       project = create_project()
-      # Get the auto-created default workflow (Backlog)
-      workflows = Workflows.all(conditions: [project_id: project.id])
-      existing_default = Enum.find(workflows, &(&1.is_default == true))
+      {:ok, workflow} = Workflows.insert(project, Map.put(@valid_attrs, :auto_advance, true))
 
-      # Update it to turn off auto_advance and keep it as default
-      assert {:ok, updated} = Workflows.update(existing_default, %{auto_advance: true})
-      assert updated.auto_advance == true
-      assert updated.is_default == true
+      refute Map.has_key?(workflow, :auto_advance)
+
+      assert {:ok, updated} = Workflows.update(workflow, %{auto_advance: true, name: "Updated"})
+      assert updated.name == "Updated"
+      refute Map.has_key?(updated, :auto_advance)
     end
 
     test "rejects updating workflow to default when another default exists" do

@@ -15,7 +15,6 @@ defmodule SacrumWeb.Graphql.Types.WorkflowType do
     field :description, :string
     field :initial_step_id, :id
     field :metadata, :json
-    field :auto_advance, :boolean
     field :display_order, :integer
     field :is_default, :boolean
     field :is_final, :boolean
@@ -119,7 +118,6 @@ defmodule SacrumWeb.Graphql.Types.WorkflowType do
       arg(:name, non_null(:string))
       arg(:description, :string)
       arg(:metadata, :json)
-      arg(:auto_advance, :boolean)
       arg(:display_order, :integer)
       arg(:is_default, :boolean)
       arg(:is_final, :boolean)
@@ -140,7 +138,6 @@ defmodule SacrumWeb.Graphql.Types.WorkflowType do
       arg(:name, :string)
       arg(:description, :string)
       arg(:metadata, :json)
-      arg(:auto_advance, :boolean)
       arg(:display_order, :integer)
       arg(:is_default, :boolean)
       arg(:is_final, :boolean)

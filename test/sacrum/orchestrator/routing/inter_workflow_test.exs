@@ -34,10 +34,7 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflowTest do
   end
 
   defp create_workflow(user, project, attrs \\ %{}) do
-    default_attrs = %{
-      "name" => "Test Workflow",
-      "auto_advance" => false
-    }
+    default_attrs = %{"name" => "Test Workflow"}
 
     {:ok, workflow} =
       Accounts.Workflows.insert(user.id, project.id, Map.merge(default_attrs, attrs))

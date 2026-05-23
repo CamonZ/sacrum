@@ -949,7 +949,6 @@ defmodule SacrumWeb.ProjectChannelTest do
       id: Ecto.UUID.generate(),
       name: "Test Workflow",
       description: "A workflow",
-      auto_advance: false,
       is_default: false,
       is_final: false,
       display_order: 1,

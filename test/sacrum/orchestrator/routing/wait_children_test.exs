@@ -175,8 +175,7 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildrenTest do
   defp create_workflow(user, project, name) do
     {:ok, workflow} =
       Accounts.Workflows.insert(user.id, project.id, %{
-        name: name,
-        auto_advance: false
+        name: name
       })
 
     workflow

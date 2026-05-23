@@ -489,7 +489,6 @@ defmodule SacrumWeb.ProjectChannel do
       id: workflow.id,
       name: workflow.name,
       description: workflow.description,
-      auto_advance: workflow.auto_advance,
       is_default: workflow.is_default,
       is_final: workflow.is_final,
       display_order: workflow.display_order,

@@ -47,11 +47,11 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
   end
 
   @doc """
-  Determine the next FSM state based on the step and workflow configuration.
+  Determine the next FSM state based on the destination step configuration.
 
   Returns gen_statem tuples:
-  - `{:next_state, :awaiting_execution, data}` if auto-advance is enabled
-  - `{:stop, :normal, data}` if no auto-advance
+  - `{:next_state, :awaiting_execution, data}` if the next step has a prompt
+  - `{:stop, :normal, data}` if the next step has no prompt
   - `{:next_state, :failed, data}` on error (nil step_id / not found)
 
   `:completing` is reached only after the executed step's StepExecution reports
@@ -82,24 +82,61 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
       nil ->
         {:failed, {:step_not_found, next_step_id}}
 
-      _step ->
-        if data.workflow.auto_advance do
-          {:next_state, :awaiting_execution}
-        else
-          {:stop, :normal, step_completed_attrs(next_step_id)}
-        end
+      step ->
+        next_state_for_step(data.workflow, step, next_step_id)
     end
   end
 
-  @spec step_completed_attrs(binary()) :: map()
-  def step_completed_attrs(next_step_id) do
+  @spec promptless_step_completed_attrs(binary()) :: map()
+  def promptless_step_completed_attrs(next_step_id) do
     %{
       outcome_kind: "step_completed",
       outcome_context: %{
-        "reason" => "auto_advance_disabled",
+        "reason" => "promptless_destination_step",
         "current_step_id" => next_step_id
       }
     }
+  end
+
+  @spec prompted_step?(WorkflowStep.t() | struct()) :: boolean()
+  def prompted_step?(%{prompt: prompt}) when is_binary(prompt), do: String.trim(prompt) != ""
+  def prompted_step?(_step), do: false
+
+  @spec next_state_for_step(Workflow.t() | struct(), WorkflowStep.t() | struct(), binary()) ::
+          {:next_state, :awaiting_execution | :completing} | {:stop, :normal, map()}
+  defp next_state_for_step(workflow, step, next_step_id) do
+    cond do
+      prompted_step?(step) ->
+        {:next_state, :awaiting_execution}
+
+      terminal_route_destination?(workflow, step) ->
+        {:next_state, :completing}
+
+      true ->
+        {:stop, :normal, promptless_step_completed_attrs(next_step_id)}
+    end
+  end
+
+  @spec maybe_mark_task_run_completed_for_decision(FSMData.t() | map(), tuple(), map()) ::
+          {:ok, map()} | {:error, term()}
+  def maybe_mark_task_run_completed_for_decision(_data, {:next_state, _state}, changes) do
+    {:ok, changes}
+  end
+
+  def maybe_mark_task_run_completed_for_decision(_data, {:failed, _reason}, changes) do
+    {:ok, changes}
+  end
+
+  def maybe_mark_task_run_completed_for_decision(data, {:stop, _reason, attrs}, changes) do
+    case Map.get(data, :task_run_id) do
+      nil ->
+        {:ok, changes}
+
+      task_run_id ->
+        with {:ok, task_run} <- Lookup.fetch(task_run_id) do
+          maybe_mark_task_run_completed(task_run, attrs, changes)
+        end
+    end
   end
 
   @doc """

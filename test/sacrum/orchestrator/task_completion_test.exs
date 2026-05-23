@@ -23,12 +23,13 @@ defmodule Sacrum.Orchestrator.TaskCompletionTest do
     project
   end
 
-  defp create_workflow(user, project, opts \\ []) do
+  defp create_workflow(user, project, attrs \\ %{}) do
     {:ok, workflow} =
-      Accounts.Workflows.insert(user.id, project.id, %{
-        name: "Test Workflow",
-        auto_advance: Keyword.get(opts, :auto_advance, false)
-      })
+      Accounts.Workflows.insert(
+        user.id,
+        project.id,
+        Map.merge(%{name: "Test Workflow"}, attrs)
+      )
 
     workflow
   end
@@ -144,10 +145,10 @@ defmodule Sacrum.Orchestrator.TaskCompletionTest do
       assert result == {:next_state, :failed, data}
     end
 
-    test "dispatches final auto_advance step instead of skipping to completing" do
+    test "dispatches final prompted step instead of skipping to completing" do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, auto_advance: true)
+      workflow = create_workflow(user, project)
       final_step = create_step(user, workflow, %{"is_final" => true})
       task = create_task(user, project, workflow)
 
@@ -161,11 +162,11 @@ defmodule Sacrum.Orchestrator.TaskCompletionTest do
                {:next_state, :awaiting_execution, data}
     end
 
-    test "stops final non-auto_advance step so manual operator can run it" do
+    test "completes instead of dispatching a promptless final sink step in a final workflow" do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, auto_advance: false)
-      final_step = create_step(user, workflow, %{"is_final" => true})
+      workflow = create_workflow(user, project, %{is_final: true})
+      final_step = create_step(user, workflow, %{"is_final" => true, "prompt" => nil})
       task = create_task(user, project, workflow)
       task_run = create_task_run(user, project, task)
 
@@ -177,18 +178,16 @@ defmodule Sacrum.Orchestrator.TaskCompletionTest do
       }
 
       assert TaskCompletion.determine_next_state(final_step.id, data) ==
-               {:stop, :normal, data}
+               {:next_state, :completing, data}
 
-      assert {:stop, :normal, attrs} = TaskCompletion.next_state_decision(final_step.id, data)
-      assert attrs.outcome_kind == "step_completed"
-      assert attrs.outcome_context["reason"] == "auto_advance_disabled"
-      assert attrs.outcome_context["current_step_id"] == final_step.id
+      assert TaskCompletion.next_state_decision(final_step.id, data) ==
+               {:next_state, :completing}
     end
 
-    test "transitions to awaiting_execution when auto_advance is enabled" do
+    test "transitions to awaiting_execution when destination step has a prompt" do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, auto_advance: true)
+      workflow = create_workflow(user, project)
       next_step = create_step(user, workflow, %{"is_final" => false})
       task = create_task(user, project, workflow)
 
@@ -203,11 +202,11 @@ defmodule Sacrum.Orchestrator.TaskCompletionTest do
       assert result == {:next_state, :awaiting_execution, data}
     end
 
-    test "stops when next step is not final and auto_advance is disabled" do
+    test "stops when next step has a blank prompt" do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, auto_advance: false)
-      next_step = create_step(user, workflow, %{"is_final" => false})
+      workflow = create_workflow(user, project)
+      next_step = create_step(user, workflow, %{"is_final" => false, "prompt" => " \n\t "})
       task = create_task(user, project, workflow)
       task_run = create_task_run(user, project, task)
 
@@ -227,7 +226,7 @@ defmodule Sacrum.Orchestrator.TaskCompletionTest do
 
       assert {:stop, :normal, attrs} = TaskCompletion.next_state_decision(next_step.id, data)
       assert attrs.outcome_kind == "step_completed"
-      assert attrs.outcome_context["reason"] == "auto_advance_disabled"
+      assert attrs.outcome_context["reason"] == "promptless_destination_step"
       assert attrs.outcome_context["current_step_id"] == next_step.id
     end
   end

@@ -39,11 +39,49 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
     {:ok, walex} = start_supervised({WalEx.Supervisor, config})
 
     on_exit(fn ->
-      if Process.alive?(walex), do: Process.exit(walex, :normal)
+      shut_down_walex(walex)
+      drop_replication_slot(slot)
       Sandbox.stop_owner(owner)
     end)
 
     :ok
+  end
+
+  defp shut_down_walex(walex) do
+    if Process.alive?(walex) do
+      ref = Process.monitor(walex)
+      Process.exit(walex, :shutdown)
+
+      receive do
+        {:DOWN, ^ref, :process, ^walex, _reason} -> :ok
+      after
+        5_000 -> :ok
+      end
+    end
+  end
+
+  defp drop_replication_slot(slot) do
+    Sandbox.unboxed_run(Repo, fn ->
+      Repo.query!(
+        """
+        SELECT pg_terminate_backend(active_pid)
+        FROM pg_replication_slots
+        WHERE slot_name = $1 AND active_pid IS NOT NULL
+        """,
+        [slot]
+      )
+
+      Repo.query!(
+        """
+        SELECT pg_drop_replication_slot(slot_name)
+        FROM pg_replication_slots
+        WHERE slot_name = $1
+        """,
+        [slot]
+      )
+    end)
+  rescue
+    _ -> :ok
   end
 
   test "committed task inserts, updates, and deletes are projected to default clients" do
@@ -93,7 +131,6 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
       {:ok, workflow} =
         Workflows.insert(project, %{
           name: "CDC workflow",
-          auto_advance: false,
           display_order: 2
         })
 
@@ -794,7 +831,6 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
     {:ok, workflow} =
       Workflows.insert(project, %{
         name: "CDC support workflow #{suffix}",
-        auto_advance: false,
         display_order: 10
       })
 

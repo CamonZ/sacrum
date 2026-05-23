@@ -33,7 +33,6 @@ defmodule Sacrum.Orchestrator.PromptContextTest do
     {:ok, workflow} =
       Accounts.Workflows.insert(user.id, project.id, %{
         name: "Test Workflow",
-        auto_advance: false,
         workflow_steps: []
       })
 

@@ -200,7 +200,6 @@ defmodule Sacrum.Import do
       attrs = %{
         "name" => wf_data["name"],
         "description" => wf_data["description"],
-        "auto_advance" => wf_data["auto_advance"] || false,
         "display_order" => wf_data["order"] || idx
       }
 

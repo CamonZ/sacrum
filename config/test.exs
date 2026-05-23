@@ -43,6 +43,7 @@ config :phoenix,
 # Daemon configuration for tests
 config :sacrum,
   daemon_presence_required: false,
-  scheduler_recovery_enabled: false
+  scheduler_recovery_enabled: false,
+  max_concurrent_executions: 1000
 
 config :sacrum, :cdc, start_consumer: false

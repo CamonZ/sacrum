@@ -35,7 +35,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
 
   alias Sacrum.Orchestrator.ExecutionEvents
   alias Sacrum.Orchestrator.Routing.{HumanInput, RouteStep, WaitChildren}
-  alias Sacrum.Orchestrator.TaskRuns.{Completion, Failure, Lookup, Root}
+  alias Sacrum.Orchestrator.TaskRuns.{Failure, Lookup, Root}
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{StepExecution, Task}
   alias Sacrum.Repo.TaskWorkflows
@@ -420,7 +420,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     Repo.transaction(fn ->
       with {:ok, changes} <- maybe_complete_waiting_execution(data.task.id, %{}),
            {:ok, changes} <- advance_task_step(data, next_step_id, changes),
-           {:ok, changes} <- maybe_mark_task_run_completed(data, decision, changes) do
+           {:ok, changes} <-
+             TaskCompletion.maybe_mark_task_run_completed_for_decision(data, decision, changes) do
         changes
       else
         {:error, reason} -> Repo.rollback(reason)
@@ -434,7 +435,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
 
     Repo.transaction(fn ->
       with {:ok, changes} <- advance_task_step(data, next_step_id, %{}),
-           {:ok, changes} <- maybe_mark_task_run_completed(data, decision, changes) do
+           {:ok, changes} <-
+             TaskCompletion.maybe_mark_task_run_completed_for_decision(data, decision, changes) do
         changes
       else
         {:error, reason} -> Repo.rollback(reason)
@@ -464,32 +466,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
            ),
          {:ok, task} <- Repo.update(changeset) do
       {:ok, Map.put(changes, :task, task)}
-    end
-  end
-
-  @spec maybe_mark_task_run_completed(FSMData.t(), tuple(), map()) ::
-          {:ok, map()} | {:error, term()}
-  defp maybe_mark_task_run_completed(_data, {:next_state, _state}, changes), do: {:ok, changes}
-  defp maybe_mark_task_run_completed(_data, {:failed, _reason}, changes), do: {:ok, changes}
-
-  defp maybe_mark_task_run_completed(data, {:stop, _reason, attrs}, changes) do
-    case Map.get(data, :task_run_id) do
-      nil ->
-        {:ok, changes}
-
-      task_run_id ->
-        mark_task_run_completed(task_run_id, attrs, changes)
-    end
-  end
-
-  @spec mark_task_run_completed(binary(), map(), map()) :: {:ok, map()} | {:error, term()}
-  defp mark_task_run_completed(task_run_id, attrs, changes) do
-    with {:ok, task_run} <- Lookup.fetch(task_run_id),
-         {:ok, task_run} <-
-           task_run
-           |> Completion.changeset(attrs)
-           |> Repo.update() do
-      {:ok, Map.put(changes, :task_run, task_run)}
     end
   end
 

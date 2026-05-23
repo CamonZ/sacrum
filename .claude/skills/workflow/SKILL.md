@@ -38,12 +38,11 @@ Create a new workflow with steps.
 # Basic workflow with steps
 vtb workflow add "Code Review" --step review:sonnet --step approved:haiku
 
-# With description and auto-advance
+# With description and options
 vtb workflow add "CI Pipeline" \
   -d "Automated build and test" \
   --step build:haiku \
-  --step test:sonnet \
-  --auto-advance
+  --step test:sonnet
 
 # Mark as default for new tasks
 vtb workflow add "Standard" --step Backlog:sonnet --step Done:haiku --default
@@ -58,7 +57,6 @@ vtb workflow add "Code Review" --step Review:sonnet --step Approved:haiku --kanb
 |------|-------|-------------|
 | `--description` | `-d` | Workflow description |
 | `--step` | `-s` | Step in `name:model` format (repeatable) |
-| `--auto-advance` | | Auto-advance on completion |
 | `--order` | `-o` | Display order (default: 0) |
 | `--default` | | Mark as the default workflow for new tasks |
 | `--kanban-column` | | Kanban column label for the workflow |
@@ -93,8 +91,6 @@ Update workflow properties.
 vtb workflow update <id> --name "Development"
 vtb workflow update <id> --description "New description"
 vtb workflow update <id> --clear-description
-vtb workflow update <id> --auto-advance
-vtb workflow update <id> --no-auto-advance
 vtb workflow update <id> --default
 vtb workflow update <id> --kanban-column "Active"
 ```
@@ -106,8 +102,6 @@ vtb workflow update <id> --kanban-column "Active"
 | `--name` | `-n` | New workflow name |
 | `--description` | `-d` | New description |
 | `--clear-description` | | Remove description |
-| `--auto-advance` | | Enable auto-advance |
-| `--no-auto-advance` | | Disable auto-advance |
 | `--default` | | Mark as the default workflow for new tasks |
 | `--kanban-column` | | Update kanban column label |
 
