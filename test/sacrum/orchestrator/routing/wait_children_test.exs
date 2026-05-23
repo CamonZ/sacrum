@@ -13,7 +13,8 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildrenTest do
   alias Sacrum.Orchestrator.{FSMData, TaskRegistry}
   alias Sacrum.Orchestrator.Routing.WaitChildren
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.StepExecution
+  alias Sacrum.Repo.Schemas.{StepExecution, TaskRun}
+  alias Sacrum.TaskRuns.Status, as: TaskRunStatus
 
   import Ecto.Query
 
@@ -44,6 +45,10 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildrenTest do
 
       child_ids = waiting_handoff_child_ids(parent.id)
       assert Enum.sort(child_ids) == Enum.sort([completed_child.id, incomplete_child.id])
+
+      assert active_task_runs(completed_child.id) == []
+      assert [%TaskRun{status: status}] = active_task_runs(incomplete_child.id)
+      assert status in [:queued, :executing]
     end
 
     test "dispatches only children whose blockers are complete" do
@@ -282,6 +287,15 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildrenTest do
       )
 
     Map.get(execution.handoff || %{}, "child_ids", [])
+  end
+
+  defp active_task_runs(task_id) do
+    Repo.all(
+      from(tr in TaskRun,
+        where: tr.task_id == ^task_id and tr.status in ^TaskRunStatus.active_statuses(),
+        order_by: [asc: tr.inserted_at]
+      )
+    )
   end
 
   defp track_orchestrator_cleanup(task_ids) do
