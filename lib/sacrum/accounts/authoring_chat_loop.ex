@@ -66,6 +66,11 @@ defmodule Sacrum.Accounts.AuthoringChatLoop do
     end
   end
 
+  @doc """
+  Post-assistant authoring hook. Every chat pipeline that appends an assistant
+  message must invoke this after persisting the message and inference_completed
+  event, so authoring tool intents in the inference metadata produce drafts.
+  """
   @spec apply_inference_result(ChatSession.t(), Inference.Result.t()) :: :ok | {:error, term()}
   def apply_inference_result(%ChatSession{} = session, %Inference.Result{} = inference_result) do
     apply_inference_metadata(session, inference_result.internal_metadata || %{})
