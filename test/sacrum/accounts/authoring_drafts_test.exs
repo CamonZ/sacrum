@@ -433,6 +433,280 @@ defmodule Sacrum.Accounts.AuthoringDraftsTest do
              ] = implementation["steps"]
     end
 
+    test "re-applying the same intent across distinct turns keeps append fields at single-pass length",
+         %{
+           user: user,
+           project: project,
+           chat_session: chat_session
+         } do
+      base = %{
+        state_machine_id: "feature_authoring",
+        state_machine_entrypoint: "start_work_breakdown_authoring",
+        current_state: "collect_scope",
+        revision: 1,
+        assumptions: ["A1", "A2"],
+        open_questions: ["Q1", "Q2", "Q3", "Q4", "Q5"],
+        proposed_approach: ["P1", "P2"],
+        candidate_work_units: [
+          %{"title" => "U1", "level" => "task"},
+          %{"title" => "U2", "level" => "task"}
+        ],
+        apply_targets: [%{"kind" => "task_tree", "mode" => "create_children"}]
+      }
+
+      first_patch =
+        Map.merge(base, %{
+          source_chat: %{
+            chat_session_id: chat_session.id,
+            source_message_id: "msg_user_dedupe_001",
+            turn_index: 1
+          }
+        })
+
+      # Second patch repeats the same intent on a later turn — distinct
+      # source_message_id so `already_applied?` doesn't short-circuit and the
+      # append-field merge is actually exercised.
+      second_patch =
+        Map.merge(base, %{
+          source_chat: %{
+            chat_session_id: chat_session.id,
+            source_message_id: "msg_user_dedupe_002",
+            turn_index: 2
+          }
+        })
+
+      assert {:ok, %{artifact: first}} =
+               AuthoringDrafts.upsert_for_chat_session(
+                 user.id,
+                 project.id,
+                 chat_session.id,
+                 first_patch
+               )
+
+      assert {:ok, %{artifact: second}} =
+               AuthoringDrafts.upsert_for_chat_session(
+                 user.id,
+                 project.id,
+                 chat_session.id,
+                 second_patch
+               )
+
+      assert second.id == first.id
+
+      reloaded = Repo.get!(Artifact, second.id)
+
+      assert reloaded.data["assumptions"] == ["A1", "A2"]
+      assert reloaded.data["open_questions"] == ["Q1", "Q2", "Q3", "Q4", "Q5"]
+      assert reloaded.data["proposed_approach"] == ["P1", "P2"]
+
+      assert reloaded.data["candidate_work_units"] == [
+               %{"title" => "U1", "level" => "task"},
+               %{"title" => "U2", "level" => "task"}
+             ]
+
+      assert reloaded.data["apply_targets"] == [
+               %{"kind" => "task_tree", "mode" => "create_children"}
+             ]
+    end
+
+    test "revision_notes are appended as history without dedup", %{
+      user: user,
+      project: project,
+      chat_session: chat_session
+    } do
+      base = %{
+        state_machine_id: "feature_authoring",
+        state_machine_entrypoint: "start_work_breakdown_authoring",
+        revision: 1
+      }
+
+      assert {:ok, _} =
+               AuthoringDrafts.upsert_for_chat_session(
+                 user.id,
+                 project.id,
+                 chat_session.id,
+                 Map.merge(base, %{
+                   current_state: "collect_scope",
+                   source_chat: %{
+                     chat_session_id: chat_session.id,
+                     source_message_id: "msg_user_history_001",
+                     turn_index: 1
+                   },
+                   revision_notes: ["Tighten scope to one user flow."]
+                 })
+               )
+
+      # Same note text on a later turn must NOT collapse — the field is
+      # an append-only audit trail and consumers depend on positional history.
+      assert {:ok, %{artifact: second}} =
+               AuthoringDrafts.upsert_for_chat_session(
+                 user.id,
+                 project.id,
+                 chat_session.id,
+                 Map.merge(base, %{
+                   current_state: "refine_scope",
+                   source_chat: %{
+                     chat_session_id: chat_session.id,
+                     source_message_id: "msg_user_history_002",
+                     turn_index: 2
+                   },
+                   revision: 2,
+                   revision_notes: ["Tighten scope to one user flow."]
+                 })
+               )
+
+      reloaded = Repo.get!(Artifact, second.id)
+
+      assert reloaded.data["revision_notes"] == [
+               "Tighten scope to one user flow.",
+               "Tighten scope to one user flow."
+             ]
+    end
+
+    test "candidate_work_units dedup by title — latest revision wins on shared title", %{
+      user: user,
+      project: project,
+      chat_session: chat_session
+    } do
+      base = %{
+        state_machine_id: "feature_authoring",
+        state_machine_entrypoint: "start_work_breakdown_authoring"
+      }
+
+      original_unit = %{
+        "title" => "Persist authoring draft artifacts",
+        "level" => "ticket",
+        "desired_behavior" => "Saved state-machine output is reusable."
+      }
+
+      assert {:ok, _} =
+               AuthoringDrafts.upsert_for_chat_session(
+                 user.id,
+                 project.id,
+                 chat_session.id,
+                 Map.merge(base, %{
+                   current_state: "collect_scope",
+                   revision: 1,
+                   source_chat: %{
+                     chat_session_id: chat_session.id,
+                     source_message_id: "msg_user_title_001",
+                     turn_index: 1
+                   },
+                   candidate_work_units: [original_unit]
+                 })
+               )
+
+      # Same title, revised desired_behavior — the new entry must replace the
+      # old one rather than co-exist with it.
+      revised_unit = %{
+        "title" => "Persist authoring draft artifacts",
+        "level" => "ticket",
+        "desired_behavior" => "Saved state-machine output is reusable across sessions."
+      }
+
+      additional_unit = %{
+        "title" => "Surface validation errors in chat",
+        "level" => "task",
+        "desired_behavior" => "User sees actionable errors after validation."
+      }
+
+      assert {:ok, %{artifact: second}} =
+               AuthoringDrafts.upsert_for_chat_session(
+                 user.id,
+                 project.id,
+                 chat_session.id,
+                 Map.merge(base, %{
+                   current_state: "refine_scope",
+                   revision: 2,
+                   source_chat: %{
+                     chat_session_id: chat_session.id,
+                     source_message_id: "msg_user_title_002",
+                     turn_index: 2
+                   },
+                   candidate_work_units: [revised_unit, additional_unit]
+                 })
+               )
+
+      reloaded = Repo.get!(Artifact, second.id)
+
+      assert reloaded.data["candidate_work_units"] == [revised_unit, additional_unit]
+    end
+
+    test "deduplicates map entries by exact map equality across append fields", %{
+      user: user,
+      project: project,
+      chat_session: chat_session
+    } do
+      unit_one = %{
+        "title" => "Persist authoring draft artifacts",
+        "level" => "ticket",
+        "desired_behavior" => "Saved state-machine output is reusable."
+      }
+
+      unit_two = %{
+        "title" => "Validate draft before apply",
+        "level" => "task",
+        "desired_behavior" => "A draft cannot apply with missing required sections."
+      }
+
+      assert {:ok, %{artifact: first}} =
+               AuthoringDrafts.upsert_for_chat_session(
+                 user.id,
+                 project.id,
+                 chat_session.id,
+                 %{
+                   state_machine_id: "feature_authoring",
+                   state_machine_entrypoint: "start_work_breakdown_authoring",
+                   current_state: "collect_scope",
+                   revision: 1,
+                   source_chat: %{
+                     chat_session_id: chat_session.id,
+                     source_message_id: "msg_user_map_dedupe_001",
+                     turn_index: 1
+                   },
+                   candidate_work_units: [unit_one, unit_two],
+                   apply_targets: [%{"kind" => "task_tree", "mode" => "create_children"}]
+                 }
+               )
+
+      # Second call repeats unit_one verbatim (identical map) and introduces
+      # unit_three. The duplicate unit_one must collapse to a single entry.
+      unit_three = %{
+        "title" => "Surface validation errors in chat",
+        "level" => "task",
+        "desired_behavior" => "User sees actionable errors after validation."
+      }
+
+      assert {:ok, %{artifact: second}} =
+               AuthoringDrafts.upsert_for_chat_session(
+                 user.id,
+                 project.id,
+                 chat_session.id,
+                 %{
+                   state_machine_id: "feature_authoring",
+                   current_state: "refine_scope",
+                   revision: 2,
+                   source_chat: %{
+                     chat_session_id: chat_session.id,
+                     source_message_id: "msg_user_map_dedupe_002",
+                     turn_index: 2
+                   },
+                   candidate_work_units: [unit_one, unit_three],
+                   apply_targets: [%{"kind" => "task_tree", "mode" => "create_children"}]
+                 }
+               )
+
+      assert second.id == first.id
+
+      reloaded = Repo.get!(Artifact, second.id)
+
+      assert reloaded.data["candidate_work_units"] == [unit_one, unit_two, unit_three]
+
+      assert reloaded.data["apply_targets"] == [
+               %{"kind" => "task_tree", "mode" => "create_children"}
+             ]
+    end
+
     test "returns an error when the patch is missing the state machine id", %{
       user: user,
       project: project,
