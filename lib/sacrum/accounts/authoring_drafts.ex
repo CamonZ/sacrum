@@ -163,13 +163,13 @@ defmodule Sacrum.Accounts.AuthoringDrafts do
          %Artifact{
            data: %{
              "current_state" => current_state,
-             "source_chat" => %{"source_message_id" => source_message_id}
+             "source_chat" => %{"source_message_id" => existing_source_message_id}
            }
          },
          patch
-       )
-       when is_binary(source_message_id) do
-    source_message_id(patch) == source_message_id and patch["current_state"] == current_state
+       ) do
+    patch["current_state"] == current_state and
+      source_message_id(patch) == existing_source_message_id
   end
 
   defp already_applied?(_artifact, _patch), do: false
