@@ -121,7 +121,9 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
            |> StateTransitions.waiting_changeset(execution.id)
            |> Repo.update(),
          {:ok, updated_task} <- Repo.update(Status.changeset(data.task)),
-         {:ok, child_runs} <- get_or_create_child_runs(children, updated_task_run, execution.id) do
+         incomplete_children = incomplete_children(children),
+         {:ok, child_runs} <-
+           get_or_create_child_runs(incomplete_children, updated_task_run, execution.id) do
       %{
         execution: execution,
         task_run: updated_task_run,
@@ -162,18 +164,20 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
     end
   end
 
+  @spec incomplete_children([Task.t()]) :: [Task.t()]
+  defp incomplete_children(children) do
+    Enum.filter(children, &is_nil(&1.completed_at))
+  end
+
   @spec schedule_all_children([{Task.t(), TaskRun.t()}]) :: :ok | {:error, term()}
   defp schedule_all_children(child_runs) do
-    incomplete_child_runs =
-      Enum.filter(child_runs, fn {child, _} -> is_nil(child.completed_at) end)
-
     blocked =
-      incomplete_child_runs
+      child_runs
       |> Enum.map(fn {child, _} -> child.id end)
       |> TaskDependencies.incomplete_direct_blocker_task_ids()
       |> MapSet.new()
 
-    incomplete_child_runs
+    child_runs
     |> Enum.filter(fn {child, _} -> not MapSet.member?(blocked, child.id) end)
     |> Enum.reduce_while(:ok, fn {child, task_run}, _acc ->
       case start_child_orchestrator(child, task_run) do
