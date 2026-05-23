@@ -21,6 +21,7 @@ defmodule Sacrum.ChatSessionRunner.SignalsTest do
       assert Signals.intake() == "sacrum.chat_session.intake"
       assert Signals.load_messages() == "sacrum.chat_session.load_messages"
       assert Signals.invoke_inference() == "sacrum.chat_session.invoke_inference"
+      assert Signals.verify_authoring() == "sacrum.chat_session.verify_authoring"
       assert Signals.append_assistant() == "sacrum.chat_session.append_assistant"
       assert Signals.resume_assistant() == "sacrum.chat_session.resume_assistant"
       assert Signals.complete_session() == "sacrum.chat_session.complete_session"
@@ -34,6 +35,7 @@ defmodule Sacrum.ChatSessionRunner.SignalsTest do
         Signals.intake(),
         Signals.load_messages(),
         Signals.invoke_inference(),
+        Signals.verify_authoring(),
         Signals.append_assistant(),
         Signals.resume_assistant(),
         Signals.complete_session(),
@@ -52,6 +54,7 @@ defmodule Sacrum.ChatSessionRunner.SignalsTest do
                Signals.intake(),
                Signals.load_messages(),
                Signals.invoke_inference(),
+               Signals.verify_authoring(),
                Signals.append_assistant(),
                Signals.resume_assistant(),
                Signals.complete_session(),

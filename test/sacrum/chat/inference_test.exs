@@ -35,6 +35,91 @@ defmodule Sacrum.Chat.InferenceTest do
     end
   end
 
+  defmodule CapturingProvider do
+    @behaviour Sacrum.Chat.Inference.Provider
+
+    @impl true
+    def generate(messages, opts) do
+      if test_pid = Keyword.get(opts, :test_pid) do
+        send(test_pid, {:capturing_provider, messages, opts})
+      end
+
+      {:ok,
+       %Result{
+         content: "ok",
+         content_format: :markdown,
+         public_metadata: %{},
+         internal_metadata: %{}
+       }}
+    end
+  end
+
+  describe "generate/2 with system_prompt and tools" do
+    test "prepends the system_prompt as a synthetic system message" do
+      tools = [
+        %{
+          "type" => "function",
+          "function" => %{"name" => "start_authoring", "parameters" => %{}}
+        }
+      ]
+
+      assert {:ok, _result} =
+               Inference.generate(
+                 [%{role: :user, content: "Hi"}],
+                 provider: CapturingProvider,
+                 system_prompt: "You are Vertebrae.",
+                 tools: tools,
+                 test_pid: self()
+               )
+
+      assert_receive {:capturing_provider, messages, opts}
+
+      assert [
+               %{role: "system", content: "You are Vertebrae."},
+               %{role: "user", content: "Hi"}
+             ] = messages
+
+      assert Keyword.get(opts, :tools) == tools
+      assert Keyword.get(opts, :system_prompt) == "You are Vertebrae."
+    end
+
+    test "does not prepend a system message when system_prompt is nil" do
+      assert {:ok, _result} =
+               Inference.generate(
+                 [%{role: :user, content: "Hi"}],
+                 provider: CapturingProvider,
+                 test_pid: self()
+               )
+
+      assert_receive {:capturing_provider, messages, opts}
+
+      assert [%{role: "user", content: "Hi"}] = messages
+      refute Keyword.has_key?(opts, :tools)
+    end
+
+    test "does not prepend a duplicate system message when the head is already system-role" do
+      assert {:ok, _result} =
+               Inference.generate(
+                 [
+                   %{role: :system, content: "caller-owned system"},
+                   %{role: :user, content: "Hi"}
+                 ],
+                 provider: CapturingProvider,
+                 system_prompt: "default vertebrae prompt",
+                 test_pid: self()
+               )
+
+      assert_receive {:capturing_provider, messages, _opts}
+
+      assert [
+               %{role: "system", content: "caller-owned system"},
+               %{role: "user", content: "Hi"}
+             ] = messages
+
+      assert Enum.count(messages, &(&1.role == "system")) == 1
+    end
+  end
+
   describe "generate/2" do
     test "runs a fake provider and returns a normalized assistant result" do
       messages = [

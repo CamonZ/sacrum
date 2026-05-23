@@ -1,55 +1,54 @@
 defmodule Sacrum.TestSupport.AuthoringFixtures do
   @moduledoc false
 
-  alias Sacrum.Accounts.{Artifacts, LiveChat, Projects}
+  alias Sacrum.Accounts.{Artifacts, AuthoringRunKinds, LiveChat, Projects}
+  alias Sacrum.Repo
   alias Sacrum.Repo.AuthoringTemplates
+  alias Sacrum.Repo.Schemas.AuthoringTemplate
   alias Sacrum.Repo.Users
 
-  @work_breakdown %{
-    run_kind: "work_breakdown",
-    artifact_type: "task_draft",
-    template_kind: "starter_draft",
-    state_machine_entrypoint: "start_work_breakdown_authoring",
-    state_machine_id: "work_breakdown_authoring",
-    initial_state: "collect_parent_scope"
-  }
-  @code_factory %{
-    run_kind: "code_factory",
-    artifact_type: "workflow_draft",
-    template_kind: "workflow_recipe",
-    state_machine_entrypoint: "start_code_factory_creation",
-    state_machine_id: "code_factory_creation",
-    initial_state: "collect_workflow_goal"
-  }
-  @feature_exploration %{
-    run_kind: "feature_exploration",
-    artifact_type: "task_draft",
-    template_kind: "starter_draft",
-    state_machine_entrypoint: "start_minimal_feature_exploration",
-    state_machine_id: "feature_exploration",
-    initial_state: "collect_feature_scope"
-  }
-  @investigation_session %{
-    run_kind: "investigation_session",
-    artifact_type: "investigation_draft",
-    template_kind: "starter_draft",
-    state_machine_entrypoint: "start_investigation_session_authoring",
-    state_machine_id: "investigation_session_authoring",
-    initial_state: "collect_investigation_scope"
-  }
+  defp work_breakdown, do: AuthoringRunKinds.work_breakdown()
+  defp code_factory, do: AuthoringRunKinds.code_factory()
+  defp feature_exploration, do: AuthoringRunKinds.feature_exploration()
+  defp investigation_session, do: AuthoringRunKinds.investigation_session()
 
   def insert_code_factory_template!(attrs \\ %{}) do
+    # AuthoringTemplateLookup resolves a code_factory start_authoring request by
+    # joining three rows: the starter_draft descriptor that the chat-side enums
+    # advertise, plus the workflow_recipe and prompt_template supporting rows
+    # that enrich_code_factory_template/3 merges in. The seeds file inserts the
+    # same three rows; tests insert their own so the suite does not depend on
+    # priv/repo/seeds.exs having been evaluated against the test DB.
+    descriptor = code_factory()
+
+    starter =
+      insert_authoring_template!(
+        descriptor,
+        "code_factory_creation",
+        code_factory_starter_payload(),
+        attrs
+      )
+
     insert_authoring_template!(
-      @code_factory,
-      "code_factory_creation",
-      code_factory_template_payload(),
+      %{descriptor | template_kind: "workflow_recipe"},
+      "code_factory_workflows",
+      code_factory_workflow_recipe_payload(),
       attrs
     )
+
+    insert_authoring_template!(
+      %{descriptor | template_kind: "prompt_template"},
+      "code_factory_step_prompts",
+      code_factory_prompt_template_payload(),
+      attrs
+    )
+
+    starter
   end
 
   def insert_feature_exploration_template!(attrs \\ %{}) do
     insert_authoring_template!(
-      @feature_exploration,
+      feature_exploration(),
       "minimal_feature_exploration",
       feature_exploration_template_payload(),
       attrs
@@ -58,7 +57,7 @@ defmodule Sacrum.TestSupport.AuthoringFixtures do
 
   def insert_investigation_session_template!(attrs \\ %{}) do
     insert_authoring_template!(
-      @investigation_session,
+      investigation_session(),
       "investigation_session_authoring",
       investigation_session_template_payload(),
       attrs
@@ -138,23 +137,23 @@ defmodule Sacrum.TestSupport.AuthoringFixtures do
   end
 
   def work_breakdown_start_intent(source_message_id, overrides \\ %{}) do
-    @work_breakdown
+    work_breakdown()
     |> start_authoring_intent(source_message_id, %{})
     |> Map.merge(overrides)
   end
 
   def code_factory_start_intent(source_message_id, overrides \\ %{}) do
-    @code_factory
+    code_factory()
     |> start_authoring_intent(source_message_id, %{"tool" => "workflow.create_from_recipe"})
     |> Map.merge(overrides)
   end
 
   def feature_start_intent(source_message_id, overrides \\ %{}) do
-    start_authoring_intent(@feature_exploration, source_message_id, overrides)
+    start_authoring_intent(feature_exploration(), source_message_id, overrides)
   end
 
   def investigation_start_intent(source_message_id, overrides \\ %{}) do
-    start_authoring_intent(@investigation_session, source_message_id, overrides)
+    start_authoring_intent(investigation_session(), source_message_id, overrides)
   end
 
   def revise_authoring_intent(state_machine_id, source_message_id, overrides \\ %{}) do
@@ -183,7 +182,39 @@ defmodule Sacrum.TestSupport.AuthoringFixtures do
 
   def step_by_key(steps, key), do: Enum.find(steps, &(&1["key"] == key))
 
-  def code_factory_template_payload do
+  def code_factory_starter_payload do
+    %{
+      "state_machine_entrypoint" => "start_code_factory_creation",
+      "apply_target" => "workflow_bundle",
+      "assumptions" => [
+        "The factory follows work steps, eval, then route.",
+        "Route steps drive transitions through structured output."
+      ],
+      "open_questions" => [
+        "Which workflow should receive aligned implementation output?",
+        "Which eval criteria decide whether work routes forward or loops?"
+      ],
+      "proposed_approach" => [
+        "Initialize only the known Code Factory workflow bundle shape.",
+        "Constrain route and eval prompts with schema-backed JSON output."
+      ],
+      "candidate_work_units" => [
+        %{
+          "title" => "Draft Code Factory workflow bundle",
+          "level" => "ticket",
+          "desired_behavior" =>
+            "Represent backlog, implementation, verification, ship, and done workflows.",
+          "testing_criteria" => ["Each workflow has at least one structured step."]
+        }
+      ],
+      "validation_expectations" => [
+        "Route steps are not final unless they are true terminal steps.",
+        "Eval and route prompts include workflow.output_schema directives."
+      ]
+    }
+  end
+
+  def code_factory_workflow_recipe_payload do
     %{
       "workflows" => [
         %{
@@ -215,6 +246,25 @@ defmodule Sacrum.TestSupport.AuthoringFixtures do
       "validation_expectations" => [
         "Every workflow has an initial step.",
         "Every prompt uses guarded Liquid variables."
+      ]
+    }
+  end
+
+  def code_factory_prompt_template_payload do
+    %{
+      "rules" => %{
+        "task_scope" => "Use task.* fields rather than ticket.* aliases.",
+        "guard_variables" => "Guard every optional variable or section before printing it.",
+        "schema_directive" =>
+          "Eval and route prompts must ask for JSON matching workflow.output_schema."
+      },
+      "prompts" => [
+        %{
+          "workflow" => "implementation",
+          "step" => "work",
+          "requires_output_schema_directive" => false,
+          "template" => "Implement {{ task.title }} using the current task context."
+        }
       ]
     }
   end
@@ -277,8 +327,38 @@ defmodule Sacrum.TestSupport.AuthoringFixtures do
       |> Map.take([:run_kind, :artifact_type, :template_kind, :state_machine_entrypoint])
       |> Map.merge(%{name: name, payload: payload})
 
-    {:ok, template} = AuthoringTemplates.insert(deep_merge(base_attrs, attrs))
-    template
+    merged_attrs = deep_merge(base_attrs, attrs)
+
+    case AuthoringTemplates.insert(merged_attrs) do
+      {:ok, template} ->
+        template
+
+      {:error, %Ecto.Changeset{errors: errors}} = error ->
+        if Keyword.has_key?(errors, :run_kind) and
+             match?({_, [constraint: :unique, constraint_name: _]}, errors[:run_kind]) do
+          # Seeded template already occupies this classification+name. Update its
+          # payload so the fixture's data wins for the duration of the test.
+          {:ok, existing} =
+            AuthoringTemplates.get_by_classification_and_name(
+              Map.take(merged_attrs, [
+                :run_kind,
+                :artifact_type,
+                :template_kind,
+                :state_machine_entrypoint
+              ]),
+              merged_attrs.name
+            )
+
+          {:ok, updated} =
+            existing
+            |> AuthoringTemplate.create_changeset(%{payload: merged_attrs.payload})
+            |> Repo.update()
+
+          updated
+        else
+          raise inspect(error)
+        end
+    end
   end
 
   defp start_authoring_intent(descriptor, source_message_id, overrides) do

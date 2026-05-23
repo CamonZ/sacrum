@@ -35,6 +35,7 @@ defmodule Sacrum.ChatSessionRunner do
       {Signals.intake(), Sacrum.ChatSessionRunner.Actions.Intake},
       {Signals.load_messages(), Sacrum.ChatSessionRunner.Actions.LoadMessages},
       {Signals.invoke_inference(), Sacrum.ChatSessionRunner.Actions.InvokeInference},
+      {Signals.verify_authoring(), Sacrum.ChatSessionRunner.Actions.VerifyAuthoringIntent},
       {Signals.append_assistant(), Sacrum.ChatSessionRunner.Actions.AppendAssistant},
       {Signals.resume_assistant(), Sacrum.ChatSessionRunner.Actions.ResumeAssistant},
       {Signals.complete_session(), Sacrum.ChatSessionRunner.Actions.CompleteSession},

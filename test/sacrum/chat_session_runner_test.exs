@@ -102,7 +102,7 @@ defmodule Sacrum.ChatSessionRunnerTest do
                )
 
       assert_receive {:blocking_provider_started, provider_pid,
-                      [%{role: "user", content: "Plan the next step"}]},
+                      [%{role: "system"}, %{role: "user", content: "Plan the next step"}]},
                      1_000
 
       assert [{^pid, _}] = Sacrum.ChatSessionRegistry.lookup(session.id)
@@ -160,7 +160,7 @@ defmodule Sacrum.ChatSessionRunnerTest do
                )
 
       assert_receive {:blocking_provider_started, provider_pid,
-                      [%{role: "user", content: "Plan the next step"}]},
+                      [%{role: "system"}, %{role: "user", content: "Plan the next step"}]},
                      1_000
 
       assert {:ok, cancelled_session} = LiveChat.cancel_session(user.id, project.id, session.id)
@@ -284,7 +284,7 @@ defmodule Sacrum.ChatSessionRunnerTest do
                )
 
       assert_receive {:blocking_provider_started, first_provider_pid,
-                      [%{role: "user", content: "Plan the next step"}]},
+                      [%{role: "system"}, %{role: "user", content: "Plan the next step"}]},
                      1_000
 
       completion =

@@ -69,6 +69,17 @@ defmodule Sacrum.Accounts.AuthoringDrafts do
     end
   end
 
+  @spec get_latest_for_chat_session(ChatSession.t()) :: Artifact.t() | nil
+  def get_latest_for_chat_session(%ChatSession{} = chat_session) do
+    chat_session
+    |> latest_draft_query()
+    |> Repo.one()
+    |> case do
+      nil -> nil
+      {artifact, _link} -> artifact
+    end
+  end
+
   defp upsert_for_chat_session(%ChatSession{} = chat_session, normalized_patch, state_machine_id) do
     Repo.transaction(fn ->
       chat_session
@@ -195,6 +206,23 @@ defmodule Sacrum.Accounts.AuthoringDrafts do
           artifact.project_id == ^chat_session.project_id and
           artifact.artifact_type == @artifact_type and artifact.artifact_state == @artifact_state and
           fragment("?->>? = ?", artifact.data, "state_machine_id", ^state_machine_id),
+      where:
+        link.user_id == ^chat_session.user_id and link.project_id == ^chat_session.project_id and
+          link.subject_type == @subject_type and link.subject_id == ^chat_session.id and
+          link.relationship_kind == @relationship_kind,
+      order_by: [desc: artifact.updated_at, desc: artifact.id],
+      limit: 1,
+      select: {artifact, link}
+  end
+
+  defp latest_draft_query(%ChatSession{} = chat_session) do
+    from artifact in Artifact,
+      join: link in ArtifactLink,
+      on: link.artifact_id == artifact.id,
+      where:
+        artifact.user_id == ^chat_session.user_id and
+          artifact.project_id == ^chat_session.project_id and
+          artifact.artifact_type == @artifact_type and artifact.artifact_state == @artifact_state,
       where:
         link.user_id == ^chat_session.user_id and link.project_id == ^chat_session.project_id and
           link.subject_type == @subject_type and link.subject_id == ^chat_session.id and

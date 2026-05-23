@@ -13,6 +13,7 @@ defmodule Sacrum.ChatSessionRunner.Signals do
   @intake "sacrum.chat_session.intake"
   @load_messages "sacrum.chat_session.load_messages"
   @invoke_inference "sacrum.chat_session.invoke_inference"
+  @verify_authoring "sacrum.chat_session.verify_authoring"
   @append_assistant "sacrum.chat_session.append_assistant"
   @resume_assistant "sacrum.chat_session.resume_assistant"
   @complete_session "sacrum.chat_session.complete_session"
@@ -33,6 +34,9 @@ defmodule Sacrum.ChatSessionRunner.Signals do
 
   @spec invoke_inference() :: String.t()
   def invoke_inference, do: @invoke_inference
+
+  @spec verify_authoring() :: String.t()
+  def verify_authoring, do: @verify_authoring
 
   @spec append_assistant() :: String.t()
   def append_assistant, do: @append_assistant
@@ -61,6 +65,7 @@ defmodule Sacrum.ChatSessionRunner.Signals do
       @intake,
       @load_messages,
       @invoke_inference,
+      @verify_authoring,
       @append_assistant,
       @resume_assistant,
       @complete_session,
