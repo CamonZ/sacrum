@@ -32,6 +32,7 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
   @engine_kind "jido"
   @runner_version 1
   @assistant_client_message_id_prefix "chat_session_runner:assistant:v1"
+  @valid_tracker_target_instruction "Select a valid in-scope task, workflow, section, or workflow step"
 
   @public_payload_keys ~w(status message_count assistant_message_id resumed provider model turn_message_id)
 
@@ -192,6 +193,7 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
       public_payload: %{
         "status" => "rejected",
         "reason" => reason,
+        "message" => public_direct_tracker_rejection_message(reason, rejection),
         "turn_message_id" => turn_message_id || latest_user_message_id!(session)
       },
       internal_payload: Inference.scrub_secrets(%{"rejection" => rejection})
@@ -640,6 +642,33 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
        do: reason
 
   defp public_direct_tracker_rejection_reason(_rejection), do: "out_of_scope"
+
+  defp public_direct_tracker_rejection_message("ambiguous_target", rejection) do
+    case ambiguous_target_handle(rejection) do
+      nil ->
+        "Multiple tracker objects match that reference. #{@valid_tracker_target_instruction}."
+
+      handle ->
+        "Multiple tracker objects match #{handle}. #{@valid_tracker_target_instruction}."
+    end
+  end
+
+  defp public_direct_tracker_rejection_message(_reason, _rejection) do
+    "#{@valid_tracker_target_instruction} and try the tracker update again."
+  end
+
+  defp ambiguous_target_handle(%{"details" => details}) when is_binary(details) do
+    details
+    |> then(&Regex.scan(~r/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i, &1))
+    |> Enum.map(fn [id] -> String.slice(id, 0, 8) end)
+    |> Enum.uniq()
+    |> case do
+      [handle] -> handle
+      _other -> nil
+    end
+  end
+
+  defp ambiguous_target_handle(_rejection), do: nil
 
   @spec checkpoint_step(ChatSession.t(), atom(), map()) ::
           {:ok, [ChatEvent.t()]} | {:error, term()}

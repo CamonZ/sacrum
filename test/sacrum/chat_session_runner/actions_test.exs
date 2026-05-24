@@ -29,7 +29,7 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
 
   alias Sacrum.ChatSessionRunner.Signals
   alias Sacrum.ChatSessions.Status, as: ChatSessionStatus
-  alias Sacrum.Repo.Schemas.ChatEvent
+  alias Sacrum.Repo.Schemas.{ChatEvent, ChatMessage}
   alias Sacrum.Repo.Users
 
   @assistant_client_message_id_prefix "chat_session_runner:assistant:v1"
@@ -483,10 +483,11 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
 
       assert [event] = public_events
       assert event.public_payload["reason"] == "out_of_scope"
+      assert_actionable_rejection_response(event, :out_of_scope)
       assert [] = authoring_drafts_for_session(ctx)
     end
 
-    test "emits an ambiguous target rejection without mutating Accounts", ctx do
+    test "emits an ambiguous target selection response without mutating or falling back", ctx do
       %{workflow: workflow, step: step} = create_tracker_targets(ctx)
 
       [first_task, second_task] =
@@ -522,8 +523,11 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
 
       inference_result =
         result_with_direct_tracker_operation(%{
-          "action" => "show_task",
-          "arguments" => %{"task_ref" => "12345678"}
+          "action" => "update_task_fields",
+          "arguments" => %{
+            "task_ref" => "12345678",
+            "fields" => %{"title" => "This ambiguous task must not change"}
+          }
         })
 
       params = %{
@@ -539,19 +543,100 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
 
       assert emit.signal.type == Signals.complete_session()
 
-      public_events =
-        Repo.all(
-          from event in ChatEvent,
-            where:
-              event.chat_session_id == ^running.id and
-                event.visibility == :public and
-                event.event_type == "chat_direct_tracker_operation.rejected"
-        )
-
-      assert [event] = public_events
+      [event] = direct_tracker_rejection_events(running.id)
       assert event.public_payload["reason"] == "ambiguous_target"
+      assert_actionable_rejection_response(event, :ambiguous_target)
+      assert event.public_payload["message"] =~ "12345678"
+      public_payload_json = Jason.encode!(event.public_payload)
+      refute public_payload_json =~ first_task.id
+      refute public_payload_json =~ second_task.id
       assert event.internal_payload["rejection"]["details"] =~ first_task.id
       assert event.internal_payload["rejection"]["details"] =~ second_task.id
+
+      unchanged_tasks =
+        Repo.all(
+          from task in Sacrum.Repo.Schemas.Task,
+            where: task.id in ^[first_task.id, second_task.id],
+            select: {task.id, task.title}
+        )
+
+      assert Enum.sort(unchanged_tasks) ==
+               Enum.sort([
+                 {first_task.id, "Ambiguous Direct Tracker Task"},
+                 {second_task.id, "Ambiguous Direct Tracker Task"}
+               ])
+
+      refute assistant_message_exists?(running.id)
+      assert [] = authoring_drafts_for_session(ctx)
+    end
+
+    test "rejects outside-scope task directives with an actionable public response before mutation",
+         ctx do
+      outside_user = create_user("outside-direct-tracker")
+      {:ok, outside_project} = Projects.insert(outside_user.id, %{name: "Outside Project"})
+
+      {:ok, outside_workflow} =
+        Sacrum.Accounts.Workflows.insert(outside_user.id, outside_project.id, %{
+          name: "Outside Workflow"
+        })
+
+      {:ok, outside_step} =
+        Sacrum.Accounts.WorkflowSteps.insert(outside_workflow, %{
+          name: "Outside Step",
+          step_order: 1,
+          prompt: "Outside prompt"
+        })
+
+      {:ok, outside_task} =
+        Sacrum.Accounts.Tasks.insert(outside_user.id, outside_project.id, %{
+          title: "Outside Direct Tracker Task",
+          workflow_id: outside_workflow.id,
+          current_step_id: outside_step.id
+        })
+
+      {:ok, running} =
+        Sacrum.Accounts.ChatSessions.transition_status(
+          ctx.user.id,
+          ctx.project.id,
+          ctx.session.id,
+          :running
+        )
+
+      inference_result =
+        result_with_direct_tracker_operation(%{
+          "action" => "update_task_fields",
+          "arguments" => %{
+            "task_ref" => outside_task.id,
+            "fields" => %{"title" => "This outside task must not change"}
+          }
+        })
+
+      params = %{
+        chat_session_id: running.id,
+        engine_session_ref: ctx.engine_session_ref,
+        inference_opts: [],
+        turn_message_id: ctx.user_message.id,
+        inference_result: inference_result
+      }
+
+      assert {:ok, %{step: :verify_authoring}, [%Directive.Emit{} = emit]} =
+               VerifyAuthoringIntent.run(params, %{})
+
+      assert emit.signal.type == Signals.complete_session()
+
+      {:ok, unchanged_outside_task} =
+        Sacrum.Accounts.Tasks.get_by(outside_user.id,
+          conditions: [id: outside_task.id, project_id: outside_project.id]
+        )
+
+      assert unchanged_outside_task.title == "Outside Direct Tracker Task"
+
+      [event] = direct_tracker_rejection_events(running.id)
+      assert event.public_payload["reason"] == "out_of_scope"
+      assert_actionable_rejection_response(event, :out_of_scope)
+      refute Jason.encode!(event.public_payload) =~ outside_task.id
+
+      refute assistant_message_exists?(running.id)
       assert [] = authoring_drafts_for_session(ctx)
     end
 
@@ -873,6 +958,32 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
             event.visibility == :public and
             event.event_type == "chat_direct_tracker_operation.rejected"
     )
+  end
+
+  defp assistant_message_exists?(session_id) do
+    Repo.exists?(
+      from message in ChatMessage,
+        where: message.chat_session_id == ^session_id and message.role == :assistant
+    )
+  end
+
+  defp assert_actionable_rejection_response(event, reason) do
+    message = event.public_payload["message"]
+
+    assert is_binary(message)
+
+    downcased_message = String.downcase(message)
+
+    assert String.contains?(downcased_message, "select")
+    assert String.contains?(downcased_message, "valid")
+
+    case reason do
+      :ambiguous_target ->
+        assert String.contains?(downcased_message, "multiple")
+
+      :out_of_scope ->
+        assert String.contains?(downcased_message, "in-scope")
+    end
   end
 
   defp create_tracker_targets(ctx) do
