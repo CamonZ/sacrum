@@ -69,6 +69,12 @@ defmodule Sacrum.Chat.DirectTrackerOperationResolver do
 
   def resolve_directive(_directive, _context), do: {:error, :invalid_direct_tracker_operation}
 
+  @spec resolve_directives([map()], context()) :: {:ok, [map()]} | {:error, term()}
+  def resolve_directives([_ | _] = directives, %{} = context),
+    do: map_while_ok(directives, &resolve_directive(&1, context))
+
+  def resolve_directives(_directives, _context), do: {:error, :invalid_direct_tracker_operation}
+
   @spec resolve_target_reference(map(), context()) :: {:ok, struct()} | {:error, term()}
   def resolve_target_reference(%{type: type, ref: ref}, context),
     do: resolve_target_reference(%{"type" => type, "ref" => ref}, context)
@@ -120,6 +126,10 @@ defmodule Sacrum.Chat.DirectTrackerOperationResolver do
     }
   end
 
+  @spec serialize_resolutions([map()]) :: [map()]
+  def serialize_resolutions(resolved) when is_list(resolved),
+    do: Enum.map(resolved, &serialize_resolution/1)
+
   @spec deserialize_resolution(map()) :: {:ok, map()} | {:error, term()}
   def deserialize_resolution(%{
         "action" => action,
@@ -141,6 +151,12 @@ defmodule Sacrum.Chat.DirectTrackerOperationResolver do
 
   def deserialize_resolution(_serialized), do: {:error, :invalid_direct_tracker_operation}
 
+  @spec deserialize_resolutions([map()]) :: {:ok, [map()]} | {:error, term()}
+  def deserialize_resolutions([_ | _] = serialized),
+    do: map_while_ok(serialized, &deserialize_resolution/1)
+
+  def deserialize_resolutions(_serialized), do: {:error, :invalid_direct_tracker_operation}
+
   @spec public_target(map()) :: map() | nil
   def public_target(%{"action" => action, "targets" => targets})
       when is_binary(action) and is_map(targets) do
@@ -158,6 +174,25 @@ defmodule Sacrum.Chat.DirectTrackerOperationResolver do
   end
 
   def public_target(_serialized), do: nil
+
+  defp map_while_ok(items, fun) do
+    result =
+      Enum.reduce_while(items, {:ok, []}, fn
+        %{} = item, {:ok, acc} ->
+          case fun.(item) do
+            {:ok, value} -> {:cont, {:ok, [value | acc]}}
+            {:error, reason} -> {:halt, {:error, reason}}
+          end
+
+        _other, _acc ->
+          {:halt, {:error, :invalid_direct_tracker_operation}}
+      end)
+
+    case result do
+      {:ok, values} -> {:ok, Enum.reverse(values)}
+      error -> error
+    end
+  end
 
   defp resolve_directive_targets(action, args, context)
        when action in [

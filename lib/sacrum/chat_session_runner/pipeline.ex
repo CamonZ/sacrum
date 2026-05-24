@@ -142,7 +142,7 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
     with {:ok, message} <- ensure_message(session, attrs),
          {:ok, _event} <- ensure_public_message_event(session, message),
          {:ok, _event} <- append_inference_completed_event(session, message, inference_result),
-         {:ok, _direct_event_or_nil} <-
+         {:ok, _direct_events} <-
            maybe_execute_direct_tracker_operation(
              session,
              inference_result,
@@ -160,13 +160,13 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
   end
 
   @spec execute_direct_tracker_operation(ChatSession.t(), Inference.Result.t(), String.t() | nil) ::
-          {:ok, ChatEvent.t()} | {:error, term()}
+          {:ok, [ChatEvent.t()]} | {:error, term()}
   def execute_direct_tracker_operation(
         %ChatSession{} = session,
         %Inference.Result{} = inference_result,
         turn_message_id \\ nil
       ) do
-    execute_and_record_direct_tracker_operation(session, inference_result, %{
+    execute_and_record_direct_tracker_operations(session, inference_result, %{
       "turn_message_id" => turn_message_id || latest_user_message_id!(session)
     })
   end
@@ -468,12 +468,12 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
          %ChatMessage{} = message,
          turn_message_id
        ) do
-    case direct_tracker_operation(inference_result) do
+    case direct_tracker_operations(inference_result) do
       {:error, :not_found} ->
-        {:ok, nil}
+        {:ok, []}
 
-      {:ok, operation} ->
-        execute_and_record_direct_tracker_operation(session, operation, %{
+      {:ok, operations} ->
+        execute_and_record_direct_tracker_operations(session, operations, %{
           "assistant_message_id" => message.id,
           "turn_message_id" => turn_message_id
         })
@@ -483,14 +483,45 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
     end
   end
 
-  defp execute_and_record_direct_tracker_operation(
+  defp execute_and_record_direct_tracker_operations(
          %ChatSession{} = session,
          %Inference.Result{} = inference_result,
          extra_public_payload
        ) do
-    with {:ok, operation} <- direct_tracker_operation(inference_result) do
-      execute_and_record_direct_tracker_operation(session, operation, extra_public_payload)
+    with {:ok, operations} <- direct_tracker_operations(inference_result) do
+      execute_and_record_direct_tracker_operations(session, operations, extra_public_payload)
     end
+  end
+
+  defp execute_and_record_direct_tracker_operations(
+         %ChatSession{} = session,
+         operations,
+         extra_public_payload
+       )
+       when is_list(operations) do
+    Repo.transaction(fn ->
+      case do_execute_and_record_direct_tracker_operations(
+             operations,
+             session,
+             extra_public_payload
+           ) do
+        {:ok, events} -> Enum.reverse(events)
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp do_execute_and_record_direct_tracker_operations(
+         operations,
+         %ChatSession{} = session,
+         extra_public_payload
+       ) do
+    Enum.reduce_while(operations, {:ok, []}, fn operation, {:ok, events} ->
+      case execute_and_record_direct_tracker_operation(session, operation, extra_public_payload) do
+        {:ok, event} -> {:cont, {:ok, [event | events]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
   end
 
   defp execute_and_record_direct_tracker_operation(
@@ -520,18 +551,27 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
     metadata = direct_tracker_metadata(result)
 
     is_map(Map.get(metadata, "resolved_direct_tracker_operation")) or
+      is_list(Map.get(metadata, "resolved_direct_tracker_operations")) or
       is_map(Map.get(metadata, "direct_tracker_operation_rejected"))
   end
 
-  defp direct_tracker_operation(%Inference.Result{} = result) do
-    case Map.get(direct_tracker_metadata(result), "resolved_direct_tracker_operation") do
-      nil ->
+  defp direct_tracker_operations(%Inference.Result{} = result) do
+    metadata = direct_tracker_metadata(result)
+
+    case {Map.get(metadata, "resolved_direct_tracker_operations"),
+          Map.get(metadata, "resolved_direct_tracker_operation")} do
+      {nil, nil} ->
         {:error, :not_found}
 
-      %{} = serialized ->
-        DirectTrackerOperationResolver.deserialize_resolution(serialized)
+      {nil, %{} = serialized} ->
+        with {:ok, operation} <- DirectTrackerOperationResolver.deserialize_resolution(serialized) do
+          {:ok, [operation]}
+        end
 
-      _other ->
+      {list, nil} when is_list(list) ->
+        DirectTrackerOperationResolver.deserialize_resolutions(list)
+
+      {_list, _single} ->
         {:error, :invalid_direct_tracker_operation}
     end
   end
@@ -548,6 +588,8 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
          result,
          extra_public_payload
        ) do
+    serialized_operation = DirectTrackerOperationResolver.serialize_resolution(operation)
+
     ChatEvents.append_to_session(session, %{
       event_type: "chat_direct_tracker_operation.completed",
       visibility: :public,
@@ -555,7 +597,7 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
         %{
           "action" => operation.action,
           "status" => "succeeded",
-          "target" => public_direct_tracker_target(operation),
+          "target" => DirectTrackerOperationResolver.public_target(serialized_operation),
           "result" => public_direct_tracker_result(result)
         }
         |> Map.merge(extra_public_payload)
@@ -563,26 +605,23 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
         |> Map.new(),
       internal_payload:
         Inference.scrub_secrets(%{
-          "operation" => DirectTrackerOperationResolver.serialize_resolution(operation),
+          "operation" => serialized_operation,
           "result" => stringify_direct_tracker_result(result)
         })
     })
   end
 
-  defp public_direct_tracker_result(%{section: section}),
-    do: stringify_direct_tracker_result(section)
+  defp public_direct_tracker_result(%{section: section}) do
+    section = stringify_direct_tracker_result(section)
+
+    Map.take(section, ~w(id section_type section_order content done))
+  end
 
   defp public_direct_tracker_result(%{workflow_step: step}),
     do: stringify_direct_tracker_result(step)
 
   defp public_direct_tracker_result(%{task: task}), do: stringify_direct_tracker_result(task)
   defp public_direct_tracker_result(result), do: stringify_direct_tracker_result(result)
-
-  defp public_direct_tracker_target(operation) do
-    operation
-    |> DirectTrackerOperationResolver.serialize_resolution()
-    |> DirectTrackerOperationResolver.public_target()
-  end
 
   defp stringify_direct_tracker_result(result) when is_map(result) do
     Map.new(result, fn {key, value} -> {to_string(key), stringify_direct_tracker_value(value)} end)

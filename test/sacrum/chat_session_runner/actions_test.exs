@@ -554,6 +554,133 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
       assert event.internal_payload["rejection"]["details"] =~ second_task.id
       assert [] = authoring_drafts_for_session(ctx)
     end
+
+    test "rejects unsupported compound operations before mutating Accounts", ctx do
+      %{workflow: workflow, step: step, task: task} = create_tracker_targets(ctx)
+
+      {:ok, running} =
+        Sacrum.Accounts.ChatSessions.transition_status(
+          ctx.user.id,
+          ctx.project.id,
+          ctx.session.id,
+          :running
+        )
+
+      inference_result =
+        result_with_direct_tracker_operations([
+          %{
+            "action" => "show_task",
+            "arguments" => %{"task_ref" => task.id}
+          },
+          %{
+            "action" => "update_workflow_step",
+            "arguments" => %{
+              "workflow_ref" => workflow.id,
+              "step_ref" => step.id,
+              "fields" => %{"prompt" => "This compound prompt must not be applied."}
+            }
+          }
+        ])
+
+      params = %{
+        chat_session_id: running.id,
+        engine_session_ref: ctx.engine_session_ref,
+        inference_opts: [],
+        turn_message_id: ctx.user_message.id,
+        inference_result: inference_result
+      }
+
+      assert {:ok, %{step: :verify_authoring}, [%Directive.Emit{} = emit]} =
+               VerifyAuthoringIntent.run(params, %{})
+
+      assert emit.signal.type == Signals.complete_session()
+
+      {:ok, unchanged_step} =
+        Sacrum.Accounts.WorkflowSteps.get_by(ctx.user.id,
+          conditions: [id: step.id, project_id: ctx.project.id]
+        )
+
+      assert unchanged_step.prompt == "Original prompt"
+
+      [event] = direct_tracker_rejection_events(running.id)
+      assert event.public_payload["reason"] == "out_of_scope"
+      assert event.internal_payload["rejection"]["reason_code"] == "out_of_scope"
+
+      assert event.internal_payload["rejection"]["details"] =~
+               "unsupported_compound_direct_tracker_operations"
+    end
+
+    test "rejects ambiguous compound operations before checklist mutation", ctx do
+      %{workflow: workflow, step: step, task: task} = create_tracker_targets(ctx)
+
+      Enum.each(
+        [
+          "12345678-0000-0000-0000-000000000003",
+          "12345678-0000-0000-0000-000000000004"
+        ],
+        fn id ->
+          {:ok, ambiguous_task} =
+            Sacrum.Accounts.Tasks.insert(ctx.user.id, ctx.project.id, %{
+              title: "Ambiguous Compound Task",
+              workflow_id: workflow.id,
+              current_step_id: step.id
+            })
+
+          Repo.update_all(from(t in Sacrum.Repo.Schemas.Task, where: t.id == ^ambiguous_task.id),
+            set: [id: id]
+          )
+        end
+      )
+
+      {:ok, running} =
+        Sacrum.Accounts.ChatSessions.transition_status(
+          ctx.user.id,
+          ctx.project.id,
+          ctx.session.id,
+          :running
+        )
+
+      inference_result =
+        result_with_direct_tracker_operations([
+          %{
+            "action" => "show_task",
+            "arguments" => %{"task_ref" => task.id}
+          },
+          %{
+            "action" => "upsert_task_section",
+            "arguments" => %{
+              "task_ref" => "12345678",
+              "section_type" => "checklist_item",
+              "content" => "Must not be partially inserted",
+              "done" => false
+            }
+          }
+        ])
+
+      params = %{
+        chat_session_id: running.id,
+        engine_session_ref: ctx.engine_session_ref,
+        inference_opts: [],
+        turn_message_id: ctx.user_message.id,
+        inference_result: inference_result
+      }
+
+      assert {:ok, %{step: :verify_authoring}, [%Directive.Emit{} = emit]} =
+               VerifyAuthoringIntent.run(params, %{})
+
+      assert emit.signal.type == Signals.complete_session()
+
+      [event] = direct_tracker_rejection_events(running.id)
+      assert event.public_payload["reason"] == "ambiguous_target"
+
+      assert [] =
+               Repo.all(
+                 from section in Sacrum.Repo.Schemas.TaskSection,
+                   where:
+                     section.project_id == ^ctx.project.id and
+                       section.content == "Must not be partially inserted"
+               )
+    end
   end
 
   describe "AppendAssistant.run/2" do
@@ -727,6 +854,25 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
       public_metadata: %{"provider" => "stub", "model" => "direct-tracker-test"},
       internal_metadata: %{"direct_tracker_operation" => directive}
     }
+  end
+
+  defp result_with_direct_tracker_operations(directives) do
+    %Result{
+      content: "Applying the requested tracker updates.",
+      content_format: :markdown,
+      public_metadata: %{"provider" => "stub", "model" => "direct-tracker-test"},
+      internal_metadata: %{"direct_tracker_operations" => directives}
+    }
+  end
+
+  defp direct_tracker_rejection_events(session_id) do
+    Repo.all(
+      from event in ChatEvent,
+        where:
+          event.chat_session_id == ^session_id and
+            event.visibility == :public and
+            event.event_type == "chat_direct_tracker_operation.rejected"
+    )
   end
 
   defp create_tracker_targets(ctx) do

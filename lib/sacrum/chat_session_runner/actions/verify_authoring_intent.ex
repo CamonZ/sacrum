@@ -86,8 +86,8 @@ defmodule Sacrum.ChatSessionRunner.Actions.VerifyAuthoringIntent do
     turn_message_id = Map.get(params, :turn_message_id)
 
     cond do
-      is_map(Map.get(metadata, "resolved_direct_tracker_operation")) ->
-        with {:ok, _event} <-
+      direct_tracker_operations_resolved?(metadata) ->
+        with {:ok, _events} <-
                Pipeline.execute_direct_tracker_operation(session, result, turn_message_id) do
           {:ok, complete_session_directive(session, params)}
         end
@@ -143,23 +143,73 @@ defmodule Sacrum.ChatSessionRunner.Actions.VerifyAuthoringIntent do
   end
 
   defp verify_direct_tracker_operation(%ChatSession{} = session, %Result{} = result) do
-    case get_in(result.internal_metadata, ["direct_tracker_operation"]) do
-      nil ->
+    metadata = result.internal_metadata || %{}
+
+    case {Map.get(metadata, "direct_tracker_operations"),
+          Map.get(metadata, "direct_tracker_operation")} do
+      {nil, nil} ->
         {:ok, result}
 
-      %{} = directive ->
-        case DirectTrackerOperationResolver.resolve_directive(
-               directive,
-               DirectTrackerOperationResolver.context_from_session(session)
-             ) do
+      {nil, %{} = directive} ->
+        context = DirectTrackerOperationResolver.context_from_session(session)
+
+        case DirectTrackerOperationResolver.resolve_directive(directive, context) do
           {:ok, resolved} -> {:ok, put_resolved_direct_tracker_operation(result, resolved)}
           {:error, reason} -> {:ok, reject_direct_tracker_operation(result, reason)}
         end
+
+      {directives, nil} when is_list(directives) ->
+        verify_direct_tracker_operations(session, result, directives)
 
       _other ->
         {:ok, reject_direct_tracker_operation(result, :invalid_direct_tracker_operation)}
     end
   end
+
+  defp verify_direct_tracker_operations(%ChatSession{} = session, %Result{} = result, directives) do
+    context = DirectTrackerOperationResolver.context_from_session(session)
+
+    with :ok <- validate_compound_direct_tracker_directives(directives),
+         {:ok, resolved} <- DirectTrackerOperationResolver.resolve_directives(directives, context),
+         :ok <- validate_compound_direct_tracker_operations(resolved) do
+      {:ok, put_resolved_direct_tracker_operations(result, resolved)}
+    else
+      {:error, reason} -> {:ok, reject_direct_tracker_operation(result, reason)}
+    end
+  end
+
+  defp direct_tracker_operations_resolved?(metadata) when is_map(metadata) do
+    is_map(Map.get(metadata, "resolved_direct_tracker_operation")) or
+      is_list(Map.get(metadata, "resolved_direct_tracker_operations"))
+  end
+
+  defp validate_compound_direct_tracker_directives([
+         %{} = show_task,
+         %{} = upsert_task_section
+       ]) do
+    case {directive_action(show_task), directive_action(upsert_task_section)} do
+      {"show_task", "upsert_task_section"} ->
+        :ok
+
+      _other ->
+        {:error, :unsupported_compound_direct_tracker_operations}
+    end
+  end
+
+  defp validate_compound_direct_tracker_directives(_directives),
+    do: {:error, :unsupported_compound_direct_tracker_operations}
+
+  defp directive_action(directive),
+    do: Map.get(directive, "action") || Map.get(directive, :action)
+
+  defp validate_compound_direct_tracker_operations([
+         %{action: "show_task", targets: %{task: task}},
+         %{action: "upsert_task_section", targets: %{task: task}}
+       ]),
+       do: :ok
+
+  defp validate_compound_direct_tracker_operations(_operations),
+    do: {:error, :unsupported_compound_direct_tracker_operations}
 
   @doc """
   Pure rule-based schema check over an authoring intent.
@@ -427,12 +477,27 @@ defmodule Sacrum.ChatSessionRunner.Actions.VerifyAuthoringIntent do
     %Result{result | internal_metadata: metadata}
   end
 
+  defp put_resolved_direct_tracker_operations(%Result{} = result, resolved) do
+    metadata =
+      (result.internal_metadata || %{})
+      |> Map.delete("direct_tracker_operations")
+      |> Map.put(
+        "resolved_direct_tracker_operations",
+        DirectTrackerOperationResolver.serialize_resolutions(resolved)
+      )
+
+    %Result{result | internal_metadata: metadata}
+  end
+
   defp reject_direct_tracker_operation(%Result{} = result, reason) do
     Logger.warning(fn ->
       "[verify_authoring_intent] direct tracker operation rejected: #{inspect(reason)}"
     end)
 
-    metadata = Map.delete(result.internal_metadata || %{}, "direct_tracker_operation")
+    metadata =
+      (result.internal_metadata || %{})
+      |> Map.delete("direct_tracker_operation")
+      |> Map.delete("direct_tracker_operations")
 
     %Result{
       result

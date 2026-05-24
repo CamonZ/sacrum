@@ -162,7 +162,9 @@ defmodule Sacrum.Chat.Inference.OpenRouter do
 
   defp has_tool_directive?(metadata) do
     Map.has_key?(metadata, "authoring_tool_intent") or
-      Map.has_key?(metadata, "direct_tracker_operation")
+      Map.has_key?(metadata, "direct_tracker_operation") or
+      Map.has_key?(metadata, "direct_tracker_operations") or
+      Map.has_key?(metadata, "direct_tracker_operation_rejected")
   end
 
   defp maybe_put_tool_directive(metadata, result, source_message_id) do
@@ -172,6 +174,12 @@ defmodule Sacrum.Chat.Inference.OpenRouter do
 
       {:direct_tracker_operation, operation} ->
         Map.put(metadata, "direct_tracker_operation", operation)
+
+      {:direct_tracker_operations, operations} ->
+        Map.put(metadata, "direct_tracker_operations", operations)
+
+      {:direct_tracker_operation_rejected, rejection} ->
+        Map.put(metadata, "direct_tracker_operation_rejected", rejection)
 
       {:authoring_tool_intent, intent} ->
         Map.put(metadata, "authoring_tool_intent", intent)
@@ -194,24 +202,31 @@ defmodule Sacrum.Chat.Inference.OpenRouter do
     |> case do
       [] -> nil
       [directive] -> directive
-      [directive | extras] -> log_extra_tool_directives_and_keep(directive, extras)
+      directives -> combine_tool_directives(directives, source_message_id)
     end
   end
 
-  defp log_extra_tool_directives_and_keep({key, payload}, extras) do
-    labels =
-      Enum.map([{key, payload} | extras], fn {directive_key, _payload} -> directive_key end)
+  defp combine_tool_directives(directives, source_message_id) do
+    labels = Enum.map(directives, fn {directive_key, _payload} -> directive_key end)
 
-    if Enum.all?(labels, &(&1 == key)) do
-      {key,
-       log_extra_tool_calls_and_keep(payload, Enum.map(extras, &elem(&1, 1)), label_for(key))}
-    else
-      Logger.warning(fn ->
-        "[chat.inference.open_router] received #{length(extras) + 1} mixed tool_calls " <>
-          "in one response; keeping the first and dropping the rest"
-      end)
+    cond do
+      Enum.all?(labels, &(&1 == :direct_tracker_operation)) ->
+        {:direct_tracker_operations, Enum.map(directives, &elem(&1, 1))}
 
-      {key, payload}
+      Enum.all?(labels, &(&1 == :authoring_tool_intent)) ->
+        [{_key, payload} | extras] = directives
+
+        {:authoring_tool_intent,
+         log_extra_tool_calls_and_keep(payload, Enum.map(extras, &elem(&1, 1)), "authoring")}
+
+      true ->
+        Logger.warning(fn ->
+          "[chat.inference.open_router] received #{length(directives)} mixed tool_calls " <>
+            "in one response; dropping all tool directives"
+        end)
+
+        {:direct_tracker_operation_rejected,
+         %{"reason" => "mixed_tool_calls", "source_message_id" => source_message_id}}
     end
   end
 
@@ -223,9 +238,6 @@ defmodule Sacrum.Chat.Inference.OpenRouter do
 
     payload
   end
-
-  defp label_for(:authoring_tool_intent), do: "authoring"
-  defp label_for(:direct_tracker_operation), do: "direct tracker"
 
   defp parse_tool_call(tool_call, source_message_id) do
     case tool_call_name(tool_call) do
