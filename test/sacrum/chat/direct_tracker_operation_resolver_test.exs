@@ -131,6 +131,41 @@ defmodule Sacrum.Chat.DirectTrackerOperationResolverTest do
       assert resolved.scope.chat_session_id == session.id
     end
 
+    test "resolves update_step_prompt from AgentServer-owned active workflow step context with only prompt input" do
+      user = create_user("step-prompt")
+      project = create_project(user, "Step Prompt")
+      workflow = create_workflow(user, project, %{name: "Implementation"})
+      active_step = create_step(user, workflow, %{name: "Implement"})
+      task = create_task(user, project, workflow, active_step)
+      session = create_chat_session(user, project)
+
+      directive = %{
+        "action" => "update_step_prompt",
+        "arguments" => %{
+          "prompt" => "Replace the server-resolved step prompt."
+        }
+      }
+
+      assert {:ok, resolved} =
+               DirectTrackerOperationResolver.resolve_directive(
+                 directive,
+                 scoped_context(user, project, session, %{
+                   active_object: %{type: "workflow_step", id: active_step.id},
+                   active_task_id: task.id
+                 })
+               )
+
+      active_step_id = active_step.id
+      workflow_id = workflow.id
+      task_id = task.id
+
+      assert resolved.action == "update_step_prompt"
+      assert resolved.arguments == %{"prompt" => "Replace the server-resolved step prompt."}
+      assert %WorkflowStep{id: ^active_step_id} = resolved.targets.workflow_step
+      assert %Workflow{id: ^workflow_id} = resolved.targets.workflow
+      assert %Task{id: ^task_id} = resolved.targets.task
+    end
+
     test "rejects direct operation targets outside the AgentServer user and project scope" do
       owner = create_user("owner")
       owner_project = create_project(owner, "Owner Project")
@@ -207,6 +242,36 @@ defmodule Sacrum.Chat.DirectTrackerOperationResolverTest do
                )
 
       assert Enum.sort(fields) == ~w(object_id permission permissions project_id user_id)
+    end
+
+    test "rejects update_step_prompt model-supplied scope or object identity authority" do
+      user = create_user("step-prompt-scope")
+      project = create_project(user, "Step Prompt Scope")
+      workflow = create_workflow(user, project, %{name: "Scope Workflow"})
+      step = create_step(user, workflow, %{name: "Scope Step"})
+      task = create_task(user, project, workflow, step)
+      session = create_chat_session(user, project)
+
+      directive = %{
+        "action" => "update_step_prompt",
+        "arguments" => %{
+          "prompt" => "This prompt must not be applied.",
+          "scope" => "project",
+          "object_id" => step.id,
+          "active_object_id" => step.id
+        }
+      }
+
+      assert {:error, {:forbidden_model_scope_fields, fields}} =
+               DirectTrackerOperationResolver.resolve_directive(
+                 directive,
+                 scoped_context(user, project, session, %{
+                   active_object: %{type: "workflow_step", id: step.id},
+                   active_task_id: task.id
+                 })
+               )
+
+      assert Enum.sort(fields) == ~w(active_object_id object_id scope)
     end
 
     test "returns ambiguous target when a short task ref matches multiple scoped tasks" do

@@ -15,6 +15,7 @@ defmodule Sacrum.Chat.DirectTrackerOperationToolsTest do
     update_task_fields
     upsert_task_section
     update_workflow_step
+    update_step_prompt
     add_task_dependency
     remove_task_dependency
     move_task_to_workflow_step
@@ -76,6 +77,7 @@ defmodule Sacrum.Chat.DirectTrackerOperationToolsTest do
       assert DirectTrackerOperationTools.known_function_name?("show_task")
       assert DirectTrackerOperationTools.known_function_name?("update_task_fields")
       assert DirectTrackerOperationTools.known_function_name?("move_task_to_workflow_step")
+      assert DirectTrackerOperationTools.known_function_name?("update_step_prompt")
 
       refute DirectTrackerOperationTools.known_function_name?("start_authoring")
       refute DirectTrackerOperationTools.known_function_name?("execute_shell")
@@ -100,6 +102,25 @@ defmodule Sacrum.Chat.DirectTrackerOperationToolsTest do
   end
 
   describe "schemas" do
+    test "exposes update_step_prompt as a prompt-only direct operation" do
+      tool =
+        DirectTrackerOperationTools.all()
+        |> Enum.find(&(get_in(&1, ["function", "name"]) == "update_step_prompt"))
+
+      assert %{
+               "function" => %{
+                 "parameters" => %{
+                   "required" => ["prompt"],
+                   "properties" => properties,
+                   "additionalProperties" => false
+                 }
+               }
+             } = tool
+
+      assert Map.keys(properties) == ["prompt"]
+      assert properties["prompt"]["type"] == "string"
+    end
+
     test "do not expose server-owned or context-derived fields as model parameters" do
       for tool <- DirectTrackerOperationTools.all() do
         tool_name = get_in(tool, ["function", "name"])

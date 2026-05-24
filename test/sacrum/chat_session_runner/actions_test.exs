@@ -429,6 +429,74 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
       assert unchanged_task.title == "Direct Tracker Task"
     end
 
+    test "routes update_step_prompt through server-resolved context without creating an authoring draft",
+         ctx do
+      %{step: step, task: task} = create_tracker_targets(ctx)
+
+      {:ok, running} =
+        Sacrum.Accounts.ChatSessions.transition_status(
+          ctx.user.id,
+          ctx.project.id,
+          ctx.session.id,
+          :running
+        )
+
+      inference_result =
+        result_with_direct_tracker_operation(%{
+          "action" => "update_step_prompt",
+          "arguments" => %{
+            "prompt" => "Use the prompt-only direct tracker alias."
+          }
+        })
+
+      params = %{
+        chat_session_id: running.id,
+        engine_session_ref: ctx.engine_session_ref,
+        inference_opts: [],
+        turn_message_id: ctx.user_message.id,
+        inference_result: inference_result
+      }
+
+      assert {:ok, %{step: :verify_authoring}, [%Directive.Emit{} = emit]} =
+               VerifyAuthoringIntent.run(params, %{})
+
+      assert emit.signal.type == Signals.complete_session()
+
+      {:ok, updated_step} =
+        Sacrum.Accounts.WorkflowSteps.get_by(ctx.user.id,
+          conditions: [id: step.id, project_id: ctx.project.id]
+        )
+
+      assert updated_step.prompt == "Use the prompt-only direct tracker alias."
+
+      [event] =
+        Repo.all(
+          from event in ChatEvent,
+            where:
+              event.chat_session_id == ^running.id and
+                event.visibility == :public and
+                event.event_type == "chat_direct_tracker_operation.completed"
+        )
+
+      assert event.public_payload["action"] == "update_step_prompt"
+      assert event.public_payload["status"] == "succeeded"
+
+      assert event.public_payload["target"] == %{
+               "type" => "workflow_step",
+               "id" => step.id
+             }
+
+      {:ok, unchanged_task} =
+        Sacrum.Accounts.Tasks.get_by(ctx.user.id,
+          conditions: [id: task.id, project_id: ctx.project.id]
+        )
+
+      assert unchanged_task.title == "Direct Tracker Task"
+      {:ok, messages} = ChatMessages.list_for_session(running, include_private: true)
+      refute Enum.any?(messages, &(&1.role == :assistant))
+      assert [] = authoring_drafts_for_session(ctx)
+    end
+
     test "emits a public rejection for model-owned scope fields without mutating Accounts",
          ctx do
       %{workflow: workflow, step: step} = create_tracker_targets(ctx)

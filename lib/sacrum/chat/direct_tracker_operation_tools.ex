@@ -67,6 +67,10 @@ defmodule Sacrum.Chat.DirectTrackerOperationTools do
          "description" => "Step prompt, goal, or configuration fields to update."
        }
      }},
+    {"update_step_prompt", "Request a prompt-only edit for the active workflow step.", ~w(prompt),
+     %{
+       "prompt" => %{"type" => "string"}
+     }},
     {"add_task_dependency", "Request adding a dependency between two tasks.",
      ~w(task_ref depends_on_ref),
      %{

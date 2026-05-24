@@ -216,6 +216,19 @@ defmodule Sacrum.Chat.DirectTrackerOperationResolver do
     end
   end
 
+  defp resolve_directive_targets("update_step_prompt", args, context) do
+    with {:ok, _prompt} <- fetch_string(args, "prompt"),
+         {:ok, step_ref} <- active_workflow_step_ref(context),
+         {:ok, step} <- resolve_workflow_step(context, step_ref),
+         {:ok, workflow} <- resolve_workflow(context, step.workflow_id),
+         {:ok, task} <- resolve_active_task(context) do
+      {:ok, %{workflow: workflow, workflow_step: step, task: task}}
+    else
+      :error -> {:error, {:missing_direct_tracker_field, "active_object"}}
+      error -> error
+    end
+  end
+
   defp resolve_directive_targets("move_task_to_workflow_step", args, context) do
     with {:ok, task_ref} <- fetch_string(args, "task_ref"),
          {:ok, task} <- resolve_task(context, task_ref),
@@ -264,7 +277,9 @@ defmodule Sacrum.Chat.DirectTrackerOperationResolver do
   defp target_reference(%{"type" => type, "ref" => ref}), do: %{"type" => type, "ref" => ref}
   defp target_reference(other), do: other
 
-  defp public_target_keys("update_workflow_step"), do: [:workflow_step]
+  defp public_target_keys(action) when action in ["update_workflow_step", "update_step_prompt"],
+    do: [:workflow_step]
+
   defp public_target_keys("upsert_task_section"), do: [:task]
   defp public_target_keys(_action), do: [:task, :workflow_step, :workflow, :section]
 

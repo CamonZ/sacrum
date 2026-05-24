@@ -73,17 +73,13 @@ defmodule Sacrum.Chat.DirectTrackerOperationExecutor do
   def execute(%{action: "update_workflow_step", targets: targets} = operation) do
     fields = operation |> arguments() |> fields_arg() |> Map.take(@workflow_step_fields)
 
-    with %WorkflowStep{} = step <- Map.get(targets, :workflow_step),
-         {:ok, updated_step} <- Accounts.WorkflowSteps.update(step, fields) do
-      {:ok,
-       %{
-         action: "update_workflow_step",
-         workflow_step: workflow_step_result(updated_step)
-       }}
-    else
-      nil -> {:error, :missing_workflow_step_target}
-      error -> error
-    end
+    update_workflow_step("update_workflow_step", targets, fields)
+  end
+
+  def execute(%{action: "update_step_prompt", targets: targets} = operation) do
+    fields = operation |> arguments() |> prompt_only_fields()
+
+    update_workflow_step("update_step_prompt", targets, fields)
   end
 
   def execute(%{action: "upsert_task_section", targets: targets} = operation) do
@@ -135,6 +131,20 @@ defmodule Sacrum.Chat.DirectTrackerOperationExecutor do
 
   def execute(_operation), do: {:error, :invalid_direct_tracker_operation}
 
+  defp update_workflow_step(action, targets, fields) do
+    with %WorkflowStep{} = step <- Map.get(targets, :workflow_step),
+         {:ok, updated_step} <- Accounts.WorkflowSteps.update(step, fields) do
+      {:ok,
+       %{
+         action: action,
+         workflow_step: workflow_step_result(updated_step)
+       }}
+    else
+      nil -> {:error, :missing_workflow_step_target}
+      error -> error
+    end
+  end
+
   defp execute_dependency_action(action, targets, operation) do
     transaction(fn ->
       with {:ok, task, depends_on} <- dependency_targets(targets),
@@ -172,6 +182,13 @@ defmodule Sacrum.Chat.DirectTrackerOperationExecutor do
   defp fields_arg(%{} = arguments) do
     case argument_get(arguments, "fields") do
       %{} = fields -> fields
+      _ -> %{}
+    end
+  end
+
+  defp prompt_only_fields(%{} = arguments) do
+    case argument_get(arguments, "prompt") do
+      prompt when is_binary(prompt) -> %{"prompt" => prompt}
       _ -> %{}
     end
   end
