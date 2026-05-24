@@ -34,6 +34,146 @@ defmodule Sacrum.Chat.Inference.OpenRouterToolCallsTest do
   end
 
   describe "tool_call parsing into authoring_tool_intent" do
+    test "lifts direct tracker operation calls into distinct internal metadata" do
+      action_result = %{
+        text: "I found the task.",
+        model: "fake-model",
+        usage: %{},
+        finish_reason: "tool_calls",
+        provider_metadata: %{},
+        tool_calls: [
+          %{
+            "function" => %{
+              "name" => "show_task",
+              "arguments" => %{
+                "task_ref" => "b2e508b0",
+                "include_sections" => true,
+                "user_id" => "model-supplied-user",
+                "project_id" => "model-supplied-project",
+                "permission" => "admin",
+                "active_selection" => %{"task_id" => "do-not-trust"}
+              }
+            }
+          }
+        ]
+      }
+
+      result = normalize(action_result, "msg-direct")
+
+      assert %{
+               "direct_tracker_operation" => %{
+                 "action" => "show_task",
+                 "arguments" => %{
+                   "task_ref" => "b2e508b0",
+                   "include_sections" => true
+                 },
+                 "source_message_id" => "msg-direct"
+               }
+             } = result.internal_metadata
+
+      refute Map.has_key?(result.internal_metadata, "authoring_tool_intent")
+    end
+
+    test "keeps same-turn direct tracker tool calls as one compound operation list" do
+      action_result = %{
+        text: "Here is the task, and I added the checklist item.",
+        model: "fake-model",
+        usage: %{},
+        finish_reason: "tool_calls",
+        provider_metadata: %{},
+        tool_calls: [
+          %{
+            "function" => %{
+              "name" => "show_task",
+              "arguments" => %{
+                "task_ref" => "82a4f332",
+                "include_sections" => true
+              }
+            }
+          },
+          %{
+            "function" => %{
+              "name" => "upsert_task_section",
+              "arguments" => %{
+                "task_ref" => "82a4f332",
+                "section_type" => "checklist_item",
+                "content" => "Verify compound direct tracker routing",
+                "done" => false
+              }
+            }
+          }
+        ]
+      }
+
+      result = normalize(action_result, "msg-compound-direct")
+
+      assert [
+               %{
+                 "action" => "show_task",
+                 "arguments" => %{
+                   "task_ref" => "82a4f332",
+                   "include_sections" => true
+                 },
+                 "source_message_id" => "msg-compound-direct"
+               },
+               %{
+                 "action" => "upsert_task_section",
+                 "arguments" => %{
+                   "task_ref" => "82a4f332",
+                   "section_type" => "checklist_item",
+                   "content" => "Verify compound direct tracker routing",
+                   "done" => false
+                 },
+                 "source_message_id" => "msg-compound-direct"
+               }
+             ] = result.internal_metadata["direct_tracker_operations"]
+
+      refute Map.has_key?(result.internal_metadata, "direct_tracker_operation")
+      refute Map.has_key?(result.internal_metadata, "authoring_tool_intent")
+    end
+
+    test "rejects mixed authoring and direct tracker tool calls without keeping either directive" do
+      action_result = %{
+        text: "",
+        model: "fake-model",
+        usage: %{},
+        finish_reason: "tool_calls",
+        provider_metadata: %{},
+        tool_calls: [
+          %{
+            "function" => %{
+              "name" => "show_task",
+              "arguments" => %{"task_ref" => "82a4f332"}
+            }
+          },
+          %{
+            "function" => %{
+              "name" => "start_authoring",
+              "arguments" => %{
+                "run_kind" => "code_factory",
+                "artifact_type" => "workflow_draft",
+                "template_kind" => "starter_draft",
+                "state_machine_entrypoint" => "start_code_factory_creation",
+                "state_machine_id" => "code_factory_creation",
+                "initial_state" => "collect_workflow_goal"
+              }
+            }
+          }
+        ]
+      }
+
+      result = normalize(action_result, "msg-mixed-tools")
+
+      refute Map.has_key?(result.internal_metadata, "direct_tracker_operation")
+      refute Map.has_key?(result.internal_metadata, "direct_tracker_operations")
+      refute Map.has_key?(result.internal_metadata, "authoring_tool_intent")
+
+      assert %{
+               "reason" => "mixed_tool_calls",
+               "source_message_id" => "msg-mixed-tools"
+             } = result.internal_metadata["direct_tracker_operation_rejected"]
+    end
+
     test "lifts start_authoring tool_call into internal_metadata with source_message_id" do
       action_result = %{
         text: "Drafting now.",

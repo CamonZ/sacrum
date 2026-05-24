@@ -103,6 +103,28 @@ defmodule Sacrum.Accounts.Tasks do
   end
 
   @doc """
+  Adds a direct blocker dependency for a task.
+  """
+  @spec add_dependency(Task.t(), Task.t()) ::
+          {:ok, Sacrum.Repo.Schemas.TaskDependency.t()}
+          | {:error, Ecto.Changeset.t()}
+          | {:error, atom()}
+  def add_dependency(%Task{} = task, %Task{} = depends_on) do
+    TaskDependencies.add_dependency(task, depends_on)
+  end
+
+  @doc """
+  Removes a direct blocker dependency from a task.
+  """
+  @spec remove_dependency(Task.t(), Task.t()) ::
+          {:ok, Sacrum.Repo.Schemas.TaskDependency.t()}
+          | {:error, Ecto.Changeset.t()}
+          | {:error, atom()}
+  def remove_dependency(%Task{} = task, %Task{} = depends_on) do
+    TaskDependencies.remove_dependency(task, depends_on)
+  end
+
+  @doc """
   Delete a task.
   """
   @spec delete(Task.t(), keyword()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}

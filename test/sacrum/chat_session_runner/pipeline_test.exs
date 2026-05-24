@@ -17,7 +17,7 @@ defmodule Sacrum.ChatSessionRunner.PipelineTest do
   alias Sacrum.Chat.InferenceEvents
   alias Sacrum.ChatSessionRunner.Pipeline
   alias Sacrum.Repo.ChatSessions, as: ChatSessionsRepo
-  alias Sacrum.Repo.Schemas.ChatEvent
+  alias Sacrum.Repo.Schemas.{ChatEvent, TaskSection}
   alias Sacrum.Repo.Users
 
   @assistant_client_message_id_prefix "chat_session_runner:assistant:v1"
@@ -108,6 +108,59 @@ defmodule Sacrum.ChatSessionRunner.PipelineTest do
       public_metadata: %{"provider" => "pipeline-stub", "model" => "pipeline-test"},
       internal_metadata: %{"trace_id" => "pipeline-trace"}
     }
+  end
+
+  defp put_resolved_direct_tracker_operation(%Result{} = result, operation) do
+    %Result{
+      result
+      | internal_metadata:
+          Map.put(result.internal_metadata || %{}, "resolved_direct_tracker_operation", operation)
+    }
+  end
+
+  defp put_resolved_direct_tracker_operations(%Result{} = result, operations) do
+    %Result{
+      result
+      | internal_metadata:
+          Map.put(
+            result.internal_metadata || %{},
+            "resolved_direct_tracker_operations",
+            operations
+          )
+    }
+  end
+
+  defp create_tracker_targets(ctx) do
+    {:ok, workflow} =
+      Sacrum.Accounts.Workflows.insert(ctx.user.id, ctx.project.id, %{
+        name: "Pipeline Direct Tracker Workflow"
+      })
+
+    {:ok, step} =
+      Sacrum.Accounts.WorkflowSteps.insert(workflow, %{
+        name: "Pipeline Direct Step",
+        step_order: 1,
+        prompt: "Original prompt"
+      })
+
+    {:ok, task} =
+      Sacrum.Accounts.Tasks.insert(ctx.user.id, ctx.project.id, %{
+        title: "Pipeline Direct Tracker Task",
+        workflow_id: workflow.id,
+        current_step_id: step.id
+      })
+
+    %{workflow: workflow, step: step, task: task}
+  end
+
+  defp direct_tracker_result_events(chat_session_id) do
+    Repo.all(
+      from event in ChatEvent,
+        where:
+          event.chat_session_id == ^chat_session_id and
+            event.event_type == "chat_direct_tracker_operation.completed",
+        order_by: [asc: event.inserted_at, asc: event.id]
+    )
   end
 
   defp checkpoint_events(chat_session_id, step) do
@@ -328,6 +381,186 @@ defmodule Sacrum.ChatSessionRunner.PipelineTest do
 
       events = checkpoint_events(ctx.session.id, "append_assistant")
       assert events.public.public_payload["assistant_message_id"] == message.id
+    end
+
+    test "executes a resolved update_workflow_step operation and records a public result event",
+         ctx do
+      ctx = transition_running(ctx)
+      %{workflow: workflow, step: step, task: task} = create_tracker_targets(ctx)
+
+      inference_result =
+        build_result("Updated the workflow step prompt.")
+        |> put_resolved_direct_tracker_operation(%{
+          "action" => "update_workflow_step",
+          "arguments" => %{
+            "workflow_ref" => workflow.id,
+            "step_ref" => step.id,
+            "fields" => %{"prompt" => "Direct prompt from chat."}
+          },
+          "scope" => %{
+            "user_id" => ctx.user.id,
+            "project_id" => ctx.project.id,
+            "chat_session_id" => ctx.session.id
+          },
+          "targets" => %{
+            "task" => %{"type" => "task", "id" => task.id},
+            "workflow" => %{"type" => "workflow", "id" => workflow.id},
+            "workflow_step" => %{"type" => "workflow_step", "id" => step.id}
+          }
+        })
+
+      assert {:ok, message} =
+               Pipeline.append_assistant_message(
+                 ctx.session,
+                 inference_result,
+                 ctx.user_message.id
+               )
+
+      {:ok, updated_step} =
+        Sacrum.Accounts.WorkflowSteps.get_by(ctx.user.id,
+          conditions: [id: step.id, project_id: ctx.project.id]
+        )
+
+      assert updated_step.prompt == "Direct prompt from chat."
+
+      [event] = direct_tracker_result_events(ctx.session.id)
+      assert event.visibility == :public
+      assert event.public_payload["action"] == "update_workflow_step"
+      assert event.public_payload["status"] == "succeeded"
+      assert event.public_payload["assistant_message_id"] == message.id
+
+      assert event.public_payload["target"] == %{
+               "type" => "workflow_step",
+               "id" => step.id
+             }
+
+      assert [] = authoring_drafts_for_session(ctx)
+    end
+
+    test "executes a resolved upsert_task_section operation and records durable target metadata",
+         ctx do
+      ctx = transition_running(ctx)
+      %{task: task} = create_tracker_targets(ctx)
+
+      inference_result =
+        build_result("Added the checklist item.")
+        |> put_resolved_direct_tracker_operation(%{
+          "action" => "upsert_task_section",
+          "arguments" => %{
+            "task_ref" => task.id,
+            "section_type" => "checklist_item",
+            "content" => "Verify direct tracker routing",
+            "done" => false
+          },
+          "scope" => %{
+            "user_id" => ctx.user.id,
+            "project_id" => ctx.project.id,
+            "chat_session_id" => ctx.session.id
+          },
+          "targets" => %{
+            "task" => %{"type" => "task", "id" => task.id}
+          }
+        })
+
+      assert {:ok, _message} =
+               Pipeline.append_assistant_message(
+                 ctx.session,
+                 inference_result,
+                 ctx.user_message.id
+               )
+
+      [event] = direct_tracker_result_events(ctx.session.id)
+      assert event.public_payload["action"] == "upsert_task_section"
+      assert event.public_payload["status"] == "succeeded"
+      assert event.public_payload["target"] == %{"type" => "task", "id" => task.id}
+      assert event.public_payload["result"]["section_type"] == "checklist_item"
+      assert event.public_payload["result"]["content"] == "Verify direct tracker routing"
+
+      assert [] = authoring_drafts_for_session(ctx)
+    end
+
+    test "executes resolved show_task plus checklist operations in one direct tracker turn",
+         ctx do
+      ctx = transition_running(ctx)
+      %{task: task} = create_tracker_targets(ctx)
+
+      inference_result =
+        build_result("Here is the ticket, and I added the checklist item.")
+        |> put_resolved_direct_tracker_operations([
+          %{
+            "action" => "show_task",
+            "arguments" => %{
+              "task_ref" => task.id,
+              "include_sections" => true
+            },
+            "scope" => %{
+              "user_id" => ctx.user.id,
+              "project_id" => ctx.project.id,
+              "chat_session_id" => ctx.session.id
+            },
+            "targets" => %{
+              "task" => %{"type" => "task", "id" => task.id}
+            }
+          },
+          %{
+            "action" => "upsert_task_section",
+            "arguments" => %{
+              "task_ref" => task.id,
+              "section_type" => "checklist_item",
+              "content" => "Verify compound direct tracker routing",
+              "done" => false
+            },
+            "scope" => %{
+              "user_id" => ctx.user.id,
+              "project_id" => ctx.project.id,
+              "chat_session_id" => ctx.session.id
+            },
+            "targets" => %{
+              "task" => %{"type" => "task", "id" => task.id}
+            }
+          }
+        ])
+
+      assert {:ok, message} =
+               Pipeline.append_assistant_message(
+                 ctx.session,
+                 inference_result,
+                 ctx.user_message.id
+               )
+
+      [persisted_section] =
+        Repo.all(
+          from section in TaskSection,
+            where:
+              section.task_id == ^task.id and
+                section.section_type == "checklist_item" and
+                section.content == "Verify compound direct tracker routing"
+        )
+
+      assert persisted_section.done == false
+      assert is_integer(persisted_section.section_order)
+
+      [show_event, checklist_event] = direct_tracker_result_events(ctx.session.id)
+
+      assert show_event.public_payload["action"] == "show_task"
+      assert show_event.public_payload["status"] == "succeeded"
+      assert show_event.public_payload["assistant_message_id"] == message.id
+      assert show_event.public_payload["target"] == %{"type" => "task", "id" => task.id}
+
+      assert checklist_event.public_payload["action"] == "upsert_task_section"
+      assert checklist_event.public_payload["status"] == "succeeded"
+      assert checklist_event.public_payload["assistant_message_id"] == message.id
+      assert checklist_event.public_payload["target"] == %{"type" => "task", "id" => task.id}
+
+      assert checklist_event.public_payload["result"] == %{
+               "id" => persisted_section.id,
+               "section_type" => "checklist_item",
+               "section_order" => persisted_section.section_order,
+               "content" => "Verify compound direct tracker routing",
+               "done" => false
+             }
+
+      assert [] = authoring_drafts_for_session(ctx)
     end
   end
 

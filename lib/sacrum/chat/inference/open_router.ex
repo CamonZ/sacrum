@@ -11,7 +11,7 @@ defmodule Sacrum.Chat.Inference.OpenRouter do
 
   require Logger
 
-  alias Sacrum.Chat.AuthoringTools
+  alias Sacrum.Chat.{AuthoringTools, DirectTrackerOperationTools}
   alias Sacrum.Chat.Inference
   alias Sacrum.Chat.Inference.Actions.OpenRouterChat
   alias Sacrum.Chat.Inference.Result
@@ -118,7 +118,7 @@ defmodule Sacrum.Chat.Inference.OpenRouter do
       is_binary(text) and String.trim(text) != "" ->
         text
 
-      Map.has_key?(internal_metadata, "authoring_tool_intent") ->
+      has_tool_directive?(internal_metadata) ->
         @tool_only_assistant_placeholder
 
       true ->
@@ -157,56 +157,118 @@ defmodule Sacrum.Chat.Inference.OpenRouter do
     }
     |> maybe_put_string("reasoning", reasoning_metadata(result))
     |> maybe_put_string("finish_reason", finish_reason)
-    |> maybe_put_authoring_tool_intent(result, source_message_id)
+    |> maybe_put_tool_directive(result, source_message_id)
   end
 
-  defp maybe_put_authoring_tool_intent(metadata, result, source_message_id) do
-    case extract_authoring_tool_intent(result, source_message_id) do
-      nil -> metadata
-      intent -> Map.put(metadata, "authoring_tool_intent", intent)
+  defp has_tool_directive?(metadata) do
+    Map.has_key?(metadata, "authoring_tool_intent") or
+      Map.has_key?(metadata, "direct_tracker_operation") or
+      Map.has_key?(metadata, "direct_tracker_operations") or
+      Map.has_key?(metadata, "direct_tracker_operation_rejected")
+  end
+
+  defp maybe_put_tool_directive(metadata, result, source_message_id) do
+    case extract_tool_directive(result, source_message_id) do
+      nil ->
+        metadata
+
+      {:direct_tracker_operation, operation} ->
+        Map.put(metadata, "direct_tracker_operation", operation)
+
+      {:direct_tracker_operations, operations} ->
+        Map.put(metadata, "direct_tracker_operations", operations)
+
+      {:direct_tracker_operation_rejected, rejection} ->
+        Map.put(metadata, "direct_tracker_operation_rejected", rejection)
+
+      {:authoring_tool_intent, intent} ->
+        Map.put(metadata, "authoring_tool_intent", intent)
     end
   end
 
-  defp extract_authoring_tool_intent(result, source_message_id) do
+  defp extract_tool_directive(result, source_message_id) do
     case fetch_result(result, :tool_calls) do
-      [_ | _] = list -> pick_authoring_intent(list, source_message_id)
-      _ -> nil
+      [_ | _] = list ->
+        pick_tool_directive(list, source_message_id)
+
+      _ ->
+        nil
     end
   end
 
-  defp pick_authoring_intent(list, source_message_id) do
+  defp pick_tool_directive(list, source_message_id) do
     list
-    |> Enum.flat_map(&List.wrap(parse_authoring_tool_call(&1, source_message_id)))
+    |> Enum.flat_map(&List.wrap(parse_tool_call(&1, source_message_id)))
     |> case do
       [] -> nil
-      [intent] -> intent
-      [intent | extras] -> log_extra_intents_and_keep(intent, extras)
+      [directive] -> directive
+      directives -> combine_tool_directives(directives, source_message_id)
     end
   end
 
-  defp log_extra_intents_and_keep(intent, extras) do
+  defp combine_tool_directives(directives, source_message_id) do
+    labels = Enum.map(directives, fn {directive_key, _payload} -> directive_key end)
+
+    cond do
+      Enum.all?(labels, &(&1 == :direct_tracker_operation)) ->
+        {:direct_tracker_operations, Enum.map(directives, &elem(&1, 1))}
+
+      Enum.all?(labels, &(&1 == :authoring_tool_intent)) ->
+        [{_key, payload} | extras] = directives
+
+        {:authoring_tool_intent,
+         log_extra_tool_calls_and_keep(payload, Enum.map(extras, &elem(&1, 1)), "authoring")}
+
+      true ->
+        Logger.warning(fn ->
+          "[chat.inference.open_router] received #{length(directives)} mixed tool_calls " <>
+            "in one response; dropping all tool directives"
+        end)
+
+        {:direct_tracker_operation_rejected,
+         %{"reason" => "mixed_tool_calls", "source_message_id" => source_message_id}}
+    end
+  end
+
+  defp log_extra_tool_calls_and_keep(payload, extras, label) do
     Logger.warning(fn ->
-      "[chat.inference.open_router] received #{length(extras) + 1} authoring tool_calls " <>
+      "[chat.inference.open_router] received #{length(extras) + 1} #{label} tool_calls " <>
         "in one response; keeping the first and dropping the rest"
     end)
 
-    intent
+    payload
   end
 
-  defp parse_authoring_tool_call(tool_call, source_message_id) do
+  defp parse_tool_call(tool_call, source_message_id) do
     case tool_call_name(tool_call) do
       nil -> nil
-      name -> intent_for_known_name(name, tool_call, source_message_id)
+      name -> directive_for_known_name(name, tool_call, source_message_id)
     end
   end
 
-  defp intent_for_known_name(name, tool_call, source_message_id) do
-    if AuthoringTools.known_function_name?(name) do
-      build_intent(name, tool_call_arguments(tool_call), source_message_id)
-    else
-      log_unknown_tool_call(name)
-      nil
+  defp directive_for_known_name(name, tool_call, source_message_id) do
+    cond do
+      AuthoringTools.known_function_name?(name) ->
+        {:authoring_tool_intent,
+         build_intent(name, tool_call_arguments(tool_call), source_message_id)}
+
+      DirectTrackerOperationTools.known_function_name?(name) ->
+        {:direct_tracker_operation,
+         build_direct_operation(name, tool_call_arguments(tool_call), source_message_id)}
+
+      true ->
+        log_unknown_tool_call(name)
+        nil
     end
+  end
+
+  defp build_direct_operation(name, arguments, source_message_id) do
+    operation = %{
+      "action" => name,
+      "arguments" => DirectTrackerOperationTools.sanitize_arguments(arguments)
+    }
+
+    maybe_put_string(operation, "source_message_id", source_message_id)
   end
 
   defp log_unknown_tool_call(name) do
@@ -360,6 +422,7 @@ defmodule Sacrum.Chat.Inference.OpenRouter do
     |> normalize_value()
   end
 
+  defp normalize_value(value) when is_boolean(value), do: value
   defp normalize_value(value) when is_atom(value), do: Atom.to_string(value)
 
   defp normalize_value(value) when is_map(value) do

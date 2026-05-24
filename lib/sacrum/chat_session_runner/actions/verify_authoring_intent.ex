@@ -44,7 +44,14 @@ defmodule Sacrum.ChatSessionRunner.Actions.VerifyAuthoringIntent do
   require Logger
 
   alias Sacrum.Accounts.{AuthoringDrafts, AuthoringRunKinds}
-  alias Sacrum.Chat.{AuthoringTools, AuthoringVerifierPrompt, Inference}
+
+  alias Sacrum.Chat.{
+    AuthoringTools,
+    AuthoringVerifierPrompt,
+    DirectTrackerOperationResolver,
+    Inference
+  }
+
   alias Sacrum.Chat.Inference.Result
   alias Sacrum.ChatSessionRunner.Actions
   alias Sacrum.ChatSessionRunner.Actions.Failure
@@ -57,16 +64,8 @@ defmodule Sacrum.ChatSessionRunner.Actions.VerifyAuthoringIntent do
     with :ok <- validate_result(params.inference_result),
          {:ok, session} <- Pipeline.fetch_session(params.chat_session_id),
          {:continue, session} <- Pipeline.ensure_runnable(session),
-         {:ok, next_result} <- verify(session, params.inference_result) do
-      directive =
-        Actions.emit(Signals.append_assistant(), %{
-          chat_session_id: session.id,
-          engine_session_ref: params.engine_session_ref,
-          inference_opts: params.inference_opts,
-          turn_message_id: Map.get(params, :turn_message_id),
-          inference_result: next_result
-        })
-
+         {:ok, next_result} <- verify(session, params.inference_result),
+         {:ok, directive} <- route_verified_result(session, next_result, params) do
       {:ok, %{step: :verify_authoring, chat_session_id: session.id}, [directive]}
     else
       {:halt, _session, reason} -> Failure.halt(params, reason)
@@ -77,7 +76,58 @@ defmodule Sacrum.ChatSessionRunner.Actions.VerifyAuthoringIntent do
   @doc false
   @spec verify(ChatSession.t(), Result.t()) :: {:ok, Result.t()} | {:error, term()}
   def verify(%ChatSession{} = session, %Result{} = result) do
-    case get_in(result.internal_metadata || %{}, ["authoring_tool_intent"]) do
+    with {:ok, result} <- verify_authoring_intent(session, result) do
+      verify_direct_tracker_operation(session, result)
+    end
+  end
+
+  defp route_verified_result(%ChatSession{} = session, %Result{} = result, params) do
+    metadata = result.internal_metadata
+    turn_message_id = Map.get(params, :turn_message_id)
+
+    cond do
+      direct_tracker_operations_resolved?(metadata) ->
+        with {:ok, _events} <-
+               Pipeline.execute_direct_tracker_operation(session, result, turn_message_id) do
+          {:ok, complete_session_directive(session, params)}
+        end
+
+      is_map(Map.get(metadata, "direct_tracker_operation_rejected")) ->
+        with {:ok, _event} <-
+               Pipeline.record_direct_tracker_operation_rejection(
+                 session,
+                 result,
+                 turn_message_id
+               ) do
+          {:ok, complete_session_directive(session, params)}
+        end
+
+      true ->
+        {:ok, append_assistant_directive(session, result, params)}
+    end
+  end
+
+  defp append_assistant_directive(%ChatSession{} = session, %Result{} = result, params) do
+    Actions.emit(Signals.append_assistant(), %{
+      chat_session_id: session.id,
+      engine_session_ref: params.engine_session_ref,
+      inference_opts: params.inference_opts,
+      turn_message_id: Map.get(params, :turn_message_id),
+      inference_result: result
+    })
+  end
+
+  defp complete_session_directive(%ChatSession{} = session, params) do
+    Actions.emit(Signals.complete_session(), %{
+      chat_session_id: session.id,
+      engine_session_ref: params.engine_session_ref,
+      inference_opts: params.inference_opts,
+      turn_message_id: Map.get(params, :turn_message_id)
+    })
+  end
+
+  defp verify_authoring_intent(%ChatSession{} = session, %Result{} = result) do
+    case get_in(result.internal_metadata, ["authoring_tool_intent"]) do
       nil ->
         {:ok, result}
 
@@ -91,6 +141,75 @@ defmodule Sacrum.ChatSessionRunner.Actions.VerifyAuthoringIntent do
         {:ok, reject_with_schema_error(result, :invalid_authoring_tool_intent)}
     end
   end
+
+  defp verify_direct_tracker_operation(%ChatSession{} = session, %Result{} = result) do
+    metadata = result.internal_metadata || %{}
+
+    case {Map.get(metadata, "direct_tracker_operations"),
+          Map.get(metadata, "direct_tracker_operation")} do
+      {nil, nil} ->
+        {:ok, result}
+
+      {nil, %{} = directive} ->
+        context = DirectTrackerOperationResolver.context_from_session(session)
+
+        case DirectTrackerOperationResolver.resolve_directive(directive, context) do
+          {:ok, resolved} -> {:ok, put_resolved_direct_tracker_operation(result, resolved)}
+          {:error, reason} -> {:ok, reject_direct_tracker_operation(result, reason)}
+        end
+
+      {directives, nil} when is_list(directives) ->
+        verify_direct_tracker_operations(session, result, directives)
+
+      _other ->
+        {:ok, reject_direct_tracker_operation(result, :invalid_direct_tracker_operation)}
+    end
+  end
+
+  defp verify_direct_tracker_operations(%ChatSession{} = session, %Result{} = result, directives) do
+    context = DirectTrackerOperationResolver.context_from_session(session)
+
+    with :ok <- validate_compound_direct_tracker_directives(directives),
+         {:ok, resolved} <- DirectTrackerOperationResolver.resolve_directives(directives, context),
+         :ok <- validate_compound_direct_tracker_operations(resolved) do
+      {:ok, put_resolved_direct_tracker_operations(result, resolved)}
+    else
+      {:error, reason} -> {:ok, reject_direct_tracker_operation(result, reason)}
+    end
+  end
+
+  defp direct_tracker_operations_resolved?(metadata) when is_map(metadata) do
+    is_map(Map.get(metadata, "resolved_direct_tracker_operation")) or
+      is_list(Map.get(metadata, "resolved_direct_tracker_operations"))
+  end
+
+  defp validate_compound_direct_tracker_directives([
+         %{} = show_task,
+         %{} = upsert_task_section
+       ]) do
+    case {directive_action(show_task), directive_action(upsert_task_section)} do
+      {"show_task", "upsert_task_section"} ->
+        :ok
+
+      _other ->
+        {:error, :unsupported_compound_direct_tracker_operations}
+    end
+  end
+
+  defp validate_compound_direct_tracker_directives(_directives),
+    do: {:error, :unsupported_compound_direct_tracker_operations}
+
+  defp directive_action(directive),
+    do: Map.get(directive, "action") || Map.get(directive, :action)
+
+  defp validate_compound_direct_tracker_operations([
+         %{action: "show_task", targets: %{task: task}},
+         %{action: "upsert_task_section", targets: %{task: task}}
+       ]),
+       do: :ok
+
+  defp validate_compound_direct_tracker_operations(_operations),
+    do: {:error, :unsupported_compound_direct_tracker_operations}
 
   @doc """
   Pure rule-based schema check over an authoring intent.
@@ -345,6 +464,59 @@ defmodule Sacrum.ChatSessionRunner.Actions.VerifyAuthoringIntent do
     "I wanted to draft a Vertebrae authoring intent but could not verify it just " <>
       "now. Could you restate what you want me to draft so we can try again?"
   end
+
+  defp put_resolved_direct_tracker_operation(%Result{} = result, resolved) do
+    metadata =
+      (result.internal_metadata || %{})
+      |> Map.delete("direct_tracker_operation")
+      |> Map.put(
+        "resolved_direct_tracker_operation",
+        DirectTrackerOperationResolver.serialize_resolution(resolved)
+      )
+
+    %Result{result | internal_metadata: metadata}
+  end
+
+  defp put_resolved_direct_tracker_operations(%Result{} = result, resolved) do
+    metadata =
+      (result.internal_metadata || %{})
+      |> Map.delete("direct_tracker_operations")
+      |> Map.put(
+        "resolved_direct_tracker_operations",
+        DirectTrackerOperationResolver.serialize_resolutions(resolved)
+      )
+
+    %Result{result | internal_metadata: metadata}
+  end
+
+  defp reject_direct_tracker_operation(%Result{} = result, reason) do
+    Logger.warning(fn ->
+      "[verify_authoring_intent] direct tracker operation rejected: #{inspect(reason)}"
+    end)
+
+    metadata =
+      (result.internal_metadata || %{})
+      |> Map.delete("direct_tracker_operation")
+      |> Map.delete("direct_tracker_operations")
+
+    %Result{
+      result
+      | internal_metadata:
+          Map.put(metadata, "direct_tracker_operation_rejected", %{
+            "reason" => "resolution_failed",
+            "reason_code" => direct_tracker_rejection_reason_code(reason),
+            "details" => inspect(reason)
+          })
+    }
+  end
+
+  defp direct_tracker_rejection_reason_code({:forbidden_model_scope_fields, _fields}),
+    do: "out_of_scope"
+
+  defp direct_tracker_rejection_reason_code({:ambiguous, _candidates}),
+    do: "ambiguous_target"
+
+  defp direct_tracker_rejection_reason_code(_reason), do: "out_of_scope"
 
   @spec validate_result(term()) :: :ok | {:error, :invalid_inference_result_payload}
   defp validate_result(%Result{}), do: :ok

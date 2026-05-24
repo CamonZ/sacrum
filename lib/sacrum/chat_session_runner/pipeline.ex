@@ -13,7 +13,15 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
   """
 
   alias Sacrum.Accounts.{AuthoringChatLoop, ChatEvents, ChatMessages, ChatSessions}
-  alias Sacrum.Chat.{Inference, InferenceEvents, PublicEvents}
+
+  alias Sacrum.Chat.{
+    DirectTrackerOperationExecutor,
+    DirectTrackerOperationResolver,
+    Inference,
+    InferenceEvents,
+    PublicEvents
+  }
+
   alias Sacrum.ChatSessions.Status, as: ChatSessionStatus
   alias Sacrum.Repo
   alias Sacrum.Repo.ChatSessions, as: ChatSessionsRepo
@@ -24,6 +32,7 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
   @engine_kind "jido"
   @runner_version 1
   @assistant_client_message_id_prefix "chat_session_runner:assistant:v1"
+  @valid_tracker_target_instruction "Select a valid in-scope task, workflow, section, or workflow step"
 
   @public_payload_keys ~w(status message_count assistant_message_id resumed provider model turn_message_id)
 
@@ -134,7 +143,14 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
     with {:ok, message} <- ensure_message(session, attrs),
          {:ok, _event} <- ensure_public_message_event(session, message),
          {:ok, _event} <- append_inference_completed_event(session, message, inference_result),
-         :ok <- AuthoringChatLoop.apply_inference_result(session, inference_result),
+         {:ok, _direct_events} <-
+           maybe_execute_direct_tracker_operation(
+             session,
+             inference_result,
+             message,
+             turn_message_id
+           ),
+         :ok <- maybe_apply_authoring_result(session, inference_result),
          {:ok, _events} <-
            checkpoint_step(session, :append_assistant, %{
              "assistant_message_id" => message.id,
@@ -142,6 +158,46 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
            }) do
       {:ok, message}
     end
+  end
+
+  @spec execute_direct_tracker_operation(ChatSession.t(), Inference.Result.t(), String.t() | nil) ::
+          {:ok, [ChatEvent.t()]} | {:error, term()}
+  def execute_direct_tracker_operation(
+        %ChatSession{} = session,
+        %Inference.Result{} = inference_result,
+        turn_message_id \\ nil
+      ) do
+    execute_and_record_direct_tracker_operations(session, inference_result, %{
+      "turn_message_id" => turn_message_id || latest_user_message_id!(session)
+    })
+  end
+
+  @spec record_direct_tracker_operation_rejection(
+          ChatSession.t(),
+          Inference.Result.t(),
+          String.t() | nil
+        ) :: {:ok, ChatEvent.t()} | {:error, term()}
+  def record_direct_tracker_operation_rejection(
+        %ChatSession{} = session,
+        %Inference.Result{} = inference_result,
+        turn_message_id \\ nil
+      ) do
+    rejection =
+      Map.fetch!(inference_result.internal_metadata, "direct_tracker_operation_rejected")
+
+    reason = public_direct_tracker_rejection_reason(rejection)
+
+    ChatEvents.append_to_session(session, %{
+      event_type: "chat_direct_tracker_operation.rejected",
+      visibility: :public,
+      public_payload: %{
+        "status" => "rejected",
+        "reason" => reason,
+        "message" => public_direct_tracker_rejection_message(reason, rejection),
+        "turn_message_id" => turn_message_id || latest_user_message_id!(session)
+      },
+      internal_payload: Inference.scrub_secrets(%{"rejection" => rejection})
+    })
   end
 
   @spec resume_assistant_message(ChatSession.t(), ChatMessage.t()) ::
@@ -407,6 +463,212 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
 
     AuthoringChatLoop.apply_inference_metadata(session, metadata)
   end
+
+  defp maybe_execute_direct_tracker_operation(
+         %ChatSession{} = session,
+         %Inference.Result{} = inference_result,
+         %ChatMessage{} = message,
+         turn_message_id
+       ) do
+    case direct_tracker_operations(inference_result) do
+      {:error, :not_found} ->
+        {:ok, []}
+
+      {:ok, operations} ->
+        execute_and_record_direct_tracker_operations(session, operations, %{
+          "assistant_message_id" => message.id,
+          "turn_message_id" => turn_message_id
+        })
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp execute_and_record_direct_tracker_operations(
+         %ChatSession{} = session,
+         %Inference.Result{} = inference_result,
+         extra_public_payload
+       ) do
+    with {:ok, operations} <- direct_tracker_operations(inference_result) do
+      execute_and_record_direct_tracker_operations(session, operations, extra_public_payload)
+    end
+  end
+
+  defp execute_and_record_direct_tracker_operations(
+         %ChatSession{} = session,
+         operations,
+         extra_public_payload
+       )
+       when is_list(operations) do
+    Repo.transaction(fn ->
+      case do_execute_and_record_direct_tracker_operations(
+             operations,
+             session,
+             extra_public_payload
+           ) do
+        {:ok, events} -> Enum.reverse(events)
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp do_execute_and_record_direct_tracker_operations(
+         operations,
+         %ChatSession{} = session,
+         extra_public_payload
+       ) do
+    Enum.reduce_while(operations, {:ok, []}, fn operation, {:ok, events} ->
+      case execute_and_record_direct_tracker_operation(session, operation, extra_public_payload) do
+        {:ok, event} -> {:cont, {:ok, [event | events]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp execute_and_record_direct_tracker_operation(
+         %ChatSession{} = session,
+         operation,
+         extra_public_payload
+       ) do
+    with {:ok, result} <- DirectTrackerOperationExecutor.execute(operation) do
+      append_direct_tracker_operation_completed_event(
+        session,
+        operation,
+        result,
+        extra_public_payload
+      )
+    end
+  end
+
+  defp maybe_apply_authoring_result(%ChatSession{} = session, %Inference.Result{} = result) do
+    if direct_tracker_metadata?(result) do
+      :ok
+    else
+      AuthoringChatLoop.apply_inference_result(session, result)
+    end
+  end
+
+  defp direct_tracker_metadata?(%Inference.Result{} = result) do
+    metadata = direct_tracker_metadata(result)
+
+    is_map(Map.get(metadata, "resolved_direct_tracker_operation")) or
+      is_list(Map.get(metadata, "resolved_direct_tracker_operations")) or
+      is_map(Map.get(metadata, "direct_tracker_operation_rejected"))
+  end
+
+  defp direct_tracker_operations(%Inference.Result{} = result) do
+    metadata = direct_tracker_metadata(result)
+
+    case {Map.get(metadata, "resolved_direct_tracker_operations"),
+          Map.get(metadata, "resolved_direct_tracker_operation")} do
+      {nil, nil} ->
+        {:error, :not_found}
+
+      {nil, %{} = serialized} ->
+        with {:ok, operation} <- DirectTrackerOperationResolver.deserialize_resolution(serialized) do
+          {:ok, [operation]}
+        end
+
+      {list, nil} when is_list(list) ->
+        DirectTrackerOperationResolver.deserialize_resolutions(list)
+
+      {_list, _single} ->
+        {:error, :invalid_direct_tracker_operation}
+    end
+  end
+
+  defp direct_tracker_metadata(%Inference.Result{internal_metadata: metadata})
+       when is_map(metadata),
+       do: metadata
+
+  defp direct_tracker_metadata(%Inference.Result{}), do: %{}
+
+  defp append_direct_tracker_operation_completed_event(
+         %ChatSession{} = session,
+         operation,
+         result,
+         extra_public_payload
+       ) do
+    serialized_operation = DirectTrackerOperationResolver.serialize_resolution(operation)
+
+    ChatEvents.append_to_session(session, %{
+      event_type: "chat_direct_tracker_operation.completed",
+      visibility: :public,
+      public_payload:
+        %{
+          "action" => operation.action,
+          "status" => "succeeded",
+          "target" => DirectTrackerOperationResolver.public_target(serialized_operation),
+          "result" => public_direct_tracker_result(result)
+        }
+        |> Map.merge(extra_public_payload)
+        |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+        |> Map.new(),
+      internal_payload:
+        Inference.scrub_secrets(%{
+          "operation" => serialized_operation,
+          "result" => stringify_direct_tracker_result(result)
+        })
+    })
+  end
+
+  defp public_direct_tracker_result(%{section: section}) do
+    section = stringify_direct_tracker_result(section)
+
+    Map.take(section, ~w(id section_type section_order content done))
+  end
+
+  defp public_direct_tracker_result(%{workflow_step: step}),
+    do: stringify_direct_tracker_result(step)
+
+  defp public_direct_tracker_result(%{task: task}), do: stringify_direct_tracker_result(task)
+  defp public_direct_tracker_result(result), do: stringify_direct_tracker_result(result)
+
+  defp stringify_direct_tracker_result(result) when is_map(result) do
+    Map.new(result, fn {key, value} -> {to_string(key), stringify_direct_tracker_value(value)} end)
+  end
+
+  defp stringify_direct_tracker_value(value) when is_map(value),
+    do: stringify_direct_tracker_result(value)
+
+  defp stringify_direct_tracker_value(value) when is_list(value),
+    do: Enum.map(value, &stringify_direct_tracker_value/1)
+
+  defp stringify_direct_tracker_value(value), do: value
+
+  defp public_direct_tracker_rejection_reason(%{"reason_code" => reason})
+       when reason in ["ambiguous_target", "out_of_scope"],
+       do: reason
+
+  defp public_direct_tracker_rejection_reason(_rejection), do: "out_of_scope"
+
+  defp public_direct_tracker_rejection_message("ambiguous_target", rejection) do
+    case ambiguous_target_handle(rejection) do
+      nil ->
+        "Multiple tracker objects match that reference. #{@valid_tracker_target_instruction}."
+
+      handle ->
+        "Multiple tracker objects match #{handle}. #{@valid_tracker_target_instruction}."
+    end
+  end
+
+  defp public_direct_tracker_rejection_message(_reason, _rejection) do
+    "#{@valid_tracker_target_instruction} and try the tracker update again."
+  end
+
+  defp ambiguous_target_handle(%{"details" => details}) when is_binary(details) do
+    details
+    |> then(&Regex.scan(~r/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i, &1))
+    |> Enum.map(fn [id] -> String.slice(id, 0, 8) end)
+    |> Enum.uniq()
+    |> case do
+      [handle] -> handle
+      _other -> nil
+    end
+  end
+
+  defp ambiguous_target_handle(_rejection), do: nil
 
   @spec checkpoint_step(ChatSession.t(), atom(), map()) ::
           {:ok, [ChatEvent.t()]} | {:error, term()}
