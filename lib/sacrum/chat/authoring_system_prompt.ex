@@ -78,9 +78,13 @@ defmodule Sacrum.Chat.AuthoringSystemPrompt do
        their next step using: "help me design", "lay out the work for",
        "break this into tasks", "investigate why", "create a workflow for",
        "set up a recipe for", "draft tasks for". Bias toward revise_authoring
-       when the user references the existing draft ("this", "the current
-       plan", "tweak the workflow", "refine the breakdown") AND an active
-       draft is present in the Active Draft block below.
+       when the user references the existing draft ("this", "the current plan",
+       "tweak the workflow", "refine the breakdown") or adds detail, scope, or
+       corrections to it. If the Active Draft block below reports an active
+       draft and the user is asking about that same draft, follow Rule 4 and
+       call revise_authoring rather than re-issuing start_authoring against
+       the same state_machine_id; starting a different run kind alongside an
+       existing draft remains allowed.
     7. Never include a "confidence" field in tool arguments. Sufficiency is
        judged by a separate verifier step, not by you.
     8. Use the user's own wording for candidate_work_units and feedback. Do
@@ -123,14 +127,38 @@ defmodule Sacrum.Chat.AuthoringSystemPrompt do
   defp active_draft_block(%Artifact{data: data}), do: active_draft_block(data || %{})
 
   defp active_draft_block(%{} = data) do
+    case string_field(data, "state_machine_id", nil) do
+      nil -> malformed_draft_block(data)
+      state_machine_id -> populated_draft_block(data, state_machine_id)
+    end
+  end
+
+  defp populated_draft_block(data, state_machine_id) do
     String.trim_trailing("""
-    state_machine_id: #{string_field(data, "state_machine_id", "(missing)")}
+    state_machine_id: #{state_machine_id}
     current_state: #{string_field(data, "current_state", "(missing)")}
     revision: #{revision_display(data)}
     open_questions:
     #{format_list(list_field(data, "open_questions"))}
     last_revision_notes:
     #{format_list(last_note(list_field(data, "revision_notes")))}
+
+    Instruction: An Active Draft exists for state_machine_id #{state_machine_id}.
+    Call revise_authoring with state_machine_id=#{state_machine_id} rather than
+    start_authoring against this draft. Do not re-issue start_authoring for the
+    same state_machine_id; start_authoring for a different run kind is fine.
+    """)
+  end
+
+  defp malformed_draft_block(data) do
+    String.trim_trailing("""
+    state_machine_id: (missing)
+    current_state: #{string_field(data, "current_state", "(missing)")}
+    revision: #{revision_display(data)}
+
+    Instruction: An authoring draft exists but is missing its state_machine_id.
+    Do not call start_authoring or revise_authoring this turn. Ask the user to
+    clarify which run they want to continue before proceeding.
     """)
   end
 

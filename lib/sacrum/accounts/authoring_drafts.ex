@@ -18,9 +18,10 @@ defmodule Sacrum.Accounts.AuthoringDrafts do
   @redaction_state "not_needed"
   @subject_type "chat_session"
   @relationship_kind "produced_by"
-  @append_fields ~w(
-    assumptions open_questions proposed_approach candidate_work_units apply_targets revision_notes
-  )
+  @uniq_append_fields ~w(assumptions open_questions proposed_approach apply_targets)
+  @title_append_fields ~w(candidate_work_units)
+  @history_append_fields ~w(revision_notes)
+  @append_fields @uniq_append_fields ++ @title_append_fields ++ @history_append_fields
   @replace_fields ~w(
     state_machine_id state_machine_entrypoint current_state revision source_chat
     knowns unknowns initial_state template trigger apply_target
@@ -248,13 +249,64 @@ defmodule Sacrum.Accounts.AuthoringDrafts do
     Enum.reduce(@append_fields, data, fn field, acc ->
       case Map.fetch(patch, field) do
         {:ok, values} when is_list(values) ->
-          Map.put(acc, field, Map.get(acc, field, []) ++ values)
+          merged = merge_field(field, Map.get(acc, field, []), values)
+          Map.put(acc, field, merged)
 
         _ ->
           acc
       end
     end)
   end
+
+  defp merge_field(field, existing, new) when field in @uniq_append_fields do
+    Enum.uniq(existing ++ new)
+  end
+
+  defp merge_field(field, existing, new) when field in @title_append_fields do
+    merge_by_title(existing, new)
+  end
+
+  defp merge_field(field, existing, new) when field in @history_append_fields do
+    existing ++ new
+  end
+
+  defp merge_by_title(existing, new_entries) do
+    new_entries
+    |> Enum.reduce(Enum.reverse(existing), &merge_by_title_step/2)
+    |> Enum.reverse()
+  end
+
+  defp merge_by_title_step(entry, reversed_acc) do
+    case entry_title(entry) do
+      nil -> prepend_unless_member(reversed_acc, entry)
+      title -> replace_or_prepend(reversed_acc, entry, title)
+    end
+  end
+
+  defp prepend_unless_member(acc, entry) do
+    if entry in acc, do: acc, else: [entry | acc]
+  end
+
+  defp replace_or_prepend(acc, entry, title) do
+    if Enum.any?(acc, &(entry_title(&1) == title)) do
+      Enum.map(acc, &replace_if_title_matches(&1, entry, title))
+    else
+      [entry | acc]
+    end
+  end
+
+  defp replace_if_title_matches(existing_entry, replacement, title) do
+    if entry_title(existing_entry) == title, do: replacement, else: existing_entry
+  end
+
+  defp entry_title(%{} = entry) do
+    case Map.get(entry, "title") || Map.get(entry, :title) do
+      title when is_binary(title) and title != "" -> title
+      _ -> nil
+    end
+  end
+
+  defp entry_title(_), do: nil
 
   defp link_metadata(patch) do
     Map.take(patch, ["state_machine_id", "current_state", "revision", "source_chat"])
