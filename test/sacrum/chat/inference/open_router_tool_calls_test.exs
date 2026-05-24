@@ -34,6 +34,46 @@ defmodule Sacrum.Chat.Inference.OpenRouterToolCallsTest do
   end
 
   describe "tool_call parsing into authoring_tool_intent" do
+    test "lifts direct tracker operation calls into distinct internal metadata" do
+      action_result = %{
+        text: "I found the task.",
+        model: "fake-model",
+        usage: %{},
+        finish_reason: "tool_calls",
+        provider_metadata: %{},
+        tool_calls: [
+          %{
+            "function" => %{
+              "name" => "show_task",
+              "arguments" => %{
+                "task_ref" => "b2e508b0",
+                "include_sections" => true,
+                "user_id" => "model-supplied-user",
+                "project_id" => "model-supplied-project",
+                "permission" => "admin",
+                "active_selection" => %{"task_id" => "do-not-trust"}
+              }
+            }
+          }
+        ]
+      }
+
+      result = normalize(action_result, "msg-direct")
+
+      assert %{
+               "direct_tracker_operation" => %{
+                 "action" => "show_task",
+                 "arguments" => %{
+                   "task_ref" => "b2e508b0",
+                   "include_sections" => true
+                 },
+                 "source_message_id" => "msg-direct"
+               }
+             } = result.internal_metadata
+
+      refute Map.has_key?(result.internal_metadata, "authoring_tool_intent")
+    end
+
     test "lifts start_authoring tool_call into internal_metadata with source_message_id" do
       action_result = %{
         text: "Drafting now.",

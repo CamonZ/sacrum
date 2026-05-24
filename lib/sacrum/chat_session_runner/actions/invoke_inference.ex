@@ -5,10 +5,10 @@ defmodule Sacrum.ChatSessionRunner.Actions.InvokeInference do
 
   Before delegating to `Pipeline.invoke_inference/3`, this action enriches the
   caller-provided `inference_opts` with the authoring system prompt and the
-  `start_authoring`/`revise_authoring` tool specs so the producer side of the
-  authoring loop is actually wired through to the LLM. Callers may still
-  override either option (tests inject `:provider`, for example, and may pass
-  their own `:system_prompt` or `:tools`).
+  `start_authoring`/`revise_authoring` tool specs plus direct tracker operation
+  specs so the producer side of the authoring loop is actually wired through to
+  the LLM. Callers may still override either option (tests inject `:provider`,
+  for example, and may pass their own `:system_prompt` or `:tools`).
   """
 
   use Jido.Action,
@@ -24,7 +24,7 @@ defmodule Sacrum.ChatSessionRunner.Actions.InvokeInference do
     ]
 
   alias Sacrum.Accounts.{AuthoringDrafts, ChatMessages}
-  alias Sacrum.Chat.{AuthoringSystemPrompt, AuthoringTools}
+  alias Sacrum.Chat.{AuthoringSystemPrompt, AuthoringTools, DirectTrackerOperationTools}
   alias Sacrum.ChatSessionRunner.Actions
   alias Sacrum.ChatSessionRunner.Actions.Failure
   alias Sacrum.ChatSessionRunner.Pipeline
@@ -61,19 +61,39 @@ defmodule Sacrum.ChatSessionRunner.Actions.InvokeInference do
 
   defp enrich_inference_opts(session, messages, inference_opts, turn_message_id)
        when is_list(inference_opts) do
-    active_draft = AuthoringDrafts.get_latest_for_chat_session(session)
-    user_turn_count = Enum.count(messages, &(&1.role == :user))
-
-    system_prompt =
-      AuthoringSystemPrompt.build(%{
-        active_draft: active_draft,
-        user_turn_count: user_turn_count
-      })
-
     inference_opts
-    |> Keyword.put_new(:system_prompt, system_prompt)
-    |> Keyword.put_new(:tools, AuthoringTools.all())
+    |> put_new_system_prompt(session, messages)
+    |> put_new_tools()
     |> maybe_put_new_source_message_id(turn_message_id)
+  end
+
+  defp put_new_system_prompt(inference_opts, session, messages) do
+    if Keyword.has_key?(inference_opts, :system_prompt) do
+      inference_opts
+    else
+      active_draft = AuthoringDrafts.get_latest_for_chat_session(session)
+      user_turn_count = Enum.count(messages, &(&1.role == :user))
+
+      system_prompt =
+        AuthoringSystemPrompt.build(%{
+          active_draft: active_draft,
+          user_turn_count: user_turn_count
+        })
+
+      Keyword.put(inference_opts, :system_prompt, system_prompt)
+    end
+  end
+
+  defp put_new_tools(inference_opts) do
+    if Keyword.has_key?(inference_opts, :tools) do
+      inference_opts
+    else
+      Keyword.put(
+        inference_opts,
+        :tools,
+        AuthoringTools.all() ++ DirectTrackerOperationTools.all()
+      )
+    end
   end
 
   defp maybe_put_new_source_message_id(opts, nil), do: opts
