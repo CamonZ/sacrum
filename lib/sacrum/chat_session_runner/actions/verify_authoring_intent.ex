@@ -64,16 +64,8 @@ defmodule Sacrum.ChatSessionRunner.Actions.VerifyAuthoringIntent do
     with :ok <- validate_result(params.inference_result),
          {:ok, session} <- Pipeline.fetch_session(params.chat_session_id),
          {:continue, session} <- Pipeline.ensure_runnable(session),
-         {:ok, next_result} <- verify(session, params.inference_result) do
-      directive =
-        Actions.emit(Signals.append_assistant(), %{
-          chat_session_id: session.id,
-          engine_session_ref: params.engine_session_ref,
-          inference_opts: params.inference_opts,
-          turn_message_id: Map.get(params, :turn_message_id),
-          inference_result: next_result
-        })
-
+         {:ok, next_result} <- verify(session, params.inference_result),
+         {:ok, directive} <- route_verified_result(session, next_result, params) do
       {:ok, %{step: :verify_authoring, chat_session_id: session.id}, [directive]}
     else
       {:halt, _session, reason} -> Failure.halt(params, reason)
@@ -89,8 +81,53 @@ defmodule Sacrum.ChatSessionRunner.Actions.VerifyAuthoringIntent do
     end
   end
 
+  defp route_verified_result(%ChatSession{} = session, %Result{} = result, params) do
+    metadata = result.internal_metadata
+    turn_message_id = Map.get(params, :turn_message_id)
+
+    cond do
+      is_map(Map.get(metadata, "resolved_direct_tracker_operation")) ->
+        with {:ok, _event} <-
+               Pipeline.execute_direct_tracker_operation(session, result, turn_message_id) do
+          {:ok, complete_session_directive(session, params)}
+        end
+
+      is_map(Map.get(metadata, "direct_tracker_operation_rejected")) ->
+        with {:ok, _event} <-
+               Pipeline.record_direct_tracker_operation_rejection(
+                 session,
+                 result,
+                 turn_message_id
+               ) do
+          {:ok, complete_session_directive(session, params)}
+        end
+
+      true ->
+        {:ok, append_assistant_directive(session, result, params)}
+    end
+  end
+
+  defp append_assistant_directive(%ChatSession{} = session, %Result{} = result, params) do
+    Actions.emit(Signals.append_assistant(), %{
+      chat_session_id: session.id,
+      engine_session_ref: params.engine_session_ref,
+      inference_opts: params.inference_opts,
+      turn_message_id: Map.get(params, :turn_message_id),
+      inference_result: result
+    })
+  end
+
+  defp complete_session_directive(%ChatSession{} = session, params) do
+    Actions.emit(Signals.complete_session(), %{
+      chat_session_id: session.id,
+      engine_session_ref: params.engine_session_ref,
+      inference_opts: params.inference_opts,
+      turn_message_id: Map.get(params, :turn_message_id)
+    })
+  end
+
   defp verify_authoring_intent(%ChatSession{} = session, %Result{} = result) do
-    case get_in(result.internal_metadata || %{}, ["authoring_tool_intent"]) do
+    case get_in(result.internal_metadata, ["authoring_tool_intent"]) do
       nil ->
         {:ok, result}
 
@@ -106,7 +143,7 @@ defmodule Sacrum.ChatSessionRunner.Actions.VerifyAuthoringIntent do
   end
 
   defp verify_direct_tracker_operation(%ChatSession{} = session, %Result{} = result) do
-    case get_in(result.internal_metadata || %{}, ["direct_tracker_operation"]) do
+    case get_in(result.internal_metadata, ["direct_tracker_operation"]) do
       nil ->
         {:ok, result}
 
@@ -380,8 +417,7 @@ defmodule Sacrum.ChatSessionRunner.Actions.VerifyAuthoringIntent do
 
   defp put_resolved_direct_tracker_operation(%Result{} = result, resolved) do
     metadata =
-      result.internal_metadata
-      |> Kernel.||(%{})
+      (result.internal_metadata || %{})
       |> Map.delete("direct_tracker_operation")
       |> Map.put(
         "resolved_direct_tracker_operation",
@@ -403,10 +439,19 @@ defmodule Sacrum.ChatSessionRunner.Actions.VerifyAuthoringIntent do
       | internal_metadata:
           Map.put(metadata, "direct_tracker_operation_rejected", %{
             "reason" => "resolution_failed",
+            "reason_code" => direct_tracker_rejection_reason_code(reason),
             "details" => inspect(reason)
           })
     }
   end
+
+  defp direct_tracker_rejection_reason_code({:forbidden_model_scope_fields, _fields}),
+    do: "out_of_scope"
+
+  defp direct_tracker_rejection_reason_code({:ambiguous, _candidates}),
+    do: "ambiguous_target"
+
+  defp direct_tracker_rejection_reason_code(_reason), do: "out_of_scope"
 
   @spec validate_result(term()) :: :ok | {:error, :invalid_inference_result_payload}
   defp validate_result(%Result{}), do: :ok

@@ -33,6 +33,14 @@ defmodule Sacrum.Chat.DirectTrackerOperationResolver do
     "task_ref" => :task_ref,
     "workflow_ref" => :workflow_ref
   }
+  @target_key_atoms %{
+    "depends_on" => :depends_on,
+    "section" => :section,
+    "task" => :task,
+    "task_section" => :task_section,
+    "workflow" => :workflow,
+    "workflow_step" => :workflow_step
+  }
 
   @type context :: %{
           required(:user_id) => String.t(),
@@ -112,6 +120,45 @@ defmodule Sacrum.Chat.DirectTrackerOperationResolver do
     }
   end
 
+  @spec deserialize_resolution(map()) :: {:ok, map()} | {:error, term()}
+  def deserialize_resolution(%{
+        "action" => action,
+        "arguments" => arguments,
+        "scope" => scope,
+        "targets" => targets
+      })
+      when is_binary(action) and is_map(arguments) and is_map(scope) and is_map(targets) do
+    with {:ok, resolved_targets} <- deserialize_targets(targets, scope) do
+      {:ok,
+       %{
+         action: action,
+         arguments: arguments,
+         scope: atomize_scope(scope),
+         targets: resolved_targets
+       }}
+    end
+  end
+
+  def deserialize_resolution(_serialized), do: {:error, :invalid_direct_tracker_operation}
+
+  @spec public_target(map()) :: map() | nil
+  def public_target(%{"action" => action, "targets" => targets})
+      when is_binary(action) and is_map(targets) do
+    action
+    |> public_target_keys()
+    |> Enum.find_value(fn key ->
+      case Map.get(targets, to_string(key)) do
+        %{"type" => type, "id" => id} when is_binary(type) and is_binary(id) ->
+          %{"type" => type, "id" => id}
+
+        _other ->
+          nil
+      end
+    end)
+  end
+
+  def public_target(_serialized), do: nil
+
   defp resolve_directive_targets(action, args, context)
        when action in [
               "show_task",
@@ -140,8 +187,7 @@ defmodule Sacrum.Chat.DirectTrackerOperationResolver do
          {:ok, workflow_ref} <- fetch_string(args, "workflow_ref"),
          {:ok, workflow} <- resolve_workflow(context, workflow_ref),
          {:ok, step_ref} <- fetch_string(args, "step_ref"),
-         {:ok, step} <- resolve_workflow_step(context, step_ref),
-         :ok <- ensure_step_belongs_to_workflow(step, workflow, step_ref) do
+         {:ok, step} <- resolve_workflow_step_for_workflow(context, workflow, step_ref) do
       {:ok, %{task: task, workflow: workflow, workflow_step: step}}
     end
   end
@@ -158,6 +204,34 @@ defmodule Sacrum.Chat.DirectTrackerOperationResolver do
 
   defp resolve_directive_targets(_action, _args, _context),
     do: {:error, :unknown_direct_tracker_operation}
+
+  defp deserialize_targets(targets, scope) do
+    context = atomize_scope(scope)
+
+    Enum.reduce_while(targets, {:ok, %{}}, fn {key, target}, {:ok, acc} ->
+      with {:ok, target_key} <- target_key(key),
+           {:ok, record} <- resolve_target_reference(target_reference(target), context) do
+        {:cont, {:ok, Map.put(acc, target_key, record)}}
+      else
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp target_key(key) do
+    case Map.fetch(@target_key_atoms, to_string(key)) do
+      {:ok, target_key} -> {:ok, target_key}
+      :error -> {:error, :invalid_direct_tracker_operation}
+    end
+  end
+
+  defp target_reference(%{"type" => type, "id" => id}), do: %{"type" => type, "ref" => id}
+  defp target_reference(%{"type" => type, "ref" => ref}), do: %{"type" => type, "ref" => ref}
+  defp target_reference(other), do: other
+
+  defp public_target_keys("update_workflow_step"), do: [:workflow_step]
+  defp public_target_keys("upsert_task_section"), do: [:task]
+  defp public_target_keys(_action), do: [:task, :workflow_step, :workflow, :section]
 
   defp resolve_step_for_workflow_update(context, %Workflow{} = workflow, args) do
     case active_workflow_step_ref(context) do
@@ -188,9 +262,23 @@ defmodule Sacrum.Chat.DirectTrackerOperationResolver do
   end
 
   defp resolve_workflow_step_for_workflow(context, %Workflow{} = workflow, step_ref) do
-    with {:ok, step} <- resolve_workflow_step(context, step_ref),
-         :ok <- ensure_step_belongs_to_workflow(step, workflow, step_ref) do
-      {:ok, step}
+    case cast_ref(step_ref) do
+      {:ok, _uuid} ->
+        with {:ok, step} <- resolve_workflow_step(context, step_ref),
+             :ok <- ensure_step_belongs_to_workflow(step, workflow, step_ref) do
+          {:ok, step}
+        end
+
+      {:short_prefix, prefix} ->
+        Accounts.WorkflowSteps.resolve_short_id(
+          fetch_context!(context, :user_id),
+          fetch_context!(context, :project_id),
+          workflow.id,
+          prefix
+        )
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -235,16 +323,32 @@ defmodule Sacrum.Chat.DirectTrackerOperationResolver do
     user_id = fetch_context!(context, :user_id)
     project_id = fetch_context!(context, :project_id)
 
-    with {:ok, uuid} <- cast_ref(ref) do
-      case accounts_module.get_by(user_id, conditions: [id: uuid, project_id: project_id]) do
-        {:ok, target} ->
-          {:ok, target}
+    case cast_ref(ref) do
+      {:ok, uuid} ->
+        case accounts_module.get_by(user_id, conditions: [id: uuid, project_id: project_id]) do
+          {:ok, target} ->
+            {:ok, target}
 
-        {:error, :not_found} ->
-          unauthorized_or_not_found(repo_module, schema_module, target_type, uuid)
-      end
+          {:error, :not_found} ->
+            unauthorized_or_not_found(repo_module, schema_module, target_type, uuid)
+        end
+
+      {:short_prefix, prefix} ->
+        resolve_short_target(accounts_module, target_type, user_id, project_id, prefix)
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
+
+  defp resolve_short_target(Accounts.Tasks, :task, user_id, project_id, prefix),
+    do: Accounts.Tasks.resolve_short_id(user_id, project_id, prefix)
+
+  defp resolve_short_target(Accounts.Workflows, :workflow, user_id, project_id, prefix),
+    do: Accounts.Workflows.resolve_short_id(user_id, project_id, prefix)
+
+  defp resolve_short_target(_accounts_module, _target_type, _user_id, _project_id, _prefix),
+    do: {:error, :not_found}
 
   defp unauthorized_or_not_found(repo_module, schema_module, target_type, uuid) do
     case repo_module.get_by(conditions: [id: uuid]) do
@@ -266,11 +370,19 @@ defmodule Sacrum.Chat.DirectTrackerOperationResolver do
   defp cast_ref(ref) when is_binary(ref) do
     case Ecto.UUID.cast(ref) do
       {:ok, uuid} -> {:ok, uuid}
-      :error -> {:error, :not_found}
+      :error -> cast_short_prefix(ref)
     end
   end
 
   defp cast_ref(_ref), do: {:error, :not_found}
+
+  defp cast_short_prefix(ref) do
+    if Regex.match?(~r/\A[0-9a-f]{1,8}\z/i, ref) do
+      {:short_prefix, ref}
+    else
+      {:error, :not_found}
+    end
+  end
 
   defp directive_arguments(%{"arguments" => %{} = args}),
     do: reject_model_scope_fields(args, {:ok, args})
@@ -327,6 +439,15 @@ defmodule Sacrum.Chat.DirectTrackerOperationResolver do
     scope
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
     |> Map.new(fn {key, value} -> {to_string(key), value} end)
+  end
+
+  defp atomize_scope(scope) do
+    %{
+      user_id: get_map_value(scope, :user_id),
+      project_id: get_map_value(scope, :project_id),
+      chat_session_id: get_map_value(scope, :chat_session_id),
+      chat_run_id: get_map_value(scope, :chat_run_id)
+    }
   end
 
   defp get_map_value(map, key), do: Map.get(map, key) || Map.get(map, to_string(key))

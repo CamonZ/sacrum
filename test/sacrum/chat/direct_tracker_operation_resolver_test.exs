@@ -208,6 +208,38 @@ defmodule Sacrum.Chat.DirectTrackerOperationResolverTest do
 
       assert Enum.sort(fields) == ~w(object_id permission permissions project_id user_id)
     end
+
+    test "returns ambiguous target when a short task ref matches multiple scoped tasks" do
+      user = create_user("ambiguous-task")
+      project = create_project(user, "Ambiguous Task")
+      workflow = create_workflow(user, project, %{name: "Ambiguous Workflow"})
+      step = create_step(user, workflow, %{name: "Ambiguous Step"})
+      session = create_chat_session(user, project)
+
+      [first_task, second_task] =
+        Enum.map(
+          [
+            "12345678-0000-0000-0000-000000000001",
+            "12345678-0000-0000-0000-000000000002"
+          ],
+          fn id ->
+            task = create_task(user, project, workflow, step)
+
+            {_count, nil} =
+              Sacrum.Repo.update_all(from(t in Task, where: t.id == ^task.id), set: [id: id])
+
+            %{task | id: id}
+          end
+        )
+
+      assert {:error, {:ambiguous, candidates}} =
+               DirectTrackerOperationResolver.resolve_directive(
+                 %{"action" => "show_task", "task_ref" => "12345678"},
+                 scoped_context(user, project, session)
+               )
+
+      assert Enum.sort(candidates) == Enum.sort([first_task.id, second_task.id])
+    end
   end
 
   describe "resolve_target_reference/2" do

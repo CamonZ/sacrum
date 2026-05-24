@@ -23,7 +23,8 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
     InvokeInference,
     LoadMessages,
     MarkFailed,
-    ResumeAssistant
+    ResumeAssistant,
+    VerifyAuthoringIntent
   }
 
   alias Sacrum.ChatSessionRunner.Signals
@@ -371,6 +372,190 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
     end
   end
 
+  describe "VerifyAuthoringIntent.run/2 for direct tracker operations" do
+    setup [:create_session_with_message]
+
+    test "routes a validated directive through resolver and executor without appending assistant",
+         ctx do
+      %{workflow: workflow, step: step, task: task} = create_tracker_targets(ctx)
+
+      {:ok, running} =
+        Sacrum.Accounts.ChatSessions.transition_status(
+          ctx.user.id,
+          ctx.project.id,
+          ctx.session.id,
+          :running
+        )
+
+      inference_result =
+        result_with_direct_tracker_operation(%{
+          "action" => "update_workflow_step",
+          "arguments" => %{
+            "workflow_ref" => workflow.id,
+            "step_ref" => step.id,
+            "fields" => %{"prompt" => "Use the durable direct prompt."}
+          }
+        })
+
+      params = %{
+        chat_session_id: running.id,
+        engine_session_ref: ctx.engine_session_ref,
+        inference_opts: [],
+        turn_message_id: ctx.user_message.id,
+        inference_result: inference_result
+      }
+
+      assert {:ok, %{step: :verify_authoring}, [%Directive.Emit{} = emit]} =
+               VerifyAuthoringIntent.run(params, %{})
+
+      assert emit.signal.type == Signals.complete_session()
+
+      {:ok, updated_step} =
+        Sacrum.Accounts.WorkflowSteps.get_by(ctx.user.id,
+          conditions: [id: step.id, project_id: ctx.project.id]
+        )
+
+      assert updated_step.prompt == "Use the durable direct prompt."
+
+      {:ok, messages} = ChatMessages.list_for_session(running, include_private: true)
+      refute Enum.any?(messages, &(&1.role == :assistant))
+      assert [] = authoring_drafts_for_session(ctx)
+
+      assert {:ok, unchanged_task} =
+               Sacrum.Accounts.Tasks.get_by(ctx.user.id,
+                 conditions: [id: task.id, project_id: ctx.project.id]
+               )
+
+      assert unchanged_task.title == "Direct Tracker Task"
+    end
+
+    test "emits a public rejection for model-owned scope fields without mutating Accounts",
+         ctx do
+      %{workflow: workflow, step: step} = create_tracker_targets(ctx)
+
+      {:ok, running} =
+        Sacrum.Accounts.ChatSessions.transition_status(
+          ctx.user.id,
+          ctx.project.id,
+          ctx.session.id,
+          :running
+        )
+
+      inference_result =
+        result_with_direct_tracker_operation(%{
+          "action" => "update_workflow_step",
+          "arguments" => %{
+            "workflow_ref" => workflow.id,
+            "step_ref" => step.id,
+            "fields" => %{"prompt" => "This prompt must not be applied."},
+            "project_id" => ctx.project.id
+          }
+        })
+
+      params = %{
+        chat_session_id: running.id,
+        engine_session_ref: ctx.engine_session_ref,
+        inference_opts: [],
+        turn_message_id: ctx.user_message.id,
+        inference_result: inference_result
+      }
+
+      assert {:ok, %{step: :verify_authoring}, [%Directive.Emit{} = emit]} =
+               VerifyAuthoringIntent.run(params, %{})
+
+      assert emit.signal.type == Signals.complete_session()
+
+      {:ok, unchanged_step} =
+        Sacrum.Accounts.WorkflowSteps.get_by(ctx.user.id,
+          conditions: [id: step.id, project_id: ctx.project.id]
+        )
+
+      assert unchanged_step.prompt == "Original prompt"
+
+      public_events =
+        Repo.all(
+          from event in ChatEvent,
+            where:
+              event.chat_session_id == ^running.id and
+                event.visibility == :public and
+                event.event_type == "chat_direct_tracker_operation.rejected"
+        )
+
+      assert [event] = public_events
+      assert event.public_payload["reason"] == "out_of_scope"
+      assert [] = authoring_drafts_for_session(ctx)
+    end
+
+    test "emits an ambiguous target rejection without mutating Accounts", ctx do
+      %{workflow: workflow, step: step} = create_tracker_targets(ctx)
+
+      [first_task, second_task] =
+        Enum.map(
+          [
+            "12345678-0000-0000-0000-000000000003",
+            "12345678-0000-0000-0000-000000000004"
+          ],
+          fn id ->
+            {:ok, task} =
+              Sacrum.Accounts.Tasks.insert(ctx.user.id, ctx.project.id, %{
+                title: "Ambiguous Direct Tracker Task",
+                workflow_id: workflow.id,
+                current_step_id: step.id
+              })
+
+            {_count, nil} =
+              Repo.update_all(from(t in Sacrum.Repo.Schemas.Task, where: t.id == ^task.id),
+                set: [id: id]
+              )
+
+            %{task | id: id}
+          end
+        )
+
+      {:ok, running} =
+        Sacrum.Accounts.ChatSessions.transition_status(
+          ctx.user.id,
+          ctx.project.id,
+          ctx.session.id,
+          :running
+        )
+
+      inference_result =
+        result_with_direct_tracker_operation(%{
+          "action" => "show_task",
+          "arguments" => %{"task_ref" => "12345678"}
+        })
+
+      params = %{
+        chat_session_id: running.id,
+        engine_session_ref: ctx.engine_session_ref,
+        inference_opts: [],
+        turn_message_id: ctx.user_message.id,
+        inference_result: inference_result
+      }
+
+      assert {:ok, %{step: :verify_authoring}, [%Directive.Emit{} = emit]} =
+               VerifyAuthoringIntent.run(params, %{})
+
+      assert emit.signal.type == Signals.complete_session()
+
+      public_events =
+        Repo.all(
+          from event in ChatEvent,
+            where:
+              event.chat_session_id == ^running.id and
+                event.visibility == :public and
+                event.event_type == "chat_direct_tracker_operation.rejected"
+        )
+
+      assert [event] = public_events
+      assert event.public_payload["reason"] == "ambiguous_target"
+      assert event.internal_payload["rejection"]["details"] =~ first_task.id
+      assert event.internal_payload["rejection"]["details"] =~ second_task.id
+      assert [] = authoring_drafts_for_session(ctx)
+    end
+  end
+
   describe "AppendAssistant.run/2" do
     setup [:create_session_with_message]
 
@@ -533,5 +718,45 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
       assert internal_failure.internal_payload["details"]["reason"] ==
                inspect({:malformed_signal, :no_payload})
     end
+  end
+
+  defp result_with_direct_tracker_operation(directive) do
+    %Result{
+      content: "Applying the requested tracker update.",
+      content_format: :markdown,
+      public_metadata: %{"provider" => "stub", "model" => "direct-tracker-test"},
+      internal_metadata: %{"direct_tracker_operation" => directive}
+    }
+  end
+
+  defp create_tracker_targets(ctx) do
+    {:ok, workflow} =
+      Sacrum.Accounts.Workflows.insert(ctx.user.id, ctx.project.id, %{
+        name: "Direct Tracker Workflow"
+      })
+
+    {:ok, step} =
+      Sacrum.Accounts.WorkflowSteps.insert(workflow, %{
+        name: "Direct Step",
+        step_order: 1,
+        prompt: "Original prompt"
+      })
+
+    {:ok, task} =
+      Sacrum.Accounts.Tasks.insert(ctx.user.id, ctx.project.id, %{
+        title: "Direct Tracker Task",
+        workflow_id: workflow.id,
+        current_step_id: step.id
+      })
+
+    {:ok, _session} =
+      Sacrum.Accounts.ChatSessions.update_session(ctx.session, %{
+        public_metadata: %{
+          "active_task_id" => task.id,
+          "active_object" => %{"type" => "workflow_step", "id" => step.id}
+        }
+      })
+
+    %{workflow: workflow, step: step, task: task}
   end
 end
