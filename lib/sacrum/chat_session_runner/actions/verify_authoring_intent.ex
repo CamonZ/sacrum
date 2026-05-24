@@ -44,7 +44,14 @@ defmodule Sacrum.ChatSessionRunner.Actions.VerifyAuthoringIntent do
   require Logger
 
   alias Sacrum.Accounts.{AuthoringDrafts, AuthoringRunKinds}
-  alias Sacrum.Chat.{AuthoringTools, AuthoringVerifierPrompt, Inference}
+
+  alias Sacrum.Chat.{
+    AuthoringTools,
+    AuthoringVerifierPrompt,
+    DirectTrackerOperationResolver,
+    Inference
+  }
+
   alias Sacrum.Chat.Inference.Result
   alias Sacrum.ChatSessionRunner.Actions
   alias Sacrum.ChatSessionRunner.Actions.Failure
@@ -77,6 +84,12 @@ defmodule Sacrum.ChatSessionRunner.Actions.VerifyAuthoringIntent do
   @doc false
   @spec verify(ChatSession.t(), Result.t()) :: {:ok, Result.t()} | {:error, term()}
   def verify(%ChatSession{} = session, %Result{} = result) do
+    with {:ok, result} <- verify_authoring_intent(session, result) do
+      verify_direct_tracker_operation(session, result)
+    end
+  end
+
+  defp verify_authoring_intent(%ChatSession{} = session, %Result{} = result) do
     case get_in(result.internal_metadata || %{}, ["authoring_tool_intent"]) do
       nil ->
         {:ok, result}
@@ -89,6 +102,25 @@ defmodule Sacrum.ChatSessionRunner.Actions.VerifyAuthoringIntent do
 
       _other ->
         {:ok, reject_with_schema_error(result, :invalid_authoring_tool_intent)}
+    end
+  end
+
+  defp verify_direct_tracker_operation(%ChatSession{} = session, %Result{} = result) do
+    case get_in(result.internal_metadata || %{}, ["direct_tracker_operation"]) do
+      nil ->
+        {:ok, result}
+
+      %{} = directive ->
+        case DirectTrackerOperationResolver.resolve_directive(
+               directive,
+               DirectTrackerOperationResolver.context_from_session(session)
+             ) do
+          {:ok, resolved} -> {:ok, put_resolved_direct_tracker_operation(result, resolved)}
+          {:error, reason} -> {:ok, reject_direct_tracker_operation(result, reason)}
+        end
+
+      _other ->
+        {:ok, reject_direct_tracker_operation(result, :invalid_direct_tracker_operation)}
     end
   end
 
@@ -344,6 +376,36 @@ defmodule Sacrum.ChatSessionRunner.Actions.VerifyAuthoringIntent do
   defp verifier_error_followup do
     "I wanted to draft a Vertebrae authoring intent but could not verify it just " <>
       "now. Could you restate what you want me to draft so we can try again?"
+  end
+
+  defp put_resolved_direct_tracker_operation(%Result{} = result, resolved) do
+    metadata =
+      result.internal_metadata
+      |> Kernel.||(%{})
+      |> Map.delete("direct_tracker_operation")
+      |> Map.put(
+        "resolved_direct_tracker_operation",
+        DirectTrackerOperationResolver.serialize_resolution(resolved)
+      )
+
+    %Result{result | internal_metadata: metadata}
+  end
+
+  defp reject_direct_tracker_operation(%Result{} = result, reason) do
+    Logger.warning(fn ->
+      "[verify_authoring_intent] direct tracker operation rejected: #{inspect(reason)}"
+    end)
+
+    metadata = Map.delete(result.internal_metadata || %{}, "direct_tracker_operation")
+
+    %Result{
+      result
+      | internal_metadata:
+          Map.put(metadata, "direct_tracker_operation_rejected", %{
+            "reason" => "resolution_failed",
+            "details" => inspect(reason)
+          })
+    }
   end
 
   @spec validate_result(term()) :: :ok | {:error, :invalid_inference_result_payload}

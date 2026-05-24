@@ -129,6 +129,9 @@ defmodule Sacrum.Chat.DirectTrackerOperationTools do
 
   def required_keys(_), do: :error
 
+  @spec server_owned_argument_keys() :: [String.t()]
+  def server_owned_argument_keys, do: @server_owned_argument_keys
+
   @spec sanitize_arguments(map()) :: map()
   def sanitize_arguments(arguments) when is_map(arguments),
     do: Map.drop(arguments, @server_owned_argument_keys)
