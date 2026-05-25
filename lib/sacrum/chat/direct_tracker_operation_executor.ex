@@ -21,11 +21,8 @@ defmodule Sacrum.Chat.DirectTrackerOperationExecutor do
     level
     priority
     tags
-    needs_human_review
-    review_comment
     started_at
     completed_at
-    revision_feedback
     worktree
     archived
   )
@@ -274,11 +271,8 @@ defmodule Sacrum.Chat.DirectTrackerOperationExecutor do
       level: task.level,
       priority: task.priority,
       tags: task.tags,
-      needs_human_review: task.needs_human_review,
-      review_comment: task.review_comment,
       started_at: task.started_at,
       completed_at: task.completed_at,
-      revision_feedback: task.revision_feedback,
       worktree: task.worktree,
       archived: task.archived,
       status: task.status,

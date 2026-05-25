@@ -4267,16 +4267,25 @@ defmodule SacrumWeb.Graphql.SchemaTest do
   describe "task field coverage" do
     setup [:setup_user_and_project]
 
-    test "returns review-related fields", %{conn: conn, user: user, project: project} do
-      {:ok, task} =
-        Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+    test "exposes workflow position for human_input review state", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, workflow} = Accounts.Workflows.insert(user.id, project.id, %{name: "Human Review"})
 
-      # rejection_reason is not in @update_fields, so it can't be set via update
-      {:ok, _} =
-        Accounts.Tasks.update(task, %{
-          needs_human_review: true,
-          review_comment: "please check",
-          revision_feedback: "add tests"
+      {:ok, step} =
+        Accounts.WorkflowSteps.insert(workflow, %{
+          name: "wait",
+          step_order: 1,
+          step_type: "human_input"
+        })
+
+      {:ok, task} =
+        Accounts.Tasks.insert(user.id, project.id, %{
+          title: "Task",
+          workflow_id: workflow.id,
+          current_step_id: step.id
         })
 
       result =
@@ -4284,47 +4293,39 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         |> authenticate(user)
         |> graphql("""
           { task(id: "#{task.id}") {
-            id needsHumanReview reviewComment rejectionReason revisionFeedback
+            id currentStepId currentStep { id name stepType }
           } }
         """)
         |> json_response(200)
 
       data = result["data"]["task"]
-      assert data["needsHumanReview"] == true
-      assert data["reviewComment"] == "please check"
-      # rejection_reason defaults to nil (not in update_fields)
-      assert data["rejectionReason"] == nil
-      assert data["revisionFeedback"] == "add tests"
+      assert data["currentStepId"] == step.id
+      assert data["currentStep"]["id"] == step.id
+      assert data["currentStep"]["name"] == "wait"
+      assert data["currentStep"]["stepType"] == "human_input"
     end
 
-    test "updateTask can set review-related fields", %{
-      conn: conn,
-      user: user,
-      project: project
-    } do
-      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+    test "removed review metadata fields are absent from task and updateTask contracts" do
+      task_fields =
+        SacrumWeb.Graphql.Schema
+        |> Absinthe.Schema.lookup_type(:task)
+        |> Map.fetch!(:fields)
+        |> Map.keys()
+        |> MapSet.new()
 
-      # Note: rejectionReason is accepted as a GraphQL arg but is not in
-      # the Task schema's @update_fields, so it gets silently dropped.
-      result =
-        conn
-        |> authenticate(user)
-        |> graphql("""
-          mutation {
-            updateTask(
-              id: "#{task.id}"
-              needsHumanReview: true
-              reviewComment: "review this"
-              revisionFeedback: "fix it"
-            ) { id needsHumanReview reviewComment revisionFeedback }
-          }
-        """)
-        |> json_response(200)
+      update_task_args =
+        SacrumWeb.Graphql.Schema
+        |> Absinthe.Schema.lookup_type(:mutation)
+        |> Map.fetch!(:fields)
+        |> Map.fetch!(:update_task)
+        |> Map.fetch!(:args)
+        |> Map.keys()
+        |> MapSet.new()
 
-      data = result["data"]["updateTask"]
-      assert data["needsHumanReview"] == true
-      assert data["reviewComment"] == "review this"
-      assert data["revisionFeedback"] == "fix it"
+      removed_fields = MapSet.new([:needs_human_review, :review_comment, :revision_feedback])
+
+      assert MapSet.disjoint?(task_fields, removed_fields)
+      assert MapSet.disjoint?(update_task_args, removed_fields)
     end
   end
 

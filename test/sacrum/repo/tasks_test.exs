@@ -113,6 +113,25 @@ defmodule Sacrum.Repo.TasksTest do
       assert updated.description == "New desc"
     end
 
+    test "ignores removed review metadata fields" do
+      user = create_user()
+      project = create_project(user)
+      {:ok, task} = Tasks.insert(project, %{title: "Original"})
+
+      changeset =
+        Task.update_changeset(task, %{
+          needs_human_review: true,
+          review_comment: "please check",
+          revision_feedback: "add tests"
+        })
+
+      assert changeset.valid?
+      assert changeset.changes == %{}
+      refute Map.has_key?(task, :needs_human_review)
+      refute Map.has_key?(task, :review_comment)
+      refute Map.has_key?(task, :revision_feedback)
+    end
+
     for valid_level <- ["epic", "ticket", "task"] do
       test "accepts valid level #{inspect(valid_level)} on update" do
         user = create_user()

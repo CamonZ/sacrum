@@ -469,8 +469,6 @@ defmodule Sacrum.Import do
       "description" => task_data["description"],
       "level" => task_data["level"],
       "priority" => task_data["priority"],
-      "needs_human_review" => task_data["needs_human_review"] || false,
-      "revision_feedback" => task_data["revision_feedback"],
       "sections" => sections_attrs
     }
 

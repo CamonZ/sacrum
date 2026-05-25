@@ -30,10 +30,7 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
     field :level, :string
     field :priority, :string
     field :tags, list_of(:string)
-    field :needs_human_review, :boolean
-    field :review_comment, :string
     field :rejection_reason, :string
-    field :revision_feedback, :string
     field :started_at, :datetime
     field :completed_at, :datetime
     field :worktree, :string
@@ -237,10 +234,7 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
       arg(:level, :string)
       arg(:priority, :string)
       arg(:tags, list_of(:string))
-      arg(:needs_human_review, :boolean)
-      arg(:review_comment, :string)
       arg(:rejection_reason, :string)
-      arg(:revision_feedback, :string)
       arg(:started_at, :datetime)
       arg(:completed_at, :datetime)
       arg(:worktree, :string)

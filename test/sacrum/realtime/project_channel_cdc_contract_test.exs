@@ -131,6 +131,12 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContractTest do
       :updated_at
     ])
 
+    assert_payload_excludes("task_updated", [
+      :needs_human_review,
+      :review_comment,
+      :revision_feedback
+    ])
+
     assert_payload_includes("task_deleted", [
       :schema_version,
       :id,
@@ -313,6 +319,18 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContractTest do
       |> MapSet.to_list()
 
     assert missing_keys == []
+  end
+
+  defp assert_payload_excludes(event, removed_keys) do
+    assert {:ok, contract} = ProjectChannelCdcContract.contract_for(event)
+
+    present_keys =
+      removed_keys
+      |> MapSet.new()
+      |> MapSet.intersection(MapSet.new(contract.payload_keys))
+      |> MapSet.to_list()
+
+    assert present_keys == []
   end
 
   defp source_tables(contract) do

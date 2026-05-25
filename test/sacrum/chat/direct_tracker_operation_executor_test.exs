@@ -86,6 +86,36 @@ defmodule Sacrum.Chat.DirectTrackerOperationExecutorTest do
     Repo.one(from d in TaskDependency, where: d.task_id == ^task.id, select: count(d.id))
   end
 
+  describe "execute/1 update_task_fields" do
+    test "does not accept or return removed review metadata fields" do
+      %{user: user, task: task} = tracker_context("taskfields")
+
+      operation =
+        resolved_operation("update_task_fields", %{task: task}, %{
+          "fields" => %{
+            "title" => "Updated title",
+            "needs_human_review" => true,
+            "review_comment" => "please review",
+            "revision_feedback" => "fix tests"
+          }
+        })
+
+      assert {:ok, %{action: "update_task_fields", task: result}} =
+               DirectTrackerOperationExecutor.execute(operation)
+
+      assert result.title == "Updated title"
+      refute Map.has_key?(result, :needs_human_review)
+      refute Map.has_key?(result, :review_comment)
+      refute Map.has_key?(result, :revision_feedback)
+
+      assert {:ok, updated_task} = Accounts.Tasks.find(user.id, task.id)
+      assert updated_task.title == "Updated title"
+      refute Map.has_key?(updated_task, :needs_human_review)
+      refute Map.has_key?(updated_task, :review_comment)
+      refute Map.has_key?(updated_task, :revision_feedback)
+    end
+  end
+
   describe "execute/1 update_workflow_step" do
     test "updates the server-resolved workflow step through Accounts.WorkflowSteps.update/2" do
       %{user: user, workflow: workflow, step: step, task: task} =
