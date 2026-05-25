@@ -28,11 +28,8 @@ defmodule Sacrum.Repo.Schemas.Task do
     :level,
     :priority,
     :tags,
-    :needs_human_review,
-    :review_comment,
     :started_at,
     :completed_at,
-    :revision_feedback,
     :worktree,
     :archived
   ]
@@ -43,10 +40,7 @@ defmodule Sacrum.Repo.Schemas.Task do
     field :level, :string, default: "task"
     field :priority, :string
     field :tags, {:array, :string}, default: []
-    field :needs_human_review, :boolean, default: false
-    field :review_comment, :string
     field :rejection_reason, :string
-    field :revision_feedback, :string
     field :started_at, :utc_datetime_usec
     field :completed_at, :utc_datetime_usec
     field :worktree, :string

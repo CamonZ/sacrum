@@ -266,8 +266,7 @@ Schemas define distinct changesets for create vs update, with different allowed 
 defmodule Sacrum.Repo.Schemas.Task do
   @create_fields [:title, :description, :level, :priority, :tags]
   @update_fields [:title, :description, :level, :priority, :tags,
-                  :needs_human_review, :review_comment, :started_at,
-                  :completed_at, :revision_feedback]
+                  :started_at, :completed_at]
 
   def create_changeset(task, attrs) do
     task

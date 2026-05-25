@@ -14,7 +14,7 @@ Sacrum is an API-only workflow engine and task management system built with Phoe
 - Structured sections (typed content blocks)
 - Code references (file paths with line ranges)
 - Tagging, priority, and level classification
-- Human review flags with rejection/revision feedback
+- Workflow-step based human review via `current_step_id` and `WorkflowStep.step_type == "human_input"`
 
 **Execution tracking** — Durable `TaskRun` records track automation lifecycle for a task run. `StepExecution` records track individual step attempts inside a run, including the step name, attempt status, and optional LLM metadata (model, provider, token counts, cost, duration). Session logs attach free-text content to executions.
 
@@ -125,7 +125,7 @@ The API is exposed via **GraphQL** at `/graphql` (GraphiQL playground available 
 | Mutation | Arguments | Returns |
 |----------|-----------|---------|
 | `createTask` | `project_id!`, `title!`, `description`, `level`, `priority`, `tags`, `parent_id`, `sections` | `:task` |
-| `updateTask` | `id!`, `title`, `description`, `level`, `priority`, `tags`, `needs_human_review`, `review_comment`, `rejection_reason`, `revision_feedback`, `started_at`, `completed_at`, `parent_id`, `depends_on_ids`, `sections` | `:task` |
+| `updateTask` | `id!`, `title`, `description`, `level`, `priority`, `tags`, `rejection_reason`, `started_at`, `completed_at`, `parent_id`, `depends_on_ids`, `sections` | `:task` |
 | `deleteTask` | `id!`, `cascade` (default: true) | `:task` |
 | `createTaskDependency` | `task_id!`, `depends_on_id!` | `:task` |
 | `deleteTaskDependency` | `task_id!`, `depends_on_id!` | `:task` |

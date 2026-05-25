@@ -62,10 +62,7 @@ Archived tasks are excluded from `vtb list` by default. Use `--include-archived`
 
 ## Human Review
 
-```bash
-vtb review <id>                # Toggle needs_human_review flag
-vtb review <id> --set true
-vtb review <id> --set false
-```
-
-Tasks with `needs_human_review: true` pause automated workflow advancement.
+Human review is represented by workflow position. A task is awaiting human
+action when its `current_step_id` points at a workflow step whose `step_type` is
+`human_input`; task-level review metadata fields are not part of the public task
+contract.
