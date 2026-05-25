@@ -14,6 +14,7 @@ defmodule Sacrum.ChatSessionRunner.DirectTracker.Events do
   def append_completed(%ChatSession{} = session, operation, result, extra_public_payload)
       when is_map(extra_public_payload) do
     serialized_operation = DirectTrackerOperationResolver.serialize_resolution(operation)
+    serialized_result = serialize_result(result)
 
     ChatEvents.append_to_session(session, %{
       event_type: "chat_direct_tracker_operation.completed",
@@ -23,7 +24,7 @@ defmodule Sacrum.ChatSessionRunner.DirectTracker.Events do
           "action" => operation.action,
           "status" => "succeeded",
           "target" => DirectTrackerOperationResolver.public_target(serialized_operation),
-          "result" => public_direct_tracker_result(result)
+          "result" => public_direct_tracker_result(serialized_result)
         }
         |> Map.merge(extra_public_payload)
         |> Enum.reject(fn {_key, value} -> is_nil(value) end)
@@ -31,7 +32,7 @@ defmodule Sacrum.ChatSessionRunner.DirectTracker.Events do
       internal_payload:
         Inference.scrub_secrets(%{
           "operation" => serialized_operation,
-          "result" => stringify_direct_tracker_result(result)
+          "result" => serialized_result
         })
     })
   end
@@ -61,32 +62,40 @@ defmodule Sacrum.ChatSessionRunner.DirectTracker.Events do
     })
   end
 
-  @spec public_direct_tracker_result(term()) :: term()
-  defp public_direct_tracker_result(%{section: section}) do
-    section = stringify_direct_tracker_result(section)
+  @doc false
+  @spec serialize_result(term()) :: term()
+  def serialize_result(%DateTime{} = value), do: DateTime.to_iso8601(value)
 
+  def serialize_result(%NaiveDateTime{} = value), do: NaiveDateTime.to_iso8601(value)
+  def serialize_result(%Date{} = value), do: Date.to_iso8601(value)
+  def serialize_result(%Time{} = value), do: Time.to_iso8601(value)
+  def serialize_result(%Decimal{} = value), do: Decimal.to_string(value)
+  def serialize_result(%_struct{} = value), do: inspect(value)
+
+  def serialize_result(result) when is_map(result) do
+    Map.new(result, fn {key, value} -> {to_string(key), serialize_result(value)} end)
+  end
+
+  def serialize_result(result) when is_list(result), do: Enum.map(result, &serialize_result/1)
+
+  def serialize_result(result) when is_tuple(result),
+    do: result |> Tuple.to_list() |> serialize_result()
+
+  def serialize_result(value) when is_atom(value) and not is_boolean(value) and not is_nil(value),
+    do: Atom.to_string(value)
+
+  def serialize_result(value)
+      when is_binary(value) or is_number(value) or is_boolean(value) or is_nil(value), do: value
+
+  def serialize_result(value), do: inspect(value)
+
+  @spec public_direct_tracker_result(term()) :: term()
+  defp public_direct_tracker_result(%{"section" => section}) do
     Map.take(section, ~w(id section_type section_order content done))
   end
 
-  defp public_direct_tracker_result(%{workflow_step: step}),
-    do: stringify_direct_tracker_result(step)
+  defp public_direct_tracker_result(%{"workflow_step" => step}), do: step
 
-  defp public_direct_tracker_result(%{task: task}), do: stringify_direct_tracker_result(task)
-  defp public_direct_tracker_result(result), do: stringify_direct_tracker_result(result)
-
-  @spec stringify_direct_tracker_result(term()) :: term()
-  defp stringify_direct_tracker_result(result) when is_map(result) do
-    Map.new(result, fn {key, value} -> {to_string(key), stringify_direct_tracker_value(value)} end)
-  end
-
-  defp stringify_direct_tracker_result(result), do: result
-
-  @spec stringify_direct_tracker_value(term()) :: term()
-  defp stringify_direct_tracker_value(value) when is_map(value),
-    do: stringify_direct_tracker_result(value)
-
-  defp stringify_direct_tracker_value(value) when is_list(value),
-    do: Enum.map(value, &stringify_direct_tracker_value/1)
-
-  defp stringify_direct_tracker_value(value), do: value
+  defp public_direct_tracker_result(%{"task" => task}), do: task
+  defp public_direct_tracker_result(result), do: result
 end

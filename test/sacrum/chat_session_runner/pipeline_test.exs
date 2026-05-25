@@ -562,6 +562,53 @@ defmodule Sacrum.ChatSessionRunner.PipelineTest do
 
       assert [] = authoring_drafts_for_session(ctx)
     end
+
+    test "serializes completed show_task results with DateTime fields", ctx do
+      ctx = transition_running(ctx)
+      %{task: task} = create_tracker_targets(ctx)
+      completed_at = ~U[2026-05-23 00:38:14.956038Z]
+
+      Repo.update_all(
+        from(task_record in Sacrum.Repo.Schemas.Task, where: task_record.id == ^task.id),
+        set: [completed_at: completed_at]
+      )
+
+      inference_result =
+        build_result("Here is the completed ticket.")
+        |> put_resolved_direct_tracker_operation(%{
+          "action" => "show_task",
+          "arguments" => %{
+            "task_ref" => task.id,
+            "include_sections" => true
+          },
+          "scope" => %{
+            "user_id" => ctx.user.id,
+            "project_id" => ctx.project.id,
+            "chat_session_id" => ctx.session.id
+          },
+          "targets" => %{
+            "task" => %{"type" => "task", "id" => task.id}
+          }
+        })
+
+      assert {:ok, message} =
+               Pipeline.append_assistant_message(
+                 ctx.session,
+                 inference_result,
+                 ctx.user_message.id
+               )
+
+      assert message.content == "Here is the completed ticket."
+
+      [event] = direct_tracker_result_events(ctx.session.id)
+      assert event.public_payload["result"]["completed_at"] == "2026-05-23T00:38:14.956038Z"
+
+      assert event.internal_payload["result"]["task"]["completed_at"] ==
+               "2026-05-23T00:38:14.956038Z"
+
+      assert Jason.encode!(event.public_payload)
+      assert Jason.encode!(event.internal_payload)
+    end
   end
 
   describe "resume_assistant_message/2" do
