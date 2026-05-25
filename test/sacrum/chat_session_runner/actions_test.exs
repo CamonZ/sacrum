@@ -497,6 +497,69 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
       assert [] = authoring_drafts_for_session(ctx)
     end
 
+    test "routes show_task for a completed task without leaving the turn silently running",
+         ctx do
+      %{task: task} = create_tracker_targets(ctx)
+      completed_at = ~U[2026-05-23 00:38:14.956038Z]
+
+      Repo.update_all(
+        from(task_record in Sacrum.Repo.Schemas.Task, where: task_record.id == ^task.id),
+        set: [completed_at: completed_at]
+      )
+
+      {:ok, running} =
+        Sacrum.Accounts.ChatSessions.transition_status(
+          ctx.user.id,
+          ctx.project.id,
+          ctx.session.id,
+          :running
+        )
+
+      inference_result =
+        result_with_direct_tracker_operation(%{
+          "action" => "show_task",
+          "arguments" => %{
+            "task_ref" => task.id,
+            "include_sections" => true
+          }
+        })
+
+      params = %{
+        chat_session_id: running.id,
+        engine_session_ref: ctx.engine_session_ref,
+        inference_opts: [],
+        turn_message_id: ctx.user_message.id,
+        inference_result: inference_result
+      }
+
+      assert {:ok, %{step: :verify_authoring}, [%Directive.Emit{} = emit]} =
+               VerifyAuthoringIntent.run(params, %{})
+
+      assert emit.signal.type == Signals.complete_session()
+      assert {:ok, %{step: :complete_session}} = CompleteSession.run(emit.signal.data, %{})
+
+      {:ok, completed} = Sacrum.Repo.ChatSessions.get(running.id)
+      assert completed.status == :completed
+
+      [event] =
+        Repo.all(
+          from event in ChatEvent,
+            where:
+              event.chat_session_id == ^running.id and
+                event.visibility == :public and
+                event.event_type == "chat_direct_tracker_operation.completed"
+        )
+
+      assert event.public_payload["action"] == "show_task"
+      assert event.public_payload["status"] == "succeeded"
+      assert event.public_payload["turn_message_id"] == ctx.user_message.id
+      assert event.public_payload["result"]["completed_at"] == "2026-05-23T00:38:14.956038Z"
+
+      assert Jason.encode!(event.public_payload)
+      assert [] = authoring_drafts_for_session(ctx)
+      refute assistant_message_exists?(running.id)
+    end
+
     test "emits a public rejection for model-owned scope fields without mutating Accounts",
          ctx do
       %{workflow: workflow, step: step} = create_tracker_targets(ctx)
