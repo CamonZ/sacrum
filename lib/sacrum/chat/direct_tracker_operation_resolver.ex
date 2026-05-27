@@ -62,7 +62,9 @@ defmodule Sacrum.Chat.DirectTrackerOperationResolver do
          action: action,
          arguments: args,
          targets: targets,
-         scope: scope_from_context(context)
+         scope: scope_from_context(context),
+         tool_call: Map.get(directive, "provider_tool_call"),
+         assistant_content: Map.get(directive, "assistant_content")
        }}
     end
   end
@@ -112,18 +114,22 @@ defmodule Sacrum.Chat.DirectTrackerOperationResolver do
   end
 
   @spec serialize_resolution(map()) :: map()
-  def serialize_resolution(%{
-        action: action,
-        arguments: arguments,
-        targets: targets,
-        scope: scope
-      }) do
+  def serialize_resolution(
+        %{
+          action: action,
+          arguments: arguments,
+          targets: targets,
+          scope: scope
+        } = resolution
+      ) do
     %{
       "action" => action,
       "arguments" => arguments,
       "scope" => stringify_scope(scope),
       "targets" => Map.new(targets, fn {key, target} -> {to_string(key), target_ref(target)} end)
     }
+    |> maybe_put("tool_call", Map.get(resolution, :tool_call))
+    |> maybe_put("assistant_content", Map.get(resolution, :assistant_content))
   end
 
   @spec serialize_resolutions([map()]) :: [map()]
@@ -131,12 +137,14 @@ defmodule Sacrum.Chat.DirectTrackerOperationResolver do
     do: Enum.map(resolved, &serialize_resolution/1)
 
   @spec deserialize_resolution(map()) :: {:ok, map()} | {:error, term()}
-  def deserialize_resolution(%{
-        "action" => action,
-        "arguments" => arguments,
-        "scope" => scope,
-        "targets" => targets
-      })
+  def deserialize_resolution(
+        %{
+          "action" => action,
+          "arguments" => arguments,
+          "scope" => scope,
+          "targets" => targets
+        } = serialized
+      )
       when is_binary(action) and is_map(arguments) and is_map(scope) and is_map(targets) do
     with {:ok, resolved_targets} <- deserialize_targets(targets, scope) do
       {:ok,
@@ -144,7 +152,9 @@ defmodule Sacrum.Chat.DirectTrackerOperationResolver do
          action: action,
          arguments: arguments,
          scope: atomize_scope(scope),
-         targets: resolved_targets
+         targets: resolved_targets,
+         tool_call: Map.get(serialized, "tool_call"),
+         assistant_content: Map.get(serialized, "assistant_content")
        }}
     end
   end
@@ -193,6 +203,9 @@ defmodule Sacrum.Chat.DirectTrackerOperationResolver do
       error -> error
     end
   end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   defp resolve_directive_targets(action, args, context)
        when action in [

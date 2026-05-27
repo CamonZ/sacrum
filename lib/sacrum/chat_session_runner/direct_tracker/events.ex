@@ -24,7 +24,8 @@ defmodule Sacrum.ChatSessionRunner.DirectTracker.Events do
           "action" => operation.action,
           "status" => "succeeded",
           "target" => DirectTrackerOperationResolver.public_target(serialized_operation),
-          "result" => public_direct_tracker_result(serialized_result)
+          "result" => public_direct_tracker_result(serialized_result),
+          "tool_call_id" => tool_call_id(operation)
         }
         |> Map.merge(extra_public_payload)
         |> Enum.reject(fn {_key, value} -> is_nil(value) end)
@@ -36,6 +37,9 @@ defmodule Sacrum.ChatSessionRunner.DirectTracker.Events do
         })
     })
   end
+
+  defp tool_call_id(%{tool_call: %{"id" => id}}) when is_binary(id), do: id
+  defp tool_call_id(_operation), do: nil
 
   @spec append_rejection(ChatSession.t(), Inference.Result.t(), String.t() | nil) ::
           {:ok, ChatEvent.t()} | {:error, term()}

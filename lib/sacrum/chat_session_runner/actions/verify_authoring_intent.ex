@@ -55,6 +55,7 @@ defmodule Sacrum.ChatSessionRunner.Actions.VerifyAuthoringIntent do
   alias Sacrum.Chat.Inference.Result
   alias Sacrum.ChatSessionRunner.Actions
   alias Sacrum.ChatSessionRunner.Actions.Failure
+  alias Sacrum.ChatSessionRunner.DirectTracker.Continuation, as: DirectTrackerContinuation
   alias Sacrum.ChatSessionRunner.Pipeline
   alias Sacrum.ChatSessionRunner.Signals
   alias Sacrum.Repo.Schemas.{Artifact, ChatSession}
@@ -87,9 +88,14 @@ defmodule Sacrum.ChatSessionRunner.Actions.VerifyAuthoringIntent do
 
     cond do
       direct_tracker_operations_resolved?(metadata) ->
-        with {:ok, _events} <-
-               Pipeline.execute_direct_tracker_operation(session, result, turn_message_id) do
-          {:ok, complete_session_directive(session, params)}
+        with {:ok, session, continued_result} <-
+               Pipeline.continue_after_direct_tracker_operation(
+                 session,
+                 result,
+                 params.inference_opts,
+                 turn_message_id
+               ) do
+          {:ok, append_assistant_directive(session, continued_result, params)}
         end
 
       is_map(Map.get(metadata, "direct_tracker_operation_rejected")) ->
@@ -473,6 +479,7 @@ defmodule Sacrum.ChatSessionRunner.Actions.VerifyAuthoringIntent do
         "resolved_direct_tracker_operation",
         DirectTrackerOperationResolver.serialize_resolution(resolved)
       )
+      |> DirectTrackerContinuation.put_metadata([resolved])
 
     %Result{result | internal_metadata: metadata}
   end
@@ -485,6 +492,7 @@ defmodule Sacrum.ChatSessionRunner.Actions.VerifyAuthoringIntent do
         "resolved_direct_tracker_operations",
         DirectTrackerOperationResolver.serialize_resolutions(resolved)
       )
+      |> DirectTrackerContinuation.put_metadata(resolved)
 
     %Result{result | internal_metadata: metadata}
   end

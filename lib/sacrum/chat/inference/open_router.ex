@@ -189,16 +189,19 @@ defmodule Sacrum.Chat.Inference.OpenRouter do
   defp extract_tool_directive(result, source_message_id) do
     case fetch_result(result, :tool_calls) do
       [_ | _] = list ->
-        pick_tool_directive(list, source_message_id)
+        pick_tool_directive(list, source_message_id, fetch_result(result, :text))
 
       _ ->
         nil
     end
   end
 
-  defp pick_tool_directive(list, source_message_id) do
+  defp pick_tool_directive(list, source_message_id, assistant_content) do
     list
-    |> Enum.flat_map(&List.wrap(parse_tool_call(&1, source_message_id)))
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {tool_call, index} ->
+      List.wrap(parse_tool_call(tool_call, source_message_id, assistant_content, index))
+    end)
     |> case do
       [] -> nil
       [directive] -> directive
@@ -239,14 +242,17 @@ defmodule Sacrum.Chat.Inference.OpenRouter do
     payload
   end
 
-  defp parse_tool_call(tool_call, source_message_id) do
+  defp parse_tool_call(tool_call, source_message_id, assistant_content, index) do
     case tool_call_name(tool_call) do
-      nil -> nil
-      name -> directive_for_known_name(name, tool_call, source_message_id)
+      nil ->
+        nil
+
+      name ->
+        directive_for_known_name(name, tool_call, source_message_id, assistant_content, index)
     end
   end
 
-  defp directive_for_known_name(name, tool_call, source_message_id) do
+  defp directive_for_known_name(name, tool_call, source_message_id, assistant_content, index) do
     cond do
       AuthoringTools.known_function_name?(name) ->
         {:authoring_tool_intent,
@@ -254,7 +260,13 @@ defmodule Sacrum.Chat.Inference.OpenRouter do
 
       DirectTrackerOperationTools.known_function_name?(name) ->
         {:direct_tracker_operation,
-         build_direct_operation(name, tool_call_arguments(tool_call), source_message_id)}
+         build_direct_operation(
+           name,
+           tool_call_arguments(tool_call),
+           source_message_id,
+           provider_tool_call(tool_call, name, source_message_id, index),
+           assistant_content
+         )}
 
       true ->
         log_unknown_tool_call(name)
@@ -262,13 +274,58 @@ defmodule Sacrum.Chat.Inference.OpenRouter do
     end
   end
 
-  defp build_direct_operation(name, arguments, source_message_id) do
+  defp build_direct_operation(
+         name,
+         arguments,
+         source_message_id,
+         provider_tool_call,
+         assistant_content
+       ) do
     operation = %{
       "action" => name,
       "arguments" => DirectTrackerOperationTools.sanitize_arguments(arguments)
     }
 
-    maybe_put_string(operation, "source_message_id", source_message_id)
+    operation
+    |> maybe_put_string("source_message_id", source_message_id)
+    |> Map.put("provider_tool_call", provider_tool_call)
+    |> maybe_put_string("assistant_content", assistant_content)
+  end
+
+  defp provider_tool_call(tool_call, name, source_message_id, index) do
+    DirectTrackerOperationTools.provider_tool_call(
+      name,
+      tool_call_arguments(tool_call),
+      tool_call_id(tool_call, source_message_id, name, index)
+    )
+  end
+
+  defp tool_call_id(%{"id" => id}, _source_message_id, _name, _index)
+       when is_binary(id) and id != "",
+       do: id
+
+  defp tool_call_id(%{id: id}, _source_message_id, _name, _index)
+       when is_binary(id) and id != "",
+       do: id
+
+  defp tool_call_id(_tool_call, source_message_id, name, index) do
+    Enum.map_join(
+      ["call", source_message_id || "unknown", name, index],
+      "_",
+      &safe_tool_call_id_part/1
+    )
+  end
+
+  defp safe_tool_call_id_part(value) do
+    value = to_string(value)
+
+    ~r/[^A-Za-z0-9_-]+/
+    |> Regex.replace(value, "_")
+    |> String.trim("_")
+    |> case do
+      "" -> "unknown"
+      part -> part
+    end
   end
 
   defp log_unknown_tool_call(name) do

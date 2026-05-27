@@ -11,6 +11,7 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
   alias Sacrum.Chat.Inference
 
   alias Sacrum.ChatSessionRunner.DirectTracker
+  alias Sacrum.ChatSessionRunner.DirectTracker.Continuation, as: DirectTrackerContinuation
   alias Sacrum.ChatSessionRunner.Events.{Checkpoints, InferenceEvents, MessageEvents}
   alias Sacrum.ChatSessionRunner.Session.{State, Turn}
   alias Sacrum.ChatSessionRunner.Transcript.{InferenceMessages, Messages}
@@ -71,20 +72,15 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
           {:ok, ChatSession.t(), Inference.Result.t()} | {:error, term()}
   def invoke_inference(%ChatSession{} = session, messages, inference_opts)
       when is_list(messages) and is_list(inference_opts) do
-    with {:ok, result} <-
-           Inference.generate(
-             InferenceMessages.conversation_messages_for_inference(messages),
-             inference_opts
-           ),
-         {:ok, session} <- State.refresh_runnable_session(session),
-         {:ok, _events} <-
-           Checkpoints.checkpoint_step(session, :invoke_inference, %{
-             "provider" => Map.get(result.public_metadata, "provider"),
-             "model" => Map.get(result.public_metadata, "model"),
-             "turn_message_id" => Turn.turn_message_id(messages)
-           }) do
-      {:ok, session, result}
-    end
+    provider_messages = InferenceMessages.conversation_messages_for_inference(messages)
+
+    run_inference(
+      session,
+      provider_messages,
+      inference_opts,
+      :invoke_inference,
+      Turn.turn_message_id(messages)
+    )
   end
 
   @spec append_assistant_message(ChatSession.t(), Inference.Result.t()) ::
@@ -130,6 +126,65 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
     DirectTracker.Runner.execute(session, inference_result, %{
       "turn_message_id" => turn_message_id || Turn.latest_user_message_id!(session)
     })
+  end
+
+  @spec continue_after_direct_tracker_operation(
+          ChatSession.t(),
+          Inference.Result.t(),
+          keyword(),
+          String.t() | nil
+        ) ::
+          {:ok, ChatSession.t(), Inference.Result.t()}
+          | {:error, term()}
+          | {:halt, ChatSession.t(), term()}
+  def continue_after_direct_tracker_operation(
+        %ChatSession{} = session,
+        %Inference.Result{} = inference_result,
+        inference_opts,
+        turn_message_id \\ nil
+      )
+      when is_list(inference_opts) do
+    turn_message_id = turn_message_id || Turn.latest_user_message_id!(session)
+
+    with {:ok, events} <-
+           execute_direct_tracker_operation(session, inference_result, turn_message_id),
+         {:ok, messages} <- Messages.list_for_session(session, include_private: true),
+         {:ok, continuation_messages} <-
+           DirectTrackerContinuation.messages(inference_result.internal_metadata, events) do
+      provider_messages =
+        InferenceMessages.conversation_messages_for_inference(messages) ++
+          continuation_messages
+
+      inference_opts = Keyword.put(inference_opts, :source_message_id, turn_message_id)
+
+      run_inference(
+        session,
+        provider_messages,
+        inference_opts,
+        :continue_inference,
+        turn_message_id
+      )
+    end
+  end
+
+  defp run_inference(
+         %ChatSession{} = session,
+         provider_messages,
+         inference_opts,
+         checkpoint_step,
+         turn_message_id
+       )
+       when is_list(provider_messages) and is_list(inference_opts) and is_atom(checkpoint_step) do
+    with {:ok, result} <- Inference.generate(provider_messages, inference_opts),
+         {:ok, refreshed_session} <- State.refresh_runnable_session(session),
+         {:ok, _events} <-
+           Checkpoints.checkpoint_step(refreshed_session, checkpoint_step, %{
+             "provider" => Map.get(result.public_metadata, "provider"),
+             "model" => Map.get(result.public_metadata, "model"),
+             "turn_message_id" => turn_message_id
+           }) do
+      {:ok, refreshed_session, result}
+    end
   end
 
   @spec record_direct_tracker_operation_rejection(
