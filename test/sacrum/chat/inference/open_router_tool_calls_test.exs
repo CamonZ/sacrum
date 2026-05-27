@@ -43,6 +43,7 @@ defmodule Sacrum.Chat.Inference.OpenRouterToolCallsTest do
         provider_metadata: %{},
         tool_calls: [
           %{
+            "id" => "call-show-task",
             "function" => %{
               "name" => "show_task",
               "arguments" => %{
@@ -67,6 +68,14 @@ defmodule Sacrum.Chat.Inference.OpenRouterToolCallsTest do
                    "task_ref" => "b2e508b0",
                    "include_sections" => true
                  },
+                 "provider_tool_call" => %{
+                   "id" => "call-show-task",
+                   "type" => "function",
+                   "function" => %{
+                     "name" => "show_task",
+                     "arguments" => "{\"include_sections\":true,\"task_ref\":\"b2e508b0\"}"
+                   }
+                 },
                  "source_message_id" => "msg-direct"
                }
              } = result.internal_metadata
@@ -83,6 +92,7 @@ defmodule Sacrum.Chat.Inference.OpenRouterToolCallsTest do
         provider_metadata: %{},
         tool_calls: [
           %{
+            "id" => "call-show-task",
             "function" => %{
               "name" => "show_task",
               "arguments" => %{

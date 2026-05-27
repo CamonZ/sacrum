@@ -141,4 +141,16 @@ defmodule Sacrum.Chat.DirectTrackerOperationTools do
     do: Map.drop(arguments, @server_owned_argument_keys)
 
   def sanitize_arguments(_), do: %{}
+
+  @spec provider_tool_call(String.t(), map(), String.t()) :: map()
+  def provider_tool_call(name, arguments, id) when is_binary(name) and is_binary(id) do
+    %{
+      "id" => id,
+      "type" => "function",
+      "function" => %{
+        "name" => name,
+        "arguments" => Jason.encode!(sanitize_arguments(arguments))
+      }
+    }
+  end
 end

@@ -13,7 +13,7 @@ defmodule Sacrum.Chat.Inference do
   alias Sacrum.Repo.Schemas.ChatMessage
 
   @default_timeout_ms 120_000
-  @supported_provider_roles ~w(system user assistant)
+  @supported_provider_roles ~w(system user assistant tool)
   @sensitive_key_names ~w(authorization bearer password credential credentials)
   @sensitive_key_suffixes ~w(api_key auth_token access_token refresh_token token secret private_key)
 
@@ -112,15 +112,46 @@ defmodule Sacrum.Chat.Inference do
       not is_binary(content) ->
         {:error, {:invalid_inference_message_content, role}}
 
-      String.trim(content) == "" ->
+      String.trim(content) == "" and not assistant_tool_call_message?(message, role) ->
         {:ok, nil}
 
       true ->
-        {:ok, %{role: role, content: content}}
+        {:ok, provider_message(message, role, content)}
     end
   end
 
   defp normalize_message(message), do: {:error, {:invalid_inference_message, message}}
+
+  defp assistant_tool_call_message?(message, "assistant") do
+    case fetch_value(message, :tool_calls) do
+      [_ | _] -> true
+      _other -> false
+    end
+  end
+
+  defp assistant_tool_call_message?(_message, _role), do: false
+
+  defp provider_message(message, "assistant", content) do
+    role =
+      if assistant_tool_call_message?(message, "assistant"), do: :assistant, else: "assistant"
+
+    maybe_put_provider_field(%{role: role, content: content}, message, :tool_calls)
+  end
+
+  defp provider_message(message, "tool", content) do
+    %{role: :tool, content: content}
+    |> maybe_put_provider_field(message, :tool_call_id)
+    |> maybe_put_provider_field(message, :name)
+  end
+
+  defp provider_message(_message, role, content), do: %{role: role, content: content}
+
+  defp maybe_put_provider_field(provider_message, source, key) do
+    case fetch_value(source, key) do
+      nil -> provider_message
+      value -> Map.put(provider_message, key, value)
+    end
+  end
 
   defp normalize_role(role) when is_atom(role), do: role |> Atom.to_string() |> normalize_role()
   defp normalize_role(role) when is_binary(role), do: role

@@ -375,7 +375,7 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
   describe "VerifyAuthoringIntent.run/2 for direct tracker operations" do
     setup [:create_session_with_message]
 
-    test "routes a validated directive through resolver and executor without appending assistant",
+    test "routes a validated directive through resolver, executor, and model continuation",
          ctx do
       %{workflow: workflow, step: step, task: task} = create_tracker_targets(ctx)
 
@@ -400,7 +400,7 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
       params = %{
         chat_session_id: running.id,
         engine_session_ref: ctx.engine_session_ref,
-        inference_opts: [],
+        inference_opts: direct_tracker_continuation_opts("The workflow step prompt was updated."),
         turn_message_id: ctx.user_message.id,
         inference_result: inference_result
       }
@@ -408,7 +408,8 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
       assert {:ok, %{step: :verify_authoring}, [%Directive.Emit{} = emit]} =
                VerifyAuthoringIntent.run(params, %{})
 
-      assert emit.signal.type == Signals.complete_session()
+      assert emit.signal.type == Signals.append_assistant()
+      assert emit.signal.data.inference_result.content == "The workflow step prompt was updated."
 
       {:ok, updated_step} =
         Sacrum.Accounts.WorkflowSteps.get_by(ctx.user.id,
@@ -420,6 +421,8 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
       {:ok, messages} = ChatMessages.list_for_session(running, include_private: true)
       refute Enum.any?(messages, &(&1.role == :assistant))
       assert [] = authoring_drafts_for_session(ctx)
+      assert_received {:stub_provider_called, continuation_messages, _opts}
+      assert_continuation_messages(continuation_messages, "update_workflow_step")
 
       assert {:ok, unchanged_task} =
                Sacrum.Accounts.Tasks.get_by(ctx.user.id,
@@ -452,7 +455,7 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
       params = %{
         chat_session_id: running.id,
         engine_session_ref: ctx.engine_session_ref,
-        inference_opts: [],
+        inference_opts: direct_tracker_continuation_opts("The active step prompt was updated."),
         turn_message_id: ctx.user_message.id,
         inference_result: inference_result
       }
@@ -460,7 +463,8 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
       assert {:ok, %{step: :verify_authoring}, [%Directive.Emit{} = emit]} =
                VerifyAuthoringIntent.run(params, %{})
 
-      assert emit.signal.type == Signals.complete_session()
+      assert emit.signal.type == Signals.append_assistant()
+      assert emit.signal.data.inference_result.content == "The active step prompt was updated."
 
       {:ok, updated_step} =
         Sacrum.Accounts.WorkflowSteps.get_by(ctx.user.id,
@@ -495,9 +499,11 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
       {:ok, messages} = ChatMessages.list_for_session(running, include_private: true)
       refute Enum.any?(messages, &(&1.role == :assistant))
       assert [] = authoring_drafts_for_session(ctx)
+      assert_received {:stub_provider_called, continuation_messages, _opts}
+      assert_continuation_messages(continuation_messages, "update_step_prompt")
     end
 
-    test "routes show_task for a completed task without leaving the turn silently running",
+    test "routes show_task for a completed task into a final assistant answer",
          ctx do
       %{task: task} = create_tracker_targets(ctx)
       completed_at = ~U[2026-05-23 00:38:14.956038Z]
@@ -527,7 +533,7 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
       params = %{
         chat_session_id: running.id,
         engine_session_ref: ctx.engine_session_ref,
-        inference_opts: [],
+        inference_opts: direct_tracker_continuation_opts("The ticket is completed."),
         turn_message_id: ctx.user_message.id,
         inference_result: inference_result
       }
@@ -535,8 +541,15 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
       assert {:ok, %{step: :verify_authoring}, [%Directive.Emit{} = emit]} =
                VerifyAuthoringIntent.run(params, %{})
 
-      assert emit.signal.type == Signals.complete_session()
-      assert {:ok, %{step: :complete_session}} = CompleteSession.run(emit.signal.data, %{})
+      assert emit.signal.type == Signals.append_assistant()
+
+      assert {:ok, %{step: :append_assistant}, [%Directive.Emit{} = complete_emit]} =
+               AppendAssistant.run(emit.signal.data, %{})
+
+      assert complete_emit.signal.type == Signals.complete_session()
+
+      assert {:ok, %{step: :complete_session}} =
+               CompleteSession.run(complete_emit.signal.data, %{})
 
       {:ok, completed} = Sacrum.Repo.ChatSessions.get(running.id)
       assert completed.status == :completed
@@ -557,7 +570,16 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
 
       assert Jason.encode!(event.public_payload)
       assert [] = authoring_drafts_for_session(ctx)
-      refute assistant_message_exists?(running.id)
+
+      {:ok, messages} = ChatMessages.list_for_session(completed, include_private: true)
+
+      assert Enum.any?(messages, fn message ->
+               message.role == :assistant and message.content == "The ticket is completed."
+             end)
+
+      refute Enum.any?(messages, fn message ->
+               message.role == :user and String.contains?(message.content, "completed_at")
+             end)
     end
 
     test "emits a public rejection for model-owned scope fields without mutating Accounts",
@@ -1064,21 +1086,72 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
   end
 
   defp result_with_direct_tracker_operation(directive) do
+    action = Map.fetch!(directive, "action")
+    arguments = Map.get(directive, "arguments", %{})
+
     %Result{
       content: "Applying the requested tracker update.",
       content_format: :markdown,
       public_metadata: %{"provider" => "stub", "model" => "direct-tracker-test"},
-      internal_metadata: %{"direct_tracker_operation" => directive}
+      internal_metadata: %{
+        "direct_tracker_operation" =>
+          directive
+          |> Map.put("provider_tool_call", provider_tool_call(action, arguments))
+          |> Map.put("assistant_content", "")
+      }
     }
   end
 
   defp result_with_direct_tracker_operations(directives) do
+    directives =
+      Enum.with_index(directives, fn directive, index ->
+        action = Map.fetch!(directive, "action")
+        arguments = Map.get(directive, "arguments", %{})
+
+        directive
+        |> Map.put("provider_tool_call", provider_tool_call(action, arguments, index))
+        |> Map.put("assistant_content", "")
+      end)
+
     %Result{
       content: "Applying the requested tracker updates.",
       content_format: :markdown,
       public_metadata: %{"provider" => "stub", "model" => "direct-tracker-test"},
       internal_metadata: %{"direct_tracker_operations" => directives}
     }
+  end
+
+  defp provider_tool_call(action, arguments, index \\ 0) do
+    Sacrum.Chat.DirectTrackerOperationTools.provider_tool_call(
+      action,
+      arguments,
+      "call_#{action}_#{index}"
+    )
+  end
+
+  defp direct_tracker_continuation_opts(content) do
+    [provider: StubProvider, test_pid: self(), content: content]
+  end
+
+  defp assert_continuation_messages(messages, action) do
+    assert [%{role: "user"} | continuation] = messages
+
+    assert [
+             %{role: :assistant, tool_calls: [tool_call]},
+             %{
+               role: :tool,
+               tool_call_id: tool_result_call_id,
+               name: ^action,
+               content: tool_result_content
+             }
+           ] = continuation
+
+    assert tool_call.name == action
+    tool_call_id = tool_call.id
+    assert tool_result_call_id == tool_call_id
+
+    assert {:ok, decoded} = Jason.decode(tool_result_content)
+    assert decoded["action"] == action
   end
 
   defp direct_tracker_rejection_events(session_id) do
