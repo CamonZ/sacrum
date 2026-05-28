@@ -106,7 +106,17 @@ defmodule Sacrum.Orchestrator.PromptContextTest do
       user = create_user()
       project = create_project(user)
       workflow = create_workflow(user, project)
-      step = create_step(user, workflow, %{"output_schema" => %{"type" => "object"}})
+
+      step =
+        create_step(user, workflow, %{
+          "output_schema" => %{
+            "type" => "object",
+            "properties" => %{},
+            "required" => [],
+            "additionalProperties" => false
+          }
+        })
+
       step_with_workflow = Repo.preload(step, :workflow)
       task = create_task(user, project, workflow)
       task_with_workflow = Repo.preload(task, :workflow)
@@ -336,7 +346,14 @@ defmodule Sacrum.Orchestrator.PromptContextTest do
       user = create_user()
       project = create_project(user)
       workflow = create_workflow(user, project)
-      schema = %{"type" => "object", "properties" => %{"id" => %{"type" => "string"}}}
+
+      schema = %{
+        "type" => "object",
+        "properties" => %{"id" => %{"type" => "string"}},
+        "required" => ["id"],
+        "additionalProperties" => false
+      }
+
       step = create_step(user, workflow, %{"output_schema" => schema})
       step_with_workflow = Repo.preload(step, :workflow)
 

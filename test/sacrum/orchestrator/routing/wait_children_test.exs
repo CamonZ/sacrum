@@ -46,6 +46,12 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildrenTest do
       child_ids = waiting_handoff_child_ids(parent.id)
       assert Enum.sort(child_ids) == Enum.sort([completed_child.id, incomplete_child.id])
 
+      snapshot = parent.id |> waiting_execution() |> Map.fetch!(:output) |> Jason.decode!()
+      assert snapshot["snapshot_type"] == "wait_children_status"
+      assert snapshot["counts"]["total_direct_children"] == 2
+      assert snapshot["counts"]["direct_done"] == 1
+      assert snapshot["counts"]["direct_in_flight"] == 1
+
       assert active_task_runs(completed_child.id) == []
       assert [%TaskRun{status: status}] = active_task_runs(incomplete_child.id)
       assert status in [:queued, :executing]
@@ -277,16 +283,20 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildrenTest do
   end
 
   defp waiting_handoff_child_ids(parent_id) do
-    execution =
-      Repo.one(
-        from(e in StepExecution,
-          where: e.task_id == ^parent_id and e.status == "waiting",
-          order_by: [desc: e.inserted_at],
-          limit: 1
-        )
-      )
+    parent_id
+    |> waiting_execution()
+    |> Map.get(:handoff, %{})
+    |> Map.get("child_ids", [])
+  end
 
-    Map.get(execution.handoff || %{}, "child_ids", [])
+  defp waiting_execution(parent_id) do
+    Repo.one!(
+      from(e in StepExecution,
+        where: e.task_id == ^parent_id and e.status == "waiting",
+        order_by: [desc: e.inserted_at],
+        limit: 1
+      )
+    )
   end
 
   defp active_task_runs(task_id) do

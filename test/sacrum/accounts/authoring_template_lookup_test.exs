@@ -3,6 +3,7 @@ defmodule Sacrum.Accounts.AuthoringTemplateLookupTest do
 
   alias Sacrum.Accounts.{AuthoringTemplateLookup, Projects}
   alias Sacrum.Repo.AuthoringTemplates
+  alias Sacrum.Repo.Schemas.WorkflowStep
   alias Sacrum.Repo.Users
 
   @request %{
@@ -162,7 +163,7 @@ defmodule Sacrum.Accounts.AuthoringTemplateLookupTest do
                 %{
                   "key" => "route",
                   "type" => "route",
-                  "output_schema" => %{"type" => "object"},
+                  "output_schema" => WorkflowStep.routing_contract_schema(),
                   "transitions_to" => ["verification.review"]
                 }
               ]
@@ -222,7 +223,7 @@ defmodule Sacrum.Accounts.AuthoringTemplateLookupTest do
 
       assert String.contains?(implement_prompt, "{% if task.desired_behavior %}")
       assert route_step["prompt"] =~ "{{ workflow.output_schema }}"
-      assert route_schema == %{"type" => "object"}
+      assert route_schema == WorkflowStep.routing_contract_schema()
       assert template.payload["rules"]["guard_variables"] =~ "Guard every optional variable"
 
       assert "Route steps emit schema-constrained transition output." in template.payload[

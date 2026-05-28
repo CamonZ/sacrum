@@ -3,7 +3,8 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
   Handles wait_children step transitions.
 
   On entry: schedules each direct child, persists a 'waiting' StepExecution
-  with the child IDs in its handoff, releases the pool slot and exits.
+  with the child IDs in its handoff and a machine-readable child-state snapshot
+  in its output, releases the pool slot and exits.
 
   On child completion (via `Scheduler.notify_task_completed/2`):
   `should_wake_parent/1` returns `:wake` when every child is completed and
@@ -35,7 +36,10 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
           "[TaskOrchestrator:#{task_id}] wait_children entry with no children, advancing through outgoing transition"
         )
 
-        {:advance_parent, data}
+        case enter_without_children(data) do
+          {:ok, _changes} -> {:advance_parent, data}
+          {:error, _reason} -> {:error_parent, data}
+        end
 
       children ->
         enter_with_children(data, children)
@@ -68,6 +72,46 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
     end
   end
 
+  @spec enter_without_children(FSMData.t()) :: {:ok, map()} | {:error, term()}
+  defp enter_without_children(data) do
+    with {:ok, task_run} <- Lookup.fetch(data.task_run_id) do
+      commit_completed_empty_wait(data, task_run, completed_empty_wait_attrs(data))
+    end
+  end
+
+  defp completed_empty_wait_attrs(data) do
+    step = wait_children_step(data)
+
+    %{
+      task_id: data.task.id,
+      task_run_id: data.task_run_id,
+      workflow_id: data.task.workflow_id,
+      step_id: data.task.current_step_id,
+      step_name: step.name,
+      step_type: step.step_type,
+      status: "completed",
+      handoff: %{"child_ids" => []},
+      output: snapshot_output(data.task, [])
+    }
+  end
+
+  defp commit_completed_empty_wait(data, task_run, attrs) do
+    Repo.transaction(fn ->
+      with {:ok, execution} <- Repo.insert(waiting_step_execution_changeset(data, attrs)),
+           {:ok, updated_task_run} <- update_latest_step_execution(task_run, execution.id) do
+        %{execution: execution, task_run: updated_task_run}
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp update_latest_step_execution(task_run, execution_id) do
+    task_run
+    |> TaskRun.update_changeset(%{latest_step_execution_id: execution_id})
+    |> Repo.update()
+  end
+
   @spec should_wake_parent(Task.t()) :: :wake | :no_wake | {:error, term()}
   def should_wake_parent(task) do
     with {:ok, execution} <- fetch_waiting_execution(task.id),
@@ -90,12 +134,8 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
   @spec enter_waiting_state(FSMData.t(), [binary()], [Task.t()]) ::
           {:ok, map()} | {:error, term()}
   defp enter_waiting_state(data, child_ids, children) do
-    step =
-      case data.steps[data.task.current_step_id] do
-        %WorkflowStep{} = step -> step
-        %{name: _name, step_type: _step_type} = step -> step
-        _ -> Repo.get!(WorkflowStep, data.task.current_step_id)
-      end
+    step = wait_children_step(data)
+    output = snapshot_output(data.task, children)
 
     attrs = %{
       task_id: data.task.id,
@@ -105,11 +145,21 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
       step_name: step.name,
       step_type: step.step_type,
       status: "waiting",
-      handoff: %{"child_ids" => child_ids}
+      handoff: %{"child_ids" => child_ids},
+      output: output
     }
 
     with {:ok, task_run} <- Lookup.fetch(data.task_run_id) do
       Repo.transaction(fn -> commit_waiting_state(data, attrs, task_run, children) end)
+    end
+  end
+
+  @spec wait_children_step(FSMData.t()) :: WorkflowStep.t() | map()
+  defp wait_children_step(data) do
+    case data.steps[data.task.current_step_id] do
+      %WorkflowStep{} = step -> step
+      %{name: _name, step_type: _step_type} = step -> step
+      _ -> Repo.get!(WorkflowStep, data.task.current_step_id)
     end
   end
 
@@ -240,6 +290,148 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
   end
 
   defp fetch_children(_), do: {:error, :invalid_child_ids}
+
+  @doc """
+  Returns the machine-readable wait_children child-state snapshot as JSON.
+
+  The output is stored on the wait_children StepExecution so the following
+  evaluate step can consume a structured child-state artifact instead of
+  rediscovering task state from prose.
+  """
+  @spec snapshot_output(Task.t(), [Task.t()]) :: String.t()
+  def snapshot_output(parent, direct_children) do
+    parent
+    |> build_snapshot(direct_children)
+    |> Jason.encode!()
+  end
+
+  @spec build_snapshot(Task.t(), [Task.t()]) :: map()
+  defp build_snapshot(parent, direct_children) do
+    direct_children = preload_snapshot_tasks(direct_children)
+    descendants = parent |> TaskHierarchy.get_descendants() |> preload_snapshot_tasks()
+    direct_child_ids = Enum.map(direct_children, & &1.id)
+    direct_blocked_ids = blocked_id_map(direct_child_ids)
+    descendant_blocked_ids = descendants |> Enum.map(& &1.id) |> blocked_id_map()
+    parked_ids = parked_task_id_map(direct_child_ids ++ Enum.map(descendants, & &1.id))
+
+    %{
+      "snapshot_type" => "wait_children_status",
+      "parent" => task_identity(parent),
+      "counts" => %{
+        "total_direct_children" => length(direct_children),
+        "direct_done" => count_done(direct_children, parked_ids),
+        "direct_in_flight" => count_in_flight(direct_children, direct_blocked_ids, parked_ids),
+        "direct_blocked" => map_size(direct_blocked_ids),
+        "direct_parked" => count_parked(direct_children, parked_ids),
+        "total_descendants" => length(descendants),
+        "descendants_done" => count_done(descendants, parked_ids),
+        "descendants_in_flight" =>
+          count_in_flight(descendants, descendant_blocked_ids, parked_ids),
+        "descendants_blocked" => map_size(descendant_blocked_ids),
+        "descendants_parked" => count_parked(descendants, parked_ids)
+      },
+      "direct_children" => snapshot_tasks(direct_children, direct_blocked_ids, parked_ids),
+      "descendants" => snapshot_tasks(descendants, descendant_blocked_ids, parked_ids)
+    }
+  end
+
+  @spec preload_snapshot_tasks([Task.t()]) :: [Task.t()]
+  defp preload_snapshot_tasks(tasks) do
+    Repo.preload(tasks, [:workflow, :current_step])
+  end
+
+  @spec task_identity(Task.t()) :: map()
+  defp task_identity(task) do
+    %{
+      "id" => task.id,
+      "title" => task.title,
+      "level" => task.level
+    }
+  end
+
+  @spec snapshot_tasks([Task.t()], map(), map()) :: [map()]
+  defp snapshot_tasks(tasks, blocked_ids, parked_ids) do
+    Enum.map(tasks, fn task ->
+      parked = Map.has_key?(parked_ids, task.id)
+      blocked = Map.has_key?(blocked_ids, task.id)
+      completed = not is_nil(task.completed_at)
+
+      %{
+        "id" => task.id,
+        "title" => task.title,
+        "level" => task.level,
+        "parent_id" => task.parent_id || "",
+        "workflow" => workflow_name(task),
+        "step" => step_name(task),
+        "status" => task.status,
+        "completed" => completed,
+        "parked" => parked,
+        "blocked" => blocked,
+        "state" => child_state(completed, blocked, parked),
+        "completed_at" => timestamp(task.completed_at),
+        "updated_at" => timestamp(task.updated_at)
+      }
+    end)
+  end
+
+  @spec blocked_id_map([binary()]) :: map()
+  defp blocked_id_map(task_ids) do
+    task_ids
+    |> TaskDependencies.incomplete_direct_blocker_task_ids()
+    |> id_map()
+  end
+
+  @spec parked_task_id_map([binary()]) :: map()
+  defp parked_task_id_map([]), do: %{}
+
+  defp parked_task_id_map(task_ids) do
+    task_ids = Enum.uniq(task_ids)
+
+    StepExecution
+    |> where([e], e.task_id in ^task_ids and e.status == "waiting")
+    |> select([e], e.task_id)
+    |> Repo.all()
+    |> id_map()
+  end
+
+  @spec id_map([binary()]) :: map()
+  defp id_map(ids), do: Map.new(ids, &{&1, true})
+
+  @spec count_done([Task.t()], map()) :: non_neg_integer()
+  defp count_done(tasks, parked_ids) do
+    Enum.count(tasks, fn task ->
+      not is_nil(task.completed_at) and not Map.has_key?(parked_ids, task.id)
+    end)
+  end
+
+  @spec count_in_flight([Task.t()], map(), map()) :: non_neg_integer()
+  defp count_in_flight(tasks, blocked_ids, parked_ids) do
+    Enum.count(tasks, fn task ->
+      is_nil(task.completed_at) and
+        not Map.has_key?(blocked_ids, task.id) and
+        not Map.has_key?(parked_ids, task.id)
+    end)
+  end
+
+  @spec count_parked([Task.t()], map()) :: non_neg_integer()
+  defp count_parked(tasks, parked_ids) do
+    Enum.count(tasks, &Map.has_key?(parked_ids, &1.id))
+  end
+
+  defp child_state(true, _blocked, false), do: "done"
+  defp child_state(_completed, true, _parked), do: "blocked"
+  defp child_state(_completed, _blocked, true), do: "parked"
+  defp child_state(false, false, false), do: "in_flight"
+
+  defp workflow_name(%{workflow: %{name: name}}) when is_binary(name), do: name
+  defp workflow_name(_task), do: ""
+
+  defp step_name(%{current_step: %{name: name}}) when is_binary(name), do: name
+  defp step_name(_task), do: ""
+
+  defp timestamp(nil), do: ""
+  defp timestamp(%DateTime{} = datetime), do: DateTime.to_iso8601(datetime)
+  defp timestamp(%NaiveDateTime{} = datetime), do: NaiveDateTime.to_iso8601(datetime)
 
   @spec all_done_and_not_parked?([Task.t()]) :: boolean()
   defp all_done_and_not_parked?(children) do

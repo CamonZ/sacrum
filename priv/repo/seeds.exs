@@ -21,6 +21,13 @@ route_handoff_schema = %{
   "additionalProperties" => false
 }
 
+eval_output_schema = %{
+  "type" => "object",
+  "properties" => %{},
+  "required" => [],
+  "additionalProperties" => false
+}
+
 route_output_schema = WorkflowStep.routing_contract_schema(route_handoff_schema)
 
 starter_drafts = [
@@ -269,7 +276,7 @@ code_factory_records = [
           auto_advance: true,
           steps: [
             %{key: "shape", type: "work", final: false},
-            %{key: "eval", type: "eval", final: false, output_schema: %{"type" => "object"}},
+            %{key: "eval", type: "eval", final: false, output_schema: eval_output_schema},
             %{key: "route", type: "route", final: false, output_schema: route_output_schema}
           ]
         },
@@ -280,7 +287,7 @@ code_factory_records = [
           steps: [
             %{key: "scaffold", type: "work", final: false},
             %{key: "implement", type: "work", final: false},
-            %{key: "eval", type: "eval", final: false, output_schema: %{"type" => "object"}},
+            %{key: "eval", type: "eval", final: false, output_schema: eval_output_schema},
             %{
               key: "route",
               type: "route",
@@ -296,7 +303,7 @@ code_factory_records = [
           auto_advance: true,
           steps: [
             %{key: "review", type: "work", final: false},
-            %{key: "eval", type: "eval", final: false, output_schema: %{"type" => "object"}},
+            %{key: "eval", type: "eval", final: false, output_schema: eval_output_schema},
             %{key: "route", type: "route", final: false, output_schema: route_output_schema}
           ]
         },
@@ -306,7 +313,7 @@ code_factory_records = [
           auto_advance: true,
           steps: [
             %{key: "wait_ci", type: "work", final: false},
-            %{key: "eval", type: "eval", final: false, output_schema: %{"type" => "object"}},
+            %{key: "eval", type: "eval", final: false, output_schema: eval_output_schema},
             %{key: "route", type: "route", final: false, output_schema: route_output_schema}
           ]
         },

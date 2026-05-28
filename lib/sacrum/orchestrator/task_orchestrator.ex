@@ -38,6 +38,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   alias Sacrum.Orchestrator.TaskRuns.{Failure, Lookup, Root}
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{StepExecution, Task}
+  alias Sacrum.Repo.TaskHierarchy
   alias Sacrum.Repo.TaskWorkflows
 
   @typep fsm_transition ::
@@ -418,7 +419,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     decision = TaskCompletion.next_state_decision(next_step_id, data)
 
     Repo.transaction(fn ->
-      with {:ok, changes} <- maybe_complete_waiting_execution(data.task.id, %{}),
+      with {:ok, changes} <- maybe_complete_waiting_execution(data, %{}),
            {:ok, changes} <- advance_task_step(data, next_step_id, changes),
            {:ok, changes} <-
              TaskCompletion.maybe_mark_task_run_completed_for_decision(data, decision, changes) do
@@ -444,15 +445,18 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     end)
   end
 
-  @spec maybe_complete_waiting_execution(binary(), map()) :: {:ok, map()} | {:error, term()}
-  defp maybe_complete_waiting_execution(task_id, changes) do
-    case latest_waiting_execution(task_id) do
+  @spec maybe_complete_waiting_execution(FSMData.t(), map()) :: {:ok, map()} | {:error, term()}
+  defp maybe_complete_waiting_execution(data, changes) do
+    case latest_waiting_execution(data.task.id) do
       nil ->
         {:ok, changes}
 
       execution ->
+        children = TaskHierarchy.get_children(data.task)
+        output = WaitChildren.snapshot_output(data.task, children)
+
         execution
-        |> StepExecution.update_changeset(%{status: "completed"})
+        |> StepExecution.update_changeset(%{status: "completed", output: output})
         |> Repo.update()
         |> put_transaction_change(changes, :waiting_execution)
     end

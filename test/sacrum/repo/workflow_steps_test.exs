@@ -174,7 +174,8 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
         "properties" => %{
           "result" => %{"type" => "string"}
         },
-        "required" => ["result"]
+        "required" => ["result"],
+        "additionalProperties" => false
       }
 
       attrs = Map.merge(@valid_attrs, %{step_type: "evaluate", output_schema: schema})
@@ -218,8 +219,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       attrs = Map.merge(@valid_attrs, %{step_type: "route", output_schema: custom_schema})
       assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
 
-      assert %{output_schema: [message]} = errors_on(changeset)
-      assert String.contains?(message, "routing contract schema")
+      assert_output_schema_error(changeset, "routing contract schema")
     end
 
     test "route steps accept correct routing contract schema" do
@@ -260,7 +260,9 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
         "type" => "object",
         "properties" => %{
           "data" => %{"type" => "string"}
-        }
+        },
+        "required" => ["data"],
+        "additionalProperties" => false
       }
 
       {:ok, step} =
@@ -273,7 +275,9 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
         "type" => "object",
         "properties" => %{
           "new_data" => %{"type" => "integer"}
-        }
+        },
+        "required" => ["new_data"],
+        "additionalProperties" => false
       }
 
       {:ok, updated} = WorkflowSteps.update(step, %{output_schema: updated_schema})
@@ -303,7 +307,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
         "type" => "object",
         "properties" => %{
           "summary" => %{"type" => "string"},
-          "notes" => %{"type" => ["string", "null"]}
+          "notes" => %{"type" => "string"}
         },
         "required" => ["summary", "notes"],
         "additionalProperties" => false
@@ -332,8 +336,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       attrs = Map.merge(@valid_attrs, %{step_type: "route", output_schema: invalid_schema})
 
       assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
-      assert %{output_schema: [message]} = errors_on(changeset)
-      assert String.contains?(message, "additionalProperties must be false")
+      assert_output_schema_error(changeset, "additionalProperties must be false")
     end
 
     test "route steps reject handoff schema missing required keys for declared properties" do
@@ -353,8 +356,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       attrs = Map.merge(@valid_attrs, %{step_type: "route", output_schema: invalid_schema})
 
       assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
-      assert %{output_schema: [message]} = errors_on(changeset)
-      assert String.contains?(message, "required must list every declared property")
+      assert_output_schema_error(changeset, "required must list every declared property")
     end
 
     test "route steps reject object schemas inside handoff arrays unless they are strict" do
@@ -380,11 +382,14 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       attrs = Map.merge(@valid_attrs, %{step_type: "route", output_schema: invalid_schema})
 
       assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
-      assert %{output_schema: [message]} = errors_on(changeset)
-      assert String.contains?(message, "handoff.items.items.additionalProperties must be false")
+
+      assert_output_schema_error(
+        changeset,
+        "handoff.items.items.additionalProperties must be false"
+      )
     end
 
-    test "route steps accept nullable strict handoff schema" do
+    test "route steps reject nullable handoff type arrays" do
       workflow = create_workflow()
 
       schema_with_nullable_handoff =
@@ -398,13 +403,170 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       attrs =
         Map.merge(@valid_attrs, %{
           step_type: "route",
-          output_schema: schema_with_nullable_handoff
+          output_schema: schema_with_nullable_handoff,
+          agent_config: %{"provider" => "openai"}
+        })
+
+      assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
+      assert %{output_schema: [message]} = errors_on(changeset)
+      assert String.contains?(message, "Codex strict-compatible")
+      assert String.contains?(message, "type must be a single string")
+    end
+
+    test "route steps allow nullable handoff object schemas for non-Codex providers" do
+      workflow = create_workflow()
+
+      schema_with_nullable_handoff =
+        WorkflowStep.routing_contract_schema(%{
+          "type" => ["null", "object"],
+          "properties" => %{"summary" => %{"type" => "string"}},
+          "required" => ["summary"],
+          "additionalProperties" => false
+        })
+
+      attrs =
+        Map.merge(@valid_attrs, %{
+          step_type: "route",
+          output_schema: schema_with_nullable_handoff,
+          agent_config: %{"provider" => "anthropic"}
         })
 
       assert {:ok, %WorkflowStep{output_schema: returned_schema}} =
                WorkflowSteps.insert(workflow, attrs)
 
       assert returned_schema == schema_with_nullable_handoff
+    end
+
+    test "rejects schemas with const values" do
+      workflow = create_workflow()
+
+      schema = %{
+        "type" => "object",
+        "properties" => %{
+          "snapshot_type" => %{"const" => "wait_children_status"}
+        },
+        "required" => ["snapshot_type"],
+        "additionalProperties" => false
+      }
+
+      attrs =
+        Map.merge(@valid_attrs, %{
+          step_type: "evaluate",
+          output_schema: schema,
+          agent_config: %{"provider" => "codex"}
+        })
+
+      assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
+      assert %{output_schema: [message]} = errors_on(changeset)
+      assert String.contains?(message, "Codex strict-compatible")
+      assert String.contains?(message, "const is not supported")
+    end
+
+    test "rejects schema nodes without explicit type strings" do
+      workflow = create_workflow()
+
+      schema = %{
+        "type" => "object",
+        "properties" => %{
+          "route_hint" => %{
+            "properties" => %{
+              "transition_to" => %{"type" => "string"}
+            },
+            "required" => ["transition_to"],
+            "additionalProperties" => false
+          }
+        },
+        "required" => ["route_hint"],
+        "additionalProperties" => false
+      }
+
+      attrs =
+        Map.merge(@valid_attrs, %{
+          step_type: "evaluate",
+          output_schema: schema,
+          agent_config: %{"provider" => "openai"}
+        })
+
+      assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
+      assert %{output_schema: [message]} = errors_on(changeset)
+      assert String.contains?(message, "Codex strict-compatible")
+      assert String.contains?(message, "schema.route_hint.type must be a string")
+    end
+
+    test "rejects object schemas without strict required and additionalProperties" do
+      workflow = create_workflow()
+
+      schema = %{
+        "type" => "object",
+        "properties" => %{
+          "counts" => %{"type" => "object"}
+        },
+        "required" => ["counts"],
+        "additionalProperties" => false
+      }
+
+      attrs =
+        Map.merge(@valid_attrs, %{
+          step_type: "evaluate",
+          output_schema: schema,
+          agent_config: %{"provider" => "openai"}
+        })
+
+      assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
+      assert %{output_schema: [message]} = errors_on(changeset)
+      assert String.contains?(message, "Codex strict-compatible")
+      assert String.contains?(message, "additionalProperties must be false")
+    end
+
+    test "allows valid JSON Schema that is not Codex strict for Anthropic provider" do
+      workflow = create_workflow()
+
+      schema = %{
+        "type" => "object",
+        "properties" => %{
+          "snapshot_type" => %{"const" => "wait_children_status"},
+          "counts" => %{"type" => "object"}
+        },
+        "required" => ["snapshot_type"]
+      }
+
+      attrs =
+        Map.merge(@valid_attrs, %{
+          step_type: "evaluate",
+          output_schema: schema,
+          agent_config: %{"provider" => "anthropic"}
+        })
+
+      assert {:ok, %WorkflowStep{output_schema: returned_schema}} =
+               WorkflowSteps.insert(workflow, attrs)
+
+      assert returned_schema == schema
+    end
+
+    test "rejects an existing loose schema when provider changes to OpenAI" do
+      workflow = create_workflow()
+
+      schema = %{
+        "type" => "object",
+        "properties" => %{"result" => %{"type" => "string"}}
+      }
+
+      {:ok, step} =
+        WorkflowSteps.insert(
+          workflow,
+          Map.merge(@valid_attrs, %{
+            step_type: "evaluate",
+            output_schema: schema,
+            agent_config: %{"provider" => "anthropic"}
+          })
+        )
+
+      assert {:error, changeset} =
+               WorkflowSteps.update(step, %{agent_config: %{"provider" => "openai"}})
+
+      assert %{output_schema: [message]} = errors_on(changeset)
+      assert String.contains?(message, "Codex strict-compatible")
+      assert String.contains?(message, "additionalProperties must be false")
     end
 
     test "route steps reject handoff property with wrong type in output schema" do
@@ -426,8 +588,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
 
       attrs = Map.merge(@valid_attrs, %{step_type: "route", output_schema: invalid_schema})
       assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
-      assert %{output_schema: [message]} = errors_on(changeset)
-      assert String.contains?(message, "routing contract schema")
+      assert_output_schema_error(changeset, "routing contract schema")
     end
 
     test "route steps reject unknown properties even with handoff present" do
@@ -450,8 +611,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
 
       attrs = Map.merge(@valid_attrs, %{step_type: "route", output_schema: invalid_schema})
       assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
-      assert %{output_schema: [message]} = errors_on(changeset)
-      assert String.contains?(message, "routing contract schema")
+      assert_output_schema_error(changeset, "routing contract schema")
     end
 
     test "route steps auto-set strict schema stays consistent on update" do
@@ -586,5 +746,10 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       assert %{output_schema: [message]} = errors_on(changeset)
       assert String.contains?(message, "routing contract schema")
     end
+  end
+
+  defp assert_output_schema_error(changeset, expected_message) do
+    assert %{output_schema: messages} = errors_on(changeset)
+    assert Enum.any?(messages, &String.contains?(&1, expected_message))
   end
 end

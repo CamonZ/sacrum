@@ -98,7 +98,8 @@ defmodule Sacrum.Accounts.LiveChat do
   @spec cancel_session(String.t(), String.t(), String.t()) ::
           {:ok, ChatSession.t()} | {:error, term()}
   def cancel_session(user_id, project_id, chat_session_id) do
-    with {:ok, updated_session} <- persist_session_cancellation(user_id, project_id, chat_session_id),
+    with {:ok, updated_session} <-
+           persist_session_cancellation(user_id, project_id, chat_session_id),
          :ok <- terminate_runner_if_running(chat_session_id) do
       {:ok, updated_session}
     end
@@ -107,7 +108,8 @@ defmodule Sacrum.Accounts.LiveChat do
   @spec delete_session(String.t(), String.t(), String.t()) ::
           {:ok, ChatSession.t()} | {:error, term()}
   def delete_session(user_id, project_id, chat_session_id) do
-    with {:ok, deleted_session} <- ChatSessions.delete_session(user_id, project_id, chat_session_id),
+    with {:ok, deleted_session} <-
+           ChatSessions.delete_session(user_id, project_id, chat_session_id),
          :ok <- terminate_runner_if_running(chat_session_id) do
       {:ok, deleted_session}
     end

@@ -81,7 +81,7 @@ vtb step delete <id>
 | `execute` | Default. Runs the step's prompt and produces output. |
 | `evaluate` | Assesses output of a previous step. Emits structured JSON matching `output_schema`. |
 | `route` | Terminal-of-workflow decision step. Emits `{ transition_to, transition_type, handoff }` to direct to the next workflow/step. |
-| `wait_children` | Parks the parent run while child tasks execute, then resumes when all children complete. |
+| `wait_children` | Parks the parent run while child tasks execute, persists a child-state JSON snapshot on the `StepExecution.output`, then resumes when all children complete. |
 | `human_input` | Parks the run for generic human response. The submitted response is validated against `output_schema`, stored on the step execution, and then the same run resumes. |
 
 ## Prompt Templates
@@ -130,6 +130,13 @@ Each list contains the raw section content strings in ordinal order. **Lists are
 | `execution.failed_count` | Times this step has failed for this task. |
 | `execution.duration_ms` | Elapsed time of the current execution. |
 | `execution.history` | List of prior steps in this workflow run: `{ step_name, status, output, duration_ms }`. |
+
+For `wait_children` steps, the backend writes a structured
+`wait_children_status` snapshot to `StepExecution.output`. The immediately
+following evaluate step can read it through `execution.previous_output` instead
+of rediscovering child state from prose. The snapshot includes parent identity,
+direct children, recursive descendants, and counts for done, in-flight, blocked,
+and parked children.
 
 #### `workflow.*` — current workflow + step metadata
 
@@ -206,5 +213,11 @@ Evaluate and route steps must emit JSON matching their `output_schema`. Include 
 {% if workflow.output_schema %}Output JSON matching:
 {{ workflow.output_schema }}{% endif %}
 ```
+
+All providers must use valid JSON Schema. Steps configured with
+`agent_config.provider` set to `openai` or `codex` additionally require
+Codex-strict schemas: explicit string `type` values, no `const`, no nullable
+type arrays, exact object `required` keys, `additionalProperties: false`, and
+schema-object array `items`.
 
 Without this, the model will return prose — and downstream steps will get `execution.previous_output` as unparseable text.
