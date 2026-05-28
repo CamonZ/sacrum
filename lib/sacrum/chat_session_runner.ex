@@ -11,9 +11,10 @@ defmodule Sacrum.ChatSessionRunner do
 
   Sacrum still owns durable state: `ChatSession`, `ChatMessage`, `ChatEvent`,
   and the `engine_session_ref` mapping live in Postgres. The Jido agent
-  carries only the run identifiers in its ephemeral state so its terminal
-  status flips to `:completed` or `:failed` and `Jido.AgentServer.await_completion/2`
-  can unblock supervisors and tests.
+  carries only the run identifiers in its ephemeral state. Normal turn
+  completion returns the runner to `:idle` so it can accept the next user turn;
+  terminal statuses are reserved for cancellation, deletion, shutdown, and
+  unrecoverable lifecycle failures.
   """
 
   alias Sacrum.ChatSessionRunner.Signals

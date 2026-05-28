@@ -250,13 +250,17 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
            Messages.ensure_status_message(
              session,
              :complete_session,
-             "Chat session completed.",
+             "Chat turn completed.",
              turn_message_id
            ),
-         {:ok, session} <- State.ensure_completed_session(session),
+         {:ok, _activity_event} <-
+           ActivityEvents.ensure_completed(session, %{
+             "turn_message_id" => turn_message_id,
+             "display" => %{"label" => "Completed"}
+           }),
          {:ok, _events} <-
            Checkpoints.checkpoint_step(session, :complete_session, %{
-             "status" => "completed",
+             "status" => "turn_completed",
              "turn_message_id" => turn_message_id
            }) do
       {:ok, session}

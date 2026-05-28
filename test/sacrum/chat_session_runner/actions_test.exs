@@ -639,8 +639,8 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
       assert {:ok, %{step: :complete_session}} =
                CompleteSession.run(complete_emit.signal.data, %{})
 
-      {:ok, completed} = Sacrum.Repo.ChatSessions.get(running.id)
-      assert completed.status == :completed
+      {:ok, turn_completed} = Sacrum.Repo.ChatSessions.get(running.id)
+      assert turn_completed.status == :running
 
       [event] =
         Repo.all(
@@ -659,7 +659,7 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
       assert Jason.encode!(event.public_payload)
       assert [] = authoring_drafts_for_session(ctx)
 
-      {:ok, messages} = ChatMessages.list_for_session(completed, include_private: true)
+      {:ok, messages} = ChatMessages.list_for_session(turn_completed, include_private: true)
 
       assert Enum.any?(messages, fn message ->
                message.role == :assistant and message.content == "The ticket is completed."
@@ -1099,7 +1099,7 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
   describe "CompleteSession.run/2" do
     setup [:create_session_with_message]
 
-    test "transitions the session to completed and reports a terminal completion result", ctx do
+    test "reports per-turn completion as idle without terminally completing the session", ctx do
       {:ok, _running} =
         Sacrum.Accounts.ChatSessions.transition_status(
           ctx.user.id,
@@ -1116,13 +1116,14 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
 
       assert {:ok,
               %{
-                status: :completed,
+                status: :idle,
+                activity: :turn_completed,
                 step: :complete_session,
-                last_answer: %{session: completed_session}
+                last_answer: %{session: turn_completed_session}
               }} = CompleteSession.run(params, %{})
 
-      assert completed_session.status == :completed
-      assert ChatSessionStatus.terminal?(completed_session.status)
+      assert turn_completed_session.status == :running
+      refute ChatSessionStatus.terminal?(turn_completed_session.status)
     end
   end
 

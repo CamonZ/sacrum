@@ -7,6 +7,11 @@ defmodule Sacrum.ChatSessionRunner.Events.ActivityEvents do
   messages.
   """
 
+  import Ecto.Query
+
+  alias Sacrum.Accounts.ChatEvents
+  alias Sacrum.Repo
+  alias Sacrum.Repo.Schemas.ChatEvent
   alias Sacrum.Repo.Schemas.ChatSession
 
   @type details :: map()
@@ -65,6 +70,17 @@ defmodule Sacrum.ChatSessionRunner.Events.ActivityEvents do
     activity_attrs(session, "completed", "completed", details)
   end
 
+  @spec ensure_completed(ChatSession.t(), details()) :: {:ok, ChatEvent.t()} | {:error, term()}
+  def ensure_completed(%ChatSession{} = session, details) when is_map(details) do
+    case completed_for_turn(session, fetch_detail(details, "turn_message_id", :turn_message_id)) do
+      {:ok, event} ->
+        {:ok, event}
+
+      {:error, :not_found} ->
+        ChatEvents.append_to_session(session, completed_attrs(session, details))
+    end
+  end
+
   @spec failed_attrs(ChatSession.t(), details()) :: attrs()
   def failed_attrs(%ChatSession{} = session, details) when is_map(details) do
     activity_attrs(session, "failed", "failed", details)
@@ -87,6 +103,31 @@ defmodule Sacrum.ChatSessionRunner.Events.ActivityEvents do
       public_payload: public_payload,
       internal_payload: %{}
     }
+  end
+
+  defp completed_for_turn(%ChatSession{} = session, turn_message_id)
+       when is_binary(turn_message_id) do
+    session
+    |> completed_for_turn_query(turn_message_id)
+    |> Repo.one()
+    |> case do
+      nil -> {:error, :not_found}
+      event -> {:ok, event}
+    end
+  end
+
+  defp completed_for_turn(%ChatSession{}, _turn_message_id), do: {:error, :not_found}
+
+  defp completed_for_turn_query(%ChatSession{} = session, turn_message_id) do
+    from event in ChatEvent,
+      where:
+        event.user_id == ^session.user_id and event.project_id == ^session.project_id and
+          event.chat_session_id == ^session.id and
+          event.event_type == "chat_runner_activity.completed" and
+          event.visibility == :public and
+          fragment("?->>'turn_message_id' = ?", event.public_payload, ^turn_message_id),
+      order_by: [asc: event.inserted_at, asc: event.id],
+      limit: 1
   end
 
   defp public_fields(details) do

@@ -112,21 +112,19 @@ defmodule Sacrum.ChatSessionRunnerTest do
                  inference_opts: [provider: BlockingProvider, test_pid: self()]
                )
 
-      completion =
-        await_runner_completion(pid, fn ->
-          send(provider_pid, {:release_blocking_provider, "Supervised assistant output"})
-        end)
+      send(provider_pid, {:release_blocking_provider, "Supervised assistant output"})
+      assert_event_persisted(session.id, "chat_session_runner.complete_session.completed")
 
-      assert completion.status == :completed
-      assert completion.result.session.status == :completed
-      assert_registry_empty(session.id)
+      assert [{^pid, _}] = Sacrum.ChatSessionRegistry.lookup(session.id)
+      assert Process.alive?(pid)
+      on_exit(fn -> Sacrum.ChatSessionSupervisor.terminate_runner(session.id) end)
 
       {:ok, completed_session} = ChatSessions.get_session(user.id, project.id, session.id)
-      assert completed_session.status == :completed
+      assert completed_session.status == :running
       assert completed_session.engine_kind == "jido"
       assert completed_session.engine_session_ref == Sacrum.ChatSessionRunner.agent_id(session.id)
       assert %DateTime{} = completed_session.started_at
-      assert %DateTime{} = completed_session.ended_at
+      refute completed_session.ended_at
 
       {:ok, messages} = ChatMessages.list_for_session(completed_session, include_private: true)
 
@@ -136,7 +134,7 @@ defmodule Sacrum.ChatSessionRunnerTest do
                 "Chat session started."},
                {:assistant, assistant_client_message_id, "Supervised assistant output"},
                {:status, "chat_session_runner:status:complete_session:v1:#{user_message.id}",
-                "Chat session completed."}
+                "Chat turn completed."}
              ]
 
       assistant = Enum.find(messages, &(&1.role == :assistant))
@@ -166,15 +164,8 @@ defmodule Sacrum.ChatSessionRunnerTest do
       assert {:ok, cancelled_session} = LiveChat.cancel_session(user.id, project.id, session.id)
       assert cancelled_session.status == :cancelled
 
-      completion =
-        await_runner_completion(pid, fn ->
-          send(provider_pid, {:release_blocking_provider, "Output after cancellation"})
-        end)
-
-      assert completion.status == :completed
-      assert completion.result.status == :noop
-      assert completion.result.reason == {:terminal_status, :cancelled}
-      assert_registry_empty(session.id)
+      assert_runner_stopped(pid, session.id)
+      send(provider_pid, {:release_blocking_provider, "Output after cancellation"})
 
       {:ok, reloaded_session} = ChatSessions.get_session(user.id, project.id, session.id)
       assert reloaded_session.status == :cancelled
@@ -184,6 +175,122 @@ defmodule Sacrum.ChatSessionRunnerTest do
       refute Enum.any?(messages, fn message ->
                message.role == :assistant and message.content == "Output after cancellation"
              end)
+    end
+
+    test "keeps the registered runner alive and reusable after normal turn completion", %{
+      user: user,
+      project: project,
+      session: session
+    } do
+      assert {:ok, pid} =
+               Sacrum.ChatSessionSupervisor.start_runner(session.id,
+                 inference_opts: [provider: BlockingProvider, test_pid: self()]
+               )
+
+      on_exit(fn -> Sacrum.ChatSessionSupervisor.terminate_runner(session.id) end)
+
+      assert_receive {:blocking_provider_started, provider_pid,
+                      [%{role: "system"}, %{role: "user", content: "Plan the next step"}]},
+                     1_000
+
+      send(provider_pid, {:release_blocking_provider, "First turn answer"})
+      assert_event_persisted(session.id, "chat_session_runner.complete_session.completed")
+
+      assert [{^pid, _}] = Sacrum.ChatSessionRegistry.lookup(session.id)
+      assert Process.alive?(pid)
+
+      second_message_id = Ecto.UUID.generate()
+
+      second_turn_signal =
+        Sacrum.ChatSessionRunner.Actions.user_turn_signal(%{
+          message_id: second_message_id,
+          user_id: user.id,
+          project_id: project.id,
+          chat_session_id: session.id,
+          content: "Second turn should use the same runner",
+          content_format: "markdown",
+          client_message_id: "client-runner-user-2",
+          metadata: %{},
+          engine_session_ref: Sacrum.ChatSessionRunner.agent_id(session.id),
+          inference_opts: [provider: BlockingProvider, test_pid: self()]
+        })
+
+      assert {:ok, ^pid} =
+               Sacrum.ChatSessionSupervisor.start_or_cast_user_turn(
+                 session.id,
+                 second_turn_signal,
+                 []
+               )
+
+      assert_receive {:blocking_provider_started, second_provider_pid, second_messages},
+                     1_000
+
+      assert Enum.any?(
+               second_messages,
+               &(&1.role == "user" and &1.content == "Second turn should use the same runner")
+             )
+
+      send(second_provider_pid, {:release_blocking_provider, "Second turn answer"})
+
+      assert_event_persisted(
+        session.id,
+        "chat_session_runner.complete_session.completed",
+        turn_message_id: second_message_id
+      )
+    end
+
+    test "cancelling an idle runner stops it and leaves the session cancelled", %{
+      user: user,
+      project: project,
+      session: session
+    } do
+      assert {:ok, pid} =
+               Sacrum.ChatSessionSupervisor.start_runner(session.id,
+                 inference_opts: [provider: BlockingProvider, test_pid: self()]
+               )
+
+      assert_receive {:blocking_provider_started, provider_pid,
+                      [%{role: "system"}, %{role: "user", content: "Plan the next step"}]},
+                     1_000
+
+      send(provider_pid, {:release_blocking_provider, "Answer before cancellation"})
+      assert_event_persisted(session.id, "chat_session_runner.complete_session.completed")
+
+      assert [{^pid, _}] = Sacrum.ChatSessionRegistry.lookup(session.id)
+      assert Process.alive?(pid)
+
+      assert {:ok, cancelled_session} = LiveChat.cancel_session(user.id, project.id, session.id)
+      assert cancelled_session.status == :cancelled
+      assert_runner_stopped(pid, session.id)
+
+      {:ok, reloaded_session} = ChatSessions.get_session(user.id, project.id, session.id)
+      assert reloaded_session.status == :cancelled
+    end
+
+    test "deleting an idle runner stops and unregisters it", %{
+      user: user,
+      project: project,
+      session: session
+    } do
+      assert {:ok, pid} =
+               Sacrum.ChatSessionSupervisor.start_runner(session.id,
+                 inference_opts: [provider: BlockingProvider, test_pid: self()]
+               )
+
+      assert_receive {:blocking_provider_started, provider_pid,
+                      [%{role: "system"}, %{role: "user", content: "Plan the next step"}]},
+                     1_000
+
+      send(provider_pid, {:release_blocking_provider, "Answer before deletion"})
+      assert_event_persisted(session.id, "chat_session_runner.complete_session.completed")
+
+      assert [{^pid, _}] = Sacrum.ChatSessionRegistry.lookup(session.id)
+      assert Process.alive?(pid)
+
+      assert {:ok, deleted_session} = LiveChat.delete_session(user.id, project.id, session.id)
+      assert deleted_session.id == session.id
+      assert_runner_stopped(pid, session.id)
+      assert {:error, :not_found} = ChatSessions.get_session(user.id, project.id, session.id)
     end
   end
 
@@ -211,23 +318,27 @@ defmodule Sacrum.ChatSessionRunnerTest do
         })
 
       resume_pid =
-        start_runner_and_wait(session.id,
+        start_runner_until_turn_completed(session.id,
           inference_opts: [provider: UnexpectedProvider, test_pid: self()]
         )
 
       {:ok, completed_session} = ChatSessions.get_session(user.id, project.id, session.id)
-      assert completed_session.status == :completed
+      assert completed_session.status == :running
       assert completed_session.engine_kind == "jido"
       assert completed_session.engine_session_ref == Sacrum.ChatSessionRunner.agent_id(session.id)
-      assert [] = Sacrum.ChatSessionRegistry.lookup(session.id)
+      assert [{^resume_pid, _}] = Sacrum.ChatSessionRegistry.lookup(session.id)
       assert is_pid(resume_pid)
       refute_receive {:unexpected_provider_called, _messages}
 
+      assert :ok = Sacrum.ChatSessionSupervisor.terminate_runner(session.id)
+      assert_registry_empty(session.id)
+
       _noop_pid =
-        start_runner_and_wait(session.id,
+        start_runner_until_turn_completed(session.id,
           inference_opts: [provider: UnexpectedProvider, test_pid: self()]
         )
 
+      on_exit(fn -> Sacrum.ChatSessionSupervisor.terminate_runner(session.id) end)
       refute_receive {:unexpected_provider_called, _messages}
 
       {:ok, messages} = ChatMessages.list_for_session(completed_session, include_private: true)
@@ -276,7 +387,7 @@ defmodule Sacrum.ChatSessionRunnerTest do
       assert inference_completed_event.internal_payload["resumed"] == true
     end
 
-    test "rerun after a fully completed session does not append duplicate output or events",
+    test "rerun after a completed turn does not append duplicate output or events",
          %{user: user, project: project, session: session} do
       assert {:ok, first_pid} =
                Sacrum.ChatSessionSupervisor.start_runner(session.id,
@@ -287,16 +398,15 @@ defmodule Sacrum.ChatSessionRunnerTest do
                       [%{role: "system"}, %{role: "user", content: "Plan the next step"}]},
                      1_000
 
-      completion =
-        await_runner_completion(first_pid, fn ->
-          send(first_provider_pid, {:release_blocking_provider, "Initial completion"})
-        end)
+      send(first_provider_pid, {:release_blocking_provider, "Initial completion"})
+      assert_event_persisted(session.id, "chat_session_runner.complete_session.completed")
 
-      assert completion.status == :completed
+      assert [{^first_pid, _}] = Sacrum.ChatSessionRegistry.lookup(session.id)
+      assert :ok = Sacrum.ChatSessionSupervisor.terminate_runner(session.id)
       assert_registry_empty(session.id)
 
       {:ok, first_completion} = ChatSessions.get_session(user.id, project.id, session.id)
-      assert first_completion.status == :completed
+      assert first_completion.status == :running
       stable_engine_session_ref = first_completion.engine_session_ref
 
       {:ok, first_messages} =
@@ -309,14 +419,15 @@ defmodule Sacrum.ChatSessionRunnerTest do
         )
 
       _second_pid =
-        start_runner_and_wait(session.id,
+        start_runner_until_turn_completed(session.id,
           inference_opts: [provider: UnexpectedProvider, test_pid: self()]
         )
 
+      on_exit(fn -> Sacrum.ChatSessionSupervisor.terminate_runner(session.id) end)
       refute_receive {:unexpected_provider_called, _messages}
 
       {:ok, second_view} = ChatSessions.get_session(user.id, project.id, session.id)
-      assert second_view.status == :completed
+      assert second_view.status == :running
       assert second_view.engine_session_ref == stable_engine_session_ref
 
       {:ok, second_messages} = ChatMessages.list_for_session(second_view, include_private: true)
@@ -393,22 +504,73 @@ defmodule Sacrum.ChatSessionRunnerTest do
     assert [] = Sacrum.ChatSessionRegistry.lookup(chat_session_id)
   end
 
-  defp start_runner_and_wait(chat_session_id, opts) do
+  defp assert_event_persisted(chat_session_id, event_type, opts \\ [])
+
+  defp assert_event_persisted(chat_session_id, event_type, opts) when is_list(opts) do
+    attempts = Keyword.get(opts, :attempts, 50)
+    turn_message_id = Keyword.get(opts, :turn_message_id)
+    assert_event_persisted(chat_session_id, event_type, turn_message_id, attempts)
+  end
+
+  defp assert_event_persisted(chat_session_id, event_type, turn_message_id, attempts)
+       when attempts > 0 do
+    count =
+      Repo.aggregate(
+        persisted_event_query(chat_session_id, event_type, turn_message_id),
+        :count
+      )
+
+    if count > 0 do
+      :ok
+    else
+      Process.sleep(20)
+      assert_event_persisted(chat_session_id, event_type, turn_message_id, attempts - 1)
+    end
+  end
+
+  defp assert_event_persisted(chat_session_id, event_type, turn_message_id, 0) do
+    assert Repo.aggregate(
+             persisted_event_query(chat_session_id, event_type, turn_message_id),
+             :count
+           ) > 0
+  end
+
+  defp persisted_event_query(chat_session_id, event_type, nil) do
+    from event in ChatEvent,
+      where:
+        event.chat_session_id == ^chat_session_id and
+          event.event_type == ^event_type
+  end
+
+  defp persisted_event_query(chat_session_id, event_type, turn_message_id) do
+    from event in persisted_event_query(chat_session_id, event_type, nil),
+      where:
+        fragment("?->>'turn_message_id' = ?", event.public_payload, ^turn_message_id) or
+          fragment(
+            "?->'details'->>'turn_message_id' = ?",
+            event.internal_payload,
+            ^turn_message_id
+          )
+  end
+
+  defp start_runner_until_turn_completed(chat_session_id, opts) do
     assert {:ok, pid} = Sacrum.ChatSessionSupervisor.start_runner(chat_session_id, opts)
 
-    assert %{status: :completed} = await_runner_completion(pid)
-    assert_registry_empty(chat_session_id)
+    assert_event_persisted(chat_session_id, "chat_session_runner.complete_session.completed")
+    assert [{^pid, _}] = Sacrum.ChatSessionRegistry.lookup(chat_session_id)
 
     pid
   end
 
-  defp await_runner_completion(pid, release_fun \\ fn -> :ok end) do
-    await_task =
-      Elixir.Task.async(fn -> Jido.AgentServer.await_completion(pid, timeout: 1_000) end)
+  defp assert_runner_stopped(pid, chat_session_id) do
+    ref = Process.monitor(pid)
 
-    release_fun.()
+    receive do
+      {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+    after
+      1_000 -> flunk("expected chat session runner to stop")
+    end
 
-    assert {:ok, completion} = Elixir.Task.await(await_task, 1_500)
-    completion
+    assert_registry_empty(chat_session_id)
   end
 end

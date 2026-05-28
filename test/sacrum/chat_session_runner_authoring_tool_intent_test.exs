@@ -96,14 +96,29 @@ defmodule Sacrum.ChatSessionRunnerAuthoringToolIntentTest do
     %{user: user, project: project, session: session}
   end
 
-  defp await_completion(pid) do
-    task =
-      Elixir.Task.async(fn ->
-        Jido.AgentServer.await_completion(pid, timeout: 2_000)
-      end)
+  defp assert_turn_completed(user, project, session, attempts \\ 50)
 
-    {:ok, completion} = Elixir.Task.await(task, 3_000)
-    completion
+  defp assert_turn_completed(user, project, session, attempts) when attempts > 0 do
+    {:ok, public_events} = LiveChat.list_public_events(user.id, project.id, session.id)
+
+    if Enum.any?(
+         public_events,
+         &(&1.event_type == "chat_session_runner.complete_session.completed")
+       ) do
+      :ok
+    else
+      Process.sleep(20)
+      assert_turn_completed(user, project, session, attempts - 1)
+    end
+  end
+
+  defp assert_turn_completed(user, project, session, 0) do
+    {:ok, public_events} = LiveChat.list_public_events(user.id, project.id, session.id)
+
+    assert Enum.any?(
+             public_events,
+             &(&1.event_type == "chat_session_runner.complete_session.completed")
+           )
   end
 
   defp assistant_message(messages), do: Enum.find(messages, &(&1.role == :assistant))
@@ -138,13 +153,14 @@ defmodule Sacrum.ChatSessionRunnerAuthoringToolIntentTest do
     assert user_message.role == :user
 
     [{pid, _}] = Sacrum.ChatSessionRegistry.lookup(session.id)
-    completion = await_completion(pid)
+    assert_turn_completed(user, project, session)
 
-    assert completion.status == :completed
-    assert completion.result.session.status == :completed
+    assert [{^pid, _}] = Sacrum.ChatSessionRegistry.lookup(session.id)
+    assert Process.alive?(pid)
+    on_exit(fn -> Sacrum.ChatSessionSupervisor.terminate_runner(session.id) end)
 
     {:ok, completed_session} = ChatSessions.get_session(user.id, project.id, session.id)
-    assert completed_session.status == :completed
+    assert completed_session.status == :running
 
     {:ok, messages} = ChatMessages.list_for_session(completed_session, include_private: true)
 

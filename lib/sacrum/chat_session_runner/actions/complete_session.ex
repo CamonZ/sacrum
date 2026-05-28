@@ -1,13 +1,11 @@
 defmodule Sacrum.ChatSessionRunner.Actions.CompleteSession do
   @moduledoc """
-  Transitions the chat session to completed and flips agent state to the
-  terminal `:completed` status so `Jido.AgentServer.await_completion/2`
-  unblocks.
+  Records per-turn chat completion and returns the agent to the idle state.
   """
 
   use Jido.Action,
     name: "sacrum_chat_session_complete",
-    description: "Mark a chat session as completed and end the run",
+    description: "Record completion for the current chat session turn",
     category: "chat",
     tags: ["sacrum", "chat", "session", "complete_session"],
     vsn: "1.0.0",
@@ -63,7 +61,8 @@ defmodule Sacrum.ChatSessionRunner.Actions.CompleteSession do
     else
       {:ok,
        %{
-         status: :completed,
+         status: :idle,
+         activity: :turn_completed,
          step: :complete_session,
          chat_session_id: session.id,
          last_answer: %{session: session}

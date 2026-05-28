@@ -1,6 +1,6 @@
 defmodule Sacrum.ChatSessionSupervisor do
   @moduledoc """
-  Dynamic supervisor for one-turn chat session runners.
+  Dynamic supervisor for reusable chat session runners.
   """
 
   use DynamicSupervisor

@@ -698,22 +698,36 @@ defmodule Sacrum.ChatSessionRunner.PipelineTest do
   describe "complete_session/1" do
     setup [:setup_session]
 
-    test "transitions to completed, writes the status message, and checkpoints", ctx do
+    test "records per-turn completion without terminally completing the chat session", ctx do
       ctx = transition_running(ctx)
 
-      assert {:ok, completed} = Pipeline.complete_session(ctx.session)
-      assert completed.status == :completed
+      assert {:ok, turn_completed} = Pipeline.complete_session(ctx.session)
+      assert turn_completed.status == :running
+      refute turn_completed.ended_at
 
       assert {:ok, status_message} =
                ChatMessages.get_by_client_message_id(
-                 completed,
+                 turn_completed,
                  "chat_session_runner:status:complete_session:v1:#{ctx.user_message.id}"
                )
 
-      assert status_message.content == "Chat session completed."
+      assert status_message.content == "Chat turn completed."
 
       events = checkpoint_events(ctx.session.id, "complete_session")
-      assert events.public.public_payload["status"] == "completed"
+      assert events.public.public_payload["status"] == "turn_completed"
+
+      [activity] =
+        Repo.all(
+          from event in ChatEvent,
+            where:
+              event.chat_session_id == ^ctx.session.id and
+                event.event_type == "chat_runner_activity.completed" and
+                event.visibility == :public
+        )
+
+      assert activity.public_payload["phase"] == "completed"
+      assert activity.public_payload["status"] == "completed"
+      assert activity.public_payload["turn_message_id"] == ctx.user_message.id
     end
 
     test "halts when the session is already terminal", ctx do

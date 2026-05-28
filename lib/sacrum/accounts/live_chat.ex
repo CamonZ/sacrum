@@ -98,30 +98,19 @@ defmodule Sacrum.Accounts.LiveChat do
   @spec cancel_session(String.t(), String.t(), String.t()) ::
           {:ok, ChatSession.t()} | {:error, term()}
   def cancel_session(user_id, project_id, chat_session_id) do
-    transaction_result(fn ->
-      with {:ok, session} <- ChatSessions.get_session(user_id, project_id, chat_session_id),
-           :ok <- ensure_stoppable(session),
-           {:ok, updated_session} <-
-             ChatSessions.update_session(session, %{
-               status: :cancelled,
-               stop_requested_at: session.stop_requested_at || DateTime.utc_now()
-             }),
-           {:ok, event} <-
-             ChatEvents.append_to_session(
-               updated_session,
-               PublicEvents.session_updated_attrs(updated_session)
-             ) do
-        {updated_session, event}
-      else
-        {:error, reason} -> Repo.rollback(reason)
-      end
-    end)
+    with {:ok, updated_session} <- persist_session_cancellation(user_id, project_id, chat_session_id),
+         :ok <- terminate_runner_if_running(chat_session_id) do
+      {:ok, updated_session}
+    end
   end
 
   @spec delete_session(String.t(), String.t(), String.t()) ::
           {:ok, ChatSession.t()} | {:error, term()}
   def delete_session(user_id, project_id, chat_session_id) do
-    ChatSessions.delete_session(user_id, project_id, chat_session_id)
+    with {:ok, deleted_session} <- ChatSessions.delete_session(user_id, project_id, chat_session_id),
+         :ok <- terminate_runner_if_running(chat_session_id) do
+      {:ok, deleted_session}
+    end
   end
 
   @spec get_session(String.t(), String.t(), String.t()) ::
@@ -166,13 +155,38 @@ defmodule Sacrum.Accounts.LiveChat do
 
   defp prepare_runner_for_user_turn(%ChatSession{status: status, id: chat_session_id})
        when status in [:completed, :failed] do
+    terminate_runner_if_running(chat_session_id)
+  end
+
+  defp prepare_runner_for_user_turn(%ChatSession{}), do: :ok
+
+  defp persist_session_cancellation(user_id, project_id, chat_session_id) do
+    transaction_result(fn ->
+      with {:ok, session} <- ChatSessions.get_session(user_id, project_id, chat_session_id),
+           :ok <- ensure_stoppable(session),
+           {:ok, updated_session} <-
+             ChatSessions.update_session(session, %{
+               status: :cancelled,
+               stop_requested_at: session.stop_requested_at || DateTime.utc_now()
+             }),
+           {:ok, event} <-
+             ChatEvents.append_to_session(
+               updated_session,
+               PublicEvents.session_updated_attrs(updated_session)
+             ) do
+        {updated_session, event}
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp terminate_runner_if_running(chat_session_id) do
     case ChatSessionSupervisor.terminate_runner(chat_session_id) do
       :ok -> :ok
       {:error, :not_found} -> :ok
     end
   end
-
-  defp prepare_runner_for_user_turn(%ChatSession{}), do: :ok
 
   defp user_turn_signal_data(user_id, project_id, chat_session_id, message_id, attrs, opts) do
     attrs = accepted_user_turn_attrs(attrs)
