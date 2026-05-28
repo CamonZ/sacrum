@@ -1,40 +1,110 @@
 defmodule Sacrum.Accounts.LiveChatRunnerStartTest do
   use Sacrum.DataCase
 
-  alias Sacrum.Accounts.{ChatSessions, LiveChat, Projects}
-  alias Sacrum.Chat.PublicEvents
+  alias Sacrum.Accounts.{LiveChat, Projects, Tasks}
+  alias Sacrum.Chat.Inference.Result
+
+  alias Sacrum.ChatSessionRunner.Actions.{
+    AcceptUserTurn,
+    AppendAssistant,
+    CompleteSession,
+    InvokeInference,
+    LoadMessages,
+    VerifyAuthoringIntent
+  }
+
+  alias Sacrum.ChatSessionRunner.Signals
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.ChatMessage
+  alias Sacrum.Repo.Schemas.{ChatEvent, ChatMessage, StepExecution, TaskRun}
   alias Sacrum.Repo.Users
 
-  defmodule RecordingRunner do
-    def start_runner(chat_session_id, opts) do
+  defmodule RecordingSignalRunner do
+    def start_or_cast_user_turn(chat_session_id, signal, opts) do
       test_pid = Keyword.fetch!(opts, :test_pid)
-
-      send(test_pid, {
-        :runner_started,
-        chat_session_id,
-        Repo.in_transaction?(),
-        Repo.aggregate(ChatMessage, :count)
-      })
-
+      send(test_pid, {:user_turn_signal_cast, chat_session_id, signal})
       {:ok, self()}
     end
   end
 
-  defmodule AlreadyStartedRunner do
-    def start_runner(_chat_session_id, opts) do
+  defmodule PumpingAcceptanceRunner do
+    def start_or_cast_user_turn(chat_session_id, signal, opts) do
       test_pid = Keyword.fetch!(opts, :test_pid)
-      send(test_pid, :runner_start_attempted)
-      {:error, {:already_started, self()}}
+      send(test_pid, {:user_turn_signal_cast, chat_session_id, signal})
+
+      signal.data
+      |> Map.put(:inference_opts, Keyword.get(opts, :inference_opts, []))
+      |> run_signal(signal.type, test_pid)
+
+      {:ok, self()}
+    end
+
+    defp run_signal(data, signal_type, test_pid) do
+      send(test_pid, {:runner_action_started, signal_type})
+
+      case action_for(signal_type).run(data, %{}) do
+        {:ok, result, directives} ->
+          send(test_pid, {:runner_action_result, signal_type, result})
+          Enum.each(directives, &run_signal(&1.signal.data, &1.signal.type, test_pid))
+
+        {:ok, result} ->
+          send(test_pid, {:runner_action_result, signal_type, result})
+      end
+    end
+
+    defp action_for(type) do
+      cond do
+        type == Signals.user_turn() -> AcceptUserTurn
+        type == Signals.load_messages() -> LoadMessages
+        type == Signals.invoke_inference() -> InvokeInference
+        type == Signals.verify_authoring() -> VerifyAuthoringIntent
+        type == Signals.append_assistant() -> AppendAssistant
+        type == Signals.complete_session() -> CompleteSession
+        true -> raise ArgumentError, "unexpected signal type: #{inspect(type)}"
+      end
     end
   end
 
-  defmodule FailingRunner do
-    def start_runner(_chat_session_id, opts) do
-      test_pid = Keyword.fetch!(opts, :test_pid)
-      send(test_pid, :runner_start_attempted)
-      {:error, :runner_unavailable}
+  defmodule ForbiddenInferenceProvider do
+    @behaviour Sacrum.Chat.Inference.Provider
+
+    @impl true
+    def generate(messages, opts) do
+      opts
+      |> Keyword.fetch!(:test_pid)
+      |> send({:forbidden_inference_called, messages})
+
+      action = "show_task"
+      arguments = %{"task_ref" => Keyword.fetch!(opts, :task_id), "include_sections" => true}
+
+      {:ok,
+       %Result{
+         content: "should not run",
+         content_format: :markdown,
+         public_metadata: %{"provider" => "forbidden", "model" => "forbidden"},
+         internal_metadata: %{
+           "direct_tracker_operation" => %{
+             "action" => action,
+             "arguments" => arguments,
+             "assistant_content" => "",
+             "provider_tool_call" =>
+               Sacrum.Chat.DirectTrackerOperationTools.provider_tool_call(
+                 action,
+                 arguments,
+                 "call_forbidden_tracker"
+               )
+           }
+         }
+       }}
+    end
+  end
+
+  defmodule ForbiddenTrackerExecutor do
+    def execute(operation) do
+      :sacrum
+      |> Application.fetch_env!(:direct_tracker_operation_executor_test_pid)
+      |> send({:tracker_operation_executed, operation})
+
+      {:ok, %{"result" => "should not run"}}
     end
   end
 
@@ -48,25 +118,49 @@ defmodule Sacrum.Accounts.LiveChatRunnerStartTest do
   describe "send_message_and_start_runner/5" do
     setup [:setup_session]
 
-    test "starts the runner only after the user message transaction commits", %{
+    test "casts an accepted user-turn signal to the session runner instead of pre-persisting", %{
       user: user,
       project: project,
       session: session
     } do
-      session_id = session.id
-
-      assert {:ok, message} =
+      assert {:ok, %{id: message_id, client_message_id: "client-turn-1"}} =
                LiveChat.send_message_and_start_runner(
                  user.id,
                  project.id,
                  session.id,
-                 %{content: "Start the assistant turn"},
-                 runner: RecordingRunner,
+                 %{
+                   content: "Route this turn through the runner",
+                   content_format: "markdown",
+                   client_message_id: "client-turn-1",
+                   metadata: %{
+                     "origin" => "graphql",
+                     "safe" => true,
+                     "unsafe_pid" => self()
+                   }
+                 },
+                 runner: RecordingSignalRunner,
                  start_opts: [test_pid: self()]
                )
 
-      assert message.role == :user
-      assert_receive {:runner_started, ^session_id, false, 1}
+      assert {:ok, _} = Ecto.UUID.cast(message_id)
+      assert_receive {:user_turn_signal_cast, chat_session_id, signal}
+      assert chat_session_id == session.id
+      assert signal.type == Sacrum.ChatSessionRunner.Signals.user_turn()
+      assert signal.source == Sacrum.ChatSessionRunner.Signals.source()
+
+      assert signal.data == %{
+               message_id: message_id,
+               user_id: user.id,
+               project_id: project.id,
+               chat_session_id: session.id,
+               content: "Route this turn through the runner",
+               content_format: "markdown",
+               client_message_id: "client-turn-1",
+               metadata: %{"origin" => "graphql", "safe" => true},
+               engine_session_ref: Sacrum.ChatSessionRunner.agent_id(session.id)
+             }
+
+      assert {:ok, []} = LiveChat.list_messages(user.id, project.id, session.id)
     end
 
     test "does not start the runner when the session cannot be loaded", %{
@@ -79,91 +173,241 @@ defmodule Sacrum.Accounts.LiveChatRunnerStartTest do
                  project.id,
                  Ecto.UUID.generate(),
                  %{content: "This session does not exist"},
-                 runner: RecordingRunner,
+                 runner: RecordingSignalRunner,
                  start_opts: [test_pid: self()]
                )
 
-      refute_receive {:runner_started, _chat_session_id, _in_transaction?, _message_count}
+      refute_receive {:user_turn_signal_cast, _chat_session_id, _signal}
     end
 
-    test "does not start the runner when message persistence fails", %{
-      user: user,
-      project: project,
-      session: session
-    } do
-      assert {:error, %Ecto.Changeset{}} =
+    test "still routes malformed turns to the runner so persistence is owned by turn acceptance",
+         %{
+           user: user,
+           project: project,
+           session: session
+         } do
+      assert {:ok, %{content: nil}} =
                LiveChat.send_message_and_start_runner(
                  user.id,
                  project.id,
                  session.id,
                  %{content: nil},
-                 runner: RecordingRunner,
+                 runner: RecordingSignalRunner,
                  start_opts: [test_pid: self()]
                )
 
-      refute_receive {:runner_started, _chat_session_id, _in_transaction?, _message_count}
+      assert_receive {:user_turn_signal_cast, chat_session_id, signal}
+      assert chat_session_id == session.id
+      refute Map.has_key?(signal.data, :content)
+      assert {:ok, []} = LiveChat.list_messages(user.id, project.id, session.id)
     end
 
-    test "treats duplicate runner starts as an in-flight assistant turn", %{
+    test "does not invoke model or tracker work when accepted-turn persistence fails", %{
       user: user,
       project: project,
       session: session
     } do
-      assert {:ok, message} =
+      use_forbidden_tracker_executor()
+
+      {:ok, existing_message} =
+        LiveChat.send_message(user.id, project.id, session.id, %{
+          content: "already persisted",
+          client_message_id: "duplicate-user-turn"
+        })
+
+      {:ok, task} =
+        Tasks.insert(user.id, project.id, %{
+          title: "Forbidden direct tracker target"
+        })
+
+      assert {:ok, %{id: rejected_message_id, client_message_id: "duplicate-user-turn"}} =
                LiveChat.send_message_and_start_runner(
                  user.id,
                  project.id,
                  session.id,
-                 %{content: "Duplicate starts are okay"},
-                 runner: AlreadyStartedRunner,
-                 start_opts: [test_pid: self()]
+                 %{
+                   content: "this turn should not persist",
+                   client_message_id: "duplicate-user-turn"
+                 },
+                 runner: PumpingAcceptanceRunner,
+                 start_opts: [
+                   test_pid: self(),
+                   inference_opts: [
+                     provider: ForbiddenInferenceProvider,
+                     test_pid: self(),
+                     task_id: task.id
+                   ]
+                 ]
                )
 
-      assert_receive :runner_start_attempted
-      assert message.role == :user
+      session_id = session.id
 
-      {:ok, reloaded_session} = ChatSessions.get_session(user.id, project.id, session.id)
-      assert reloaded_session.status == :queued
-    end
+      assert_receive {:user_turn_signal_cast, ^session_id, signal}
+      assert signal.type == Signals.user_turn()
+      assert signal.data.message_id == rejected_message_id
 
-    test "surfaces runner start failures through committed chat events", %{
-      user: user,
-      project: project,
-      session: session
-    } do
-      assert {:ok, message} =
-               LiveChat.send_message_and_start_runner(
-                 user.id,
-                 project.id,
-                 session.id,
-                 %{content: "Surface the failure"},
-                 runner: FailingRunner,
-                 start_opts: [test_pid: self()]
+      assert_receive {:runner_action_started, type}
+      assert type == Signals.user_turn()
+
+      assert_receive {:runner_action_result, ^type,
+                      %{
+                        step: :accept_user_turn,
+                        status: :failed,
+                        chat_session_id: chat_session_id
+                      }}
+
+      assert chat_session_id == session.id
+      refute_received {:runner_action_started, _downstream}
+      refute_receive {:forbidden_inference_called, _messages}
+      refute_received {:tracker_operation_executed, _operation}
+
+      assert {:ok, messages} = LiveChat.list_messages(user.id, project.id, session.id)
+      assert Enum.map(messages, & &1.id) == [existing_message.id]
+
+      refute Repo.exists?(
+               from(message in ChatMessage,
+                 where:
+                   message.chat_session_id == ^session.id and message.id == ^rejected_message_id
                )
+             )
 
-      assert_receive :runner_start_attempted
-      assert message.role == :user
+      assert Repo.aggregate(from(run in TaskRun, where: run.project_id == ^project.id), :count) ==
+               0
 
-      {:ok, failed_session} = ChatSessions.get_session(user.id, project.id, session.id)
+      assert Repo.aggregate(
+               from(execution in StepExecution, where: execution.project_id == ^project.id),
+               :count
+             ) == 0
+
+      assert {:ok, failed_session} = Sacrum.Repo.ChatSessions.get(session.id)
       assert failed_session.status == :failed
 
-      assert {:ok, public_events} = LiveChat.list_public_events(user.id, project.id, session.id)
-
-      assert Enum.map(public_events, & &1.event_type) == [
-               PublicEvents.event_type(:session_created),
-               PublicEvents.event_type(:message_created),
-               PublicEvents.event_type(:session_updated),
-               "chat_session_runner.failed.completed"
-             ]
-
-      failure_event = List.last(public_events)
-
-      assert failure_event.public_payload == %{
-               "chat_session_id" => session.id,
-               "step" => "failed",
-               "turn_message_id" => message.id
-             }
+      assert latest_failed_activity_payload(session.id) ==
+               failed_activity_payload(session.id, rejected_message_id, "duplicate-user-turn")
     end
+
+    test "returns terminal failed activity state with sanitized payload when duplicate client message id is rejected",
+         %{
+           user: user,
+           project: project,
+           session: session
+         } do
+      {:ok, _existing_message} =
+        LiveChat.send_message(user.id, project.id, session.id, %{
+          content: "already persisted",
+          client_message_id: "duplicate-public-payload"
+        })
+
+      assert {:ok, %{id: rejected_message_id, client_message_id: "duplicate-public-payload"}} =
+               LiveChat.send_message_and_start_runner(
+                 user.id,
+                 project.id,
+                 session.id,
+                 %{
+                   content: "this turn should fail acceptance",
+                   client_message_id: "duplicate-public-payload"
+                 },
+                 runner: PumpingAcceptanceRunner,
+                 start_opts: [
+                   test_pid: self(),
+                   inference_opts: [
+                     provider: ForbiddenInferenceProvider,
+                     test_pid: self(),
+                     task_id: Ecto.UUID.generate()
+                   ]
+                 ]
+               )
+
+      assert_receive {:runner_action_started, started_signal_type}
+
+      assert_receive {:runner_action_result, result_signal_type,
+                      %{
+                        step: :accept_user_turn,
+                        status: :failed,
+                        chat_session_id: chat_session_id,
+                        activity: %{
+                          event_type: "chat_runner_activity.failed",
+                          public_payload: returned_payload
+                        }
+                      }}
+
+      assert result_signal_type == started_signal_type
+      assert result_signal_type == Signals.user_turn()
+      assert chat_session_id == session.id
+      refute_received {:runner_action_started, _downstream}
+      refute_receive {:forbidden_inference_called, _messages}
+      refute_received {:tracker_operation_executed, _operation}
+
+      assert {:ok, failed_session} = Sacrum.Repo.ChatSessions.get(session.id)
+      assert failed_session.status == :failed
+
+      persisted_payload = latest_failed_activity_payload(session.id)
+
+      assert returned_payload == persisted_payload
+
+      assert persisted_payload ==
+               failed_activity_payload(
+                 session.id,
+                 rejected_message_id,
+                 "duplicate-public-payload"
+               )
+
+      refute Map.has_key?(persisted_payload, "reason")
+      refute Map.has_key?(persisted_payload, "error")
+      refute Map.has_key?(persisted_payload, "raw_reason")
+      refute inspect(persisted_payload) =~ "unique"
+      refute inspect(persisted_payload) =~ "constraint"
+    end
+  end
+
+  defp use_forbidden_tracker_executor do
+    original_executor = Application.fetch_env(:sacrum, :direct_tracker_operation_executor)
+
+    Application.put_env(:sacrum, :direct_tracker_operation_executor, ForbiddenTrackerExecutor)
+    Application.put_env(:sacrum, :direct_tracker_operation_executor_test_pid, self())
+
+    on_exit(fn ->
+      case original_executor do
+        {:ok, executor} ->
+          Application.put_env(:sacrum, :direct_tracker_operation_executor, executor)
+
+        :error ->
+          Application.delete_env(:sacrum, :direct_tracker_operation_executor)
+      end
+
+      Application.delete_env(:sacrum, :direct_tracker_operation_executor_test_pid)
+    end)
+  end
+
+  defp latest_failed_activity_payload(chat_session_id) do
+    assert %ChatEvent{
+             event_type: "chat_runner_activity.failed",
+             visibility: :public,
+             public_payload: payload,
+             internal_payload: %{}
+           } =
+             Repo.one!(
+               from(event in ChatEvent,
+                 where:
+                   event.chat_session_id == ^chat_session_id and
+                     event.event_type == "chat_runner_activity.failed",
+                 order_by: [desc: event.inserted_at, desc: event.id],
+                 limit: 1
+               )
+             )
+
+    payload
+  end
+
+  defp failed_activity_payload(chat_session_id, turn_message_id, client_message_id) do
+    %{
+      "chat_session_id" => chat_session_id,
+      "phase" => "failed",
+      "status" => "failed",
+      "turn_message_id" => turn_message_id,
+      "client_message_id" => client_message_id,
+      "display" => %{"label" => "Failed"}
+    }
   end
 
   defp create_user do

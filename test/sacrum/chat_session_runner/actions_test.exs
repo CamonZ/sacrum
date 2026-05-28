@@ -12,13 +12,14 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
 
   alias Jido.Agent.Directive
   alias Jido.Signal
-  alias Sacrum.Accounts.{ChatMessages, LiveChat, Projects}
+  alias Sacrum.Accounts.{ChatEvents, ChatMessages, LiveChat, Projects}
   alias Sacrum.Chat.Inference.Result
   alias Sacrum.ChatSessionRunner.Actions
 
   alias Sacrum.ChatSessionRunner.Actions.{
     AppendAssistant,
     CompleteSession,
+    AcceptUserTurn,
     Intake,
     InvokeInference,
     LoadMessages,
@@ -222,6 +223,93 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
                Intake.run(params, %{})
 
       assert reason == {:terminal_status, :cancelled}
+    end
+  end
+
+  describe "AcceptUserTurn.run/2" do
+    setup do
+      user = create_user("accept-user-turn")
+      {:ok, project} = Projects.insert(user.id, %{name: "Accept User Turn Project"})
+      {:ok, session} = LiveChat.create_session(user.id, project.id, %{})
+
+      %{
+        user: user,
+        project: project,
+        session: session,
+        engine_session_ref: Sacrum.ChatSessionRunner.agent_id(session.id)
+      }
+    end
+
+    test "persists the accepted user message and public event before downstream work", ctx do
+      message_id = Ecto.UUID.generate()
+
+      params = %{
+        user_id: ctx.user.id,
+        project_id: ctx.project.id,
+        chat_session_id: ctx.session.id,
+        message_id: message_id,
+        engine_session_ref: ctx.engine_session_ref,
+        content: "Persist me before any model or tracker work",
+        content_format: "markdown",
+        client_message_id: "accepted-turn-1",
+        metadata: %{"origin" => "graphql"},
+        inference_opts: [provider: StubProvider, test_pid: self()]
+      }
+
+      assert {:ok, %{step: :accept_user_turn, turn_message_id: ^message_id},
+              [%Directive.Emit{} = emit]} = AcceptUserTurn.run(params, %{})
+
+      refute_received {:stub_provider_called, _messages, _opts}
+
+      assert {:ok,
+              %ChatMessage{
+                id: ^message_id,
+                role: :user,
+                content: "Persist me before any model or tracker work",
+                content_format: :markdown,
+                client_message_id: "accepted-turn-1",
+                metadata: %{"origin" => "graphql"}
+              }} = ChatMessages.get_by_client_message_id(ctx.session, "accepted-turn-1")
+
+      assert {:ok, %ChatEvent{event_type: "chat_message_created", visibility: :public} = event} =
+               ChatEvents.get_message_created_for_message(ctx.session, message_id)
+
+      assert event.public_payload["id"] == message_id
+      assert emit.signal.type == Signals.load_messages()
+      assert emit.signal.data.turn_message_id == message_id
+    end
+
+    test "returns failed accepted-turn activity without invoking downstream work when persistence fails",
+         ctx do
+      {:ok, _existing} =
+        LiveChat.send_message(ctx.user.id, ctx.project.id, ctx.session.id, %{
+          content: "Already accepted",
+          client_message_id: "duplicate-client-turn"
+        })
+
+      params = %{
+        user_id: ctx.user.id,
+        project_id: ctx.project.id,
+        chat_session_id: ctx.session.id,
+        message_id: Ecto.UUID.generate(),
+        engine_session_ref: ctx.engine_session_ref,
+        content: "This duplicate turn should fail acceptance",
+        content_format: "markdown",
+        client_message_id: "duplicate-client-turn",
+        metadata: %{},
+        inference_opts: [provider: StubProvider, test_pid: self()]
+      }
+
+      assert {:ok,
+              %{
+                step: :accept_user_turn,
+                status: :failed,
+                chat_session_id: chat_session_id,
+                error: _reason
+              }} = AcceptUserTurn.run(params, %{})
+
+      assert chat_session_id == ctx.session.id
+      refute_received {:stub_provider_called, _messages, _opts}
     end
   end
 
@@ -551,8 +639,8 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
       assert {:ok, %{step: :complete_session}} =
                CompleteSession.run(complete_emit.signal.data, %{})
 
-      {:ok, completed} = Sacrum.Repo.ChatSessions.get(running.id)
-      assert completed.status == :completed
+      {:ok, turn_completed} = Sacrum.Repo.ChatSessions.get(running.id)
+      assert turn_completed.status == :running
 
       [event] =
         Repo.all(
@@ -571,7 +659,7 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
       assert Jason.encode!(event.public_payload)
       assert [] = authoring_drafts_for_session(ctx)
 
-      {:ok, messages} = ChatMessages.list_for_session(completed, include_private: true)
+      {:ok, messages} = ChatMessages.list_for_session(turn_completed, include_private: true)
 
       assert Enum.any?(messages, fn message ->
                message.role == :assistant and message.content == "The ticket is completed."
@@ -1011,7 +1099,7 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
   describe "CompleteSession.run/2" do
     setup [:create_session_with_message]
 
-    test "transitions the session to completed and reports a terminal completion result", ctx do
+    test "reports per-turn completion as idle without terminally completing the session", ctx do
       {:ok, _running} =
         Sacrum.Accounts.ChatSessions.transition_status(
           ctx.user.id,
@@ -1028,13 +1116,14 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
 
       assert {:ok,
               %{
-                status: :completed,
+                status: :idle,
+                activity: :turn_completed,
                 step: :complete_session,
-                last_answer: %{session: completed_session}
+                last_answer: %{session: turn_completed_session}
               }} = CompleteSession.run(params, %{})
 
-      assert completed_session.status == :completed
-      assert ChatSessionStatus.terminal?(completed_session.status)
+      assert turn_completed_session.status == :running
+      refute ChatSessionStatus.terminal?(turn_completed_session.status)
     end
   end
 

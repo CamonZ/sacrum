@@ -9,6 +9,8 @@ defmodule Sacrum.ChatSessionRunner.Signals do
 
   @source "/sacrum/chat_session_runner"
 
+  @user_turn "sacrum.chat_session.user_turn"
+  @hydrate_session "sacrum.chat_session.hydrate_session"
   @run "sacrum.chat_session.run"
   @intake "sacrum.chat_session.intake"
   @load_messages "sacrum.chat_session.load_messages"
@@ -22,6 +24,12 @@ defmodule Sacrum.ChatSessionRunner.Signals do
 
   @spec source() :: String.t()
   def source, do: @source
+
+  @spec user_turn() :: String.t()
+  def user_turn, do: @user_turn
+
+  @spec hydrate_session() :: String.t()
+  def hydrate_session, do: @hydrate_session
 
   @spec run() :: String.t()
   def run, do: @run
@@ -61,6 +69,8 @@ defmodule Sacrum.ChatSessionRunner.Signals do
   @spec all() :: [String.t()]
   def all do
     [
+      @user_turn,
+      @hydrate_session,
       @run,
       @intake,
       @load_messages,

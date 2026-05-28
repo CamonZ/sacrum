@@ -9,7 +9,7 @@ defmodule Sacrum.Repo.Schemas.ChatMessage do
   @roles [:user, :assistant, :status]
   @content_formats [:plain, :markdown]
   @default_content_format :plain
-  @create_fields ~w(role content content_format client_message_id metadata)a
+  @create_fields ~w(id role content content_format client_message_id metadata)a
   @required_fields ~w(chat_session_id project_id user_id role content content_format)a
 
   schema "chat_messages" do

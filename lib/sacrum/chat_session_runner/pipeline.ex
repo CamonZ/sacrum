@@ -8,11 +8,19 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
   """
 
   alias Sacrum.Accounts.AuthoringChatLoop
+  alias Sacrum.Accounts.ChatEvents
   alias Sacrum.Chat.Inference
-
+  alias Sacrum.Chat.Inference.Result
   alias Sacrum.ChatSessionRunner.DirectTracker
   alias Sacrum.ChatSessionRunner.DirectTracker.Continuation, as: DirectTrackerContinuation
-  alias Sacrum.ChatSessionRunner.Events.{Checkpoints, InferenceEvents, MessageEvents}
+
+  alias Sacrum.ChatSessionRunner.Events.{
+    ActivityEvents,
+    Checkpoints,
+    InferenceEvents,
+    MessageEvents
+  }
+
   alias Sacrum.ChatSessionRunner.Session.{State, Turn}
   alias Sacrum.ChatSessionRunner.Transcript.{InferenceMessages, Messages}
   alias Sacrum.Repo.Schemas.{ChatEvent, ChatMessage, ChatSession}
@@ -60,6 +68,7 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
   @spec load_messages(ChatSession.t()) :: {:ok, [ChatMessage.t()]} | {:error, term()}
   def load_messages(%ChatSession{} = session) do
     with {:ok, messages} <- Messages.list_for_session(session, include_private: true),
+         {:ok, _activity_event} <- ensure_latest_turn_accepted_activity(session, messages),
          {:ok, _events} <-
            Checkpoints.checkpoint_step(session, :load_messages, %{
              "message_count" => length(messages)
@@ -95,7 +104,9 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
     turn_message_id = turn_message_id || Turn.latest_user_message_id!(session)
     attrs = Messages.assistant_message_attrs(inference_result, turn_message_id)
 
-    with {:ok, message} <- Messages.ensure_message(session, attrs),
+    with {:ok, _activity_event} <-
+           append_composing_answer_activity(session, %{"turn_message_id" => turn_message_id}),
+         {:ok, message} <- Messages.ensure_message(session, attrs),
          {:ok, _event} <- MessageEvents.ensure_public_message_event(session, message),
          {:ok, _event} <-
            InferenceEvents.append_inference_completed_event(session, message, inference_result),
@@ -148,6 +159,10 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
 
     with {:ok, events} <-
            execute_direct_tracker_operation(session, inference_result, turn_message_id),
+         {:ok, _activity_event} <-
+           append_continuing_after_tool_result_activity(session, %{
+             "turn_message_id" => turn_message_id
+           }),
          {:ok, messages} <- Messages.list_for_session(session, include_private: true),
          {:ok, continuation_messages} <-
            DirectTrackerContinuation.messages(inference_result.internal_metadata, events) do
@@ -167,6 +182,19 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
     end
   end
 
+  @spec resume_direct_tracker_continuation(ChatSession.t(), keyword(), String.t()) ::
+          {:ok, ChatSession.t(), Result.t()} | {:error, term()} | {:halt, ChatSession.t(), term()}
+  def resume_direct_tracker_continuation(
+        %ChatSession{} = session,
+        inference_opts,
+        turn_message_id
+      )
+      when is_list(inference_opts) and is_binary(turn_message_id) do
+    with {:ok, result} <- direct_tracker_result_from_completed_events(session, turn_message_id) do
+      continue_after_direct_tracker_operation(session, result, inference_opts, turn_message_id)
+    end
+  end
+
   defp run_inference(
          %ChatSession{} = session,
          provider_messages,
@@ -175,16 +203,140 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
          turn_message_id
        )
        when is_list(provider_messages) and is_list(inference_opts) and is_atom(checkpoint_step) do
-    with {:ok, result} <- Inference.generate(provider_messages, inference_opts),
+    turn_message_id = turn_message_id || Keyword.get(inference_opts, :source_message_id)
+    metadata = inference_request_public_metadata(inference_opts, turn_message_id)
+
+    with {:ok, _activity_event} <- append_invoking_model_activity(session, metadata),
+         {:ok, result} <- Inference.generate(provider_messages, inference_opts),
          {:ok, refreshed_session} <- State.refresh_runnable_session(session),
+         metadata = inference_public_metadata(result, turn_message_id),
          {:ok, _events} <-
-           Checkpoints.checkpoint_step(refreshed_session, checkpoint_step, %{
-             "provider" => Map.get(result.public_metadata, "provider"),
-             "model" => Map.get(result.public_metadata, "model"),
-             "turn_message_id" => turn_message_id
-           }) do
+           Checkpoints.checkpoint_step(refreshed_session, checkpoint_step, metadata) do
       {:ok, refreshed_session, result}
     end
+  end
+
+  defp direct_tracker_result_from_completed_events(%ChatSession{} = session, turn_message_id) do
+    events = DirectTracker.Events.completed_for_turn(session, turn_message_id)
+
+    with [_ | _] <- events,
+         {:ok, operations} <- completed_event_operations(events),
+         {:ok, metadata} <- completed_event_direct_tracker_metadata(operations) do
+      {:ok,
+       %Result{
+         content: "",
+         content_format: :markdown,
+         public_metadata: %{"provider" => "hydration", "model" => "direct-tracker-continuation"},
+         internal_metadata: metadata
+       }}
+    else
+      [] -> {:error, :missing_direct_tracker_result_events}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp completed_event_operations(events) do
+    events
+    |> Enum.map(&get_in(&1.internal_payload || %{}, ["operation"]))
+    |> Enum.reduce_while({:ok, []}, fn
+      %{} = operation, {:ok, operations} -> {:cont, {:ok, [operation | operations]}}
+      _operation, _acc -> {:halt, {:error, :missing_direct_tracker_operation}}
+    end)
+    |> case do
+      {:ok, operations} -> {:ok, Enum.reverse(operations)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp completed_event_direct_tracker_metadata(serialized_operations) do
+    metadata = %{"resolved_direct_tracker_operations" => serialized_operations}
+
+    result = %Result{
+      content: "",
+      content_format: :markdown,
+      public_metadata: %{},
+      internal_metadata: metadata
+    }
+
+    with {:ok, operations} <- DirectTracker.Operations.direct_tracker_operations(result) do
+      metadata
+      |> DirectTrackerContinuation.put_metadata(operations)
+      |> ensure_direct_tracker_tool_call_metadata()
+    end
+  end
+
+  defp ensure_direct_tracker_tool_call_metadata(metadata) do
+    case metadata do
+      %{"direct_tracker_provider_tool_calls" => _tool_calls} = metadata ->
+        {:ok, metadata}
+
+      _metadata ->
+        {:error, :missing_direct_tracker_tool_call_metadata}
+    end
+  end
+
+  defp inference_public_metadata(%Inference.Result{} = result, turn_message_id) do
+    %{
+      "provider" => Map.get(result.public_metadata, "provider"),
+      "model" => Map.get(result.public_metadata, "model"),
+      "turn_message_id" => turn_message_id
+    }
+  end
+
+  defp inference_request_public_metadata(inference_opts, turn_message_id) do
+    provider = Keyword.get(inference_opts, :provider)
+
+    %{
+      "provider" => provider_name(provider),
+      "model" => Keyword.get(inference_opts, :model),
+      "turn_message_id" => turn_message_id
+    }
+  end
+
+  defp provider_name(provider) when is_binary(provider), do: provider
+  defp provider_name(_provider), do: nil
+
+  defp append_invoking_model_activity(%ChatSession{} = session, metadata) do
+    details = Map.put(metadata, "display", %{"label" => "Invoking model"})
+
+    ChatEvents.append_to_session(
+      session,
+      ActivityEvents.invoking_model_attrs(session, details)
+    )
+  end
+
+  defp ensure_latest_turn_accepted_activity(%ChatSession{} = session, messages) do
+    case Turn.turn_message_id(messages) do
+      turn_message_id when is_binary(turn_message_id) ->
+        message = Enum.find(messages, &(&1.id == turn_message_id))
+
+        ActivityEvents.ensure_accepted_turn(session, %{
+          "turn_message_id" => turn_message_id,
+          "client_message_id" => message.client_message_id,
+          "display" => %{"label" => "Accepted turn"}
+        })
+
+      nil ->
+        {:ok, nil}
+    end
+  end
+
+  defp append_continuing_after_tool_result_activity(%ChatSession{} = session, metadata) do
+    details = Map.put(metadata, "display", %{"label" => "Continuing after tool result"})
+
+    ChatEvents.append_to_session(
+      session,
+      ActivityEvents.continuing_after_tool_result_attrs(session, details)
+    )
+  end
+
+  defp append_composing_answer_activity(%ChatSession{} = session, metadata) do
+    details = Map.put(metadata, "display", %{"label" => "Composing answer"})
+
+    ChatEvents.append_to_session(
+      session,
+      ActivityEvents.composing_answer_attrs(session, details)
+    )
   end
 
   @spec record_direct_tracker_operation_rejection(
@@ -228,13 +380,17 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
            Messages.ensure_status_message(
              session,
              :complete_session,
-             "Chat session completed.",
+             "Chat turn completed.",
              turn_message_id
            ),
-         {:ok, session} <- State.ensure_completed_session(session),
+         {:ok, _activity_event} <-
+           ActivityEvents.ensure_completed(session, %{
+             "turn_message_id" => turn_message_id,
+             "display" => %{"label" => "Completed"}
+           }),
          {:ok, _events} <-
            Checkpoints.checkpoint_step(session, :complete_session, %{
-             "status" => "completed",
+             "status" => "turn_completed",
              "turn_message_id" => turn_message_id
            }) do
       {:ok, session}

@@ -11,9 +11,10 @@ defmodule Sacrum.ChatSessionRunner do
 
   Sacrum still owns durable state: `ChatSession`, `ChatMessage`, `ChatEvent`,
   and the `engine_session_ref` mapping live in Postgres. The Jido agent
-  carries only the run identifiers in its ephemeral state so its terminal
-  status flips to `:completed` or `:failed` and `Jido.AgentServer.await_completion/2`
-  can unblock supervisors and tests.
+  carries only the run identifiers in its ephemeral state. Normal turn
+  completion returns the runner to `:idle` so it can accept the next user turn;
+  terminal statuses are reserved for cancellation, deletion, shutdown, and
+  unrecoverable lifecycle failures.
   """
 
   alias Sacrum.ChatSessionRunner.Signals
@@ -28,9 +29,12 @@ defmodule Sacrum.ChatSessionRunner do
       status: [type: :atom, default: :idle],
       chat_session_id: [type: :string],
       engine_session_ref: [type: :string],
-      inference_opts: [type: :any, default: []]
+      inference_opts: [type: :any, default: []],
+      queued_user_turn_signal: [type: :any]
     ],
     signal_routes: [
+      {Signals.user_turn(), Sacrum.ChatSessionRunner.Actions.AcceptUserTurn},
+      {Signals.hydrate_session(), Sacrum.ChatSessionRunner.Actions.HydrateSession},
       {Signals.run(), Sacrum.ChatSessionRunner.Actions.Intake},
       {Signals.intake(), Sacrum.ChatSessionRunner.Actions.Intake},
       {Signals.load_messages(), Sacrum.ChatSessionRunner.Actions.LoadMessages},
@@ -49,7 +53,6 @@ defmodule Sacrum.ChatSessionRunner do
   alias Sacrum.ChatSessionRunner.Actions.InvokeInference
 
   @engine_session_ref_prefix "jido_agent_server:"
-  @completion_cleanup_delay_ms 100
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -64,19 +67,19 @@ defmodule Sacrum.ChatSessionRunner do
         status: :idle,
         chat_session_id: chat_session_id,
         engine_session_ref: engine_session_ref,
-        inference_opts: inference_opts
+        inference_opts: inference_opts,
+        queued_user_turn_signal: nil
       },
       register_global: false,
       name: Sacrum.ChatSessionRegistry.via_tuple(chat_session_id)
     ]
 
+    initial_signal =
+      Keyword.get(opts, :initial_signal) ||
+        Actions.hydrate_session_signal(chat_session_id, engine_session_ref, inference_opts)
+
     with {:ok, pid} <- Jido.AgentServer.start_link(agent_opts),
-         :ok <-
-           Jido.AgentServer.cast(
-             pid,
-             Actions.run_signal(chat_session_id, engine_session_ref, inference_opts)
-           ) do
-      start_completion_cleanup(pid)
+         :ok <- Jido.AgentServer.cast(pid, initial_signal) do
       {:ok, pid}
     else
       {:error, reason} = error ->
@@ -111,35 +114,4 @@ defmodule Sacrum.ChatSessionRunner do
   end
 
   def on_before_cmd(agent, action), do: {:ok, agent, action}
-
-  @spec start_completion_cleanup(pid()) :: :ok
-  defp start_completion_cleanup(pid) when is_pid(pid) do
-    Task.start(fn -> await_completion_and_stop(pid) end)
-    :ok
-  end
-
-  @spec await_completion_and_stop(pid()) :: :ok
-  defp await_completion_and_stop(pid) do
-    case Jido.AgentServer.await_completion(pid, timeout: :infinity) do
-      {:ok, _completion} ->
-        Process.sleep(@completion_cleanup_delay_ms)
-        stop_agent_server(pid)
-
-      {:error, _reason} ->
-        :ok
-    end
-  catch
-    :exit, _reason -> :ok
-  end
-
-  @spec stop_agent_server(pid()) :: :ok
-  defp stop_agent_server(pid) do
-    if Process.alive?(pid) do
-      GenServer.stop(pid, :normal, 5_000)
-    else
-      :ok
-    end
-  catch
-    :exit, _reason -> :ok
-  end
 end

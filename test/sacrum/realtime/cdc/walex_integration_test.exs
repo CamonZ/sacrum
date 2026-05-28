@@ -5,6 +5,7 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
 
   alias Ecto.Adapters.SQL.Sandbox
   alias Sacrum.Accounts
+  alias Sacrum.ChatSessionRunner.Events.ActivityEvents
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{CodeRef, StepExecution, Task}
 
@@ -806,6 +807,50 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
         },
         1_000
       )
+    end)
+  end
+
+  test "committed public runner activity events are projected for live chat clients" do
+    with_project(fn user, project ->
+      {:ok, session} = Accounts.LiveChat.create_session(user.id, project.id, %{status: :running})
+      turn_message_id = Ecto.UUID.generate()
+
+      attrs =
+        ActivityEvents.invoking_model_attrs(session, %{
+          "turn_message_id" => turn_message_id,
+          "provider" => "fake",
+          "model" => "runner-test",
+          "display" => %{"label" => "Invoking model"}
+        })
+
+      :ok = subscribe_project(project.id)
+
+      {:ok, chat_event} =
+        Accounts.ChatEvents.append(user.id, project.id, session.id, attrs)
+
+      payload =
+        assert_project_broadcast(
+          "chat_event_created",
+          %{
+            id: chat_event.id,
+            project_id: project.id,
+            chat_session_id: session.id,
+            event_type: "chat_runner_activity.invoking_model",
+            payload: %{
+              "chat_session_id" => session.id,
+              "phase" => "invoking_model",
+              "status" => "running",
+              "turn_message_id" => turn_message_id,
+              "provider" => "fake",
+              "model" => "runner-test",
+              "display" => %{"label" => "Invoking model"}
+            }
+          },
+          1_000
+        )
+
+      refute Map.has_key?(payload, :internal_payload)
+      refute Map.has_key?(payload, "internal_payload")
     end)
   end
 

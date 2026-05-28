@@ -31,6 +31,41 @@ defmodule Sacrum.ChatSessionRunner.Actions do
     )
   end
 
+  @doc """
+  Build a user-turn signal accepted by the session-owned runner.
+  """
+  @spec user_turn_signal(map()) :: Signal.t()
+  def user_turn_signal(data) when is_map(data) do
+    Signal.new!(Signals.user_turn(), data, source: Signals.source())
+  end
+
+  @doc """
+  Build the crash-recovery hydration signal for a session-owned runner.
+  """
+  @spec hydrate_session_signal(String.t(), String.t(), keyword(), keyword()) :: Signal.t()
+  def hydrate_session_signal(chat_session_id, engine_session_ref, inference_opts, opts \\ [])
+      when is_binary(chat_session_id) and is_binary(engine_session_ref) and
+             is_list(inference_opts) do
+    data = %{
+      chat_session_id: chat_session_id,
+      engine_session_ref: engine_session_ref,
+      inference_opts: inference_opts
+    }
+
+    data = maybe_put_queued_user_turn_signal(data, Keyword.get(opts, :queued_user_turn_signal))
+
+    Signal.new!(Signals.hydrate_session(), data, source: Signals.source())
+  end
+
+  defp maybe_put_queued_user_turn_signal(data, %Signal{} = signal),
+    do: Map.put(data, :queued_user_turn_signal, signal)
+
+  defp maybe_put_queued_user_turn_signal(data, _signal), do: data
+
+  @doc false
+  @spec emit(Signal.t()) :: Directive.Emit.t()
+  def emit(%Signal{} = signal), do: Directive.emit(signal)
+
   @doc false
   @spec emit(String.t(), map()) :: Directive.Emit.t()
   def emit(type, data) when is_binary(type) and is_map(data) do

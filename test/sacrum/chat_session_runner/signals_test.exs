@@ -17,6 +17,7 @@ defmodule Sacrum.ChatSessionRunner.SignalsTest do
 
   describe "individual signal accessors" do
     test "use the chat-session prefix" do
+      assert Signals.user_turn() == "sacrum.chat_session.user_turn"
       assert Signals.run() == "sacrum.chat_session.run"
       assert Signals.intake() == "sacrum.chat_session.intake"
       assert Signals.load_messages() == "sacrum.chat_session.load_messages"
@@ -31,6 +32,7 @@ defmodule Sacrum.ChatSessionRunner.SignalsTest do
 
     test "every accessor returns a unique string" do
       values = [
+        Signals.user_turn(),
         Signals.run(),
         Signals.intake(),
         Signals.load_messages(),
@@ -50,6 +52,7 @@ defmodule Sacrum.ChatSessionRunner.SignalsTest do
   describe "all/0" do
     test "lists every routed signal" do
       assert Signals.all() == [
+               Signals.user_turn(),
                Signals.run(),
                Signals.intake(),
                Signals.load_messages(),

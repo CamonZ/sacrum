@@ -16,13 +16,11 @@ defmodule Sacrum.Accounts.LiveChat do
   }
 
   alias Sacrum.Chat.{Inference, InferenceEvents, PublicEvents}
-  alias Sacrum.ChatSessionRunner.Pipeline, as: RunnerPipeline
+  alias Sacrum.ChatSessionRunner.Actions, as: RunnerActions
   alias Sacrum.ChatSessions.Status, as: ChatSessionStatus
   alias Sacrum.ChatSessionSupervisor
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{ChatMessage, ChatSession}
-
-  require Logger
 
   @spec create_session(String.t(), String.t(), map()) ::
           {:ok, ChatSession.t()} | {:error, term()}
@@ -68,9 +66,22 @@ defmodule Sacrum.Accounts.LiveChat do
           {:ok, ChatMessage.t()} | {:error, term()}
   def send_message_and_start_runner(user_id, project_id, chat_session_id, attrs, opts \\ [])
       when is_map(attrs) and is_list(opts) do
-    with {:ok, message} <- send_message(user_id, project_id, chat_session_id, attrs) do
-      start_runner_after_commit(chat_session_id, opts)
-      {:ok, message}
+    with {:ok, session} <- ChatSessions.get_session(user_id, project_id, chat_session_id),
+         :ok <- prepare_runner_for_user_turn(session) do
+      message_id = Ecto.UUID.generate()
+
+      signal =
+        RunnerActions.user_turn_signal(
+          user_turn_signal_data(user_id, project_id, chat_session_id, message_id, attrs, opts)
+        )
+
+      case start_or_cast_user_turn(chat_session_id, signal, opts) do
+        {:ok, _pid} ->
+          {:ok, accepted_turn_response(user_id, project_id, chat_session_id, message_id, attrs)}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
     end
   end
 
@@ -87,30 +98,19 @@ defmodule Sacrum.Accounts.LiveChat do
   @spec cancel_session(String.t(), String.t(), String.t()) ::
           {:ok, ChatSession.t()} | {:error, term()}
   def cancel_session(user_id, project_id, chat_session_id) do
-    transaction_result(fn ->
-      with {:ok, session} <- ChatSessions.get_session(user_id, project_id, chat_session_id),
-           :ok <- ensure_stoppable(session),
-           {:ok, updated_session} <-
-             ChatSessions.update_session(session, %{
-               status: :cancelled,
-               stop_requested_at: session.stop_requested_at || DateTime.utc_now()
-             }),
-           {:ok, event} <-
-             ChatEvents.append_to_session(
-               updated_session,
-               PublicEvents.session_updated_attrs(updated_session)
-             ) do
-        {updated_session, event}
-      else
-        {:error, reason} -> Repo.rollback(reason)
-      end
-    end)
+    with {:ok, updated_session} <- persist_session_cancellation(user_id, project_id, chat_session_id),
+         :ok <- terminate_runner_if_running(chat_session_id) do
+      {:ok, updated_session}
+    end
   end
 
   @spec delete_session(String.t(), String.t(), String.t()) ::
           {:ok, ChatSession.t()} | {:error, term()}
   def delete_session(user_id, project_id, chat_session_id) do
-    ChatSessions.delete_session(user_id, project_id, chat_session_id)
+    with {:ok, deleted_session} <- ChatSessions.delete_session(user_id, project_id, chat_session_id),
+         :ok <- terminate_runner_if_running(chat_session_id) do
+      {:ok, deleted_session}
+    end
   end
 
   @spec get_session(String.t(), String.t(), String.t()) ::
@@ -146,20 +146,141 @@ defmodule Sacrum.Accounts.LiveChat do
     end
   end
 
-  @spec start_runner_after_commit(String.t(), keyword()) :: :ok
-  defp start_runner_after_commit(chat_session_id, opts) when is_binary(chat_session_id) do
+  defp start_or_cast_user_turn(chat_session_id, signal, opts) when is_binary(chat_session_id) do
     runner = Keyword.get(opts, :runner, ChatSessionSupervisor)
     start_opts = Keyword.get(opts, :start_opts, live_chat_runner_start_opts())
 
-    case runner.start_runner(chat_session_id, start_opts) do
-      {:ok, _pid} ->
-        :ok
+    runner.start_or_cast_user_turn(chat_session_id, signal, start_opts)
+  end
 
-      {:error, {:already_started, _pid}} ->
-        :ok
+  defp prepare_runner_for_user_turn(%ChatSession{status: status, id: chat_session_id})
+       when status in [:completed, :failed] do
+    terminate_runner_if_running(chat_session_id)
+  end
 
-      {:error, reason} ->
-        surface_runner_start_failure(chat_session_id, reason)
+  defp prepare_runner_for_user_turn(%ChatSession{}), do: :ok
+
+  defp persist_session_cancellation(user_id, project_id, chat_session_id) do
+    transaction_result(fn ->
+      with {:ok, session} <- ChatSessions.get_session(user_id, project_id, chat_session_id),
+           :ok <- ensure_stoppable(session),
+           {:ok, updated_session} <-
+             ChatSessions.update_session(session, %{
+               status: :cancelled,
+               stop_requested_at: session.stop_requested_at || DateTime.utc_now()
+             }),
+           {:ok, event} <-
+             ChatEvents.append_to_session(
+               updated_session,
+               PublicEvents.session_updated_attrs(updated_session)
+             ) do
+        {updated_session, event}
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp terminate_runner_if_running(chat_session_id) do
+    case ChatSessionSupervisor.terminate_runner(chat_session_id) do
+      :ok -> :ok
+      {:error, :not_found} -> :ok
+    end
+  end
+
+  defp user_turn_signal_data(user_id, project_id, chat_session_id, message_id, attrs, opts) do
+    attrs = accepted_user_turn_attrs(attrs)
+
+    %{
+      message_id: message_id,
+      user_id: user_id,
+      project_id: project_id,
+      chat_session_id: chat_session_id,
+      engine_session_ref: Sacrum.ChatSessionRunner.agent_id(chat_session_id),
+      inference_opts: user_turn_inference_opts(opts)
+    }
+    |> Map.merge(attrs)
+    |> Enum.reject(fn {_key, value} -> value in [nil, %{}, []] end)
+    |> Map.new()
+  end
+
+  defp accepted_turn_response(user_id, project_id, chat_session_id, message_id, attrs) do
+    attrs = accepted_user_turn_attrs(attrs)
+
+    Map.merge(attrs, %{
+      id: message_id,
+      user_id: user_id,
+      project_id: project_id,
+      chat_session_id: chat_session_id,
+      role: :user
+    })
+  end
+
+  defp accepted_user_turn_attrs(attrs) do
+    attrs =
+      put_default(attrs, :content_format, "content_format", ChatMessage.default_content_format())
+
+    %{
+      content: fetch_attr(attrs, :content, "content"),
+      content_format:
+        normalize_content_format(fetch_attr(attrs, :content_format, "content_format")),
+      client_message_id: fetch_attr(attrs, :client_message_id, "client_message_id"),
+      metadata: safe_metadata(fetch_attr(attrs, :metadata, "metadata") || %{})
+    }
+  end
+
+  defp fetch_attr(attrs, atom_key, string_key) do
+    cond do
+      Map.has_key?(attrs, atom_key) -> Map.fetch!(attrs, atom_key)
+      Map.has_key?(attrs, string_key) -> Map.fetch!(attrs, string_key)
+      true -> nil
+    end
+  end
+
+  defp safe_metadata(value) when is_map(value) do
+    Enum.reduce(value, %{}, fn {key, metadata_value}, metadata ->
+      with true <- is_binary(key),
+           {:ok, safe_value} <- safe_metadata_value(metadata_value) do
+        Map.put(metadata, key, safe_value)
+      else
+        _other -> metadata
+      end
+    end)
+  end
+
+  defp safe_metadata(_value), do: %{}
+
+  defp safe_metadata_value(value) when is_binary(value) or is_boolean(value) or is_number(value),
+    do: {:ok, value}
+
+  defp safe_metadata_value(nil), do: {:ok, nil}
+
+  defp safe_metadata_value(value) when is_list(value) do
+    safe_list =
+      value
+      |> Enum.reduce([], fn item, items ->
+        case safe_metadata_value(item) do
+          {:ok, safe_item} -> [safe_item | items]
+          :error -> items
+        end
+      end)
+      |> Enum.reverse()
+
+    {:ok, safe_list}
+  end
+
+  defp safe_metadata_value(value) when is_map(value), do: {:ok, safe_metadata(value)}
+  defp safe_metadata_value(_value), do: :error
+
+  defp normalize_content_format(value) when is_atom(value), do: Atom.to_string(value)
+  defp normalize_content_format(value), do: value
+
+  defp user_turn_inference_opts(opts) do
+    opts
+    |> Keyword.get(:inference_opts, Keyword.get(opts[:start_opts] || [], :inference_opts))
+    |> case do
+      nil -> Keyword.get(live_chat_runner_start_opts(), :inference_opts, [])
+      inference_opts -> inference_opts
     end
   end
 
@@ -168,21 +289,6 @@ defmodule Sacrum.Accounts.LiveChat do
     :sacrum
     |> Application.get_env(:live_chat_runner, [])
     |> Keyword.get(:start_opts, [])
-  end
-
-  @spec surface_runner_start_failure(String.t(), term()) :: :ok
-  defp surface_runner_start_failure(chat_session_id, reason) do
-    case RunnerPipeline.surface_failure(chat_session_id, {:runner_start_failed, reason}) do
-      :ok ->
-        :ok
-
-      {:error, failure_reason} ->
-        Logger.error(
-          "[LiveChat:#{chat_session_id}] failed to surface runner start failure: #{inspect(failure_reason)}"
-        )
-
-        :ok
-    end
   end
 
   defp persist_assistant_result(%ChatSession{} = session, %Inference.Result{} = inference_result) do

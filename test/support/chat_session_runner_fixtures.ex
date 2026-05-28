@@ -3,6 +3,8 @@ defmodule Sacrum.TestSupport.ChatSessionRunnerFixtures do
 
   alias Sacrum.Accounts.{LiveChat, Projects}
   alias Sacrum.Chat.Inference.Result
+  alias Sacrum.ChatSessionRunner.DirectTracker
+  alias Sacrum.ChatSessionRunner.Events.Checkpoints
   alias Sacrum.ChatSessionRunner.Transcript.Messages
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.ChatEvent
@@ -82,11 +84,138 @@ defmodule Sacrum.TestSupport.ChatSessionRunnerFixtures do
     }
   end
 
+  def show_task_directive(ctx, tool_call_id \\ "tool-call-1") do
+    targets = create_tracker_targets(ctx)
+    arguments = %{"task_ref" => targets.task.id, "include_sections" => false}
+
+    %{
+      "action" => "show_task",
+      "arguments" => arguments,
+      "provider_tool_call" => provider_tool_call("show_task", arguments, tool_call_id),
+      "assistant_content" => ""
+    }
+  end
+
+  def provider_tool_call(action, arguments, tool_call_id \\ "tool-call-1") do
+    Sacrum.Chat.DirectTrackerOperationTools.provider_tool_call(
+      action,
+      arguments,
+      tool_call_id
+    )
+  end
+
+  def no_pending_turn_fixture(ctx) do
+    {:ok, session} = LiveChat.create_session(ctx.user.id, ctx.project.id, %{})
+    %{session: session, status: :queued}
+  end
+
+  def pending_user_turn_fixture(ctx) do
+    {:ok, session} = LiveChat.create_session(ctx.user.id, ctx.project.id, %{})
+    {:ok, user_message} = send_user_message(ctx, session, "pending-user-turn")
+    {:ok, running} = transition(ctx, session, :running)
+    {:ok, _events} = Checkpoints.checkpoint_step(running, :intake, %{})
+
+    %{
+      session: running,
+      status: :running,
+      turn_message_id: user_message.id,
+      user_client_message_id: user_message.client_message_id
+    }
+  end
+
+  def partial_direct_tool_continuation_fixture(ctx) do
+    {:ok, session} = LiveChat.create_session(ctx.user.id, ctx.project.id, %{})
+    {:ok, user_message} = send_user_message(ctx, session, "partial-direct-tool-continuation")
+    {:ok, running} = transition(ctx, session, :running)
+    {:ok, _events} = Checkpoints.checkpoint_step(running, :intake, %{})
+    {:ok, _events} = Checkpoints.checkpoint_step(running, :load_messages, %{"message_count" => 1})
+
+    {:ok, _events} =
+      Checkpoints.checkpoint_step(running, :invoke_inference, %{"provider" => "stub"})
+
+    operation =
+      ctx
+      |> Map.put(:session, running)
+      |> show_task_operation()
+      |> Map.put(:tool_call, provider_tool_call("show_task", %{"include_sections" => false}))
+      |> Map.put(:assistant_content, "")
+
+    {:ok, _event} =
+      DirectTracker.Events.append_completed(running, operation, %{ok: true}, %{
+        "turn_message_id" => user_message.id
+      })
+
+    %{
+      session: running,
+      status: :running,
+      turn_message_id: user_message.id,
+      user_client_message_id: user_message.client_message_id
+    }
+  end
+
+  def completed_turn_fixture(ctx) do
+    {:ok, session} = LiveChat.create_session(ctx.user.id, ctx.project.id, %{})
+    {:ok, user_message} = send_user_message(ctx, session, "completed-turn")
+    {:ok, running} = transition(ctx, session, :running)
+
+    {:ok, _events} =
+      Checkpoints.checkpoint_step(running, :invoke_inference, %{"provider" => "stub"})
+
+    {:ok, assistant} = append_assistant(running, user_message)
+
+    {:ok, _events} =
+      Checkpoints.checkpoint_step(running, :append_assistant, %{
+        "assistant_message_id" => assistant.id,
+        "turn_message_id" => user_message.id
+      })
+
+    {:ok, _events} =
+      Checkpoints.checkpoint_step(running, :complete_session, %{"status" => "turn_completed"})
+
+    %{
+      session: running,
+      status: :running,
+      turn_message_id: user_message.id,
+      user_client_message_id: user_message.client_message_id,
+      assistant_client_message_id: assistant.client_message_id
+    }
+  end
+
+  def failed_turn_fixture(ctx) do
+    {:ok, session} = LiveChat.create_session(ctx.user.id, ctx.project.id, %{})
+    {:ok, user_message} = send_user_message(ctx, session, "failed-turn")
+    {:ok, failed} = transition(ctx, session, :failed)
+    {:ok, _events} = Checkpoints.checkpoint_step(failed, :failed, %{"reason" => "boom"})
+
+    %{
+      session: failed,
+      status: :failed,
+      turn_message_id: user_message.id,
+      user_client_message_id: user_message.client_message_id
+    }
+  end
+
   def event_count(session, type) do
     Repo.one(
       from event in ChatEvent,
         where: event.chat_session_id == ^session.id and event.event_type == ^type,
         select: count(event.id)
+    )
+  end
+
+  defp send_user_message(ctx, session, client_message_id) do
+    LiveChat.send_message(ctx.user.id, ctx.project.id, session.id, %{
+      content: "Hydrate #{client_message_id}",
+      client_message_id: client_message_id
+    })
+  end
+
+  defp transition(ctx, session, status) do
+    Sacrum.Accounts.ChatSessions.transition_status(
+      ctx.user.id,
+      ctx.project.id,
+      session.id,
+      status
     )
   end
 end
