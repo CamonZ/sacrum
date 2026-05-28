@@ -2759,6 +2759,13 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       waiting_exec = Repo.get!(StepExecution, waiting_exec_id)
       assert waiting_exec.status == "completed"
 
+      snapshot = Jason.decode!(waiting_exec.output)
+      assert snapshot["snapshot_type"] == "wait_children_status"
+      assert snapshot["counts"]["total_direct_children"] == 1
+      assert snapshot["counts"]["direct_done"] == 1
+      assert [%{"id" => child_id, "state" => "done"}] = snapshot["direct_children"]
+      assert child_id == child_task_1.id
+
       parent_task = Repo.get!(Sacrum.Repo.Schemas.Task, parent_task.id)
       assert parent_task.current_step_id == final_step.id
 
@@ -2957,6 +2964,22 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         )
 
       assert waiting_executions == []
+
+      completed_execution =
+        Repo.one!(
+          from(e in StepExecution,
+            where:
+              e.task_id == ^parent_task.id and
+                e.step_type == "wait_children" and
+                e.status == "completed",
+            limit: 1
+          )
+        )
+
+      snapshot = Jason.decode!(completed_execution.output)
+      assert snapshot["snapshot_type"] == "wait_children_status"
+      assert snapshot["counts"]["total_direct_children"] == 0
+      assert snapshot["direct_children"] == []
     end
 
     test "wait_children entry with one or more children still parks in waiting state" do
@@ -3087,6 +3110,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       assert waiting_execution.task_id == parent_task.id
       assert waiting_execution.task_run_id
       assert waiting_execution.status == "waiting"
+      assert Jason.decode!(waiting_execution.output)["snapshot_type"] == "wait_children_status"
 
       cleanup_spawned_orchestrators([child_task.id])
     end

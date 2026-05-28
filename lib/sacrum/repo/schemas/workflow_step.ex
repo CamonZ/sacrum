@@ -69,7 +69,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
       schema when is_map(schema) ->
         try do
           ExJsonSchema.Schema.resolve(schema)
-          changeset
+          validate_provider_output_schema(changeset, schema)
         rescue
           exception ->
             Logger.error(
@@ -83,6 +83,49 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
         add_error(changeset, :output_schema, "must be a map or null")
     end
   end
+
+  defp validate_provider_output_schema(changeset, schema) do
+    if codex_strict_provider?(get_field(changeset, :agent_config)) do
+      validate_codex_provider_output_schema(changeset, schema)
+    else
+      changeset
+    end
+  end
+
+  defp validate_codex_provider_output_schema(changeset, schema) do
+    case validate_codex_strict_schema(schema) do
+      :ok ->
+        changeset
+
+      {:error, reason} ->
+        add_error(changeset, :output_schema, "must be Codex strict-compatible: #{reason}")
+    end
+  end
+
+  defp codex_strict_provider?(agent_config) when is_map(agent_config) do
+    provider =
+      agent_config
+      |> Map.get("provider", Map.get(agent_config, :provider))
+      |> normalize_provider()
+
+    provider in ["openai", "codex"]
+  end
+
+  defp codex_strict_provider?(_agent_config), do: false
+
+  defp normalize_provider(provider) when is_atom(provider) do
+    provider
+    |> Atom.to_string()
+    |> normalize_provider()
+  end
+
+  defp normalize_provider(provider) when is_binary(provider) do
+    provider
+    |> String.trim()
+    |> String.downcase()
+  end
+
+  defp normalize_provider(_provider), do: nil
 
   defp validate_route_step_schema(changeset) do
     step_type = get_field(changeset, :step_type)
@@ -162,6 +205,68 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
   end
 
   def validate_routing_contract_schema(_schema), do: {:error, "schema must be a map"}
+
+  @spec validate_codex_strict_schema(map()) :: :ok | {:error, String.t()}
+  def validate_codex_strict_schema(schema) when is_map(schema) do
+    validate_codex_strict_schema(schema, "schema")
+  end
+
+  def validate_codex_strict_schema(_schema), do: {:error, "schema must be a map"}
+
+  defp validate_codex_strict_schema(schema, path) when is_map(schema) do
+    cond do
+      Map.has_key?(schema, "const") ->
+        {:error, "#{path}.const is not supported"}
+
+      is_list(schema["type"]) ->
+        {:error, "#{path}.type must be a single string, not a type array"}
+
+      not is_binary(schema["type"]) ->
+        {:error, "#{path}.type must be a string"}
+
+      schema["type"] == "object" ->
+        validate_codex_strict_object_schema(schema, path)
+
+      schema["type"] == "array" ->
+        validate_codex_strict_array_schema(schema, path)
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_codex_strict_schema(_schema, path),
+    do: {:error, "#{path} must be a schema object"}
+
+  defp validate_codex_strict_object_schema(schema, path) do
+    with :ok <-
+           require_exact_value(
+             schema,
+             "additionalProperties",
+             false,
+             "#{path}.additionalProperties must be false"
+           ),
+         {:ok, properties} <- fetch_map(schema, "properties", "#{path}.properties must be a map"),
+         :ok <- validate_required_keys(schema, Map.keys(properties), "#{path}.required") do
+      validate_codex_strict_properties(properties, path)
+    end
+  end
+
+  defp validate_codex_strict_properties(properties, path) do
+    Enum.reduce_while(properties, :ok, fn {key, property_schema}, :ok ->
+      case validate_codex_strict_schema(property_schema, "#{path}.#{key}") do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp validate_codex_strict_array_schema(schema, path) do
+    case Map.get(schema, "items") do
+      items when is_map(items) -> validate_codex_strict_schema(items, "#{path}.items")
+      _ -> {:error, "#{path}.items must be a schema object"}
+    end
+  end
 
   defp validate_route_properties(properties) do
     property_keys = Map.keys(properties)

@@ -419,7 +419,9 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
             "properties" => %{
               "verdict" => %{"type" => "string"},
               "should_retry" => %{"type" => "boolean"}
-            }
+            },
+            "required" => ["verdict", "should_retry"],
+            "additionalProperties" => false
           }
         })
 
@@ -507,7 +509,9 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
           "step_order" => 1,
           "output_schema" => %{
             "type" => "object",
-            "properties" => %{"result" => %{"type" => "string"}}
+            "properties" => %{"result" => %{"type" => "string"}},
+            "required" => ["result"],
+            "additionalProperties" => false
           }
         })
 
@@ -558,7 +562,9 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
             "properties" => %{
               "verdict" => %{"type" => "string"},
               "confidence" => %{"type" => "number"}
-            }
+            },
+            "required" => ["verdict", "confidence"],
+            "additionalProperties" => false
           }
         })
 
@@ -632,7 +638,9 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
           "step_order" => 1,
           "output_schema" => %{
             "type" => "object",
-            "properties" => %{"result" => %{"type" => "string"}}
+            "properties" => %{"result" => %{"type" => "string"}},
+            "required" => ["result"],
+            "additionalProperties" => false
           }
         })
 

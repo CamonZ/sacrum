@@ -1940,7 +1940,9 @@ defmodule SacrumWeb.Graphql.SchemaTest do
           name: "Step",
           output_schema: %{
             "type" => "object",
-            "properties" => %{"result" => %{"type" => "string"}}
+            "properties" => %{"result" => %{"type" => "string"}},
+            "required" => ["result"],
+            "additionalProperties" => false
           }
         })
 

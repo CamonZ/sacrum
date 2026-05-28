@@ -318,7 +318,8 @@ defmodule Sacrum.Accounts.AuthoringDraftsTest do
                 output_schema: %{
                   type: "object",
                   required: ["summary"],
-                  properties: %{summary: %{type: "string"}}
+                  properties: %{summary: %{type: "string"}},
+                  additionalProperties: false
                 },
                 validation_expectations: [
                   "The implementation step returns a concise summary."
@@ -332,7 +333,8 @@ defmodule Sacrum.Accounts.AuthoringDraftsTest do
                 output_schema: %{
                   type: "object",
                   required: ["target_step"],
-                  properties: %{target_step: %{type: "string"}}
+                  properties: %{target_step: %{type: "string"}},
+                  additionalProperties: false
                 },
                 transitions_to: ["verification.review"]
               }
@@ -347,7 +349,12 @@ defmodule Sacrum.Accounts.AuthoringDraftsTest do
                 key: "review",
                 type: "eval",
                 prompt: "{% if task.title %}Review {{ task.title }}.{% endif %}",
-                output_schema: %{type: "object", required: ["approved"]}
+                output_schema: %{
+                  type: "object",
+                  required: ["approved"],
+                  properties: %{approved: %{type: "boolean"}},
+                  additionalProperties: false
+                }
               }
             ]
           }

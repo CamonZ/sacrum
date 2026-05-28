@@ -74,7 +74,13 @@ defmodule Sacrum.Accounts.CodeFactorySeededAuthoringFlowTest do
     assert implement_step["prompt"] =~ "{{ task.desired_behavior }}"
     refute implement_step["prompt"] =~ "{{ ticket."
 
-    assert eval_step["output_schema"] == %{"type" => "object"}
+    assert eval_step["output_schema"] == %{
+             "type" => "object",
+             "properties" => %{},
+             "required" => [],
+             "additionalProperties" => false
+           }
+
     assert eval_step["prompt"] =~ "{% if workflow.output_schema %}"
     assert eval_step["prompt"] =~ "{{ workflow.output_schema }}"
 
