@@ -3,11 +3,19 @@ defmodule Sacrum.ChatSessionRunner.DirectTracker.Events do
   Owns persisted public events for completed and rejected direct tracker operations.
   """
 
+  import Ecto.Query
+
   alias Sacrum.Accounts.ChatEvents
   alias Sacrum.Chat.{DirectTrackerOperationResolver, Inference}
   alias Sacrum.ChatSessionRunner.DirectTracker.Rejections
   alias Sacrum.ChatSessionRunner.Session.Turn
+  alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{ChatEvent, ChatSession}
+
+  @completed_event_type "chat_direct_tracker_operation.completed"
+
+  @spec completed_event_type() :: String.t()
+  def completed_event_type, do: @completed_event_type
 
   @spec append_completed(ChatSession.t(), term(), term(), map()) ::
           {:ok, ChatEvent.t()} | {:error, term()}
@@ -17,7 +25,7 @@ defmodule Sacrum.ChatSessionRunner.DirectTracker.Events do
     serialized_result = serialize_result(result)
 
     ChatEvents.append_to_session(session, %{
-      event_type: "chat_direct_tracker_operation.completed",
+      event_type: @completed_event_type,
       visibility: :public,
       public_payload:
         %{
@@ -38,8 +46,72 @@ defmodule Sacrum.ChatSessionRunner.DirectTracker.Events do
     })
   end
 
-  defp tool_call_id(%{tool_call: %{"id" => id}}) when is_binary(id), do: id
-  defp tool_call_id(_operation), do: nil
+  @spec completed_for_turn?(ChatSession.t(), String.t()) :: boolean()
+  def completed_for_turn?(%ChatSession{} = session, turn_message_id)
+      when is_binary(turn_message_id) do
+    session
+    |> completed_events_for_turn_query(turn_message_id)
+    |> Repo.exists?()
+  end
+
+  @spec completed_for_turn(ChatSession.t(), String.t()) :: [ChatEvent.t()]
+  def completed_for_turn(%ChatSession{} = session, turn_message_id)
+      when is_binary(turn_message_id) do
+    completed_events_for_turn(session, turn_message_id)
+  end
+
+  @spec completed_events_by_tool_call(ChatSession.t(), [term()], String.t()) :: map()
+  def completed_events_by_tool_call(%ChatSession{} = session, operations, turn_message_id)
+      when is_list(operations) and is_binary(turn_message_id) do
+    tool_call_ids =
+      operations
+      |> Enum.map(&tool_call_id/1)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+
+    case tool_call_ids do
+      [] ->
+        %{}
+
+      [_ | _] ->
+        session
+        |> completed_events_for_turn(turn_message_id, tool_call_ids)
+        |> Map.new(fn event -> {event.public_payload["tool_call_id"], event} end)
+    end
+  end
+
+  defp completed_events_for_turn(session, turn_message_id, tool_call_ids \\ nil) do
+    session
+    |> completed_events_for_turn_query(turn_message_id)
+    |> maybe_filter_tool_call_ids(tool_call_ids)
+    |> Repo.all()
+  end
+
+  defp completed_events_for_turn_query(session, turn_message_id) do
+    from event in ChatEvent,
+      where:
+        event.user_id == ^session.user_id and event.project_id == ^session.project_id and
+          event.chat_session_id == ^session.id and
+          event.visibility == :public and
+          event.event_type == ^@completed_event_type and
+          fragment("?->>'turn_message_id' = ?", event.public_payload, ^turn_message_id),
+      order_by: [asc: event.inserted_at, asc: event.id]
+  end
+
+  defp maybe_filter_tool_call_ids(query, nil), do: query
+
+  defp maybe_filter_tool_call_ids(query, tool_call_ids) do
+    where(
+      query,
+      [event],
+      fragment("?->>? = ANY(?)", event.public_payload, "tool_call_id", ^tool_call_ids)
+    )
+  end
+
+  @doc false
+  @spec tool_call_id(term()) :: String.t() | nil
+  def tool_call_id(%{tool_call: %{"id" => id}}) when is_binary(id) and id != "", do: id
+  def tool_call_id(_operation), do: nil
 
   @spec append_rejection(ChatSession.t(), Inference.Result.t(), String.t() | nil) ::
           {:ok, ChatEvent.t()} | {:error, term()}

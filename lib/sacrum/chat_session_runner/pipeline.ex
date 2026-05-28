@@ -10,6 +10,7 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
   alias Sacrum.Accounts.AuthoringChatLoop
   alias Sacrum.Accounts.ChatEvents
   alias Sacrum.Chat.Inference
+  alias Sacrum.Chat.Inference.Result
   alias Sacrum.ChatSessionRunner.DirectTracker
   alias Sacrum.ChatSessionRunner.DirectTracker.Continuation, as: DirectTrackerContinuation
 
@@ -174,6 +175,19 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
     end
   end
 
+  @spec resume_direct_tracker_continuation(ChatSession.t(), keyword(), String.t()) ::
+          {:ok, ChatSession.t(), Result.t()} | {:error, term()} | {:halt, ChatSession.t(), term()}
+  def resume_direct_tracker_continuation(
+        %ChatSession{} = session,
+        inference_opts,
+        turn_message_id
+      )
+      when is_list(inference_opts) and is_binary(turn_message_id) do
+    with {:ok, result} <- direct_tracker_result_from_completed_events(session, turn_message_id) do
+      continue_after_direct_tracker_operation(session, result, inference_opts, turn_message_id)
+    end
+  end
+
   defp run_inference(
          %ChatSession{} = session,
          provider_messages,
@@ -189,6 +203,65 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
          {:ok, _events} <-
            Checkpoints.checkpoint_step(refreshed_session, checkpoint_step, metadata) do
       {:ok, refreshed_session, result}
+    end
+  end
+
+  defp direct_tracker_result_from_completed_events(%ChatSession{} = session, turn_message_id) do
+    events = DirectTracker.Events.completed_for_turn(session, turn_message_id)
+
+    with [_ | _] <- events,
+         {:ok, operations} <- completed_event_operations(events),
+         {:ok, metadata} <- completed_event_direct_tracker_metadata(operations) do
+      {:ok,
+       %Result{
+         content: "",
+         content_format: :markdown,
+         public_metadata: %{"provider" => "hydration", "model" => "direct-tracker-continuation"},
+         internal_metadata: metadata
+       }}
+    else
+      [] -> {:error, :missing_direct_tracker_result_events}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp completed_event_operations(events) do
+    events
+    |> Enum.map(&get_in(&1.internal_payload || %{}, ["operation"]))
+    |> Enum.reduce_while({:ok, []}, fn
+      %{} = operation, {:ok, operations} -> {:cont, {:ok, [operation | operations]}}
+      _operation, _acc -> {:halt, {:error, :missing_direct_tracker_operation}}
+    end)
+    |> case do
+      {:ok, operations} -> {:ok, Enum.reverse(operations)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp completed_event_direct_tracker_metadata(serialized_operations) do
+    metadata = %{"resolved_direct_tracker_operations" => serialized_operations}
+
+    result = %Result{
+      content: "",
+      content_format: :markdown,
+      public_metadata: %{},
+      internal_metadata: metadata
+    }
+
+    with {:ok, operations} <- DirectTracker.Operations.direct_tracker_operations(result) do
+      metadata
+      |> DirectTrackerContinuation.put_metadata(operations)
+      |> ensure_direct_tracker_tool_call_metadata()
+    end
+  end
+
+  defp ensure_direct_tracker_tool_call_metadata(metadata) do
+    case metadata do
+      %{"direct_tracker_provider_tool_calls" => _tool_calls} = metadata ->
+        {:ok, metadata}
+
+      _metadata ->
+        {:error, :missing_direct_tracker_tool_call_metadata}
     end
   end
 

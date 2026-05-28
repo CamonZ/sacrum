@@ -39,6 +39,24 @@ defmodule Sacrum.ChatSessionRunner.Actions do
     Signal.new!(Signals.user_turn(), data, source: Signals.source())
   end
 
+  @doc """
+  Build the crash-recovery hydration signal for a session-owned runner.
+  """
+  @spec hydrate_session_signal(String.t(), String.t(), keyword()) :: Signal.t()
+  def hydrate_session_signal(chat_session_id, engine_session_ref, inference_opts)
+      when is_binary(chat_session_id) and is_binary(engine_session_ref) and
+             is_list(inference_opts) do
+    Signal.new!(
+      Signals.hydrate_session(),
+      %{
+        chat_session_id: chat_session_id,
+        engine_session_ref: engine_session_ref,
+        inference_opts: inference_opts
+      },
+      source: Signals.source()
+    )
+  end
+
   @doc false
   @spec emit(String.t(), map()) :: Directive.Emit.t()
   def emit(type, data) when is_binary(type) and is_map(data) do

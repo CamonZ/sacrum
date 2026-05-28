@@ -13,6 +13,16 @@ defmodule Sacrum.ChatSessionRunner.Events.Checkpoints do
 
   @runner_version 1
   @public_payload_keys ~w(status message_count assistant_message_id resumed provider model turn_message_id)
+  @ordered_steps [
+    :intake,
+    :load_messages,
+    :invoke_inference,
+    :continue_inference,
+    :append_assistant,
+    :complete_session,
+    :failed
+  ]
+  @step_event_types Map.new(@ordered_steps, &{"chat_session_runner.#{&1}.completed", &1})
 
   @spec checkpoint_step(ChatSession.t(), atom(), map()) ::
           {:ok, [ChatEvent.t()]} | {:error, term()}
@@ -36,6 +46,30 @@ defmodule Sacrum.ChatSessionRunner.Events.Checkpoints do
            ensure_event(session, event_type, :internal, %{}, internal_payload) do
       {:ok, [public_event, internal_event]}
     end
+  end
+
+  @spec recorded_steps_for_turn(ChatSession.t(), String.t()) :: [atom()]
+  def recorded_steps_for_turn(%ChatSession{} = session, turn_message_id)
+      when is_binary(turn_message_id) do
+    event_types = Map.keys(@step_event_types)
+
+    query =
+      from event in ChatEvent,
+        where:
+          event.user_id == ^session.user_id and event.project_id == ^session.project_id and
+            event.chat_session_id == ^session.id and event.visibility == :public and
+            event.event_type in ^event_types and
+            fragment("?->>'turn_message_id' = ?", event.public_payload, ^turn_message_id),
+        select: event.event_type
+
+    query
+    |> Repo.all()
+    |> Enum.map(&Map.fetch!(@step_event_types, &1))
+  end
+
+  @spec last_recorded_step([atom()]) :: atom() | nil
+  def last_recorded_step(steps) when is_list(steps) do
+    Enum.find(Enum.reverse(@ordered_steps), &(&1 in steps))
   end
 
   @spec runner_public_payload(ChatSession.t(), atom(), map()) :: map()

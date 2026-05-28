@@ -7,7 +7,6 @@ defmodule Sacrum.ChatSessionRunner.DirectTracker.Runner do
   alias Sacrum.ChatSessionRunner.DirectTracker.{Events, Operations}
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{ChatEvent, ChatSession}
-  import Ecto.Query
 
   @spec execute(ChatSession.t(), Inference.Result.t(), map()) ::
           {:ok, [ChatEvent.t()]} | {:error, term()}
@@ -93,41 +92,15 @@ defmodule Sacrum.ChatSessionRunner.DirectTracker.Runner do
          %{"turn_message_id" => turn_message_id}
        )
        when is_binary(turn_message_id) do
-    tool_call_ids =
-      operations
-      |> Enum.map(&tool_call_id/1)
-      |> Enum.reject(&is_nil/1)
-      |> Enum.uniq()
-
-    case tool_call_ids do
-      [] ->
-        %{}
-
-      [_ | _] ->
-        query =
-          from event in ChatEvent,
-            where:
-              event.chat_session_id == ^session.id and
-                event.event_type == "chat_direct_tracker_operation.completed" and
-                fragment("?->>? = ?", event.public_payload, "turn_message_id", ^turn_message_id) and
-                fragment("?->>? = ANY(?)", event.public_payload, "tool_call_id", ^tool_call_ids),
-            order_by: [asc: event.inserted_at, asc: event.id]
-
-        query
-        |> Repo.all()
-        |> Map.new(fn event -> {event.public_payload["tool_call_id"], event} end)
-    end
+    Events.completed_events_by_tool_call(session, operations, turn_message_id)
   end
 
   defp completed_events_by_tool_call(_session, _operations, _extra_public_payload), do: %{}
 
   defp completed_event_for_tool_call(operation, completed_events) do
-    case tool_call_id(operation) do
+    case Events.tool_call_id(operation) do
       nil -> :error
       id -> Map.fetch(completed_events, id)
     end
   end
-
-  defp tool_call_id(%{tool_call: %{"id" => id}}) when is_binary(id) and id != "", do: id
-  defp tool_call_id(_operation), do: nil
 end
