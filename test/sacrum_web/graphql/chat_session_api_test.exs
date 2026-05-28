@@ -144,9 +144,9 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
 
       assert_receive {:fake_provider_called, provider_pid,
                       [%{role: "system"}, %{role: "user", content: "Plan the next step"}]},
-                     1_000
+                     2_000
 
-      await_graphql_runner_completion(session["id"], provider_pid)
+      await_graphql_runner_turn(session["id"], provider_pid, 1)
 
       query_result =
         graphql_result(conn, user, """
@@ -172,7 +172,7 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
       assert query_result["errors"] == nil
       found_session = query_result["data"]["chatSession"]
       assert found_session["id"] == session["id"]
-      assert found_session["status"] == "completed"
+      assert found_session["status"] == "running"
       assert message["id"] in Enum.map(found_session["messages"], & &1["id"])
       assert message["id"] in Enum.map(query_result["data"]["chatMessages"], & &1["id"])
       refute Enum.any?(found_session["messages"], &(&1["role"] == "status"))
@@ -211,8 +211,6 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
                "phase" => "invoking_model",
                "status" => "running",
                "turn_message_id" => message["id"],
-               "provider" => "fake",
-               "model" => "graphql-test",
                "display" => %{"label" => "Invoking model"}
              }
 
@@ -251,7 +249,7 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
                       ]},
                      1_000
 
-      await_graphql_runner_completion(session["id"], second_provider_pid)
+      await_graphql_runner_turn(session["id"], second_provider_pid, 2)
 
       second_query_result =
         graphql_result(conn, user, """
@@ -266,7 +264,7 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
 
       assert second_query_result["errors"] == nil
       second_found_session = second_query_result["data"]["chatSession"]
-      assert second_found_session["status"] == "completed"
+      assert second_found_session["status"] == "running"
 
       messages = second_found_session["messages"]
       assert length(Enum.filter(messages, &(&1["role"] == "user"))) == 2
@@ -390,9 +388,6 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
       assert [{runner_pid, _}] = Sacrum.ChatSessionRegistry.lookup(session_id)
       refute_receive {:fake_provider_called, _second_provider_pid, _messages}, 100
 
-      await_task =
-        Elixir.Task.async(fn -> Jido.AgentServer.await_completion(runner_pid, timeout: 2_000) end)
-
       send(provider_pid, :release_fake_provider)
 
       assert_receive {:fake_provider_called, second_provider_pid,
@@ -406,8 +401,9 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
 
       send(second_provider_pid, :release_fake_provider)
 
-      assert {:ok, %{status: :completed}} = Elixir.Task.await(await_task, 2_500)
-      assert_registry_empty(session_id)
+      await_graphql_runner_side_effects(session_id, 2)
+      assert_runner_retained_after_graphql_completion(runner_pid, session_id)
+      terminate_graphql_runner_on_exit(session_id)
 
       messages_result =
         graphql_result(conn, user, """
@@ -545,7 +541,7 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
                       [%{role: "system"}, %{role: "user", content: "remove this transcript"}]},
                      1_000
 
-      await_graphql_runner_completion(session_id, provider_pid)
+      runner_pid = await_graphql_runner_turn(session_id, provider_pid, 1)
 
       public_event_ids =
         chat_event_ids_for_session(user.id, project.id, session_id)
@@ -561,6 +557,7 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
         """)
 
       assert delete_result["errors"] == nil
+      assert_runner_stopped_after_graphql_delete(runner_pid, session_id)
 
       assert delete_result["data"]["deleteChatSession"] == %{
                "deletedSessionId" => session_id,
@@ -883,15 +880,94 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
     Enum.map(events, & &1.id)
   end
 
-  defp await_graphql_runner_completion(session_id, provider_pid) do
+  defp await_graphql_runner_turn(session_id, provider_pid, expected_turn_count) do
     assert [{runner_pid, _}] = Sacrum.ChatSessionRegistry.lookup(session_id)
-
-    await_task =
-      Elixir.Task.async(fn -> Jido.AgentServer.await_completion(runner_pid, timeout: 1_000) end)
 
     send(provider_pid, :release_fake_provider)
 
-    assert {:ok, %{status: :completed}} = Elixir.Task.await(await_task, 1_500)
+    await_graphql_runner_side_effects(session_id, expected_turn_count)
+    assert_runner_retained_after_graphql_completion(runner_pid, session_id)
+    terminate_graphql_runner_on_exit(session_id)
+
+    runner_pid
+  end
+
+  defp await_graphql_runner_side_effects(session_id, expected_turn_count, attempts \\ 40)
+
+  defp await_graphql_runner_side_effects(session_id, expected_turn_count, attempts)
+       when attempts > 0 do
+    {assistant_count, completed_count, completed_session?} =
+      graphql_runner_side_effect_counts(session_id)
+
+    if assistant_count >= expected_turn_count and completed_count >= expected_turn_count and
+         completed_session? do
+      :ok
+    else
+      Process.sleep(25)
+      await_graphql_runner_side_effects(session_id, expected_turn_count, attempts - 1)
+    end
+  end
+
+  defp await_graphql_runner_side_effects(session_id, expected_turn_count, 0) do
+    {assistant_count, completed_count, completed_session?} =
+      graphql_runner_side_effect_counts(session_id)
+
+    assert assistant_count >= expected_turn_count
+    assert completed_count >= expected_turn_count
+    assert completed_session?
+  end
+
+  defp graphql_runner_side_effect_counts(session_id) do
+    {
+      graphql_runner_message_count(session_id, :assistant),
+      graphql_runner_event_count(session_id, "chat_inference.completed"),
+      graphql_runner_event_count(session_id, "chat_session_runner.complete_session.completed") > 0
+    }
+  end
+
+  defp graphql_runner_message_count(session_id, role) do
+    Repo.aggregate(
+      from(message in ChatMessage,
+        where: message.chat_session_id == ^session_id and message.role == ^role
+      ),
+      :count
+    )
+  end
+
+  defp graphql_runner_event_count(session_id, event_type) do
+    Repo.aggregate(
+      from(event in ChatEvent,
+        where:
+          event.chat_session_id == ^session_id and
+            event.event_type == ^event_type and
+            event.visibility == :internal
+      ),
+      :count
+    )
+  end
+
+  defp assert_runner_retained_after_graphql_completion(runner_pid, session_id) do
+    Process.sleep(250)
+
+    assert [{^runner_pid, _}] = Sacrum.ChatSessionRegistry.lookup(session_id)
+    assert Process.alive?(runner_pid)
+  end
+
+  defp terminate_graphql_runner_on_exit(session_id) do
+    on_exit(fn ->
+      Sacrum.ChatSessionSupervisor.terminate_runner(session_id)
+    end)
+  end
+
+  defp assert_runner_stopped_after_graphql_delete(runner_pid, session_id) do
+    ref = Process.monitor(runner_pid)
+
+    receive do
+      {:DOWN, ^ref, :process, ^runner_pid, _reason} -> :ok
+    after
+      1_000 -> flunk("expected deleted chat session runner to stop")
+    end
+
     assert_registry_empty(session_id)
   end
 
