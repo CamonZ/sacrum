@@ -84,6 +84,18 @@ defmodule Sacrum.ChatSessionRunnerTest do
     end
   end
 
+  defmodule FailingDirectTrackerExecutor do
+    def execute(operation) do
+      {:error,
+       {:tracker_executor_failed,
+        %{
+          operation: operation,
+          provider_request: %{"messages" => ["raw prompt"], "api_key" => "sk-test-secret"},
+          stacktrace: ["/tmp/sacrum/lib/private_runner.ex:42"]
+        }}}
+    end
+  end
+
   defp create_user(prefix \\ "chat-session-runner") do
     suffix = System.unique_integer([:positive])
     username_prefix = String.replace(prefix, "-", "_")
@@ -320,8 +332,13 @@ defmodule Sacrum.ChatSessionRunnerTest do
       assert [{^pid, _}] = Sacrum.ChatSessionRegistry.lookup(session.id)
 
       assert_public_activity_phases(user, project, session, user_message.id, [
+        "accepted_turn",
         "invoking_model",
+        "executing_tool",
+        "applying_tracker_operation",
+        "continuing_after_tool_result",
         "invoking_model",
+        "composing_answer",
         "completed"
       ])
 
@@ -332,6 +349,82 @@ defmodule Sacrum.ChatSessionRunnerTest do
                {:status, "Chat session started."},
                {:assistant, "I read the tracker item and can continue from the tool result."},
                {:status, "Chat turn completed."}
+             ]
+    end
+
+    test "direct tracker failure emits sanitized public failed activity without transcript leakage",
+         %{
+           user: user,
+           project: project,
+           session: session,
+           user_message: user_message
+         } do
+      operation =
+        ChatSessionRunnerFixtures.show_task_directive(
+          %{user: user, project: project, session: session},
+          "tool-call-failure-1"
+        )
+
+      original_executor = Application.get_env(:sacrum, :direct_tracker_operation_executor)
+
+      Application.put_env(
+        :sacrum,
+        :direct_tracker_operation_executor,
+        FailingDirectTrackerExecutor
+      )
+
+      on_exit(fn ->
+        if is_nil(original_executor) do
+          Application.delete_env(:sacrum, :direct_tracker_operation_executor)
+        else
+          Application.put_env(:sacrum, :direct_tracker_operation_executor, original_executor)
+        end
+
+        Sacrum.ChatSessionSupervisor.terminate_runner(session.id)
+      end)
+
+      assert {:ok, _pid} =
+               Sacrum.ChatSessionSupervisor.start_runner(session.id,
+                 inference_opts: [
+                   provider: DirectTrackerProvider,
+                   test_pid: self(),
+                   direct_tracker_operation: operation
+                 ]
+               )
+
+      assert_receive {:direct_tracker_provider_called,
+                      [%{role: "system"}, %{role: "user", content: "Plan the next step"}]},
+                     1_000
+
+      assert_event_persisted(session.id, "chat_session_runner.failed.completed")
+
+      assert {:ok, events} = LiveChat.list_public_events(user.id, project.id, session.id)
+
+      failed_activity =
+        Enum.find(events, fn event ->
+          event.event_type == "chat_runner_activity.failed" and
+            event.public_payload["turn_message_id"] == user_message.id
+        end)
+
+      refute is_nil(failed_activity)
+      assert failed_activity.visibility == :public
+      assert failed_activity.public_payload["phase"] == "failed"
+      assert failed_activity.public_payload["status"] == "failed"
+
+      failed_payload_json = Jason.encode!(failed_activity.public_payload)
+      refute failed_payload_json =~ "tracker_executor_failed"
+      refute failed_payload_json =~ "raw prompt"
+      refute failed_payload_json =~ "api_key"
+      refute failed_payload_json =~ "sk-test-secret"
+      refute failed_payload_json =~ "/tmp/sacrum"
+      refute failed_payload_json =~ "show_task"
+      refute failed_payload_json =~ "tool-call-failure-1"
+
+      {:ok, messages} = ChatMessages.list_for_session(session, include_private: true)
+
+      assert Enum.map(messages, &{&1.role, &1.content}) == [
+               {:user, "Plan the next step"},
+               {:status, "Chat session started."}
              ]
     end
 

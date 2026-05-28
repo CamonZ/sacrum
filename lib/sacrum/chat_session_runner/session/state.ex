@@ -5,7 +5,7 @@ defmodule Sacrum.ChatSessionRunner.Session.State do
 
   alias Sacrum.Accounts.{ChatEvents, ChatSessions}
   alias Sacrum.Chat.PublicEvents
-  alias Sacrum.ChatSessionRunner.Events.Checkpoints
+  alias Sacrum.ChatSessionRunner.Events.{ActivityEvents, Checkpoints}
   alias Sacrum.ChatSessionRunner.Session.Turn
   alias Sacrum.ChatSessionRunner.Transcript.Messages
   alias Sacrum.ChatSessions.Status, as: ChatSessionStatus
@@ -116,6 +116,7 @@ defmodule Sacrum.ChatSessionRunner.Session.State do
 
         with {:continue, session} <- ensure_runnable(session),
              {:ok, failed_session} <- update_session_with_event(session, %{status: :failed}),
+             {:ok, _activity_event} <- append_failed_activity(failed_session),
              {:ok, _events} <-
                Checkpoints.checkpoint_step(failed_session, :failed, %{"reason" => failed_reason}) do
           :ok
@@ -174,6 +175,20 @@ defmodule Sacrum.ChatSessionRunner.Session.State do
 
       {:error, :not_found} ->
         false
+    end
+  end
+
+  defp append_failed_activity(%ChatSession{} = session) do
+    details =
+      Map.put(failed_activity_turn_details(session), "display", %{"label" => "Failed"})
+
+    ChatEvents.append_to_session(session, ActivityEvents.failed_attrs(session, details))
+  end
+
+  defp failed_activity_turn_details(%ChatSession{} = session) do
+    case Turn.latest_user_message(session) do
+      {:ok, user_message} -> %{"turn_message_id" => user_message.id}
+      {:error, :not_found} -> %{}
     end
   end
 end

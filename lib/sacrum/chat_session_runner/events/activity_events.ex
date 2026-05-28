@@ -39,6 +39,22 @@ defmodule Sacrum.ChatSessionRunner.Events.ActivityEvents do
     activity_attrs(session, "accepted_turn", "queued", details)
   end
 
+  @spec ensure_accepted_turn(ChatSession.t(), details()) ::
+          {:ok, ChatEvent.t()} | {:error, term()}
+  def ensure_accepted_turn(%ChatSession{} = session, details) when is_map(details) do
+    case activity_for_turn(
+           session,
+           "accepted_turn",
+           fetch_detail(details, "turn_message_id", :turn_message_id)
+         ) do
+      {:ok, event} ->
+        {:ok, event}
+
+      {:error, :not_found} ->
+        ChatEvents.append_to_session(session, accepted_turn_attrs(session, details))
+    end
+  end
+
   @spec invoking_model_attrs(ChatSession.t(), details()) :: attrs()
   def invoking_model_attrs(%ChatSession{} = session, details) when is_map(details) do
     activity_attrs(session, "invoking_model", "running", details)
@@ -107,8 +123,15 @@ defmodule Sacrum.ChatSessionRunner.Events.ActivityEvents do
 
   defp completed_for_turn(%ChatSession{} = session, turn_message_id)
        when is_binary(turn_message_id) do
+    activity_for_turn(session, "completed", turn_message_id)
+  end
+
+  defp completed_for_turn(%ChatSession{}, _turn_message_id), do: {:error, :not_found}
+
+  defp activity_for_turn(%ChatSession{} = session, phase, turn_message_id)
+       when is_binary(phase) and is_binary(turn_message_id) do
     session
-    |> completed_for_turn_query(turn_message_id)
+    |> activity_for_turn_query(phase, turn_message_id)
     |> Repo.one()
     |> case do
       nil -> {:error, :not_found}
@@ -116,14 +139,14 @@ defmodule Sacrum.ChatSessionRunner.Events.ActivityEvents do
     end
   end
 
-  defp completed_for_turn(%ChatSession{}, _turn_message_id), do: {:error, :not_found}
+  defp activity_for_turn(%ChatSession{}, _phase, _turn_message_id), do: {:error, :not_found}
 
-  defp completed_for_turn_query(%ChatSession{} = session, turn_message_id) do
+  defp activity_for_turn_query(%ChatSession{} = session, phase, turn_message_id) do
     from event in ChatEvent,
       where:
         event.user_id == ^session.user_id and event.project_id == ^session.project_id and
           event.chat_session_id == ^session.id and
-          event.event_type == "chat_runner_activity.completed" and
+          event.event_type == ^"chat_runner_activity.#{phase}" and
           event.visibility == :public and
           fragment("?->>'turn_message_id' = ?", event.public_payload, ^turn_message_id),
       order_by: [asc: event.inserted_at, asc: event.id],

@@ -30,6 +30,7 @@ defmodule Sacrum.ChatSessionRunner.Actions.AcceptUserTurn do
   alias Sacrum.Chat.PublicEvents
   alias Sacrum.ChatSessionRunner.Actions
   alias Sacrum.ChatSessionRunner.Actions.Failure
+  alias Sacrum.ChatSessionRunner.Events.ActivityEvents
   alias Sacrum.ChatSessionRunner.Pipeline
   alias Sacrum.ChatSessionRunner.Session.Turn
   alias Sacrum.ChatSessionRunner.Signals
@@ -43,6 +44,7 @@ defmodule Sacrum.ChatSessionRunner.Actions.AcceptUserTurn do
          {:ok, messages} <- ChatMessages.list_for_session(session, include_private: true),
          defer_next_turn? = current_turn_in_flight?(session, messages),
          {:ok, message} <- persist_turn(session, params),
+         {:ok, _activity_event} <- append_accepted_turn_activity(session, message, params),
          {:ok, session} <- Pipeline.intake(session, params.engine_session_ref) do
       result = %{
         step: :accept_user_turn,
@@ -117,5 +119,16 @@ defmodule Sacrum.ChatSessionRunner.Actions.AcceptUserTurn do
         {:error, reason} -> Repo.rollback(reason)
       end
     end)
+  end
+
+  defp append_accepted_turn_activity(session, message, params) do
+    ActivityEvents.ensure_accepted_turn(
+      session,
+      %{
+        "turn_message_id" => message.id,
+        "client_message_id" => Map.get(params, :client_message_id),
+        "display" => %{"label" => "Accepted turn"}
+      }
+    )
   end
 end

@@ -68,6 +68,7 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
   @spec load_messages(ChatSession.t()) :: {:ok, [ChatMessage.t()]} | {:error, term()}
   def load_messages(%ChatSession{} = session) do
     with {:ok, messages} <- Messages.list_for_session(session, include_private: true),
+         {:ok, _activity_event} <- ensure_latest_turn_accepted_activity(session, messages),
          {:ok, _events} <-
            Checkpoints.checkpoint_step(session, :load_messages, %{
              "message_count" => length(messages)
@@ -103,7 +104,9 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
     turn_message_id = turn_message_id || Turn.latest_user_message_id!(session)
     attrs = Messages.assistant_message_attrs(inference_result, turn_message_id)
 
-    with {:ok, message} <- Messages.ensure_message(session, attrs),
+    with {:ok, _activity_event} <-
+           append_composing_answer_activity(session, %{"turn_message_id" => turn_message_id}),
+         {:ok, message} <- Messages.ensure_message(session, attrs),
          {:ok, _event} <- MessageEvents.ensure_public_message_event(session, message),
          {:ok, _event} <-
            InferenceEvents.append_inference_completed_event(session, message, inference_result),
@@ -156,6 +159,10 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
 
     with {:ok, events} <-
            execute_direct_tracker_operation(session, inference_result, turn_message_id),
+         {:ok, _activity_event} <-
+           append_continuing_after_tool_result_activity(session, %{
+             "turn_message_id" => turn_message_id
+           }),
          {:ok, messages} <- Messages.list_for_session(session, include_private: true),
          {:ok, continuation_messages} <-
            DirectTrackerContinuation.messages(inference_result.internal_metadata, events) do
@@ -196,10 +203,13 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
          turn_message_id
        )
        when is_list(provider_messages) and is_list(inference_opts) and is_atom(checkpoint_step) do
-    with {:ok, result} <- Inference.generate(provider_messages, inference_opts),
+    turn_message_id = turn_message_id || Keyword.get(inference_opts, :source_message_id)
+    metadata = inference_request_public_metadata(inference_opts, turn_message_id)
+
+    with {:ok, _activity_event} <- append_invoking_model_activity(session, metadata),
+         {:ok, result} <- Inference.generate(provider_messages, inference_opts),
          {:ok, refreshed_session} <- State.refresh_runnable_session(session),
          metadata = inference_public_metadata(result, turn_message_id),
-         {:ok, _activity_event} <- append_invoking_model_activity(refreshed_session, metadata),
          {:ok, _events} <-
            Checkpoints.checkpoint_step(refreshed_session, checkpoint_step, metadata) do
       {:ok, refreshed_session, result}
@@ -273,12 +283,59 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
     }
   end
 
+  defp inference_request_public_metadata(inference_opts, turn_message_id) do
+    provider = Keyword.get(inference_opts, :provider)
+
+    %{
+      "provider" => provider_name(provider),
+      "model" => Keyword.get(inference_opts, :model),
+      "turn_message_id" => turn_message_id
+    }
+  end
+
+  defp provider_name(provider) when is_binary(provider), do: provider
+  defp provider_name(_provider), do: nil
+
   defp append_invoking_model_activity(%ChatSession{} = session, metadata) do
     details = Map.put(metadata, "display", %{"label" => "Invoking model"})
 
     ChatEvents.append_to_session(
       session,
       ActivityEvents.invoking_model_attrs(session, details)
+    )
+  end
+
+  defp ensure_latest_turn_accepted_activity(%ChatSession{} = session, messages) do
+    case Turn.turn_message_id(messages) do
+      turn_message_id when is_binary(turn_message_id) ->
+        message = Enum.find(messages, &(&1.id == turn_message_id))
+
+        ActivityEvents.ensure_accepted_turn(session, %{
+          "turn_message_id" => turn_message_id,
+          "client_message_id" => message.client_message_id,
+          "display" => %{"label" => "Accepted turn"}
+        })
+
+      nil ->
+        {:ok, nil}
+    end
+  end
+
+  defp append_continuing_after_tool_result_activity(%ChatSession{} = session, metadata) do
+    details = Map.put(metadata, "display", %{"label" => "Continuing after tool result"})
+
+    ChatEvents.append_to_session(
+      session,
+      ActivityEvents.continuing_after_tool_result_attrs(session, details)
+    )
+  end
+
+  defp append_composing_answer_activity(%ChatSession{} = session, metadata) do
+    details = Map.put(metadata, "display", %{"label" => "Composing answer"})
+
+    ChatEvents.append_to_session(
+      session,
+      ActivityEvents.composing_answer_attrs(session, details)
     )
   end
 

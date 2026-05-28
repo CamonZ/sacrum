@@ -3,8 +3,10 @@ defmodule Sacrum.ChatSessionRunner.DirectTracker.Runner do
   Coordinates direct tracker execution from verified inference metadata.
   """
 
+  alias Sacrum.Accounts.ChatEvents
   alias Sacrum.Chat.Inference
   alias Sacrum.ChatSessionRunner.DirectTracker.{Events, Operations}
+  alias Sacrum.ChatSessionRunner.Events.ActivityEvents
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{ChatEvent, ChatSession}
 
@@ -80,11 +82,54 @@ defmodule Sacrum.ChatSessionRunner.DirectTracker.Runner do
         {:ok, event}
 
       :error ->
-        with {:ok, result} <- executor().execute(operation) do
+        with {:ok, _executing_event} <-
+               append_activity(session, operation, extra_public_payload, :executing_tool),
+             {:ok, result} <- executor().execute(operation),
+             {:ok, _applying_event} <-
+               append_activity(
+                 session,
+                 operation,
+                 extra_public_payload,
+                 :applying_tracker_operation
+               ) do
           Events.append_completed(session, operation, result, extra_public_payload)
         end
     end
   end
+
+  defp append_activity(%ChatSession{} = session, operation, extra_public_payload, phase)
+       when phase in [:executing_tool, :applying_tracker_operation] do
+    details =
+      extra_public_payload
+      |> Map.take(["turn_message_id", "assistant_message_id"])
+      |> Map.merge(%{
+        "tool_name" => tool_name(operation),
+        "operation" => operation_name(operation),
+        "display" => %{"label" => activity_label(phase)}
+      })
+
+    attrs =
+      case phase do
+        :executing_tool ->
+          ActivityEvents.executing_tool_attrs(session, details)
+
+        :applying_tracker_operation ->
+          ActivityEvents.applying_tracker_operation_attrs(session, details)
+      end
+
+    ChatEvents.append_to_session(session, attrs)
+  end
+
+  defp tool_name(%{tool_name: tool_name}) when is_binary(tool_name), do: tool_name
+  defp tool_name(%{tool_call: %{"function" => %{"name" => name}}}) when is_binary(name), do: name
+  defp tool_name(_operation), do: nil
+
+  defp operation_name(%{action: action}) when is_atom(action), do: Atom.to_string(action)
+  defp operation_name(%{action: action}) when is_binary(action), do: action
+  defp operation_name(_operation), do: nil
+
+  defp activity_label(:executing_tool), do: "Executing tool"
+  defp activity_label(:applying_tracker_operation), do: "Applying tracker operation"
 
   defp executor do
     Application.get_env(
