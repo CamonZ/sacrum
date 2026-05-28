@@ -159,8 +159,7 @@ defmodule Sacrum.ChatSessionRunnerTest do
       send(provider_pid, {:release_blocking_provider, "Supervised assistant output"})
       assert_event_persisted(session.id, "chat_session_runner.complete_session.completed")
 
-      assert [{^pid, _}] = Sacrum.ChatSessionRegistry.lookup(session.id)
-      assert Process.alive?(pid)
+      assert_runner_retained_after_completion(pid, session.id)
       on_exit(fn -> Sacrum.ChatSessionSupervisor.terminate_runner(session.id) end)
 
       {:ok, completed_session} = ChatSessions.get_session(user.id, project.id, session.id)
@@ -250,8 +249,7 @@ defmodule Sacrum.ChatSessionRunnerTest do
       send(provider_pid, {:release_blocking_provider, "First turn answer"})
       assert_event_persisted(session.id, "chat_session_runner.complete_session.completed")
 
-      assert [{^pid, _}] = Sacrum.ChatSessionRegistry.lookup(session.id)
-      assert Process.alive?(pid)
+      assert_runner_retained_after_completion(pid, session.id)
 
       second_message_id = Ecto.UUID.generate()
 
@@ -445,8 +443,7 @@ defmodule Sacrum.ChatSessionRunnerTest do
       send(provider_pid, {:release_blocking_provider, "Answer before cancellation"})
       assert_event_persisted(session.id, "chat_session_runner.complete_session.completed")
 
-      assert [{^pid, _}] = Sacrum.ChatSessionRegistry.lookup(session.id)
-      assert Process.alive?(pid)
+      assert_runner_retained_after_completion(pid, session.id)
 
       assert {:ok, cancelled_session} = LiveChat.cancel_session(user.id, project.id, session.id)
       assert cancelled_session.status == :cancelled
@@ -473,8 +470,7 @@ defmodule Sacrum.ChatSessionRunnerTest do
       send(provider_pid, {:release_blocking_provider, "Answer before deletion"})
       assert_event_persisted(session.id, "chat_session_runner.complete_session.completed")
 
-      assert [{^pid, _}] = Sacrum.ChatSessionRegistry.lookup(session.id)
-      assert Process.alive?(pid)
+      assert_runner_retained_after_completion(pid, session.id)
 
       assert {:ok, deleted_session} = LiveChat.delete_session(user.id, project.id, session.id)
       assert deleted_session.id == session.id
@@ -763,6 +759,13 @@ defmodule Sacrum.ChatSessionRunnerTest do
     assert [{^pid, _}] = Sacrum.ChatSessionRegistry.lookup(chat_session_id)
 
     pid
+  end
+
+  defp assert_runner_retained_after_completion(pid, chat_session_id) do
+    Process.sleep(250)
+
+    assert [{^pid, _}] = Sacrum.ChatSessionRegistry.lookup(chat_session_id)
+    assert Process.alive?(pid)
   end
 
   defp assert_runner_stopped(pid, chat_session_id) do

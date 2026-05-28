@@ -52,7 +52,6 @@ defmodule Sacrum.ChatSessionRunner do
   alias Sacrum.ChatSessionRunner.Actions.InvokeInference
 
   @engine_session_ref_prefix "jido_agent_server:"
-  @completion_cleanup_delay_ms 100
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -79,7 +78,6 @@ defmodule Sacrum.ChatSessionRunner do
 
     with {:ok, pid} <- Jido.AgentServer.start_link(agent_opts),
          :ok <- Jido.AgentServer.cast(pid, initial_signal) do
-      start_completion_cleanup(pid)
       {:ok, pid}
     else
       {:error, reason} = error ->
@@ -114,35 +112,4 @@ defmodule Sacrum.ChatSessionRunner do
   end
 
   def on_before_cmd(agent, action), do: {:ok, agent, action}
-
-  @spec start_completion_cleanup(pid()) :: :ok
-  defp start_completion_cleanup(pid) when is_pid(pid) do
-    Task.start(fn -> await_completion_and_stop(pid) end)
-    :ok
-  end
-
-  @spec await_completion_and_stop(pid()) :: :ok
-  defp await_completion_and_stop(pid) do
-    case Jido.AgentServer.await_completion(pid, timeout: :infinity) do
-      {:ok, _completion} ->
-        Process.sleep(@completion_cleanup_delay_ms)
-        stop_agent_server(pid)
-
-      {:error, _reason} ->
-        :ok
-    end
-  catch
-    :exit, _reason -> :ok
-  end
-
-  @spec stop_agent_server(pid()) :: :ok
-  defp stop_agent_server(pid) do
-    if Process.alive?(pid) do
-      GenServer.stop(pid, :normal, 5_000)
-    else
-      :ok
-    end
-  catch
-    :exit, _reason -> :ok
-  end
 end
