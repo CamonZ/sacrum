@@ -110,16 +110,27 @@ defmodule Sacrum.ChatSessionRunner.Session.State do
 
   @spec surface_failure(String.t(), term()) :: :ok | {:error, term()}
   def surface_failure(chat_session_id, reason) when is_binary(chat_session_id) do
+    case surface_failure_activity(chat_session_id, reason, %{}) do
+      {:ok, _activity_event} -> :ok
+      :ok -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @spec surface_failure_activity(String.t(), term(), map()) ::
+          {:ok, ChatEvent.t()} | :ok | {:error, term()}
+  def surface_failure_activity(chat_session_id, reason, activity_details)
+      when is_binary(chat_session_id) and is_map(activity_details) do
     case ChatSessionsRepo.get(chat_session_id) do
       {:ok, %ChatSession{} = session} ->
         failed_reason = inspect(reason)
 
         with {:continue, session} <- ensure_runnable(session),
              {:ok, failed_session} <- update_session_with_event(session, %{status: :failed}),
-             {:ok, _activity_event} <- append_failed_activity(failed_session),
+             {:ok, activity_event} <- append_failed_activity(failed_session, activity_details),
              {:ok, _events} <-
                Checkpoints.checkpoint_step(failed_session, :failed, %{"reason" => failed_reason}) do
-          :ok
+          {:ok, activity_event}
         else
           {:halt, _session, _reason} -> :ok
           {:error, failure_reason} -> {:error, failure_reason}
@@ -178,9 +189,12 @@ defmodule Sacrum.ChatSessionRunner.Session.State do
     end
   end
 
-  defp append_failed_activity(%ChatSession{} = session) do
+  defp append_failed_activity(%ChatSession{} = session, activity_details) do
     details =
-      Map.put(failed_activity_turn_details(session), "display", %{"label" => "Failed"})
+      session
+      |> failed_activity_turn_details()
+      |> Map.merge(activity_details)
+      |> Map.put("display", %{"label" => "Failed"})
 
     ChatEvents.append_to_session(session, ActivityEvents.failed_attrs(session, details))
   end

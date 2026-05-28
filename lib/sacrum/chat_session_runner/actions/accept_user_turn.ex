@@ -32,6 +32,7 @@ defmodule Sacrum.ChatSessionRunner.Actions.AcceptUserTurn do
   alias Sacrum.ChatSessionRunner.Actions.Failure
   alias Sacrum.ChatSessionRunner.Events.ActivityEvents
   alias Sacrum.ChatSessionRunner.Pipeline
+  alias Sacrum.ChatSessionRunner.Session.State
   alias Sacrum.ChatSessionRunner.Session.Turn
   alias Sacrum.ChatSessionRunner.Signals
   alias Sacrum.Repo
@@ -87,14 +88,27 @@ defmodule Sacrum.ChatSessionRunner.Actions.AcceptUserTurn do
     end
   end
 
-  defp failed_acceptance(%{chat_session_id: chat_session_id}, reason) do
-    {:ok,
-     %{
-       step: :accept_user_turn,
-       status: :failed,
-       chat_session_id: chat_session_id,
-       error: reason
-     }}
+  defp failed_acceptance(%{chat_session_id: chat_session_id} = params, reason) do
+    activity_details =
+      %{
+        "turn_message_id" => Map.get(params, :message_id),
+        "client_message_id" => Map.get(params, :client_message_id)
+      }
+      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+      |> Map.new()
+
+    result = %{
+      step: :accept_user_turn,
+      status: :failed,
+      chat_session_id: chat_session_id,
+      error: reason
+    }
+
+    case State.surface_failure_activity(chat_session_id, reason, activity_details) do
+      {:ok, activity_event} -> {:ok, Map.put(result, :activity, activity_event)}
+      :ok -> {:ok, result}
+      {:error, _failure_reason} -> {:ok, result}
+    end
   end
 
   defp persist_turn(session, params) do

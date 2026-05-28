@@ -15,7 +15,7 @@ defmodule Sacrum.Accounts.LiveChatRunnerStartTest do
 
   alias Sacrum.ChatSessionRunner.Signals
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.{ChatMessage, StepExecution, TaskRun}
+  alias Sacrum.Repo.Schemas.{ChatEvent, ChatMessage, StepExecution, TaskRun}
   alias Sacrum.Repo.Users
 
   defmodule RecordingSignalRunner do
@@ -278,6 +278,85 @@ defmodule Sacrum.Accounts.LiveChatRunnerStartTest do
                from(execution in StepExecution, where: execution.project_id == ^project.id),
                :count
              ) == 0
+
+      assert {:ok, failed_session} = Sacrum.Repo.ChatSessions.get(session.id)
+      assert failed_session.status == :failed
+
+      assert latest_failed_activity_payload(session.id) ==
+               failed_activity_payload(session.id, rejected_message_id, "duplicate-user-turn")
+    end
+
+    test "returns terminal failed activity state with sanitized payload when duplicate client message id is rejected",
+         %{
+           user: user,
+           project: project,
+           session: session
+         } do
+      {:ok, _existing_message} =
+        LiveChat.send_message(user.id, project.id, session.id, %{
+          content: "already persisted",
+          client_message_id: "duplicate-public-payload"
+        })
+
+      assert {:ok, %{id: rejected_message_id, client_message_id: "duplicate-public-payload"}} =
+               LiveChat.send_message_and_start_runner(
+                 user.id,
+                 project.id,
+                 session.id,
+                 %{
+                   content: "this turn should fail acceptance",
+                   client_message_id: "duplicate-public-payload"
+                 },
+                 runner: PumpingAcceptanceRunner,
+                 start_opts: [
+                   test_pid: self(),
+                   inference_opts: [
+                     provider: ForbiddenInferenceProvider,
+                     test_pid: self(),
+                     task_id: Ecto.UUID.generate()
+                   ]
+                 ]
+               )
+
+      assert_receive {:runner_action_started, started_signal_type}
+
+      assert_receive {:runner_action_result, result_signal_type,
+                      %{
+                        step: :accept_user_turn,
+                        status: :failed,
+                        chat_session_id: chat_session_id,
+                        activity: %{
+                          event_type: "chat_runner_activity.failed",
+                          public_payload: returned_payload
+                        }
+                      }}
+
+      assert result_signal_type == started_signal_type
+      assert result_signal_type == Signals.user_turn()
+      assert chat_session_id == session.id
+      refute_received {:runner_action_started, _downstream}
+      refute_receive {:forbidden_inference_called, _messages}
+      refute_received {:tracker_operation_executed, _operation}
+
+      assert {:ok, failed_session} = Sacrum.Repo.ChatSessions.get(session.id)
+      assert failed_session.status == :failed
+
+      persisted_payload = latest_failed_activity_payload(session.id)
+
+      assert returned_payload == persisted_payload
+
+      assert persisted_payload ==
+               failed_activity_payload(
+                 session.id,
+                 rejected_message_id,
+                 "duplicate-public-payload"
+               )
+
+      refute Map.has_key?(persisted_payload, "reason")
+      refute Map.has_key?(persisted_payload, "error")
+      refute Map.has_key?(persisted_payload, "raw_reason")
+      refute inspect(persisted_payload) =~ "unique"
+      refute inspect(persisted_payload) =~ "constraint"
     end
   end
 
@@ -298,6 +377,37 @@ defmodule Sacrum.Accounts.LiveChatRunnerStartTest do
 
       Application.delete_env(:sacrum, :direct_tracker_operation_executor_test_pid)
     end)
+  end
+
+  defp latest_failed_activity_payload(chat_session_id) do
+    assert %ChatEvent{
+             event_type: "chat_runner_activity.failed",
+             visibility: :public,
+             public_payload: payload,
+             internal_payload: %{}
+           } =
+             Repo.one!(
+               from(event in ChatEvent,
+                 where:
+                   event.chat_session_id == ^chat_session_id and
+                     event.event_type == "chat_runner_activity.failed",
+                 order_by: [desc: event.inserted_at, desc: event.id],
+                 limit: 1
+               )
+             )
+
+    payload
+  end
+
+  defp failed_activity_payload(chat_session_id, turn_message_id, client_message_id) do
+    %{
+      "chat_session_id" => chat_session_id,
+      "phase" => "failed",
+      "status" => "failed",
+      "turn_message_id" => turn_message_id,
+      "client_message_id" => client_message_id,
+      "display" => %{"label" => "Failed"}
+    }
   end
 
   defp create_user do
