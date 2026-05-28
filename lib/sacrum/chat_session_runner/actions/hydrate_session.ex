@@ -12,7 +12,8 @@ defmodule Sacrum.ChatSessionRunner.Actions.HydrateSession do
     schema: [
       chat_session_id: [type: :string, required: true],
       engine_session_ref: [type: :string, required: true],
-      inference_opts: [type: :any, default: []]
+      inference_opts: [type: :any, default: []],
+      queued_user_turn_signal: [type: :any]
     ]
 
   alias Sacrum.ChatSessionRunner.Actions
@@ -29,6 +30,7 @@ defmodule Sacrum.ChatSessionRunner.Actions.HydrateSession do
         chat_session_id: snapshot.chat_session_id,
         engine_session_ref: params.engine_session_ref,
         inference_opts: params.inference_opts,
+        queued_user_turn_signal: queued_user_turn_signal(params, snapshot),
         hydration: snapshot
       }
 
@@ -38,11 +40,17 @@ defmodule Sacrum.ChatSessionRunner.Actions.HydrateSession do
 
   defp maybe_emit_next(result, snapshot, params) do
     if snapshot.next_signal in [nil, Signals.noop()] do
-      {:ok, result}
+      maybe_emit_queued_user_turn(result, params)
     else
       emit_next(result, snapshot, params)
     end
   end
+
+  defp maybe_emit_queued_user_turn(result, %{queued_user_turn_signal: %Jido.Signal{} = signal}) do
+    {:ok, Map.put(result, :queued_user_turn_signal, nil), [Actions.emit(signal)]}
+  end
+
+  defp maybe_emit_queued_user_turn(result, _params), do: {:ok, result}
 
   defp emit_next(result, snapshot, params) do
     directive =
@@ -61,4 +69,10 @@ defmodule Sacrum.ChatSessionRunner.Actions.HydrateSession do
        do: :idle
 
   defp agent_status(_snapshot), do: :running
+
+  defp queued_user_turn_signal(%{queued_user_turn_signal: %Jido.Signal{} = signal}, snapshot) do
+    if snapshot.next_signal in [nil, Signals.noop()], do: nil, else: signal
+  end
+
+  defp queued_user_turn_signal(_params, _snapshot), do: nil
 end

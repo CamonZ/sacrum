@@ -5,6 +5,8 @@ defmodule Sacrum.ChatSessionSupervisor do
 
   use DynamicSupervisor
 
+  alias Sacrum.ChatSessionRunner.Actions
+
   @spec start_link(keyword()) :: Supervisor.on_start()
   def start_link(opts) do
     DynamicSupervisor.start_link(__MODULE__, opts, name: __MODULE__)
@@ -34,7 +36,17 @@ defmodule Sacrum.ChatSessionSupervisor do
         end
 
       [] ->
-        start_runner(chat_session_id, Keyword.put(opts, :initial_signal, signal))
+        inference_opts =
+          Keyword.get(opts, :inference_opts, Map.get(signal.data, :inference_opts, []))
+
+        engine_session_ref = Sacrum.ChatSessionRunner.agent_id(chat_session_id)
+
+        initial_signal =
+          Actions.hydrate_session_signal(chat_session_id, engine_session_ref, inference_opts,
+            queued_user_turn_signal: signal
+          )
+
+        start_runner(chat_session_id, Keyword.put(opts, :initial_signal, initial_signal))
     end
   end
 

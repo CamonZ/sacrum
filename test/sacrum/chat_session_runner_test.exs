@@ -631,6 +631,160 @@ defmodule Sacrum.ChatSessionRunnerTest do
 
       assert second_event_count == first_event_count
     end
+
+    test "send message replacement startup hydrates and resumes an accepted pending turn before the new turn",
+         %{user: user, project: project} do
+      {:ok, session} = LiveChat.create_session(user.id, project.id, %{})
+
+      assert {:ok, %{id: first_message_id}} =
+               LiveChat.send_message_and_start_runner(
+                 user.id,
+                 project.id,
+                 session.id,
+                 %{
+                   content: "Persisted turn before crash",
+                   client_message_id: "replacement-pending-first"
+                 },
+                 inference_opts: [provider: BlockingProvider, test_pid: self()]
+               )
+
+      assert_receive {:blocking_provider_started, first_provider_pid,
+                      [%{role: "system"}, %{role: "user", content: "Persisted turn before crash"}]},
+                     1_000
+
+      assert :ok = Sacrum.ChatSessionSupervisor.terminate_runner(session.id)
+      assert_registry_empty(session.id)
+
+      assert {:ok, %{id: second_message_id}} =
+               LiveChat.send_message_and_start_runner(
+                 user.id,
+                 project.id,
+                 session.id,
+                 %{
+                   content: "New turn after replacement",
+                   client_message_id: "replacement-pending-second"
+                 },
+                 inference_opts: [provider: BlockingProvider, test_pid: self()]
+               )
+
+      refute first_message_id == second_message_id
+
+      assert_receive {:blocking_provider_started, replacement_first_provider_pid,
+                      [%{role: "system"}, %{role: "user", content: "Persisted turn before crash"}]},
+                     1_000
+
+      refute replacement_first_provider_pid == first_provider_pid
+      send(replacement_first_provider_pid, {:release_blocking_provider, "Recovered first answer"})
+
+      assert_event_persisted(
+        session.id,
+        "chat_session_runner.complete_session.completed",
+        turn_message_id: first_message_id
+      )
+
+      assert_receive {:blocking_provider_started, second_provider_pid, second_messages}, 1_000
+
+      assert Enum.any?(
+               second_messages,
+               &(&1.role == "user" and &1.content == "New turn after replacement")
+             )
+
+      send(second_provider_pid, {:release_blocking_provider, "Sequenced second answer"})
+
+      assert_event_persisted(
+        session.id,
+        "chat_session_runner.complete_session.completed",
+        turn_message_id: second_message_id
+      )
+
+      on_exit(fn -> Sacrum.ChatSessionSupervisor.terminate_runner(session.id) end)
+
+      {:ok, completed_session} = ChatSessions.get_session(user.id, project.id, session.id)
+      {:ok, messages} = ChatMessages.list_for_session(completed_session, include_private: true)
+
+      assert Enum.map(Enum.filter(messages, &(&1.role == :user)), & &1.content) == [
+               "Persisted turn before crash",
+               "New turn after replacement"
+             ]
+
+      assert Enum.map(Enum.filter(messages, &(&1.role == :assistant)), & &1.content) == [
+               "Recovered first answer",
+               "Sequenced second answer"
+             ]
+
+      assert event_count(session.id, "chat_session_runner.complete_session.completed") == 4
+    end
+
+    test "send message replacement startup resumes a partial direct-tool turn before accepting the new turn",
+         %{user: user, project: project} do
+      fixture =
+        ChatSessionRunnerFixtures.partial_direct_tool_continuation_fixture(%{
+          user: user,
+          project: project
+        })
+
+      session = fixture.session
+      before_counts = replacement_side_effect_counts(session.id)
+
+      assert {:ok, %{id: new_message_id}} =
+               LiveChat.send_message_and_start_runner(
+                 user.id,
+                 project.id,
+                 session.id,
+                 %{
+                   content: "New message after partial tool crash",
+                   client_message_id: "replacement-tool-new"
+                 },
+                 inference_opts: [
+                   provider: DirectTrackerProvider,
+                   test_pid: self(),
+                   direct_tracker_operation:
+                     ChatSessionRunnerFixtures.show_task_directive(
+                       %{user: user, project: project, session: session},
+                       "tool-call-replacement-new"
+                     )
+                 ]
+               )
+
+      assert_receive {:direct_tracker_provider_called, continuation_messages}, 1_000
+      assert Enum.any?(continuation_messages, &(Map.get(&1, :role) in ["tool", :tool]))
+
+      assert_event_persisted(
+        session.id,
+        "chat_session_runner.complete_session.completed",
+        turn_message_id: fixture.turn_message_id
+      )
+
+      assert_receive {:direct_tracker_provider_called, new_turn_messages}, 1_000
+
+      assert Enum.any?(
+               new_turn_messages,
+               &(&1.role == "user" and &1.content == "New message after partial tool crash")
+             )
+
+      assert_event_persisted(
+        session.id,
+        "chat_session_runner.complete_session.completed",
+        turn_message_id: new_message_id
+      )
+
+      on_exit(fn -> Sacrum.ChatSessionSupervisor.terminate_runner(session.id) end)
+
+      after_counts = replacement_side_effect_counts(session.id)
+
+      assert after_counts.user_messages == before_counts.user_messages + 1
+      assert after_counts.assistant_messages == before_counts.assistant_messages + 2
+      assert after_counts.direct_tracker_events == before_counts.direct_tracker_events + 1
+      assert after_counts.activity_events > before_counts.activity_events
+
+      {:ok, completed_session} = ChatSessions.get_session(user.id, project.id, session.id)
+      {:ok, messages} = ChatMessages.list_for_session(completed_session, include_private: true)
+
+      assert Enum.map(Enum.filter(messages, &(&1.role == :user)), & &1.content) == [
+               "Hydrate partial-direct-tool-continuation",
+               "New message after partial tool crash"
+             ]
+    end
   end
 
   defp assert_runner_checkpoints(chat_session_id, opts \\ []) do
@@ -750,6 +904,48 @@ defmodule Sacrum.ChatSessionRunnerTest do
             event.internal_payload,
             ^turn_message_id
           )
+  end
+
+  defp replacement_side_effect_counts(chat_session_id) do
+    %{
+      user_messages: message_count(chat_session_id, :user),
+      assistant_messages: message_count(chat_session_id, :assistant),
+      direct_tracker_events:
+        event_count(
+          chat_session_id,
+          Sacrum.ChatSessionRunner.DirectTracker.Events.completed_event_type()
+        ),
+      activity_events: activity_event_count(chat_session_id)
+    }
+  end
+
+  defp message_count(chat_session_id, role) do
+    Repo.aggregate(
+      from(message in Sacrum.Repo.Schemas.ChatMessage,
+        where: message.chat_session_id == ^chat_session_id and message.role == ^role
+      ),
+      :count
+    )
+  end
+
+  defp event_count(chat_session_id, event_type) do
+    Repo.aggregate(
+      from(event in ChatEvent,
+        where: event.chat_session_id == ^chat_session_id and event.event_type == ^event_type
+      ),
+      :count
+    )
+  end
+
+  defp activity_event_count(chat_session_id) do
+    Repo.aggregate(
+      from(event in ChatEvent,
+        where:
+          event.chat_session_id == ^chat_session_id and
+            fragment("? LIKE 'chat_runner_activity.%'", event.event_type)
+      ),
+      :count
+    )
   end
 
   defp start_runner_until_turn_completed(chat_session_id, opts) do

@@ -21,12 +21,12 @@ defmodule Sacrum.ChatSessionRunner.Actions.CompleteSession do
   alias Sacrum.ChatSessionRunner.Pipeline
 
   @impl true
-  def run(params, _context) do
+  def run(params, context) do
     with {:ok, session} <- Pipeline.fetch_session(params.chat_session_id),
          {:continue, session} <- Pipeline.ensure_runnable(session),
          {:ok, completed_session} <-
            Pipeline.complete_session(session, Map.get(params, :turn_message_id)) do
-      maybe_continue_next_turn(completed_session, params)
+      maybe_continue_next_turn(completed_session, params, context)
     else
       {:halt, session, reason} ->
         {:ok,
@@ -42,7 +42,7 @@ defmodule Sacrum.ChatSessionRunner.Actions.CompleteSession do
     end
   end
 
-  defp maybe_continue_next_turn(session, params) do
+  defp maybe_continue_next_turn(session, params, context) do
     if Pipeline.pending_user_turn_after?(session, Map.get(params, :turn_message_id)) do
       directive =
         Actions.emit(Signals.intake(), %{
@@ -59,14 +59,23 @@ defmodule Sacrum.ChatSessionRunner.Actions.CompleteSession do
          last_answer: %{session: session}
        }, [directive]}
     else
-      {:ok,
-       %{
-         status: :idle,
-         activity: :turn_completed,
-         step: :complete_session,
-         chat_session_id: session.id,
-         last_answer: %{session: session}
-       }}
+      complete_idle(session, context)
+    end
+  end
+
+  defp complete_idle(session, context) do
+    result = %{
+      status: :idle,
+      activity: :turn_completed,
+      step: :complete_session,
+      chat_session_id: session.id,
+      last_answer: %{session: session},
+      queued_user_turn_signal: nil
+    }
+
+    case get_in(context, [:state, :queued_user_turn_signal]) do
+      %Jido.Signal{} = signal -> {:ok, result, [Actions.emit(signal)]}
+      _signal -> {:ok, result}
     end
   end
 end

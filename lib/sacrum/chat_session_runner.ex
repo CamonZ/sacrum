@@ -29,7 +29,8 @@ defmodule Sacrum.ChatSessionRunner do
       status: [type: :atom, default: :idle],
       chat_session_id: [type: :string],
       engine_session_ref: [type: :string],
-      inference_opts: [type: :any, default: []]
+      inference_opts: [type: :any, default: []],
+      queued_user_turn_signal: [type: :any]
     ],
     signal_routes: [
       {Signals.user_turn(), Sacrum.ChatSessionRunner.Actions.AcceptUserTurn},
@@ -66,7 +67,8 @@ defmodule Sacrum.ChatSessionRunner do
         status: :idle,
         chat_session_id: chat_session_id,
         engine_session_ref: engine_session_ref,
-        inference_opts: inference_opts
+        inference_opts: inference_opts,
+        queued_user_turn_signal: nil
       },
       register_global: false,
       name: Sacrum.ChatSessionRegistry.via_tuple(chat_session_id)
