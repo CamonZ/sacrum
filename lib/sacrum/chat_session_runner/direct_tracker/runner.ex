@@ -3,7 +3,7 @@ defmodule Sacrum.ChatSessionRunner.DirectTracker.Runner do
   Coordinates direct tracker execution from verified inference metadata.
   """
 
-  alias Sacrum.Chat.{DirectTrackerOperationExecutor, Inference}
+  alias Sacrum.Chat.Inference
   alias Sacrum.ChatSessionRunner.DirectTracker.{Events, Operations}
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{ChatEvent, ChatSession}
@@ -80,10 +80,18 @@ defmodule Sacrum.ChatSessionRunner.DirectTracker.Runner do
         {:ok, event}
 
       :error ->
-        with {:ok, result} <- DirectTrackerOperationExecutor.execute(operation) do
+        with {:ok, result} <- executor().execute(operation) do
           Events.append_completed(session, operation, result, extra_public_payload)
         end
     end
+  end
+
+  defp executor do
+    Application.get_env(
+      :sacrum,
+      :direct_tracker_operation_executor,
+      Sacrum.Chat.DirectTrackerOperationExecutor
+    )
   end
 
   defp completed_events_by_tool_call(

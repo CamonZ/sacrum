@@ -5,6 +5,7 @@ defmodule Sacrum.ChatSessionRunnerTest do
   alias Sacrum.Chat.Inference.Result
   alias Sacrum.Repo.Schemas.{ChatEvent, StepExecution, Task, TaskRun}
   alias Sacrum.Repo.Users
+  alias Sacrum.TestSupport.ChatSessionRunnerFixtures
 
   @assistant_client_message_id_prefix "chat_session_runner:assistant:v1"
   @runner_steps ~w(
@@ -49,6 +50,37 @@ defmodule Sacrum.ChatSessionRunnerTest do
       end
 
       {:ok, %Result{content: "Unexpected duplicate output"}}
+    end
+  end
+
+  defmodule DirectTrackerProvider do
+    @behaviour Sacrum.Chat.Inference.Provider
+
+    @impl true
+    def generate(messages, opts) do
+      test_pid = Keyword.fetch!(opts, :test_pid)
+      send(test_pid, {:direct_tracker_provider_called, messages})
+
+      if Enum.any?(messages, &(Map.get(&1, :role) in ["tool", :tool])) do
+        {:ok,
+         %Result{
+           content: "I read the tracker item and can continue from the tool result.",
+           content_format: :markdown,
+           public_metadata: %{"provider" => "fake", "model" => "direct-tracker-test"},
+           internal_metadata: %{"trace_id" => "direct-tracker-final"}
+         }}
+      else
+        {:ok,
+         %Result{
+           content: "I'll check the tracker item.",
+           content_format: :markdown,
+           public_metadata: %{"provider" => "fake", "model" => "direct-tracker-test"},
+           internal_metadata: %{
+             "trace_id" => "direct-tracker-tool-call",
+             "direct_tracker_operation" => Keyword.fetch!(opts, :direct_tracker_operation)
+           }
+         }}
+      end
     end
   end
 
@@ -142,9 +174,19 @@ defmodule Sacrum.ChatSessionRunnerTest do
 
       assert_runner_checkpoints(session.id)
 
-      assert Repo.aggregate(Task, :count) == 0
-      assert Repo.aggregate(TaskRun, :count) == 0
-      assert Repo.aggregate(StepExecution, :count) == 0
+      assert Repo.aggregate(from(task in Task, where: task.project_id == ^project.id), :count) ==
+               0
+
+      assert Repo.aggregate(
+               from(task_run in TaskRun, where: task_run.project_id == ^project.id),
+               :count
+             ) ==
+               0
+
+      assert Repo.aggregate(
+               from(execution in StepExecution, where: execution.project_id == ^project.id),
+               :count
+             ) == 0
     end
 
     test "does not overwrite cancellation while inference is in flight", %{
@@ -237,6 +279,60 @@ defmodule Sacrum.ChatSessionRunnerTest do
         "chat_session_runner.complete_session.completed",
         turn_message_id: second_message_id
       )
+    end
+
+    test "direct tracker turn emits ordered activity and only intended transcript messages", %{
+      user: user,
+      project: project,
+      session: session,
+      user_message: user_message
+    } do
+      operation =
+        ChatSessionRunnerFixtures.show_task_directive(
+          %{user: user, project: project, session: session},
+          "tool-call-activity-1"
+        )
+
+      assert {:ok, pid} =
+               Sacrum.ChatSessionSupervisor.start_runner(session.id,
+                 inference_opts: [
+                   provider: DirectTrackerProvider,
+                   test_pid: self(),
+                   direct_tracker_operation: operation
+                 ]
+               )
+
+      on_exit(fn -> Sacrum.ChatSessionSupervisor.terminate_runner(session.id) end)
+
+      assert_receive {:direct_tracker_provider_called,
+                      [%{role: "system"}, %{role: "user", content: "Plan the next step"}]},
+                     1_000
+
+      assert_receive {:direct_tracker_provider_called, continuation_messages}, 1_000
+      assert Enum.any?(continuation_messages, &(Map.get(&1, :role) in ["tool", :tool]))
+
+      assert_event_persisted(
+        session.id,
+        "chat_session_runner.complete_session.completed",
+        turn_message_id: user_message.id
+      )
+
+      assert [{^pid, _}] = Sacrum.ChatSessionRegistry.lookup(session.id)
+
+      assert_public_activity_phases(user, project, session, user_message.id, [
+        "invoking_model",
+        "invoking_model",
+        "completed"
+      ])
+
+      {:ok, messages} = ChatMessages.list_for_session(session, include_private: true)
+
+      assert Enum.map(messages, &{&1.role, &1.content}) == [
+               {:user, "Plan the next step"},
+               {:status, "Chat session started."},
+               {:assistant, "I read the tracker item and can continue from the tool result."},
+               {:status, "Chat turn completed."}
+             ]
     end
 
     test "cancelling an idle runner stops it and leaves the session cancelled", %{
@@ -481,6 +577,20 @@ defmodule Sacrum.ChatSessionRunnerTest do
       |> Enum.map(fn event -> event.internal_payload["step"] end)
 
     assert internal_payload_steps == Enum.map(expected_steps, &runner_step_name/1)
+  end
+
+  defp assert_public_activity_phases(user, project, session, turn_message_id, expected_phases) do
+    assert {:ok, events} = LiveChat.list_public_events(user.id, project.id, session.id)
+
+    actual_phases =
+      events
+      |> Enum.filter(fn event ->
+        String.starts_with?(event.event_type, "chat_runner_activity.") and
+          event.public_payload["turn_message_id"] == turn_message_id
+      end)
+      |> Enum.map(& &1.public_payload["phase"])
+
+    assert actual_phases == expected_phases
   end
 
   defp runner_step_name("chat_session_runner." <> rest) do

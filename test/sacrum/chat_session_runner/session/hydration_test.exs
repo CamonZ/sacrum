@@ -33,16 +33,18 @@ defmodule Sacrum.ChatSessionRunner.Session.HydrationTest do
   describe "hydrate_session/2 snapshots" do
     test "returns deterministic snapshots for durable turn fixtures", ctx do
       fixtures = [
-        {:no_pending_turn, no_pending_turn_fixture(ctx), Signals.noop(), nil, nil},
-        {:pending_user_turn, pending_user_turn_fixture(ctx), Signals.load_messages(), :intake,
-         nil},
+        {:no_pending_turn, ChatSessionRunnerFixtures.no_pending_turn_fixture(ctx), Signals.noop(),
+         nil, nil},
+        {:pending_user_turn, ChatSessionRunnerFixtures.pending_user_turn_fixture(ctx),
+         Signals.load_messages(), :intake, nil},
         {:partially_completed_tool_turn, partially_completed_tool_turn_fixture(ctx),
          Signals.resume_assistant(), :invoke_inference, :direct_tracker_operation_completed},
         {:partially_completed_tool_turn, append_assistant_pending_completion_fixture(ctx),
          Signals.complete_session(), :append_assistant, nil},
-        {:completed_turn, completed_turn_fixture(ctx), Signals.noop(), :complete_session,
-         :completion_recorded},
-        {:failed_turn, failed_turn_fixture(ctx), Signals.noop(), :failed, :failure_recorded}
+        {:completed_turn, ChatSessionRunnerFixtures.completed_turn_fixture(ctx), Signals.noop(),
+         :complete_session, :completion_recorded},
+        {:failed_turn, ChatSessionRunnerFixtures.failed_turn_fixture(ctx), Signals.noop(),
+         :failed, :failure_recorded}
       ]
 
       for {turn_state, fixture, next_signal, last_checkpoint, durable_marker} <- fixtures do
@@ -198,25 +200,6 @@ defmodule Sacrum.ChatSessionRunner.Session.HydrationTest do
            }
   end
 
-  defp no_pending_turn_fixture(ctx) do
-    {:ok, session} = LiveChat.create_session(ctx.user.id, ctx.project.id, %{})
-    %{session: session, status: :queued}
-  end
-
-  defp pending_user_turn_fixture(ctx) do
-    {:ok, session} = LiveChat.create_session(ctx.user.id, ctx.project.id, %{})
-    {:ok, user_message} = send_user_message(ctx, session, "pending-user-turn")
-    {:ok, running} = transition(ctx, session, :running)
-    {:ok, _events} = Checkpoints.checkpoint_step(running, :intake, %{})
-
-    %{
-      session: running,
-      status: :running,
-      turn_message_id: user_message.id,
-      user_client_message_id: user_message.client_message_id
-    }
-  end
-
   defp partially_completed_tool_turn_fixture(ctx) do
     {:ok, session} = LiveChat.create_session(ctx.user.id, ctx.project.id, %{})
     {:ok, user_message} = send_user_message(ctx, session, "partial-tool-turn")
@@ -300,47 +283,6 @@ defmodule Sacrum.ChatSessionRunner.Session.HydrationTest do
     }
   end
 
-  defp completed_turn_fixture(ctx) do
-    {:ok, session} = LiveChat.create_session(ctx.user.id, ctx.project.id, %{})
-    {:ok, user_message} = send_user_message(ctx, session, "completed-turn")
-    {:ok, running} = transition(ctx, session, :running)
-
-    {:ok, _events} =
-      Checkpoints.checkpoint_step(running, :invoke_inference, %{"provider" => "stub"})
-
-    {:ok, assistant} = ChatSessionRunnerFixtures.append_assistant(running, user_message)
-
-    {:ok, _events} =
-      Checkpoints.checkpoint_step(running, :append_assistant, %{
-        "assistant_message_id" => assistant.id
-      })
-
-    {:ok, _events} =
-      Checkpoints.checkpoint_step(running, :complete_session, %{"status" => "turn_completed"})
-
-    %{
-      session: running,
-      status: :running,
-      turn_message_id: user_message.id,
-      user_client_message_id: user_message.client_message_id,
-      assistant_client_message_id: assistant.client_message_id
-    }
-  end
-
-  defp failed_turn_fixture(ctx) do
-    {:ok, session} = LiveChat.create_session(ctx.user.id, ctx.project.id, %{})
-    {:ok, user_message} = send_user_message(ctx, session, "failed-turn")
-    {:ok, failed} = transition(ctx, session, :failed)
-    {:ok, _events} = Checkpoints.checkpoint_step(failed, :failed, %{"reason" => "boom"})
-
-    %{
-      session: failed,
-      status: :failed,
-      turn_message_id: user_message.id,
-      user_client_message_id: user_message.client_message_id
-    }
-  end
-
   defp send_user_message(ctx, session, client_message_id) do
     LiveChat.send_message(ctx.user.id, ctx.project.id, session.id, %{
       content: "Hydrate #{client_message_id}",
@@ -371,16 +313,11 @@ defmodule Sacrum.ChatSessionRunner.Session.HydrationTest do
     ctx
     |> Map.put(:session, session)
     |> ChatSessionRunnerFixtures.show_task_operation()
-    |> Map.put(:tool_call, provider_tool_call("show_task", %{"include_sections" => false}))
-    |> Map.put(:assistant_content, "")
-  end
-
-  defp provider_tool_call(action, arguments) do
-    Sacrum.Chat.DirectTrackerOperationTools.provider_tool_call(
-      action,
-      arguments,
-      "tool-call-1"
+    |> Map.put(
+      :tool_call,
+      ChatSessionRunnerFixtures.provider_tool_call("show_task", %{"include_sections" => false})
     )
+    |> Map.put(:assistant_content, "")
   end
 
   defp side_effect_counts(session) do
