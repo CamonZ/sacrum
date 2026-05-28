@@ -31,6 +31,14 @@ defmodule Sacrum.ChatSessionRunner.Actions do
     )
   end
 
+  @doc """
+  Build a user-turn signal accepted by the session-owned runner.
+  """
+  @spec user_turn_signal(map()) :: Signal.t()
+  def user_turn_signal(data) when is_map(data) do
+    Signal.new!(Signals.user_turn(), data, source: Signals.source())
+  end
+
   @doc false
   @spec emit(String.t(), map()) :: Directive.Emit.t()
   def emit(type, data) when is_binary(type) and is_map(data) do

@@ -1,40 +1,14 @@
 defmodule Sacrum.Accounts.LiveChatRunnerStartTest do
   use Sacrum.DataCase
 
-  alias Sacrum.Accounts.{ChatSessions, LiveChat, Projects}
-  alias Sacrum.Chat.PublicEvents
-  alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.ChatMessage
+  alias Sacrum.Accounts.{LiveChat, Projects}
   alias Sacrum.Repo.Users
 
-  defmodule RecordingRunner do
-    def start_runner(chat_session_id, opts) do
+  defmodule RecordingSignalRunner do
+    def start_or_cast_user_turn(chat_session_id, signal, opts) do
       test_pid = Keyword.fetch!(opts, :test_pid)
-
-      send(test_pid, {
-        :runner_started,
-        chat_session_id,
-        Repo.in_transaction?(),
-        Repo.aggregate(ChatMessage, :count)
-      })
-
+      send(test_pid, {:user_turn_signal_cast, chat_session_id, signal})
       {:ok, self()}
-    end
-  end
-
-  defmodule AlreadyStartedRunner do
-    def start_runner(_chat_session_id, opts) do
-      test_pid = Keyword.fetch!(opts, :test_pid)
-      send(test_pid, :runner_start_attempted)
-      {:error, {:already_started, self()}}
-    end
-  end
-
-  defmodule FailingRunner do
-    def start_runner(_chat_session_id, opts) do
-      test_pid = Keyword.fetch!(opts, :test_pid)
-      send(test_pid, :runner_start_attempted)
-      {:error, :runner_unavailable}
     end
   end
 
@@ -48,25 +22,49 @@ defmodule Sacrum.Accounts.LiveChatRunnerStartTest do
   describe "send_message_and_start_runner/5" do
     setup [:setup_session]
 
-    test "starts the runner only after the user message transaction commits", %{
+    test "casts an accepted user-turn signal to the session runner instead of pre-persisting", %{
       user: user,
       project: project,
       session: session
     } do
-      session_id = session.id
-
-      assert {:ok, message} =
+      assert {:ok, %{id: message_id, client_message_id: "client-turn-1"}} =
                LiveChat.send_message_and_start_runner(
                  user.id,
                  project.id,
                  session.id,
-                 %{content: "Start the assistant turn"},
-                 runner: RecordingRunner,
+                 %{
+                   content: "Route this turn through the runner",
+                   content_format: "markdown",
+                   client_message_id: "client-turn-1",
+                   metadata: %{
+                     "origin" => "graphql",
+                     "safe" => true,
+                     "unsafe_pid" => self()
+                   }
+                 },
+                 runner: RecordingSignalRunner,
                  start_opts: [test_pid: self()]
                )
 
-      assert message.role == :user
-      assert_receive {:runner_started, ^session_id, false, 1}
+      assert {:ok, _} = Ecto.UUID.cast(message_id)
+      assert_receive {:user_turn_signal_cast, chat_session_id, signal}
+      assert chat_session_id == session.id
+      assert signal.type == Sacrum.ChatSessionRunner.Signals.user_turn()
+      assert signal.source == Sacrum.ChatSessionRunner.Signals.source()
+
+      assert signal.data == %{
+               message_id: message_id,
+               user_id: user.id,
+               project_id: project.id,
+               chat_session_id: session.id,
+               content: "Route this turn through the runner",
+               content_format: "markdown",
+               client_message_id: "client-turn-1",
+               metadata: %{"origin" => "graphql", "safe" => true},
+               engine_session_ref: Sacrum.ChatSessionRunner.agent_id(session.id)
+             }
+
+      assert {:ok, []} = LiveChat.list_messages(user.id, project.id, session.id)
     end
 
     test "does not start the runner when the session cannot be loaded", %{
@@ -79,90 +77,33 @@ defmodule Sacrum.Accounts.LiveChatRunnerStartTest do
                  project.id,
                  Ecto.UUID.generate(),
                  %{content: "This session does not exist"},
-                 runner: RecordingRunner,
+                 runner: RecordingSignalRunner,
                  start_opts: [test_pid: self()]
                )
 
-      refute_receive {:runner_started, _chat_session_id, _in_transaction?, _message_count}
+      refute_receive {:user_turn_signal_cast, _chat_session_id, _signal}
     end
 
-    test "does not start the runner when message persistence fails", %{
-      user: user,
-      project: project,
-      session: session
-    } do
-      assert {:error, %Ecto.Changeset{}} =
+    test "still routes malformed turns to the runner so persistence is owned by turn acceptance",
+         %{
+           user: user,
+           project: project,
+           session: session
+         } do
+      assert {:ok, %{content: nil}} =
                LiveChat.send_message_and_start_runner(
                  user.id,
                  project.id,
                  session.id,
                  %{content: nil},
-                 runner: RecordingRunner,
+                 runner: RecordingSignalRunner,
                  start_opts: [test_pid: self()]
                )
 
-      refute_receive {:runner_started, _chat_session_id, _in_transaction?, _message_count}
-    end
-
-    test "treats duplicate runner starts as an in-flight assistant turn", %{
-      user: user,
-      project: project,
-      session: session
-    } do
-      assert {:ok, message} =
-               LiveChat.send_message_and_start_runner(
-                 user.id,
-                 project.id,
-                 session.id,
-                 %{content: "Duplicate starts are okay"},
-                 runner: AlreadyStartedRunner,
-                 start_opts: [test_pid: self()]
-               )
-
-      assert_receive :runner_start_attempted
-      assert message.role == :user
-
-      {:ok, reloaded_session} = ChatSessions.get_session(user.id, project.id, session.id)
-      assert reloaded_session.status == :queued
-    end
-
-    test "surfaces runner start failures through committed chat events", %{
-      user: user,
-      project: project,
-      session: session
-    } do
-      assert {:ok, message} =
-               LiveChat.send_message_and_start_runner(
-                 user.id,
-                 project.id,
-                 session.id,
-                 %{content: "Surface the failure"},
-                 runner: FailingRunner,
-                 start_opts: [test_pid: self()]
-               )
-
-      assert_receive :runner_start_attempted
-      assert message.role == :user
-
-      {:ok, failed_session} = ChatSessions.get_session(user.id, project.id, session.id)
-      assert failed_session.status == :failed
-
-      assert {:ok, public_events} = LiveChat.list_public_events(user.id, project.id, session.id)
-
-      assert Enum.map(public_events, & &1.event_type) == [
-               PublicEvents.event_type(:session_created),
-               PublicEvents.event_type(:message_created),
-               PublicEvents.event_type(:session_updated),
-               "chat_session_runner.failed.completed"
-             ]
-
-      failure_event = List.last(public_events)
-
-      assert failure_event.public_payload == %{
-               "chat_session_id" => session.id,
-               "step" => "failed",
-               "turn_message_id" => message.id
-             }
+      assert_receive {:user_turn_signal_cast, chat_session_id, signal}
+      assert chat_session_id == session.id
+      refute Map.has_key?(signal.data, :content)
+      assert {:ok, []} = LiveChat.list_messages(user.id, project.id, session.id)
     end
   end
 

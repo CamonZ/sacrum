@@ -264,6 +264,125 @@ defmodule Sacrum.ChatSessionRunner.Events.ActivityEventsTest do
       assert event.public_payload["phase"] == "composing_answer"
       assert 0 == transcript_message_count(ctx.session.id)
     end
+
+    test "lists public activity with transcript and checkpoint events while filtering internal runner events",
+         ctx do
+      turn_message_id = Ecto.UUID.generate()
+
+      assert {:ok, transcript_event} =
+               ChatEvents.append_to_session(
+                 ctx.session,
+                 PublicEvents.message_created_attrs(%ChatMessage{
+                   id: turn_message_id,
+                   project_id: ctx.project.id,
+                   chat_session_id: ctx.session.id,
+                   role: :user,
+                   content: "Plan the next step",
+                   content_format: :markdown,
+                   client_message_id: ctx.user_message.client_message_id,
+                   metadata: %{},
+                   inserted_at: DateTime.utc_now(),
+                   updated_at: DateTime.utc_now()
+                 })
+               )
+
+      assert {:ok, activity_event} =
+               ChatEvents.append_to_session(
+                 ctx.session,
+                 ActivityEvents.invoking_model_attrs(ctx.session, %{
+                   turn_message_id: turn_message_id,
+                   provider: "fake",
+                   model: "runner-test",
+                   display: %{label: "Invoking model"}
+                 })
+               )
+
+      assert {:ok, checkpoint_event} =
+               ChatEvents.append_to_session(ctx.session, %{
+                 event_type: "chat_session_runner.invoke_inference.completed",
+                 visibility: :public,
+                 public_payload: %{
+                   "chat_session_id" => ctx.session.id,
+                   "step" => "invoke_inference",
+                   "turn_message_id" => turn_message_id
+                 },
+                 internal_payload: %{}
+               })
+
+      assert {:ok, _internal_event} =
+               ChatEvents.append_to_session(ctx.session, %{
+                 event_type: "chat_session_runner.tool_trace",
+                 visibility: :internal,
+                 public_payload: %{},
+                 internal_payload: %{"raw_tool_arguments" => %{"secret" => "do not expose"}}
+               })
+
+      assert {:ok, public_events} =
+               LiveChat.list_public_events(ctx.user.id, ctx.project.id, ctx.session.id)
+
+      public_event_ids = Enum.map(public_events, & &1.id)
+      assert transcript_event.id in public_event_ids
+      assert activity_event.id in public_event_ids
+      assert checkpoint_event.id in public_event_ids
+
+      event_types = Enum.map(public_events, & &1.event_type)
+      assert PublicEvents.event_type(:message_created) in event_types
+      assert "chat_runner_activity.invoking_model" in event_types
+      assert "chat_session_runner.invoke_inference.completed" in event_types
+      refute "chat_session_runner.tool_trace" in event_types
+
+      listed_activity =
+        Enum.find(public_events, &(&1.event_type == "chat_runner_activity.invoking_model"))
+
+      assert listed_activity.public_payload == %{
+               "chat_session_id" => ctx.session.id,
+               "phase" => "invoking_model",
+               "status" => "running",
+               "turn_message_id" => turn_message_id,
+               "provider" => "fake",
+               "model" => "runner-test",
+               "display" => %{"label" => "Invoking model"}
+             }
+
+      refute Map.has_key?(listed_activity, :internal_payload)
+    end
+
+    test "projects unknown runner activity through generic channel and GraphQL payload shapes",
+         ctx do
+      payload = %{
+        "chat_session_id" => ctx.session.id,
+        "phase" => "reading_project_context",
+        "status" => "running",
+        "turn_message_id" => ctx.user_message.id,
+        "display" => %{"label" => "Reading project context"}
+      }
+
+      event = %{
+        id: Ecto.UUID.generate(),
+        project_id: ctx.project.id,
+        chat_session_id: ctx.session.id,
+        event_type: "chat_runner_activity.reading_project_context",
+        visibility: :public,
+        public_payload: payload,
+        internal_payload: %{"raw_prompt" => "do not expose"},
+        inserted_at: DateTime.utc_now()
+      }
+
+      assert {:ok, "chat_event_created", channel_payload} = PublicEvents.channel_event(event)
+
+      assert channel_payload == %{
+               id: event.id,
+               project_id: ctx.project.id,
+               chat_session_id: ctx.session.id,
+               event_type: "chat_runner_activity.reading_project_context",
+               payload: payload,
+               inserted_at: DateTime.to_iso8601(event.inserted_at)
+             }
+
+      assert PublicEvents.graphql_payload(event) == payload
+      refute Jason.encode!(channel_payload) =~ "raw_prompt"
+      refute Jason.encode!(PublicEvents.graphql_payload(event)) =~ "do not expose"
+    end
   end
 
   defp setup_session(_context) do

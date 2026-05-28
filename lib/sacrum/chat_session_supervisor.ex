@@ -22,6 +22,22 @@ defmodule Sacrum.ChatSessionSupervisor do
     DynamicSupervisor.start_child(__MODULE__, {Sacrum.ChatSessionRunner, child_opts})
   end
 
+  @spec start_or_cast_user_turn(String.t(), Jido.Signal.t(), keyword()) ::
+          DynamicSupervisor.on_start_child() | {:error, term()}
+  def start_or_cast_user_turn(chat_session_id, signal, opts \\ [])
+      when is_binary(chat_session_id) and is_list(opts) do
+    case Sacrum.ChatSessionRegistry.lookup(chat_session_id) do
+      [{pid, _}] ->
+        case Jido.AgentServer.cast(pid, signal) do
+          :ok -> {:ok, pid}
+          {:error, reason} -> {:error, reason}
+        end
+
+      [] ->
+        start_runner(chat_session_id, Keyword.put(opts, :initial_signal, signal))
+    end
+  end
+
   @spec terminate_runner(String.t()) :: :ok | {:error, :not_found}
   def terminate_runner(chat_session_id) when is_binary(chat_session_id) do
     case Sacrum.ChatSessionRegistry.lookup(chat_session_id) do

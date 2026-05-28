@@ -200,6 +200,25 @@ defmodule SacrumWeb.Graphql.ChatSessionApiTest do
       refute Map.has_key?(message_event["payload"], "internal_payload")
       refute Map.has_key?(message_event["payload"], "secret")
 
+      activity_event =
+        Enum.find(
+          query_result["data"]["chatEvents"],
+          &(&1["eventType"] == "chat_runner_activity.invoking_model")
+        )
+
+      assert activity_event["payload"] == %{
+               "chat_session_id" => session["id"],
+               "phase" => "invoking_model",
+               "status" => "running",
+               "turn_message_id" => message["id"],
+               "provider" => "fake",
+               "model" => "graphql-test",
+               "display" => %{"label" => "Invoking model"}
+             }
+
+      refute Map.has_key?(activity_event["payload"], "internal_payload")
+      refute Map.has_key?(activity_event["payload"], "trace_id")
+
       second_send_result =
         graphql_result(conn, user, """
         mutation {

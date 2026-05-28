@@ -8,11 +8,18 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
   """
 
   alias Sacrum.Accounts.AuthoringChatLoop
+  alias Sacrum.Accounts.ChatEvents
   alias Sacrum.Chat.Inference
-
   alias Sacrum.ChatSessionRunner.DirectTracker
   alias Sacrum.ChatSessionRunner.DirectTracker.Continuation, as: DirectTrackerContinuation
-  alias Sacrum.ChatSessionRunner.Events.{Checkpoints, InferenceEvents, MessageEvents}
+
+  alias Sacrum.ChatSessionRunner.Events.{
+    ActivityEvents,
+    Checkpoints,
+    InferenceEvents,
+    MessageEvents
+  }
+
   alias Sacrum.ChatSessionRunner.Session.{State, Turn}
   alias Sacrum.ChatSessionRunner.Transcript.{InferenceMessages, Messages}
   alias Sacrum.Repo.Schemas.{ChatEvent, ChatMessage, ChatSession}
@@ -177,14 +184,29 @@ defmodule Sacrum.ChatSessionRunner.Pipeline do
        when is_list(provider_messages) and is_list(inference_opts) and is_atom(checkpoint_step) do
     with {:ok, result} <- Inference.generate(provider_messages, inference_opts),
          {:ok, refreshed_session} <- State.refresh_runnable_session(session),
+         metadata = inference_public_metadata(result, turn_message_id),
+         {:ok, _activity_event} <- append_invoking_model_activity(refreshed_session, metadata),
          {:ok, _events} <-
-           Checkpoints.checkpoint_step(refreshed_session, checkpoint_step, %{
-             "provider" => Map.get(result.public_metadata, "provider"),
-             "model" => Map.get(result.public_metadata, "model"),
-             "turn_message_id" => turn_message_id
-           }) do
+           Checkpoints.checkpoint_step(refreshed_session, checkpoint_step, metadata) do
       {:ok, refreshed_session, result}
     end
+  end
+
+  defp inference_public_metadata(%Inference.Result{} = result, turn_message_id) do
+    %{
+      "provider" => Map.get(result.public_metadata, "provider"),
+      "model" => Map.get(result.public_metadata, "model"),
+      "turn_message_id" => turn_message_id
+    }
+  end
+
+  defp append_invoking_model_activity(%ChatSession{} = session, metadata) do
+    details = Map.put(metadata, "display", %{"label" => "Invoking model"})
+
+    ChatEvents.append_to_session(
+      session,
+      ActivityEvents.invoking_model_attrs(session, details)
+    )
   end
 
   @spec record_direct_tracker_operation_rejection(

@@ -20,7 +20,8 @@ defmodule Sacrum.ChatSessionRunner.Actions.InvokeInference do
     schema: [
       chat_session_id: [type: :string, required: true],
       engine_session_ref: [type: :string, required: true],
-      inference_opts: [type: :any, default: []]
+      inference_opts: [type: :any, default: []],
+      turn_message_id: [type: :string]
     ]
 
   alias Sacrum.Accounts.{AuthoringDrafts, ChatMessages}
@@ -36,7 +37,7 @@ defmodule Sacrum.ChatSessionRunner.Actions.InvokeInference do
     with {:ok, session} <- Pipeline.fetch_session(params.chat_session_id),
          {:continue, session} <- Pipeline.ensure_runnable(session),
          {:ok, messages} <- ChatMessages.list_for_session(session, include_private: true),
-         turn_message_id = turn_message_id(messages),
+         turn_message_id = Map.get(params, :turn_message_id) || turn_message_id(messages),
          {:ok, session, result} <-
            Pipeline.invoke_inference(
              session,

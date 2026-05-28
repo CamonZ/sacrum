@@ -31,6 +31,7 @@ defmodule Sacrum.ChatSessionRunner do
       inference_opts: [type: :any, default: []]
     ],
     signal_routes: [
+      {Signals.user_turn(), Sacrum.ChatSessionRunner.Actions.AcceptUserTurn},
       {Signals.run(), Sacrum.ChatSessionRunner.Actions.Intake},
       {Signals.intake(), Sacrum.ChatSessionRunner.Actions.Intake},
       {Signals.load_messages(), Sacrum.ChatSessionRunner.Actions.LoadMessages},
@@ -70,12 +71,12 @@ defmodule Sacrum.ChatSessionRunner do
       name: Sacrum.ChatSessionRegistry.via_tuple(chat_session_id)
     ]
 
+    initial_signal =
+      Keyword.get(opts, :initial_signal) ||
+        Actions.run_signal(chat_session_id, engine_session_ref, inference_opts)
+
     with {:ok, pid} <- Jido.AgentServer.start_link(agent_opts),
-         :ok <-
-           Jido.AgentServer.cast(
-             pid,
-             Actions.run_signal(chat_session_id, engine_session_ref, inference_opts)
-           ) do
+         :ok <- Jido.AgentServer.cast(pid, initial_signal) do
       start_completion_cleanup(pid)
       {:ok, pid}
     else
