@@ -55,7 +55,7 @@ defmodule Sacrum.ChatSessionRunner.Actions.AcceptUserTurn do
         {:ok, result}
       else
         directive =
-          Actions.emit(Signals.invoke_inference(), %{
+          Actions.emit(Signals.load_messages(), %{
             chat_session_id: session.id,
             engine_session_ref: params.engine_session_ref,
             inference_opts: params.inference_opts,
@@ -66,7 +66,7 @@ defmodule Sacrum.ChatSessionRunner.Actions.AcceptUserTurn do
       end
     else
       {:halt, _session, reason} -> Failure.halt(params, reason)
-      {:error, reason} -> Failure.fail(params, reason)
+      {:error, reason} -> failed_acceptance(params, reason)
     end
   end
 
@@ -83,6 +83,16 @@ defmodule Sacrum.ChatSessionRunner.Actions.AcceptUserTurn do
       nil ->
         false
     end
+  end
+
+  defp failed_acceptance(%{chat_session_id: chat_session_id}, reason) do
+    {:ok,
+     %{
+       step: :accept_user_turn,
+       status: :failed,
+       chat_session_id: chat_session_id,
+       error: reason
+     }}
   end
 
   defp persist_turn(session, params) do
