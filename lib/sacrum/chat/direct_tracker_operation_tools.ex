@@ -92,6 +92,29 @@ defmodule Sacrum.Chat.DirectTrackerOperationTools do
        },
        "workflow_ref" => %{"type" => "string", "description" => "Target workflow reference."},
        "step_ref" => %{"type" => "string", "description" => "Target workflow step reference."}
+     }},
+    {"tracker_task_write", "Request creating or editing tracker tasks.", ~w(operation title),
+     %{
+       "operation" => %{
+         "type" => "string",
+         "enum" => ["create"],
+         "description" => "Tracker task write operation to perform."
+       },
+       "title" => %{"type" => "string", "description" => "Task title."},
+       "level" => %{"type" => "string", "description" => "Task level."},
+       "priority" => %{"type" => "string", "description" => "Task priority."},
+       "tags" => %{
+         "type" => "array",
+         "items" => %{"type" => "string"},
+         "description" => "Task tags."
+       },
+       "parent_ref" => %{"type" => "string", "description" => "Parent task reference."},
+       "depends_on_refs" => %{
+         "type" => "array",
+         "items" => %{"type" => "string"},
+         "description" => "Task dependency references."
+       },
+       "workflow_ref" => %{"type" => "string", "description" => "Workflow reference."}
      }}
   ]
 

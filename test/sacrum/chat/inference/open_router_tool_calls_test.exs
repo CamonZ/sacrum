@@ -83,6 +83,72 @@ defmodule Sacrum.Chat.Inference.OpenRouterToolCallsTest do
       refute Map.has_key?(result.internal_metadata, "authoring_tool_intent")
     end
 
+    test "preserves tracker_task_write create payloads and strips server-owned fields" do
+      action_result = %{
+        text: "I can create that tracker task.",
+        model: "fake-model",
+        usage: %{},
+        finish_reason: "tool_calls",
+        provider_metadata: %{},
+        tool_calls: [
+          %{
+            "id" => "call-create-task",
+            "function" => %{
+              "name" => "tracker_task_write",
+              "arguments" => %{
+                "operation" => "create",
+                "title" => "Add tracker task write create",
+                "level" => "ticket",
+                "priority" => "high",
+                "tags" => ["chat", "tracker"],
+                "parent_ref" => "parent-123",
+                "depends_on_refs" => ["dep-1", "dep-2"],
+                "workflow_ref" => "implementation",
+                "user_id" => "model-supplied-user",
+                "project_id" => "model-supplied-project",
+                "permissions" => ["admin"],
+                "active_selection" => %{"task_id" => "do-not-trust"}
+              }
+            }
+          }
+        ]
+      }
+
+      result = normalize(action_result, "msg-create")
+
+      assert %{
+               "direct_tracker_operation" => %{
+                 "action" => "tracker_task_write",
+                 "arguments" => %{
+                   "operation" => "create",
+                   "title" => "Add tracker task write create",
+                   "level" => "ticket",
+                   "priority" => "high",
+                   "tags" => ["chat", "tracker"],
+                   "parent_ref" => "parent-123",
+                   "depends_on_refs" => ["dep-1", "dep-2"],
+                   "workflow_ref" => "implementation"
+                 },
+                 "provider_tool_call" => %{
+                   "id" => "call-create-task",
+                   "function" => %{
+                     "name" => "tracker_task_write",
+                     "arguments" => provider_arguments_json
+                   }
+                 },
+                 "source_message_id" => "msg-create"
+               }
+             } = result.internal_metadata
+
+      provider_arguments = Jason.decode!(provider_arguments_json)
+      assert provider_arguments["operation"] == "create"
+      assert provider_arguments["title"] == "Add tracker task write create"
+      refute Map.has_key?(provider_arguments, "user_id")
+      refute Map.has_key?(provider_arguments, "project_id")
+      refute Map.has_key?(provider_arguments, "permissions")
+      refute Map.has_key?(provider_arguments, "active_selection")
+    end
+
     test "keeps same-turn direct tracker tool calls as one compound operation list" do
       action_result = %{
         text: "Here is the task, and I added the checklist item.",
