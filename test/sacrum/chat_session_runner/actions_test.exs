@@ -30,7 +30,7 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
 
   alias Sacrum.ChatSessionRunner.Signals
   alias Sacrum.ChatSessions.Status, as: ChatSessionStatus
-  alias Sacrum.Repo.Schemas.{ChatEvent, ChatMessage}
+  alias Sacrum.Repo.Schemas.{ChatEvent, ChatMessage, TaskDependency}
   alias Sacrum.Repo.Users
 
   @assistant_client_message_id_prefix "chat_session_runner:assistant:v1"
@@ -431,6 +431,31 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
       tool_names = Enum.map(tools, fn %{"function" => %{"name" => name}} -> name end)
       assert "start_authoring" in tool_names
       assert "revise_authoring" in tool_names
+      assert "tracker_task_write" in tool_names
+      refute "create" in tool_names
+      refute "create_task" in tool_names
+      refute "tracker_task_create" in tool_names
+
+      tracker_task_write =
+        Enum.find(tools, fn
+          %{"function" => %{"name" => "tracker_task_write"}} -> true
+          _tool -> false
+        end)
+
+      assert %{
+               "function" => %{
+                 "parameters" => %{
+                   "additionalProperties" => false,
+                   "required" => required,
+                   "properties" => %{
+                     "operation" => %{"enum" => ["create"]},
+                     "title" => %{"type" => "string"}
+                   }
+                 }
+               }
+             } = tracker_task_write
+
+      assert Enum.sort(required) == ~w(operation title)
     end
 
     test "caller-supplied :system_prompt and :tools win over the defaults", ctx do
@@ -589,6 +614,145 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
       assert [] = authoring_drafts_for_session(ctx)
       assert_received {:stub_provider_called, continuation_messages, _opts}
       assert_continuation_messages(continuation_messages, "update_step_prompt")
+    end
+
+    test "creates a tracker task from a model-shaped provider tool call and reads it back",
+         ctx do
+      %{workflow: workflow, step: step, task: parent} = create_tracker_targets(ctx)
+
+      {:ok, dependency} =
+        Sacrum.Accounts.Tasks.insert(ctx.user.id, ctx.project.id, %{
+          title: "Direct Tracker Dependency",
+          workflow_id: workflow.id,
+          current_step_id: step.id
+        })
+
+      {:ok, running} =
+        Sacrum.Accounts.ChatSessions.transition_status(
+          ctx.user.id,
+          ctx.project.id,
+          ctx.session.id,
+          :running
+        )
+
+      created_title = "Created through chat runner"
+      created_description = "Created from a model-shaped tracker_task_write provider tool call."
+
+      create_arguments = %{
+        "operation" => "create",
+        "title" => created_title,
+        "description" => created_description,
+        "level" => "ticket",
+        "priority" => "high",
+        "tags" => ["direct-tracker", "create"],
+        "parent_ref" => parent.id,
+        "depends_on_refs" => [dependency.id],
+        "workflow_ref" => workflow.id,
+        "project_id" => Ecto.UUID.generate(),
+        "user_id" => Ecto.UUID.generate()
+      }
+
+      inference_result =
+        result_with_direct_tracker_operation(%{
+          "action" => "tracker_task_write",
+          "arguments" => create_arguments
+        })
+
+      params = %{
+        chat_session_id: running.id,
+        engine_session_ref: ctx.engine_session_ref,
+        inference_opts: direct_tracker_continuation_opts("The tracker task was created."),
+        turn_message_id: ctx.user_message.id,
+        inference_result: inference_result
+      }
+
+      assert {:ok, %{step: :verify_authoring}, [%Directive.Emit{} = emit]} =
+               VerifyAuthoringIntent.run(params, %{})
+
+      assert emit.signal.type == Signals.append_assistant()
+      assert emit.signal.data.inference_result.content == "The tracker task was created."
+      assert_received {:stub_provider_called, continuation_messages, _opts}
+
+      tool_result = assert_continuation_messages(continuation_messages, "tracker_task_write")
+      assert tool_result["operation"] == "create"
+
+      assert %{
+               "task" => %{
+                 "id" => created_task_id,
+                 "title" => ^created_title,
+                 "description" => ^created_description,
+                 "level" => "ticket",
+                 "priority" => "high",
+                 "tags" => ["direct-tracker", "create"],
+                 "parent" => %{"id" => parent_id},
+                 "depends_on" => [%{"id" => dependency_id}],
+                 "workflow" => %{"id" => workflow_id}
+               }
+             } = tool_result
+
+      assert parent_id == parent.id
+      assert dependency_id == dependency.id
+      assert workflow_id == workflow.id
+      encoded_tool_result = Jason.encode!(tool_result)
+      refute encoded_tool_result =~ ctx.project.id
+      refute Map.has_key?(tool_result["task"], "needs_human_review")
+      refute Map.has_key?(tool_result["task"], "review_comment")
+
+      {:ok, created_task} =
+        Sacrum.Accounts.Tasks.get_by(ctx.user.id,
+          conditions: [id: created_task_id, project_id: ctx.project.id]
+        )
+
+      assert created_task.title == created_title
+      assert created_task.description == created_description
+      assert created_task.level == "ticket"
+      assert created_task.priority == "high"
+      assert created_task.tags == ["direct-tracker", "create"]
+      assert created_task.parent_id == parent.id
+      assert created_task.workflow_id == workflow.id
+      assert created_task.current_step_id == step.id
+
+      assert [%TaskDependency{depends_on_id: ^dependency_id}] =
+               Repo.all(from dep in TaskDependency, where: dep.task_id == ^created_task.id)
+
+      [event] =
+        Repo.all(
+          from event in ChatEvent,
+            where:
+              event.chat_session_id == ^running.id and
+                event.visibility == :public and
+                event.event_type == "chat_direct_tracker_operation.completed"
+        )
+
+      assert event.public_payload["action"] == "tracker_task_write"
+      assert event.public_payload["status"] == "succeeded"
+      assert event.public_payload["tool_call_id"] == "call_tracker_task_write_0"
+      assert event.public_payload["turn_message_id"] == ctx.user_message.id
+      assert event.public_payload["result"]["id"] == created_task_id
+      encoded_public_payload = Jason.encode!(event.public_payload)
+      refute encoded_public_payload =~ ctx.project.id
+      refute encoded_public_payload =~ "needs_human_review"
+
+      read_back =
+        result_with_direct_tracker_operation(%{
+          "action" => "show_task",
+          "arguments" => %{"task_ref" => created_task_id, "include_sections" => false}
+        })
+
+      read_params = %{params | inference_result: read_back}
+
+      assert {:ok, %{step: :verify_authoring}, [%Directive.Emit{}]} =
+               VerifyAuthoringIntent.run(read_params, %{})
+
+      assert_received {:stub_provider_called, read_messages, _opts}
+      read_result = assert_continuation_messages(read_messages, "show_task")
+
+      assert get_in(read_result, ["task", "id"]) == created_task_id
+      assert get_in(read_result, ["task", "title"]) == created_title
+      assert get_in(read_result, ["task", "workflow_id"]) == workflow.id
+      assert get_in(read_result, ["task", "current_step_id"]) == step.id
+
+      assert [] = authoring_drafts_for_session(ctx)
     end
 
     test "routes show_task for a completed task into a final assistant answer",
@@ -1241,6 +1405,7 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
 
     assert {:ok, decoded} = Jason.decode(tool_result_content)
     assert decoded["action"] == action
+    decoded
   end
 
   defp direct_tracker_rejection_events(session_id) do

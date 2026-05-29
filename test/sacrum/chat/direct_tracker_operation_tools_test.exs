@@ -136,9 +136,10 @@ defmodule Sacrum.Chat.DirectTrackerOperationToolsTest do
       assert properties["operation"]["enum"] == ["create"]
 
       assert Map.keys(properties) |> Enum.sort() ==
-               ~w(depends_on_refs level operation parent_ref priority tags title workflow_ref)
+               ~w(depends_on_refs description level operation parent_ref priority tags title workflow_ref)
 
       assert properties["title"]["type"] == "string"
+      assert properties["description"]["type"] == "string"
       assert properties["level"]["type"] == "string"
       assert properties["priority"]["type"] == "string"
       assert properties["tags"]["type"] == "array"
@@ -147,6 +148,28 @@ defmodule Sacrum.Chat.DirectTrackerOperationToolsTest do
       assert properties["depends_on_refs"]["type"] == "array"
       assert properties["depends_on_refs"]["items"]["type"] == "string"
       assert properties["workflow_ref"]["type"] == "string"
+      refute Map.has_key?(properties, "needs_review")
+      refute Map.has_key?(properties, "needs_human_review")
+      refute Map.has_key?(properties, "review_comment")
+    end
+
+    test "tracker_task_write create schema stays aligned with live vtb add help" do
+      assert {help, 0} = System.cmd("vtb", ["add", "--help"], stderr_to_stdout: true)
+
+      live_create_fields = create_fields_from_vtb_add_help(help)
+
+      properties =
+        tool_by_name("tracker_task_write")
+        |> get_in(["function", "parameters", "properties"])
+
+      assert MapSet.new(Map.keys(properties)) == live_create_fields
+
+      stale_guide_only_fields =
+        MapSet.new(~w(needs_review needs_human_review review_comment revision_feedback))
+
+      assert MapSet.disjoint?(live_create_fields, stale_guide_only_fields)
+      assert help =~ "--depends-on"
+      refute help =~ "--needs-review"
     end
 
     test "does not advertise a standalone model-visible create tool" do
@@ -175,6 +198,25 @@ defmodule Sacrum.Chat.DirectTrackerOperationToolsTest do
     Enum.find(DirectTrackerOperationTools.all(), fn
       %{"function" => %{"name" => ^name}} -> true
       _tool -> false
+    end)
+  end
+
+  defp create_fields_from_vtb_add_help(help) when is_binary(help) do
+    base_fields = MapSet.new(~w(operation title))
+
+    help
+    |> String.split("\n")
+    |> Enum.reduce(base_fields, fn line, fields ->
+      cond do
+        String.contains?(line, "--description") -> MapSet.put(fields, "description")
+        String.contains?(line, "--level") -> MapSet.put(fields, "level")
+        String.contains?(line, "--priority") -> MapSet.put(fields, "priority")
+        String.contains?(line, "--tag") -> MapSet.put(fields, "tags")
+        String.contains?(line, "--parent") -> MapSet.put(fields, "parent_ref")
+        String.contains?(line, "--depends-on") -> MapSet.put(fields, "depends_on_refs")
+        String.contains?(line, "--workflow") -> MapSet.put(fields, "workflow_ref")
+        true -> fields
+      end
     end)
   end
 end

@@ -101,6 +101,7 @@ defmodule Sacrum.Chat.DirectTrackerOperationTools do
          "description" => "Tracker task write operation to perform."
        },
        "title" => %{"type" => "string", "description" => "Task title."},
+       "description" => %{"type" => "string", "description" => "Task description."},
        "level" => %{"type" => "string", "description" => "Task level."},
        "priority" => %{"type" => "string", "description" => "Task priority."},
        "tags" => %{

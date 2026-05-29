@@ -339,7 +339,7 @@ defmodule Sacrum.Chat.DirectTrackerOperationResolver do
   defp target_reference(other), do: other
 
   defp resolve_target(targets, context) when is_list(targets) do
-    resolve_refs(context, targets, &resolve_target/2)
+    resolve_refs(context, targets, fn _context, target -> resolve_target(target, context) end)
   end
 
   defp resolve_target(target, context),
