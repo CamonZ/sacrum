@@ -19,6 +19,7 @@ defmodule Sacrum.Chat.DirectTrackerOperationResolver do
     active_object_type
     active_task_id
     object_id
+    permission_context
     scope
   )
   @server_owned_fields Enum.uniq(
@@ -38,6 +39,7 @@ defmodule Sacrum.Chat.DirectTrackerOperationResolver do
     "section" => :section,
     "task" => :task,
     "task_section" => :task_section,
+    "parent" => :parent,
     "workflow" => :workflow,
     "workflow_step" => :workflow_step
   }
@@ -53,9 +55,9 @@ defmodule Sacrum.Chat.DirectTrackerOperationResolver do
 
   @spec resolve_directive(map(), context()) :: {:ok, map()} | {:error, term()}
   def resolve_directive(%{} = directive, %{} = context) do
-    with :ok <- reject_model_scope_fields(directive),
-         {:ok, action} <- fetch_string(directive, "action"),
-         {:ok, args} <- directive_arguments(directive),
+    with {:ok, action} <- fetch_string(directive, "action"),
+         :ok <- reject_model_scope_fields_for_action(action, directive),
+         {:ok, args} <- directive_arguments(action, directive),
          {:ok, targets} <- resolve_directive_targets(action, args, context) do
       {:ok,
        %{
@@ -263,15 +265,61 @@ defmodule Sacrum.Chat.DirectTrackerOperationResolver do
     end
   end
 
+  defp resolve_directive_targets("tracker_task_write", args, context) do
+    with {:ok, "create"} <- fetch_string(args, "operation"),
+         {:ok, _title} <- fetch_string(args, "title"),
+         {:ok, parent} <- resolve_optional_ref(context, args, "parent_ref", &resolve_task/2),
+         {:ok, depends_on} <- resolve_task_refs(context, get_map_value(args, :depends_on_refs)),
+         {:ok, workflow} <-
+           resolve_optional_ref(context, args, "workflow_ref", &resolve_workflow/2) do
+      targets =
+        %{
+          parent: parent,
+          depends_on: depends_on,
+          workflow: workflow
+        }
+        |> Enum.reject(fn {_key, value} -> empty_target?(value) end)
+        |> Map.new()
+
+      {:ok, targets}
+    else
+      {:ok, operation} when is_binary(operation) ->
+        {:error, {:unsupported_tracker_task_write_operation, operation}}
+
+      error ->
+        error
+    end
+  end
+
   defp resolve_directive_targets(_action, _args, _context),
     do: {:error, :unknown_direct_tracker_operation}
+
+  defp resolve_optional_ref(context, args, key, resolver) do
+    case get_map_value(args, key) do
+      ref when is_binary(ref) and ref != "" -> resolver.(context, ref)
+      _ -> {:ok, nil}
+    end
+  end
+
+  defp resolve_task_refs(context, refs) when is_list(refs) do
+    resolve_refs(context, refs, &resolve_task/2)
+  end
+
+  defp resolve_task_refs(_context, nil), do: {:ok, []}
+
+  defp resolve_task_refs(_context, _refs),
+    do: {:error, {:invalid_direct_tracker_field, "depends_on_refs"}}
+
+  defp empty_target?(nil), do: true
+  defp empty_target?([]), do: true
+  defp empty_target?(_target), do: false
 
   defp deserialize_targets(targets, scope) do
     context = atomize_scope(scope)
 
     Enum.reduce_while(targets, {:ok, %{}}, fn {key, target}, {:ok, acc} ->
       with {:ok, target_key} <- target_key(key),
-           {:ok, record} <- resolve_target_reference(target_reference(target), context) do
+           {:ok, record} <- resolve_target(target, context) do
         {:cont, {:ok, Map.put(acc, target_key, record)}}
       else
         {:error, reason} -> {:halt, {:error, reason}}
@@ -289,6 +337,28 @@ defmodule Sacrum.Chat.DirectTrackerOperationResolver do
   defp target_reference(%{"type" => type, "id" => id}), do: %{"type" => type, "ref" => id}
   defp target_reference(%{"type" => type, "ref" => ref}), do: %{"type" => type, "ref" => ref}
   defp target_reference(other), do: other
+
+  defp resolve_target(targets, context) when is_list(targets) do
+    resolve_refs(context, targets, &resolve_target/2)
+  end
+
+  defp resolve_target(target, context),
+    do: resolve_target_reference(target_reference(target), context)
+
+  defp resolve_refs(context, refs, resolver) do
+    result =
+      Enum.reduce_while(refs, {:ok, []}, fn ref, {:ok, acc} ->
+        case resolver.(context, ref) do
+          {:ok, resolved} -> {:cont, {:ok, [resolved | acc]}}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+      end)
+
+    case result do
+      {:ok, resolved} -> {:ok, Enum.reverse(resolved)}
+      error -> error
+    end
+  end
 
   defp public_target_keys(action) when action in ["update_workflow_step", "update_step_prompt"],
     do: [:workflow_step]
@@ -447,10 +517,23 @@ defmodule Sacrum.Chat.DirectTrackerOperationResolver do
     end
   end
 
-  defp directive_arguments(%{"arguments" => %{} = args}),
+  defp reject_model_scope_fields_for_action("tracker_task_write", _directive), do: :ok
+
+  defp reject_model_scope_fields_for_action(_action, directive),
+    do: reject_model_scope_fields(directive)
+
+  defp directive_arguments("tracker_task_write", %{"arguments" => %{} = args}),
+    do: {:ok, Map.drop(args, @server_owned_fields)}
+
+  defp directive_arguments("tracker_task_write", %{} = directive) do
+    args = directive |> Map.drop(["action"]) |> Map.drop(@server_owned_fields)
+    {:ok, args}
+  end
+
+  defp directive_arguments(_action, %{"arguments" => %{} = args}),
     do: reject_model_scope_fields(args, {:ok, args})
 
-  defp directive_arguments(%{} = directive) do
+  defp directive_arguments(_action, %{} = directive) do
     args = Map.drop(directive, ["action"])
     reject_model_scope_fields(args, {:ok, args})
   end
@@ -483,11 +566,16 @@ defmodule Sacrum.Chat.DirectTrackerOperationResolver do
       user_id: fetch_context!(context, :user_id),
       project_id: fetch_context!(context, :project_id),
       chat_session_id: fetch_context!(context, :chat_session_id),
-      chat_run_id: get_map_value(context, :chat_run_id)
+      chat_run_id: get_map_value(context, :chat_run_id),
+      active_object: get_map_value(context, :active_object),
+      active_task_id: get_map_value(context, :active_task_id),
+      permission_context: get_map_value(context, :permission_context)
     }
   end
 
   defp target_ref(nil), do: nil
+
+  defp target_ref(records) when is_list(records), do: Enum.map(records, &target_ref/1)
 
   defp target_ref(%{id: id} = record) do
     %{"type" => record_type(record), "id" => id}
