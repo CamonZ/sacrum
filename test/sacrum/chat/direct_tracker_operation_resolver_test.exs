@@ -305,6 +305,241 @@ defmodule Sacrum.Chat.DirectTrackerOperationResolverTest do
 
       assert Enum.sort(candidates) == Enum.sort([first_task.id, second_task.id])
     end
+
+    test "tracker_task_write create derives server-owned scope and permission context from chat context" do
+      user = create_user("create-scope")
+      project = create_project(user, "Create Scope")
+      workflow = create_workflow(user, project, %{name: "Create Workflow"})
+      step = create_step(user, workflow, %{name: "Create Step"})
+      active_task = create_task(user, project, workflow, step, %{title: "Active task"})
+      parent = create_task(user, project, workflow, step, %{title: "Parent task"})
+      dependency = create_task(user, project, workflow, step, %{title: "Dependency task"})
+      session = create_chat_session(user, project)
+
+      other = create_user("create-scope-other")
+      other_project = create_project(other, "Create Scope Other")
+      other_workflow = create_workflow(other, other_project, %{name: "Other Workflow"})
+      other_step = create_step(other, other_workflow, %{name: "Other Step"})
+
+      directive = %{
+        "action" => "tracker_task_write",
+        "arguments" => %{
+          "operation" => "create",
+          "title" => "Child from chat",
+          "level" => "task",
+          "parent_ref" => parent.id,
+          "depends_on_refs" => [dependency.id],
+          "workflow_ref" => workflow.id,
+          "user_id" => other.id,
+          "project_id" => other_project.id,
+          "chat_session_id" => Ecto.UUID.generate(),
+          "active_object_id" => other_step.id,
+          "selected_task_id" => other_step.id,
+          "permission_context" => %{"role" => "owner", "source" => "model"}
+        }
+      }
+
+      assert {:ok, resolved} =
+               DirectTrackerOperationResolver.resolve_directive(
+                 directive,
+                 scoped_context(user, project, session, %{
+                   active_object: %{type: "task", id: active_task.id},
+                   active_task_id: active_task.id,
+                   permission_context: %{
+                     "actor_id" => user.id,
+                     "project_id" => project.id,
+                     "source" => "chat_session"
+                   }
+                 })
+               )
+
+      parent_id = parent.id
+      dependency_id = dependency.id
+      workflow_id = workflow.id
+
+      assert resolved.action == "tracker_task_write"
+      assert resolved.arguments["operation"] == "create"
+      assert resolved.arguments["title"] == "Child from chat"
+      refute Map.has_key?(resolved.arguments, "user_id")
+      refute Map.has_key?(resolved.arguments, "project_id")
+      refute Map.has_key?(resolved.arguments, "chat_session_id")
+      refute Map.has_key?(resolved.arguments, "active_object_id")
+      refute Map.has_key?(resolved.arguments, "selected_task_id")
+      refute Map.has_key?(resolved.arguments, "permission_context")
+
+      assert %Task{id: ^parent_id} = resolved.targets.parent
+      assert [%Task{id: ^dependency_id}] = resolved.targets.depends_on
+      assert %Workflow{id: ^workflow_id} = resolved.targets.workflow
+
+      assert resolved.scope.user_id == user.id
+      assert resolved.scope.project_id == project.id
+      assert resolved.scope.chat_session_id == session.id
+      assert resolved.scope.active_object == %{type: "task", id: active_task.id}
+
+      assert resolved.scope.permission_context == %{
+               "actor_id" => user.id,
+               "project_id" => project.id,
+               "source" => "chat_session"
+             }
+    end
+
+    test "tracker_task_write create resolves parent, dependency, and workflow refs only inside chat scope" do
+      owner = create_user("create-targets")
+      owner_project = create_project(owner, "Create Targets")
+      owner_workflow = create_workflow(owner, owner_project, %{name: "Owner Workflow"})
+      owner_step = create_step(owner, owner_workflow, %{name: "Owner Step"})
+      owner_parent = create_task(owner, owner_project, owner_workflow, owner_step)
+      owner_dependency = create_task(owner, owner_project, owner_workflow, owner_step)
+      session = create_chat_session(owner, owner_project)
+
+      other = create_user("create-targets-other")
+      other_project = create_project(other, "Create Targets Other")
+      other_workflow = create_workflow(other, other_project, %{name: "Other Workflow"})
+      other_step = create_step(other, other_workflow, %{name: "Other Step"})
+      other_task = create_task(other, other_project, other_workflow, other_step)
+
+      context = scoped_context(owner, owner_project, session)
+
+      scoped_failures = [
+        {
+          %{
+            "operation" => "create",
+            "title" => "Cross-project parent",
+            "parent_ref" => other_task.id,
+            "workflow_ref" => owner_workflow.id
+          },
+          {:unauthorized_target, {:task, other_task.id}}
+        },
+        {
+          %{
+            "operation" => "create",
+            "title" => "Cross-project dependency",
+            "parent_ref" => owner_parent.id,
+            "depends_on_refs" => [other_task.id],
+            "workflow_ref" => owner_workflow.id
+          },
+          {:unauthorized_target, {:task, other_task.id}}
+        },
+        {
+          %{
+            "operation" => "create",
+            "title" => "Cross-user workflow",
+            "parent_ref" => owner_parent.id,
+            "depends_on_refs" => [owner_dependency.id],
+            "workflow_ref" => other_workflow.id
+          },
+          {:unauthorized_target, {:workflow, other_workflow.id}}
+        },
+        {
+          %{
+            "operation" => "create",
+            "title" => "Missing parent",
+            "parent_ref" => Ecto.UUID.generate(),
+            "workflow_ref" => owner_workflow.id
+          },
+          :not_found
+        },
+        {
+          %{
+            "operation" => "create",
+            "title" => "Missing workflow",
+            "parent_ref" => owner_parent.id,
+            "workflow_ref" => Ecto.UUID.generate()
+          },
+          :not_found
+        }
+      ]
+
+      for {arguments, expected_error} <- scoped_failures do
+        assert {:error, ^expected_error} =
+                 DirectTrackerOperationResolver.resolve_directive(
+                   %{"action" => "tracker_task_write", "arguments" => arguments},
+                   context
+                 )
+      end
+    end
+
+    test "tracker_task_write create reports ambiguous scoped parent and dependency refs" do
+      user = create_user("create-ambiguous")
+      project = create_project(user, "Create Ambiguous")
+      workflow = create_workflow(user, project, %{name: "Ambiguous Workflow"})
+      step = create_step(user, workflow, %{name: "Ambiguous Step"})
+      session = create_chat_session(user, project)
+
+      ambiguous_ids = [
+        "87654321-0000-0000-0000-000000000001",
+        "87654321-0000-0000-0000-000000000002"
+      ]
+
+      for id <- ambiguous_ids do
+        task = create_task(user, project, workflow, step)
+
+        {_count, nil} =
+          Sacrum.Repo.update_all(from(t in Task, where: t.id == ^task.id), set: [id: id])
+      end
+
+      assert {:error, {:ambiguous, candidates}} =
+               DirectTrackerOperationResolver.resolve_directive(
+                 %{
+                   "action" => "tracker_task_write",
+                   "arguments" => %{
+                     "operation" => "create",
+                     "title" => "Ambiguous parent",
+                     "parent_ref" => "87654321",
+                     "workflow_ref" => workflow.id
+                   }
+                 },
+                 scoped_context(user, project, session)
+               )
+
+      assert Enum.sort(candidates) == Enum.sort(ambiguous_ids)
+
+      assert {:error, {:ambiguous, candidates}} =
+               DirectTrackerOperationResolver.resolve_directive(
+                 %{
+                   "action" => "tracker_task_write",
+                   "arguments" => %{
+                     "operation" => "create",
+                     "title" => "Ambiguous dependency",
+                     "depends_on_refs" => ["87654321"],
+                     "workflow_ref" => workflow.id
+                   }
+                 },
+                 scoped_context(user, project, session)
+               )
+
+      assert Enum.sort(candidates) == Enum.sort(ambiguous_ids)
+
+      ambiguous_workflow_ids = [
+        "76543210-0000-0000-0000-000000000001",
+        "76543210-0000-0000-0000-000000000002"
+      ]
+
+      for id <- ambiguous_workflow_ids do
+        scoped_workflow = create_workflow(user, project, %{name: "Ambiguous Workflow #{id}"})
+
+        {_count, nil} =
+          Sacrum.Repo.update_all(
+            from(w in Workflow, where: w.id == ^scoped_workflow.id),
+            set: [id: id]
+          )
+      end
+
+      assert {:error, {:ambiguous, candidates}} =
+               DirectTrackerOperationResolver.resolve_directive(
+                 %{
+                   "action" => "tracker_task_write",
+                   "arguments" => %{
+                     "operation" => "create",
+                     "title" => "Ambiguous workflow",
+                     "workflow_ref" => "76543210"
+                   }
+                 },
+                 scoped_context(user, project, session)
+               )
+
+      assert Enum.sort(candidates) == Enum.sort(ambiguous_workflow_ids)
+    end
   end
 
   describe "resolve_target_reference/2" do

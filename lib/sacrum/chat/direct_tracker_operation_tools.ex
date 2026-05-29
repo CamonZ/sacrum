@@ -92,6 +92,30 @@ defmodule Sacrum.Chat.DirectTrackerOperationTools do
        },
        "workflow_ref" => %{"type" => "string", "description" => "Target workflow reference."},
        "step_ref" => %{"type" => "string", "description" => "Target workflow step reference."}
+     }},
+    {"tracker_task_write", "Request creating or editing tracker tasks.", ~w(operation title),
+     %{
+       "operation" => %{
+         "type" => "string",
+         "enum" => ["create"],
+         "description" => "Tracker task write operation to perform."
+       },
+       "title" => %{"type" => "string", "description" => "Task title."},
+       "description" => %{"type" => "string", "description" => "Task description."},
+       "level" => %{"type" => "string", "description" => "Task level."},
+       "priority" => %{"type" => "string", "description" => "Task priority."},
+       "tags" => %{
+         "type" => "array",
+         "items" => %{"type" => "string"},
+         "description" => "Task tags."
+       },
+       "parent_ref" => %{"type" => "string", "description" => "Parent task reference."},
+       "depends_on_refs" => %{
+         "type" => "array",
+         "items" => %{"type" => "string"},
+         "description" => "Task dependency references."
+       },
+       "workflow_ref" => %{"type" => "string", "description" => "Workflow reference."}
      }}
   ]
 
@@ -99,6 +123,9 @@ defmodule Sacrum.Chat.DirectTrackerOperationTools do
   @required_by_name Map.new(@tools, fn {name, _description, required, _properties} ->
                       {name, required}
                     end)
+  @argument_keys_by_name Map.new(@tools, fn {name, _description, _required, properties} ->
+                           {name, Map.keys(properties)}
+                         end)
 
   @spec all() :: [map()]
   def all do
@@ -132,6 +159,16 @@ defmodule Sacrum.Chat.DirectTrackerOperationTools do
   end
 
   def required_keys(_), do: :error
+
+  @spec argument_keys(String.t()) :: {:ok, [String.t()]} | :error
+  def argument_keys(name) when is_binary(name) do
+    case Map.fetch(@argument_keys_by_name, name) do
+      {:ok, keys} -> {:ok, keys}
+      :error -> :error
+    end
+  end
+
+  def argument_keys(_), do: :error
 
   @spec server_owned_argument_keys() :: [String.t()]
   def server_owned_argument_keys, do: @server_owned_argument_keys

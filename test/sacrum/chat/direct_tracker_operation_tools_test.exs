@@ -19,6 +19,7 @@ defmodule Sacrum.Chat.DirectTrackerOperationToolsTest do
     add_task_dependency
     remove_task_dependency
     move_task_to_workflow_step
+    tracker_task_write
   )
 
   @server_owned_fields ~w(
@@ -78,6 +79,7 @@ defmodule Sacrum.Chat.DirectTrackerOperationToolsTest do
       assert DirectTrackerOperationTools.known_function_name?("update_task_fields")
       assert DirectTrackerOperationTools.known_function_name?("move_task_to_workflow_step")
       assert DirectTrackerOperationTools.known_function_name?("update_step_prompt")
+      assert DirectTrackerOperationTools.known_function_name?("tracker_task_write")
 
       refute DirectTrackerOperationTools.known_function_name?("start_authoring")
       refute DirectTrackerOperationTools.known_function_name?("execute_shell")
@@ -103,9 +105,7 @@ defmodule Sacrum.Chat.DirectTrackerOperationToolsTest do
 
   describe "schemas" do
     test "exposes update_step_prompt as a prompt-only direct operation" do
-      tool =
-        DirectTrackerOperationTools.all()
-        |> Enum.find(&(get_in(&1, ["function", "name"]) == "update_step_prompt"))
+      tool = tool_by_name("update_step_prompt")
 
       assert %{
                "function" => %{
@@ -121,6 +121,68 @@ defmodule Sacrum.Chat.DirectTrackerOperationToolsTest do
       assert properties["prompt"]["type"] == "string"
     end
 
+    test "exposes tracker_task_write create as a branch of the resource-owned write tool" do
+      assert %{
+               "function" => %{
+                 "parameters" => %{
+                   "additionalProperties" => false,
+                   "required" => required,
+                   "properties" => properties
+                 }
+               }
+             } = tool_by_name("tracker_task_write")
+
+      assert Enum.sort(required) == ~w(operation title)
+      assert properties["operation"]["enum"] == ["create"]
+
+      assert Map.keys(properties) |> Enum.sort() ==
+               ~w(depends_on_refs description level operation parent_ref priority tags title workflow_ref)
+
+      assert properties["title"]["type"] == "string"
+      assert properties["description"]["type"] == "string"
+      assert properties["level"]["type"] == "string"
+      assert properties["priority"]["type"] == "string"
+      assert properties["tags"]["type"] == "array"
+      assert properties["tags"]["items"]["type"] == "string"
+      assert properties["parent_ref"]["type"] == "string"
+      assert properties["depends_on_refs"]["type"] == "array"
+      assert properties["depends_on_refs"]["items"]["type"] == "string"
+      assert properties["workflow_ref"]["type"] == "string"
+      refute Map.has_key?(properties, "needs_review")
+      refute Map.has_key?(properties, "needs_human_review")
+      refute Map.has_key?(properties, "review_comment")
+    end
+
+    test "tracker_task_write create schema stays aligned with live vtb add help" do
+      assert {help, 0} = System.cmd("vtb", ["add", "--help"], stderr_to_stdout: true)
+
+      live_create_fields = create_fields_from_vtb_add_help(help)
+
+      properties =
+        tool_by_name("tracker_task_write")
+        |> get_in(["function", "parameters", "properties"])
+
+      assert MapSet.new(Map.keys(properties)) == live_create_fields
+
+      stale_guide_only_fields =
+        MapSet.new(~w(needs_review needs_human_review review_comment revision_feedback))
+
+      assert MapSet.disjoint?(live_create_fields, stale_guide_only_fields)
+      assert help =~ "--depends-on"
+      refute help =~ "--needs-review"
+    end
+
+    test "does not advertise a standalone model-visible create tool" do
+      tool_names =
+        DirectTrackerOperationTools.all()
+        |> Enum.map(&get_in(&1, ["function", "name"]))
+
+      assert "tracker_task_write" in tool_names
+      refute "create_task" in tool_names
+      refute "create" in tool_names
+      refute "tracker_task_create" in tool_names
+    end
+
     test "do not expose server-owned or context-derived fields as model parameters" do
       for tool <- DirectTrackerOperationTools.all() do
         tool_name = get_in(tool, ["function", "name"])
@@ -130,5 +192,31 @@ defmodule Sacrum.Chat.DirectTrackerOperationToolsTest do
                "#{tool_name} exposes server-owned fields: #{inspect(Map.keys(properties))}"
       end
     end
+  end
+
+  defp tool_by_name(name) do
+    Enum.find(DirectTrackerOperationTools.all(), fn
+      %{"function" => %{"name" => ^name}} -> true
+      _tool -> false
+    end)
+  end
+
+  defp create_fields_from_vtb_add_help(help) when is_binary(help) do
+    base_fields = MapSet.new(~w(operation title))
+
+    help
+    |> String.split("\n")
+    |> Enum.reduce(base_fields, fn line, fields ->
+      cond do
+        String.contains?(line, "--description") -> MapSet.put(fields, "description")
+        String.contains?(line, "--level") -> MapSet.put(fields, "level")
+        String.contains?(line, "--priority") -> MapSet.put(fields, "priority")
+        String.contains?(line, "--tag") -> MapSet.put(fields, "tags")
+        String.contains?(line, "--parent") -> MapSet.put(fields, "parent_ref")
+        String.contains?(line, "--depends-on") -> MapSet.put(fields, "depends_on_refs")
+        String.contains?(line, "--workflow") -> MapSet.put(fields, "workflow_ref")
+        true -> fields
+      end
+    end)
   end
 end
