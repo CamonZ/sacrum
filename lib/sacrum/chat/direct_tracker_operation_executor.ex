@@ -26,14 +26,23 @@ defmodule Sacrum.Chat.DirectTrackerOperationExecutor do
     worktree
     archived
   )
+  @task_create_fields ~w(title description level priority tags worktree)a
   @workflow_step_fields ~w(prompt goal agent_config)
   @argument_atom_keys %{
     "content" => :content,
+    "description" => :description,
     "done" => :done,
     "done_at" => :done_at,
     "fields" => :fields,
     "include_sections" => :include_sections,
-    "section_type" => :section_type
+    "level" => :level,
+    "operation" => :operation,
+    "prompt" => :prompt,
+    "priority" => :priority,
+    "section_type" => :section_type,
+    "tags" => :tags,
+    "title" => :title,
+    "worktree" => :worktree
   }
 
   @spec execute(map()) :: {:ok, map()} | {:error, term()}
@@ -50,6 +59,13 @@ defmodule Sacrum.Chat.DirectTrackerOperationExecutor do
     sections = Enum.map(task_sections(task.id, section_type), &section_result/1)
 
     {:ok, %{action: "read_task_sections", sections: sections}}
+  end
+
+  def execute(%{action: "tracker_task_write"} = operation) do
+    case argument_get(arguments(operation), "operation") do
+      "create" -> create_tracker_task(operation)
+      _ -> {:error, :unsupported_direct_tracker_operation}
+    end
   end
 
   def execute(
@@ -128,6 +144,25 @@ defmodule Sacrum.Chat.DirectTrackerOperationExecutor do
 
   def execute(_operation), do: {:error, :invalid_direct_tracker_operation}
 
+  defp create_tracker_task(operation) do
+    targets = Map.get(operation, :targets, %{})
+    arguments = arguments(operation)
+
+    transaction(fn ->
+      with {:ok, user_id, project_id} <- create_scope(operation, targets),
+           {:ok, task} <-
+             Accounts.Tasks.insert(user_id, project_id, create_task_attrs(arguments, targets)),
+           :ok <- add_task_dependencies(task, Map.get(targets, :depends_on, [])) do
+        {:ok,
+         %{
+           action: "tracker_task_write",
+           operation: "create",
+           task: create_task_result(task, targets)
+         }}
+      end
+    end)
+  end
+
   defp update_workflow_step(action, targets, fields) do
     with %WorkflowStep{} = step <- Map.get(targets, :workflow_step),
          {:ok, updated_step} <- Accounts.WorkflowSteps.update(step, fields) do
@@ -141,6 +176,62 @@ defmodule Sacrum.Chat.DirectTrackerOperationExecutor do
       error -> error
     end
   end
+
+  defp create_scope(%{scope: %{user_id: user_id, project_id: project_id}}, _targets)
+       when is_binary(user_id) and is_binary(project_id) do
+    {:ok, user_id, project_id}
+  end
+
+  defp create_scope(_operation, %{parent: %Task{user_id: user_id, project_id: project_id}})
+       when is_binary(user_id) and is_binary(project_id) do
+    {:ok, user_id, project_id}
+  end
+
+  defp create_scope(_operation, %{workflow: %Workflow{user_id: user_id, project_id: project_id}})
+       when is_binary(user_id) and is_binary(project_id) do
+    {:ok, user_id, project_id}
+  end
+
+  defp create_scope(_operation, %{
+         depends_on: [%Task{user_id: user_id, project_id: project_id} | _]
+       })
+       when is_binary(user_id) and is_binary(project_id) do
+    {:ok, user_id, project_id}
+  end
+
+  defp create_scope(_operation, _targets), do: {:error, :missing_create_scope}
+
+  defp create_task_attrs(arguments, targets) do
+    arguments
+    |> take_argument_fields(@task_create_fields)
+    |> maybe_put_target_id(:parent_id, Map.get(targets, :parent))
+    |> maybe_put_target_id(:workflow_id, Map.get(targets, :workflow))
+  end
+
+  defp take_argument_fields(arguments, fields) do
+    fields
+    |> Map.new(fn field -> {field, argument_get(arguments, Atom.to_string(field))} end)
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
+  end
+
+  defp maybe_put_target_id(attrs, key, %{id: id}) when is_binary(id), do: Map.put(attrs, key, id)
+  defp maybe_put_target_id(attrs, _key, _target), do: attrs
+
+  defp add_task_dependencies(%Task{} = task, dependencies) when is_list(dependencies) do
+    Enum.reduce_while(dependencies, :ok, fn
+      %Task{} = depends_on, :ok ->
+        case Accounts.Tasks.add_dependency(task, depends_on) do
+          {:ok, _dependency} -> {:cont, :ok}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+
+      _invalid, _acc ->
+        {:halt, {:error, :invalid_dependency_target}}
+    end)
+  end
+
+  defp add_task_dependencies(_task, _dependencies), do: {:error, :invalid_dependency_target}
 
   defp execute_dependency_action(action, targets, operation) do
     transaction(fn ->
@@ -287,6 +378,43 @@ defmodule Sacrum.Chat.DirectTrackerOperationExecutor do
       result
     end
   end
+
+  defp create_task_result(%Task{} = task, targets) do
+    task
+    |> task_result(false)
+    |> Map.drop([:project_id])
+    |> Map.merge(%{
+      parent: task_summary(Map.get(targets, :parent)),
+      depends_on: dependency_summaries(targets),
+      workflow: workflow_summary(Map.get(targets, :workflow))
+    })
+  end
+
+  defp task_summary(%Task{} = task) do
+    %{
+      id: task.id,
+      title: task.title,
+      level: task.level,
+      status: task.status
+    }
+  end
+
+  defp task_summary(_task), do: nil
+
+  defp dependency_summaries(%{depends_on: dependencies}) when is_list(dependencies) do
+    Enum.map(dependencies, &task_summary/1)
+  end
+
+  defp dependency_summaries(_targets), do: []
+
+  defp workflow_summary(%Workflow{} = workflow) do
+    %{
+      id: workflow.id,
+      name: workflow.name
+    }
+  end
+
+  defp workflow_summary(_workflow), do: nil
 
   defp workflow_step_result(%WorkflowStep{} = step) do
     %{

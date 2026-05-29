@@ -86,6 +86,116 @@ defmodule Sacrum.Chat.DirectTrackerOperationExecutorTest do
     Repo.one(from d in TaskDependency, where: d.task_id == ^task.id, select: count(d.id))
   end
 
+  describe "execute/1 tracker_task_write create" do
+    test "creates a task through internal services with CLI-parity attrs and relationships" do
+      %{user: user, project: project, workflow: workflow, step: step, task: parent} =
+        tracker_context("create", %{task_attrs: %{title: "Parent tracker task"}})
+
+      blocker = create_task(user, project, workflow, step, %{title: "Required blocker"})
+
+      operation =
+        resolved_operation(
+          "tracker_task_write",
+          %{parent: parent, depends_on: [blocker], workflow: workflow},
+          %{
+            "operation" => "create",
+            "title" => "Create direct tracker task",
+            "description" => "Created without shelling out or invoking GraphQL.",
+            "level" => "ticket",
+            "priority" => "high",
+            "tags" => ["direct-tracker", "create"],
+            "worktree" => "/tmp/direct-tracker-create"
+          }
+        )
+
+      assert {:ok, %{action: "tracker_task_write", operation: "create", task: result}} =
+               DirectTrackerOperationExecutor.execute(operation)
+
+      assert %{
+               id: task_id,
+               title: "Create direct tracker task",
+               description: "Created without shelling out or invoking GraphQL.",
+               level: "ticket",
+               priority: "high",
+               tags: ["direct-tracker", "create"],
+               worktree: "/tmp/direct-tracker-create",
+               parent: %{id: parent_id, title: "Parent tracker task"},
+               depends_on: [%{id: blocker_id, title: "Required blocker"}],
+               workflow: %{id: workflow_id, name: workflow_name}
+             } = result
+
+      assert parent_id == parent.id
+      assert blocker_id == blocker.id
+      assert workflow_id == workflow.id
+      assert workflow_name == workflow.name
+
+      persisted = Repo.get!(Sacrum.Repo.Schemas.Task, task_id)
+      assert persisted.user_id == user.id
+      assert persisted.project_id == project.id
+      assert persisted.parent_id == parent.id
+      assert persisted.workflow_id == workflow.id
+      assert persisted.current_step_id == step.id
+
+      assert [%TaskDependency{task_id: ^task_id, depends_on_id: ^blocker_id}] =
+               Repo.all(from d in TaskDependency, where: d.task_id == ^task_id)
+    end
+
+    test "returns only client-safe task fields and relationship summaries" do
+      %{user: user, project: project, workflow: workflow, step: step, task: parent} =
+        tracker_context("createsafe")
+
+      blocker = create_task(user, project, workflow, step, %{title: "Safe blocker"})
+
+      operation =
+        resolved_operation(
+          "tracker_task_write",
+          %{
+            parent: parent,
+            depends_on: [blocker],
+            workflow: workflow,
+            permission_context: %{user_id: user.id, project_id: project.id},
+            chat_session: %{id: Ecto.UUID.generate()},
+            resolver_state: %{private: true}
+          },
+          %{
+            "operation" => "create",
+            "title" => "Safe serialized create result",
+            "description" => "Only client-safe fields should leave the executor.",
+            "level" => "task"
+          }
+        )
+
+      assert {:ok, %{task: result}} = DirectTrackerOperationExecutor.execute(operation)
+
+      assert Map.take(result, [:title, :description, :level]) == %{
+               title: "Safe serialized create result",
+               description: "Only client-safe fields should leave the executor.",
+               level: "task"
+             }
+
+      assert %{
+               parent: %{id: parent_id},
+               depends_on: [%{id: blocker_id}],
+               workflow: %{id: workflow_id}
+             } =
+               result
+
+      assert parent_id == parent.id
+      assert blocker_id == blocker.id
+      assert workflow_id == workflow.id
+
+      refute Map.has_key?(result, :user_id)
+      refute Map.has_key?(result, :project_id)
+      refute Map.has_key?(result, :chat_session_id)
+      refute Map.has_key?(result, :permission_context)
+      refute Map.has_key?(result, :resolver_state)
+      refute Map.has_key?(result, :targets)
+      refute Map.has_key?(result.parent, :project_id)
+      refute Map.has_key?(hd(result.depends_on), :project_id)
+      refute Map.has_key?(result.workflow, :project_id)
+    end
+  end
+
   describe "execute/1 update_task_fields" do
     test "does not accept or return removed review metadata fields" do
       %{user: user, task: task} = tracker_context("taskfields")
