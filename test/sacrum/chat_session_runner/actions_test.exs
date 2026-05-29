@@ -755,6 +755,74 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
       assert [] = authoring_drafts_for_session(ctx)
     end
 
+    test "rejects unknown tracker_task_write create arguments before mutating Accounts", ctx do
+      %{workflow: workflow, task: parent} = create_tracker_targets(ctx)
+
+      {:ok, dependency} =
+        Sacrum.Accounts.Tasks.insert(ctx.user.id, ctx.project.id, %{
+          title: "Direct Tracker Dependency"
+        })
+
+      task_count_before = project_task_count(ctx.project.id)
+      dependency_count_before = project_dependency_count(ctx.project.id)
+
+      {:ok, running} =
+        Sacrum.Accounts.ChatSessions.transition_status(
+          ctx.user.id,
+          ctx.project.id,
+          ctx.session.id,
+          :running
+        )
+
+      inference_result =
+        result_with_direct_tracker_operation(%{
+          "action" => "tracker_task_write",
+          "arguments" => %{
+            "operation" => "create",
+            "title" => "Created with unsupported model fields",
+            "description" => "This payload must be rejected before execution.",
+            "parent_ref" => parent.id,
+            "depends_on_refs" => [dependency.id],
+            "workflow_ref" => workflow.id,
+            "unexpected_model_argument" => "must not be ignored",
+            "needs_review" => true,
+            "needs_human_review" => true,
+            "review_comment" => "guide-only field",
+            "revision_feedback" => "guide-only field"
+          }
+        })
+
+      params = %{
+        chat_session_id: running.id,
+        engine_session_ref: ctx.engine_session_ref,
+        inference_opts: direct_tracker_continuation_opts("This continuation should not run."),
+        turn_message_id: ctx.user_message.id,
+        inference_result: inference_result
+      }
+
+      assert {:ok, %{step: :verify_authoring}, [%Directive.Emit{} = emit]} =
+               VerifyAuthoringIntent.run(params, %{})
+
+      assert project_task_count(ctx.project.id) == task_count_before
+      assert project_dependency_count(ctx.project.id) == dependency_count_before
+
+      assert emit.signal.type == Signals.complete_session()
+
+      assert [event] = direct_tracker_rejection_events(running.id)
+      assert event.public_payload["reason"] == "out_of_scope"
+      assert event.internal_payload["rejection"]["reason_code"] == "out_of_scope"
+
+      rejection_details = event.internal_payload["rejection"]["details"]
+      assert rejection_details =~ "unexpected_model_argument"
+      assert rejection_details =~ "needs_review"
+      assert rejection_details =~ "needs_human_review"
+      assert rejection_details =~ "review_comment"
+      assert rejection_details =~ "revision_feedback"
+      assert_actionable_rejection_response(event, :out_of_scope)
+      refute_received {:stub_provider_called, _messages, _opts}
+      assert [] = authoring_drafts_for_session(ctx)
+    end
+
     test "routes show_task for a completed task into a final assistant answer",
          ctx do
       %{task: task} = create_tracker_targets(ctx)
@@ -1415,6 +1483,20 @@ defmodule Sacrum.ChatSessionRunner.ActionsTest do
           event.chat_session_id == ^session_id and
             event.visibility == :public and
             event.event_type == "chat_direct_tracker_operation.rejected"
+    )
+  end
+
+  defp project_task_count(project_id) do
+    Repo.aggregate(
+      from(task in Sacrum.Repo.Schemas.Task, where: task.project_id == ^project_id),
+      :count
+    )
+  end
+
+  defp project_dependency_count(project_id) do
+    Repo.aggregate(
+      from(dependency in TaskDependency, where: dependency.project_id == ^project_id),
+      :count
     )
   end
 

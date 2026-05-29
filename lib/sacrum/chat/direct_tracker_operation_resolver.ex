@@ -26,7 +26,6 @@ defmodule Sacrum.Chat.DirectTrackerOperationResolver do
                          DirectTrackerOperationTools.server_owned_argument_keys() ++
                            @resolver_owned_fields
                        )
-
   @string_field_atoms %{
     "action" => :action,
     "depends_on_ref" => :depends_on_ref,
@@ -522,12 +521,14 @@ defmodule Sacrum.Chat.DirectTrackerOperationResolver do
   defp reject_model_scope_fields_for_action(_action, directive),
     do: reject_model_scope_fields(directive)
 
-  defp directive_arguments("tracker_task_write", %{"arguments" => %{} = args}),
-    do: {:ok, Map.drop(args, @server_owned_fields)}
+  defp directive_arguments("tracker_task_write", %{"arguments" => %{} = args}) do
+    args = Map.drop(args, @server_owned_fields)
+    validate_tracker_task_write_arguments(args, {:ok, args})
+  end
 
   defp directive_arguments("tracker_task_write", %{} = directive) do
     args = directive |> Map.drop(["action"]) |> Map.drop(@server_owned_fields)
-    {:ok, args}
+    validate_tracker_task_write_arguments(args, {:ok, args})
   end
 
   defp directive_arguments(_action, %{"arguments" => %{} = args}),
@@ -547,6 +548,29 @@ defmodule Sacrum.Chat.DirectTrackerOperationResolver do
     case fields do
       [] -> ok_result
       [_ | _] -> {:error, {:forbidden_model_scope_fields, Enum.sort(fields)}}
+    end
+  end
+
+  defp validate_tracker_task_write_arguments(%{} = args, ok_result) do
+    case get_map_value(args, :operation) do
+      "create" -> reject_unknown_tracker_task_write_create_arguments(args, ok_result)
+      _operation -> ok_result
+    end
+  end
+
+  defp reject_unknown_tracker_task_write_create_arguments(%{} = args, ok_result) do
+    {:ok, allowed_argument_keys} = DirectTrackerOperationTools.argument_keys("tracker_task_write")
+
+    unknown_fields =
+      args
+      |> Map.keys()
+      |> Enum.map(&to_string/1)
+      |> Enum.reject(&(&1 in allowed_argument_keys))
+      |> Enum.sort()
+
+    case unknown_fields do
+      [] -> ok_result
+      [_ | _] -> {:error, {:unknown_tracker_task_write_create_arguments, unknown_fields}}
     end
   end
 

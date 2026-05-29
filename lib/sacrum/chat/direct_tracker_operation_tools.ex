@@ -123,6 +123,9 @@ defmodule Sacrum.Chat.DirectTrackerOperationTools do
   @required_by_name Map.new(@tools, fn {name, _description, required, _properties} ->
                       {name, required}
                     end)
+  @argument_keys_by_name Map.new(@tools, fn {name, _description, _required, properties} ->
+                           {name, Map.keys(properties)}
+                         end)
 
   @spec all() :: [map()]
   def all do
@@ -156,6 +159,16 @@ defmodule Sacrum.Chat.DirectTrackerOperationTools do
   end
 
   def required_keys(_), do: :error
+
+  @spec argument_keys(String.t()) :: {:ok, [String.t()]} | :error
+  def argument_keys(name) when is_binary(name) do
+    case Map.fetch(@argument_keys_by_name, name) do
+      {:ok, keys} -> {:ok, keys}
+      :error -> :error
+    end
+  end
+
+  def argument_keys(_), do: :error
 
   @spec server_owned_argument_keys() :: [String.t()]
   def server_owned_argument_keys, do: @server_owned_argument_keys
