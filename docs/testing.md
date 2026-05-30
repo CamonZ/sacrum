@@ -13,6 +13,17 @@ Sacrum uses ExUnit with Ecto SQL Sandbox for isolated, concurrent database tests
 
 Both templates set up the Ecto SQL Sandbox automatically. Use `async: true` for parallel execution.
 
+### External CLI Boundaries
+
+Ordinary tests should exercise Sacrum modules and contracts directly, not a
+globally installed CLI binary. Do not shell out to `vtb` from unit, contract, or
+feature tests to prove behavior that lives in this repository.
+
+If CLI parity matters, assert against shared in-repo code or a documented
+contract instead of parsing `vtb --help` output or depending on whatever `vtb`
+happens to be on `PATH`. Tests that intentionally validate an installed CLI
+belong in an explicitly tagged integration suite.
+
 ### Helper Functions
 
 **`SacrumWeb.ConnCase` provides:**
