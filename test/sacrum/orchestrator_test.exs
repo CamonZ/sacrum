@@ -60,7 +60,7 @@ defmodule Sacrum.OrchestratorTest do
       title: "Test Task",
       description: "Test description",
       level: "task",
-      priority: "normal",
+      priority: "medium",
       tags: ["test"]
     }
 

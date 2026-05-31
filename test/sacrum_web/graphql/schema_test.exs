@@ -249,7 +249,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
           title: "My Task",
           description: "Details",
           level: "task",
-          priority: "normal",
+          priority: "medium",
           tags: ["backend"]
         })
 
@@ -265,7 +265,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["title"] == "My Task"
       assert data["description"] == "Details"
       assert data["level"] == "task"
-      assert data["priority"] == "normal"
+      assert data["priority"] == "medium"
       assert data["tags"] == ["backend"]
     end
   end
@@ -284,7 +284,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
               title: "New Task"
               description: "Task desc"
               level: "epic"
-              priority: "urgent"
+              priority: "critical"
               tags: ["bug", "critical"]
             ) { id title description level priority tags }
           }
@@ -295,8 +295,47 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["title"] == "New Task"
       assert data["description"] == "Task desc"
       assert data["level"] == "epic"
-      assert data["priority"] == "urgent"
+      assert data["priority"] == "critical"
       assert data["tags"] == ["bug", "critical"]
+    end
+
+    test "creates a task with default priority", %{conn: conn, user: user, project: project} do
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createTask(
+              projectId: "#{project.id}"
+              title: "Default Priority"
+            ) { id title priority }
+          }
+        """)
+        |> json_response(200)
+
+      data = result["data"]["createTask"]
+      assert data["title"] == "Default Priority"
+      assert data["priority"] == "medium"
+    end
+
+    test "rejects invalid task priority", %{conn: conn, user: user, project: project} do
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createTask(
+              projectId: "#{project.id}"
+              title: "Invalid Priority"
+              priority: "urgent"
+            ) { id title priority }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["createTask"] == nil
+      assert [%{"message" => message}] = result["errors"]
+      assert message =~ "priority"
     end
 
     test "creates a task with worktree field", %{conn: conn, user: user, project: project} do

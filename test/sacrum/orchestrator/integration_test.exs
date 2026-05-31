@@ -84,7 +84,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
         title: "Integration Task",
         description: "test",
         level: "task",
-        priority: "normal",
+        priority: "medium",
         tags: ["test"]
       })
 

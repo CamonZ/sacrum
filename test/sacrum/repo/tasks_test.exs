@@ -35,6 +35,7 @@ defmodule Sacrum.Repo.TasksTest do
 
       assert task.title == "My Task"
       assert task.description == "A description"
+      assert task.priority == "medium"
       assert task.project_id == project.id
       refute Map.has_key?(task, :short_id)
     end
@@ -83,6 +84,36 @@ defmodule Sacrum.Repo.TasksTest do
           Tasks.insert(project, %{title: "Bad Level", level: unquote(invalid_level)})
 
         assert %{level: ["is invalid"]} = errors_on(changeset)
+      end
+    end
+
+    for priority <- ["low", "medium", "high", "critical"] do
+      test "preserves explicit priority #{inspect(priority)}" do
+        user = create_user()
+        project = create_project(user)
+
+        {:ok, task} =
+          Tasks.insert(project, %{
+            title: "Explicit #{unquote(priority)}",
+            priority: unquote(priority)
+          })
+
+        assert task.priority == unquote(priority)
+
+        {:ok, reloaded} = Tasks.get(task.id)
+        assert reloaded.priority == unquote(priority)
+      end
+    end
+
+    for invalid_priority <- ["urgent", "normal", "blocked"] do
+      test "rejects invalid priority #{inspect(invalid_priority)} on insert" do
+        user = create_user()
+        project = create_project(user)
+
+        {:error, changeset} =
+          Tasks.insert(project, %{title: "Bad Priority", priority: unquote(invalid_priority)})
+
+        assert %{priority: ["is invalid"]} = errors_on(changeset)
       end
     end
   end
@@ -151,6 +182,28 @@ defmodule Sacrum.Repo.TasksTest do
 
         {:error, changeset} = Tasks.update(task, %{level: unquote(invalid_level)})
         assert %{level: ["is invalid"]} = errors_on(changeset)
+      end
+    end
+
+    for valid_priority <- ["low", "medium", "high", "critical"] do
+      test "accepts valid priority #{inspect(valid_priority)} on update" do
+        user = create_user()
+        project = create_project(user)
+        {:ok, task} = Tasks.insert(project, %{title: "Priority Update"})
+
+        {:ok, updated} = Tasks.update(task, %{priority: unquote(valid_priority)})
+        assert updated.priority == unquote(valid_priority)
+      end
+    end
+
+    for invalid_priority <- ["urgent", "normal", "blocked"] do
+      test "rejects invalid priority #{inspect(invalid_priority)} on update" do
+        user = create_user()
+        project = create_project(user)
+        {:ok, task} = Tasks.insert(project, %{title: "Bad Priority Update"})
+
+        {:error, changeset} = Tasks.update(task, %{priority: unquote(invalid_priority)})
+        assert %{priority: ["is invalid"]} = errors_on(changeset)
       end
     end
   end

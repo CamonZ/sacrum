@@ -137,7 +137,7 @@ test "creates a task", %{conn: conn, user: user, project: project} do
           title: "New Task"
           description: "Task desc"
           level: "high"
-          priority: "urgent"
+          priority: "critical"
           tags: ["bug", "critical"]
         ) { id title description level priority tags }
       }
