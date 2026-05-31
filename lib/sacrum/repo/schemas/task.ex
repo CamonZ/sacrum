@@ -10,6 +10,7 @@ defmodule Sacrum.Repo.Schemas.Task do
   @foreign_key_type :binary_id
 
   @valid_levels ["epic", "ticket", "task"]
+  @valid_priorities ["low", "medium", "high", "critical"]
 
   @create_fields [
     :title,
@@ -38,7 +39,7 @@ defmodule Sacrum.Repo.Schemas.Task do
     field :title, :string
     field :description, :string
     field :level, :string, default: "task"
-    field :priority, :string
+    field :priority, :string, default: "medium"
     field :tags, {:array, :string}, default: []
     field :rejection_reason, :string
     field :started_at, :utc_datetime_usec
@@ -83,6 +84,7 @@ defmodule Sacrum.Repo.Schemas.Task do
     |> cast(attrs, @create_fields)
     |> validate_required([:title])
     |> validate_inclusion(:level, @valid_levels)
+    |> validate_inclusion(:priority, @valid_priorities)
     |> cast_assoc(:sections,
       with: fn section, section_attrs ->
         section
@@ -106,6 +108,7 @@ defmodule Sacrum.Repo.Schemas.Task do
     |> cast(attrs, @update_fields)
     |> validate_required([:title])
     |> validate_inclusion(:level, @valid_levels)
+    |> validate_inclusion(:priority, @valid_priorities)
     |> cast_assoc(:sections,
       with: fn section, section_attrs ->
         section

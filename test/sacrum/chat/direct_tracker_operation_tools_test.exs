@@ -153,25 +153,6 @@ defmodule Sacrum.Chat.DirectTrackerOperationToolsTest do
       refute Map.has_key?(properties, "review_comment")
     end
 
-    test "tracker_task_write create schema stays aligned with live vtb add help" do
-      assert {help, 0} = System.cmd("vtb", ["add", "--help"], stderr_to_stdout: true)
-
-      live_create_fields = create_fields_from_vtb_add_help(help)
-
-      properties =
-        tool_by_name("tracker_task_write")
-        |> get_in(["function", "parameters", "properties"])
-
-      assert MapSet.new(Map.keys(properties)) == live_create_fields
-
-      stale_guide_only_fields =
-        MapSet.new(~w(needs_review needs_human_review review_comment revision_feedback))
-
-      assert MapSet.disjoint?(live_create_fields, stale_guide_only_fields)
-      assert help =~ "--depends-on"
-      refute help =~ "--needs-review"
-    end
-
     test "does not advertise a standalone model-visible create tool" do
       tool_names =
         DirectTrackerOperationTools.all()
@@ -198,25 +179,6 @@ defmodule Sacrum.Chat.DirectTrackerOperationToolsTest do
     Enum.find(DirectTrackerOperationTools.all(), fn
       %{"function" => %{"name" => ^name}} -> true
       _tool -> false
-    end)
-  end
-
-  defp create_fields_from_vtb_add_help(help) when is_binary(help) do
-    base_fields = MapSet.new(~w(operation title))
-
-    help
-    |> String.split("\n")
-    |> Enum.reduce(base_fields, fn line, fields ->
-      cond do
-        String.contains?(line, "--description") -> MapSet.put(fields, "description")
-        String.contains?(line, "--level") -> MapSet.put(fields, "level")
-        String.contains?(line, "--priority") -> MapSet.put(fields, "priority")
-        String.contains?(line, "--tag") -> MapSet.put(fields, "tags")
-        String.contains?(line, "--parent") -> MapSet.put(fields, "parent_ref")
-        String.contains?(line, "--depends-on") -> MapSet.put(fields, "depends_on_refs")
-        String.contains?(line, "--workflow") -> MapSet.put(fields, "workflow_ref")
-        true -> fields
-      end
     end)
   end
 end

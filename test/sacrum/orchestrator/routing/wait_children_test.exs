@@ -260,7 +260,7 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildrenTest do
       title: "Task",
       description: "x",
       level: "task",
-      priority: "normal",
+      priority: "medium",
       tags: ["test"]
     }
 
