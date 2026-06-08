@@ -151,37 +151,54 @@ defmodule SacrumWeb.Graphql.TaskRunApiTest do
       assert no_run_result["data"]["activeRun"] == nil
     end
 
-    test "taskRunTrace returns descendant runs, executions, and logs in deterministic order", %{
+    test "taskRunTrace returns only parent run executions and logs", %{
       conn: conn,
       user: user,
       project: project
     } do
       {:ok, workflow} = Accounts.Workflows.insert(user.id, project.id, %{name: "Trace workflow"})
-      root_task = create_task(user, project, "Root task")
+      parent_task = create_task(user, project, "Parent task")
       child_task = create_task(user, project, "Child task")
       grandchild_task = create_task(user, project, "Grandchild task")
+      sibling_task = create_task(user, project, "Sibling task")
 
-      {:ok, root} = Accounts.TaskRuns.insert(user.id, project.id, root_task.id)
+      {:ok, parent} = Accounts.TaskRuns.insert(user.id, project.id, parent_task.id)
 
       {:ok, child} =
         Accounts.TaskRuns.insert(user.id, project.id, child_task.id, %{
-          parent_task_run_id: root.id,
-          root_task_run_id: root.id
+          parent_task_run_id: parent.id,
+          root_task_run_id: parent.id
         })
 
       {:ok, grandchild} =
         Accounts.TaskRuns.insert(user.id, project.id, grandchild_task.id, %{
           parent_task_run_id: child.id,
-          root_task_run_id: root.id
+          root_task_run_id: parent.id
         })
 
-      {:ok, root_execution} =
+      {:ok, sibling} =
+        Accounts.TaskRuns.insert(user.id, project.id, sibling_task.id, %{
+          parent_task_run_id: parent.id,
+          root_task_run_id: parent.id
+        })
+
+      {:ok, parent_execution} =
         Accounts.StepExecutions.insert(user.id, %{
-          task_id: root_task.id,
-          task_run_id: root.id,
+          task_id: parent_task.id,
+          task_run_id: parent.id,
           project_id: project.id,
           workflow_id: workflow.id,
-          step_name: "01_root",
+          step_name: "01_parent",
+          status: "completed"
+        })
+
+      {:ok, parent_followup_execution} =
+        Accounts.StepExecutions.insert(user.id, %{
+          task_id: parent_task.id,
+          task_run_id: parent.id,
+          project_id: project.id,
+          workflow_id: workflow.id,
+          step_name: "02_parent_followup",
           status: "completed"
         })
 
@@ -191,7 +208,7 @@ defmodule SacrumWeb.Graphql.TaskRunApiTest do
           task_run_id: child.id,
           project_id: project.id,
           workflow_id: workflow.id,
-          step_name: "02_child",
+          step_name: "03_child",
           status: "completed"
         })
 
@@ -201,24 +218,41 @@ defmodule SacrumWeb.Graphql.TaskRunApiTest do
           task_run_id: grandchild.id,
           project_id: project.id,
           workflow_id: workflow.id,
-          step_name: "03_grandchild",
+          step_name: "04_grandchild",
           status: "completed"
         })
 
-      {:ok, legacy_execution} =
+      {:ok, sibling_execution} =
         Accounts.StepExecutions.insert(user.id, %{
-          task_id: root_task.id,
+          task_id: sibling_task.id,
+          task_run_id: sibling.id,
           project_id: project.id,
           workflow_id: workflow.id,
-          step_name: "legacy_without_task_run",
+          step_name: "05_sibling",
           status: "completed"
         })
 
-      {:ok, root_log} =
+      {:ok, parent_legacy_execution} =
+        Accounts.StepExecutions.insert(user.id, %{
+          task_id: parent_task.id,
+          project_id: project.id,
+          workflow_id: workflow.id,
+          step_name: "legacy_parent_without_task_run",
+          status: "completed"
+        })
+
+      {:ok, parent_log} =
         Accounts.SessionLogs.insert(user.id, %{
           project_id: project.id,
-          step_execution_id: root_execution.id,
-          content: "root output"
+          step_execution_id: parent_execution.id,
+          content: "parent output"
+        })
+
+      {:ok, parent_followup_log} =
+        Accounts.SessionLogs.insert(user.id, %{
+          project_id: project.id,
+          step_execution_id: parent_followup_execution.id,
+          content: "parent followup output"
         })
 
       {:ok, child_log} =
@@ -235,17 +269,24 @@ defmodule SacrumWeb.Graphql.TaskRunApiTest do
           content: "grandchild output"
         })
 
-      {:ok, legacy_log} =
+      {:ok, sibling_log} =
         Accounts.SessionLogs.insert(user.id, %{
           project_id: project.id,
-          step_execution_id: legacy_execution.id,
-          content: "legacy output"
+          step_execution_id: sibling_execution.id,
+          content: "sibling output"
+        })
+
+      {:ok, parent_legacy_log} =
+        Accounts.SessionLogs.insert(user.id, %{
+          project_id: project.id,
+          step_execution_id: parent_legacy_execution.id,
+          content: "parent legacy output"
         })
 
       result =
         graphql_result(conn, user, """
         {
-          taskRunTrace(rootTaskRunId: "#{root.id}") {
+          taskRunTrace(rootTaskRunId: "#{parent.id}") {
             rootTaskRunId
             taskRuns {
               id
@@ -272,29 +313,205 @@ defmodule SacrumWeb.Graphql.TaskRunApiTest do
       assert result["errors"] == nil
 
       trace = result["data"]["taskRunTrace"]
-      assert trace["rootTaskRunId"] == root.id
-      assert Enum.map(trace["taskRuns"], & &1["id"]) == [root.id, child.id, grandchild.id]
+      assert trace["rootTaskRunId"] == parent.id
+      assert Enum.map(trace["taskRuns"], & &1["id"]) == [parent.id]
 
       assert Enum.map(trace["stepExecutions"], & &1["id"]) == [
-               root_execution.id,
-               child_execution.id,
-               grandchild_execution.id
+               parent_execution.id,
+               parent_followup_execution.id
              ]
 
       assert Enum.map(trace["sessionLogs"], & &1["id"]) == [
-               root_log.id,
-               child_log.id,
-               grandchild_log.id
+               parent_log.id,
+               parent_followup_log.id
              ]
 
-      refute legacy_execution.id in Enum.map(trace["stepExecutions"], & &1["id"])
-      refute legacy_log.id in Enum.map(trace["sessionLogs"], & &1["id"])
+      returned_execution_ids = Enum.map(trace["stepExecutions"], & &1["id"])
+      returned_log_ids = Enum.map(trace["sessionLogs"], & &1["id"])
 
       assert [
-               %{"sessionLogs" => [%{"content" => "root output"}]},
-               %{"sessionLogs" => [%{"content" => "child output"}]},
-               %{"sessionLogs" => [%{"content" => "grandchild output"}]}
+               %{"sessionLogs" => [%{"content" => "parent output"}]},
+               %{"sessionLogs" => [%{"content" => "parent followup output"}]}
              ] = trace["stepExecutions"]
+
+      refute child.id in Enum.map(trace["taskRuns"], & &1["id"])
+      refute grandchild.id in Enum.map(trace["taskRuns"], & &1["id"])
+      refute sibling.id in Enum.map(trace["taskRuns"], & &1["id"])
+      refute child_execution.id in returned_execution_ids
+      refute grandchild_execution.id in returned_execution_ids
+      refute sibling_execution.id in returned_execution_ids
+      refute parent_legacy_execution.id in returned_execution_ids
+      refute child_log.id in returned_log_ids
+      refute grandchild_log.id in returned_log_ids
+      refute sibling_log.id in returned_log_ids
+      refute parent_legacy_log.id in returned_log_ids
+    end
+
+    test "taskRunTrace returns only child run executions and logs", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, workflow} = Accounts.Workflows.insert(user.id, project.id, %{name: "Child trace"})
+      parent_task = create_task(user, project, "Parent task")
+      child_task = create_task(user, project, "Child task")
+      grandchild_task = create_task(user, project, "Grandchild task")
+      sibling_task = create_task(user, project, "Sibling task")
+
+      {:ok, parent} = Accounts.TaskRuns.insert(user.id, project.id, parent_task.id)
+
+      {:ok, child} =
+        Accounts.TaskRuns.insert(user.id, project.id, child_task.id, %{
+          parent_task_run_id: parent.id,
+          root_task_run_id: parent.id
+        })
+
+      {:ok, grandchild} =
+        Accounts.TaskRuns.insert(user.id, project.id, grandchild_task.id, %{
+          parent_task_run_id: child.id,
+          root_task_run_id: parent.id
+        })
+
+      {:ok, sibling} =
+        Accounts.TaskRuns.insert(user.id, project.id, sibling_task.id, %{
+          parent_task_run_id: parent.id,
+          root_task_run_id: parent.id
+        })
+
+      {:ok, parent_execution} =
+        Accounts.StepExecutions.insert(user.id, %{
+          task_id: parent_task.id,
+          task_run_id: parent.id,
+          project_id: project.id,
+          workflow_id: workflow.id,
+          step_name: "01_parent",
+          status: "completed"
+        })
+
+      {:ok, child_execution} =
+        Accounts.StepExecutions.insert(user.id, %{
+          task_id: child_task.id,
+          task_run_id: child.id,
+          project_id: project.id,
+          workflow_id: workflow.id,
+          step_name: "02_child",
+          status: "completed"
+        })
+
+      {:ok, grandchild_execution} =
+        Accounts.StepExecutions.insert(user.id, %{
+          task_id: grandchild_task.id,
+          task_run_id: grandchild.id,
+          project_id: project.id,
+          workflow_id: workflow.id,
+          step_name: "03_grandchild",
+          status: "completed"
+        })
+
+      {:ok, sibling_execution} =
+        Accounts.StepExecutions.insert(user.id, %{
+          task_id: sibling_task.id,
+          task_run_id: sibling.id,
+          project_id: project.id,
+          workflow_id: workflow.id,
+          step_name: "04_sibling",
+          status: "completed"
+        })
+
+      {:ok, child_legacy_execution} =
+        Accounts.StepExecutions.insert(user.id, %{
+          task_id: child_task.id,
+          project_id: project.id,
+          workflow_id: workflow.id,
+          step_name: "legacy_child_without_task_run",
+          status: "completed"
+        })
+
+      {:ok, parent_log} =
+        Accounts.SessionLogs.insert(user.id, %{
+          project_id: project.id,
+          step_execution_id: parent_execution.id,
+          content: "parent output"
+        })
+
+      {:ok, child_log} =
+        Accounts.SessionLogs.insert(user.id, %{
+          project_id: project.id,
+          step_execution_id: child_execution.id,
+          content: "child output"
+        })
+
+      {:ok, grandchild_log} =
+        Accounts.SessionLogs.insert(user.id, %{
+          project_id: project.id,
+          step_execution_id: grandchild_execution.id,
+          content: "grandchild output"
+        })
+
+      {:ok, sibling_log} =
+        Accounts.SessionLogs.insert(user.id, %{
+          project_id: project.id,
+          step_execution_id: sibling_execution.id,
+          content: "sibling output"
+        })
+
+      {:ok, child_legacy_log} =
+        Accounts.SessionLogs.insert(user.id, %{
+          project_id: project.id,
+          step_execution_id: child_legacy_execution.id,
+          content: "child legacy output"
+        })
+
+      result =
+        graphql_result(conn, user, """
+        {
+          taskRunTrace(rootTaskRunId: "#{child.id}") {
+            rootTaskRunId
+            taskRuns {
+              id
+              taskId
+              parentTaskRunId
+              rootTaskRunId
+              status
+            }
+            stepExecutions {
+              id
+              taskRunId
+              stepName
+              sessionLogs { id content }
+            }
+            sessionLogs {
+              id
+              stepExecutionId
+              content
+            }
+          }
+        }
+        """)
+
+      assert result["errors"] == nil
+
+      trace = result["data"]["taskRunTrace"]
+      assert trace["rootTaskRunId"] == child.id
+      assert Enum.map(trace["taskRuns"], & &1["id"]) == [child.id]
+      assert Enum.map(trace["stepExecutions"], & &1["id"]) == [child_execution.id]
+      assert Enum.map(trace["sessionLogs"], & &1["id"]) == [child_log.id]
+      assert [%{"sessionLogs" => [%{"content" => "child output"}]}] = trace["stepExecutions"]
+
+      returned_execution_ids = Enum.map(trace["stepExecutions"], & &1["id"])
+      returned_log_ids = Enum.map(trace["sessionLogs"], & &1["id"])
+
+      refute parent.id in Enum.map(trace["taskRuns"], & &1["id"])
+      refute grandchild.id in Enum.map(trace["taskRuns"], & &1["id"])
+      refute sibling.id in Enum.map(trace["taskRuns"], & &1["id"])
+      refute parent_execution.id in returned_execution_ids
+      refute grandchild_execution.id in returned_execution_ids
+      refute sibling_execution.id in returned_execution_ids
+      refute child_legacy_execution.id in returned_execution_ids
+      refute parent_log.id in returned_log_ids
+      refute grandchild_log.id in returned_log_ids
+      refute sibling_log.id in returned_log_ids
+      refute child_legacy_log.id in returned_log_ids
     end
 
     test "taskRun and taskRunTrace enforce user ownership", %{

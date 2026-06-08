@@ -91,7 +91,7 @@ The API is exposed via **GraphQL** at `/graphql` (GraphiQL playground available 
 | `activeRun` | `task_id!` | Current active `TaskRun` for a task, or null |
 | `taskRuns` | `task_id!` | List durable runs for a task |
 | `taskRun` | `id!` | Single durable run by ID |
-| `taskRunTrace` | `root_task_run_id!` | Full run trace with child runs, step attempts, and logs |
+| `taskRunTrace` | `root_task_run_id!` | Single requested `TaskRun` with directly attached step attempts and logs |
 | `stepExecutions` | `task_id!` | List executions for a task |
 | `stepExecution` | `id!` | Single execution by ID |
 | `sessionLogs` | `step_execution_id!` | List logs for an execution |

@@ -160,10 +160,10 @@ defmodule Sacrum.Accounts.TaskRunsTest do
     end
   end
 
-  describe "list_for_trace/2" do
-    test "lists root and descendant runs scoped to the user in deterministic order" do
+  describe "run-scoped lookups" do
+    test "lists single-run executions and session logs without descendants or legacy task rows" do
       user = create_user()
-      {project, task, _workflow} = create_task_with_workflow(user)
+      {project, task, workflow} = create_task_with_workflow(user)
       {:ok, root} = TaskRuns.insert(user.id, project.id, task.id)
 
       {:ok, child} =
@@ -178,32 +178,7 @@ defmodule Sacrum.Accounts.TaskRunsTest do
           root_task_run_id: root.id
         })
 
-      other_user = create_user()
-      {other_project, other_task, _workflow} = create_task_with_workflow(other_user)
-
-      {:ok, other_root} = TaskRuns.insert(other_user.id, other_project.id, other_task.id)
-
-      {:ok, out_of_scope} =
-        TaskRuns.insert(other_user.id, other_project.id, other_task.id, %{
-          parent_task_run_id: other_root.id,
-          root_task_run_id: other_root.id
-        })
-
-      listed_ids = Enum.map(TaskRuns.list_for_trace(user.id, root.id), & &1.id)
-      descendant_ids = Enum.map(TaskRuns.list_descendants_for_trace(user.id, root.id), & &1.id)
-
-      assert listed_ids == [root.id, child.id, grandchild.id]
-      assert descendant_ids == [child.id, grandchild.id]
-      refute out_of_scope.id in listed_ids
-      refute out_of_scope.id in descendant_ids
-    end
-
-    test "lists trace executions and session logs through task run joins" do
-      user = create_user()
-      {project, task, workflow} = create_task_with_workflow(user)
-      {:ok, root} = TaskRuns.insert(user.id, project.id, task.id)
-
-      {:ok, child} =
+      {:ok, sibling} =
         TaskRuns.insert(user.id, project.id, task.id, %{
           parent_task_run_id: root.id,
           root_task_run_id: root.id
@@ -229,12 +204,41 @@ defmodule Sacrum.Accounts.TaskRunsTest do
           "status" => "completed"
         })
 
+      {:ok, grandchild_execution} =
+        StepExecutions.insert(user.id, %{
+          "task_id" => task.id,
+          "task_run_id" => grandchild.id,
+          "project_id" => project.id,
+          "workflow_id" => workflow.id,
+          "step_name" => "grandchild_step",
+          "status" => "completed"
+        })
+
+      {:ok, sibling_execution} =
+        StepExecutions.insert(user.id, %{
+          "task_id" => task.id,
+          "task_run_id" => sibling.id,
+          "project_id" => project.id,
+          "workflow_id" => workflow.id,
+          "step_name" => "sibling_step",
+          "status" => "completed"
+        })
+
+      {:ok, legacy_execution} =
+        StepExecutions.insert(user.id, %{
+          "task_id" => task.id,
+          "project_id" => project.id,
+          "workflow_id" => workflow.id,
+          "step_name" => "legacy_without_task_run",
+          "status" => "completed"
+        })
+
       other_user = create_user()
 
       {:ok, mismatched_owner_execution} =
         StepExecutions.insert(other_user.id, %{
           "task_id" => task.id,
-          "task_run_id" => child.id,
+          "task_run_id" => root.id,
           "project_id" => project.id,
           "workflow_id" => workflow.id,
           "step_name" => "mismatched_owner_step",
@@ -255,49 +259,77 @@ defmodule Sacrum.Accounts.TaskRunsTest do
           "content" => "child output"
         })
 
+      {:ok, grandchild_log} =
+        SessionLogs.insert(user.id, %{
+          "project_id" => project.id,
+          "step_execution_id" => grandchild_execution.id,
+          "content" => "grandchild output"
+        })
+
+      {:ok, sibling_log} =
+        SessionLogs.insert(user.id, %{
+          "project_id" => project.id,
+          "step_execution_id" => sibling_execution.id,
+          "content" => "sibling output"
+        })
+
+      {:ok, legacy_log} =
+        SessionLogs.insert(user.id, %{
+          "project_id" => project.id,
+          "step_execution_id" => legacy_execution.id,
+          "content" => "legacy output"
+        })
+
       {:ok, mismatched_owner_log} =
         SessionLogs.insert(other_user.id, %{
           "project_id" => project.id,
-          "step_execution_id" => child_execution.id,
+          "step_execution_id" => mismatched_owner_execution.id,
           "content" => "mismatched owner output"
         })
 
-      {other_project, other_task, other_workflow} = create_task_with_workflow(other_user)
-      {:ok, other_root} = TaskRuns.insert(other_user.id, other_project.id, other_task.id)
-
-      {:ok, other_execution} =
-        StepExecutions.insert(other_user.id, %{
-          "task_id" => other_task.id,
-          "task_run_id" => other_root.id,
-          "project_id" => other_project.id,
-          "workflow_id" => other_workflow.id,
-          "step_name" => "other_step",
-          "status" => "completed"
-        })
-
-      {:ok, other_log} =
-        SessionLogs.insert(other_user.id, %{
-          "project_id" => other_project.id,
-          "step_execution_id" => other_execution.id,
-          "content" => "other output"
-        })
-
-      trace_execution_ids =
+      root_execution_ids =
         user.id
-        |> TaskRuns.list_step_executions_for_trace(root.id)
+        |> TaskRuns.list_step_executions_for_run(root.id)
         |> Enum.map(& &1.id)
 
-      trace_log_ids =
+      root_log_ids =
         user.id
-        |> TaskRuns.list_session_logs_for_trace(root.id)
+        |> TaskRuns.list_session_logs_for_run(root.id)
         |> Enum.map(& &1.id)
 
-      assert trace_execution_ids == [root_execution.id, child_execution.id]
-      assert trace_log_ids == [root_log.id, child_log.id]
-      refute mismatched_owner_execution.id in trace_execution_ids
-      refute mismatched_owner_log.id in trace_log_ids
-      refute other_execution.id in trace_execution_ids
-      refute other_log.id in trace_log_ids
+      child_execution_ids =
+        user.id
+        |> TaskRuns.list_step_executions_for_run(child.id)
+        |> Enum.map(& &1.id)
+
+      child_log_ids =
+        user.id
+        |> TaskRuns.list_session_logs_for_run(child.id)
+        |> Enum.map(& &1.id)
+
+      assert root_execution_ids == [root_execution.id]
+      assert root_log_ids == [root_log.id]
+      assert child_execution_ids == [child_execution.id]
+      assert child_log_ids == [child_log.id]
+
+      refute child_execution.id in root_execution_ids
+      refute grandchild_execution.id in root_execution_ids
+      refute sibling_execution.id in root_execution_ids
+      refute legacy_execution.id in root_execution_ids
+      refute mismatched_owner_execution.id in root_execution_ids
+      refute child_log.id in root_log_ids
+      refute grandchild_log.id in root_log_ids
+      refute sibling_log.id in root_log_ids
+      refute legacy_log.id in root_log_ids
+      refute mismatched_owner_log.id in root_log_ids
+      refute root_execution.id in child_execution_ids
+      refute grandchild_execution.id in child_execution_ids
+      refute sibling_execution.id in child_execution_ids
+      refute legacy_execution.id in child_execution_ids
+      refute root_log.id in child_log_ids
+      refute grandchild_log.id in child_log_ids
+      refute sibling_log.id in child_log_ids
+      refute legacy_log.id in child_log_ids
     end
 
     test "does not attach an unrelated manual child run to a parent trace" do
@@ -333,10 +365,6 @@ defmodule Sacrum.Accounts.TaskRunsTest do
       assert reloaded_manual_run.parent_task_run_id == nil
       assert reloaded_manual_run.root_task_run_id == nil
       assert reloaded_manual_run.triggered_by_step_execution_id == nil
-
-      trace_ids = Enum.map(TaskRuns.list_for_trace(user.id, parent_run.id), & &1.id)
-      assert trace_ids == [parent_run.id]
-      refute manual_child_run.id in trace_ids
     end
 
     test "rejects an active child run with a stale triggering execution" do

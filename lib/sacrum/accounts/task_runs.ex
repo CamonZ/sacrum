@@ -8,7 +8,6 @@ defmodule Sacrum.Accounts.TaskRuns do
     preloads: [],
     default_order: [desc: :inserted_at]
 
-  alias Sacrum.Accounts.StepExecutions
   alias Sacrum.Repo.Schemas.{SessionLog, StepExecution, TaskRun}
   alias Sacrum.Repo.TaskRuns, as: TaskRunsRepo
 
@@ -32,21 +31,15 @@ defmodule Sacrum.Accounts.TaskRuns do
   @spec list_active_for_tasks(String.t(), [String.t()]) :: [TaskRun.t()]
   defdelegate list_active_for_tasks(user_id, task_ids), to: TaskRunsRepo
 
-  @spec list_for_trace(String.t(), String.t()) :: [TaskRun.t()]
-  defdelegate list_for_trace(user_id, root_task_run_id), to: TaskRunsRepo
-
-  @spec list_descendants_for_trace(String.t(), String.t()) :: [TaskRun.t()]
-  defdelegate list_descendants_for_trace(user_id, root_task_run_id), to: TaskRunsRepo
-
   @spec list_step_executions(String.t(), String.t()) :: [StepExecution.t()]
   def list_step_executions(user_id, task_run_id)
       when is_binary(user_id) and is_binary(task_run_id) do
-    StepExecutions.list_by(user_id, conditions: [task_run_id: task_run_id])
+    TaskRunsRepo.list_step_executions_for_run(user_id, task_run_id)
   end
 
-  @spec list_step_executions_for_trace(String.t(), String.t()) :: [StepExecution.t()]
-  defdelegate list_step_executions_for_trace(user_id, root_task_run_id), to: TaskRunsRepo
+  @spec list_step_executions_for_run(String.t(), String.t()) :: [StepExecution.t()]
+  defdelegate list_step_executions_for_run(user_id, task_run_id), to: TaskRunsRepo
 
-  @spec list_session_logs_for_trace(String.t(), String.t()) :: [SessionLog.t()]
-  defdelegate list_session_logs_for_trace(user_id, root_task_run_id), to: TaskRunsRepo
+  @spec list_session_logs_for_run(String.t(), String.t()) :: [SessionLog.t()]
+  defdelegate list_session_logs_for_run(user_id, task_run_id), to: TaskRunsRepo
 end
