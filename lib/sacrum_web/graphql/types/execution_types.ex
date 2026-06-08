@@ -189,15 +189,15 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
       arg(:root_task_run_id, non_null(:uuid4))
 
       resolve(fn %{root_task_run_id: root_task_run_id}, %{context: %{current_user: user}} ->
-        with {:ok, root_run} <-
+        with {:ok, task_run} <-
                Accounts.TaskRuns.get_by(user.id, conditions: [id: root_task_run_id]) do
           {:ok,
            %{
-             root_task_run_id: root_run.id,
-             task_runs: Accounts.TaskRuns.list_for_trace(user.id, root_run.id),
+             root_task_run_id: task_run.id,
+             task_runs: [task_run],
              step_executions:
-               Accounts.TaskRuns.list_step_executions_for_trace(user.id, root_run.id),
-             session_logs: Accounts.TaskRuns.list_session_logs_for_trace(user.id, root_run.id)
+               Accounts.TaskRuns.list_step_executions_for_run(user.id, task_run.id),
+             session_logs: Accounts.TaskRuns.list_session_logs_for_run(user.id, task_run.id)
            }}
         end
       end)

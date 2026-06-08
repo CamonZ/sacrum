@@ -2533,19 +2533,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       assert leaf_run.root_task_run_id == parent_run.id
       assert leaf_run.triggered_by_step_execution_id == child_waiting_exec.id
 
-      trace_ids =
-        parent_run.id
-        |> then(&Accounts.TaskRuns.list_for_trace(user.id, &1))
-        |> Enum.map(& &1.id)
-
-      descendant_ids =
-        parent_run.id
-        |> then(&Accounts.TaskRuns.list_descendants_for_trace(user.id, &1))
-        |> Enum.map(& &1.id)
-
-      assert trace_ids == [parent_run.id, child_run.id, leaf_run.id]
-      assert descendant_ids == [child_run.id, leaf_run.id]
-
       assert Registry.lookup(Sacrum.Orchestrator.TaskRegistry, parent_task.id) == [],
              "Parent orchestrator must exit (pause lives in DB)"
 

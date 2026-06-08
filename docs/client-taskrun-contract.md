@@ -112,7 +112,7 @@ See [Domain Model: StepExecution.status](domain-model.md#stepexecutionstatus) fo
 
 ### Run History
 
-Use `taskRuns(taskId)` for a task-local run history and `taskRunTrace(rootTaskRunId)` for recursive parent/child orchestration.
+Use `taskRuns(taskId)` for a task-local run history and `taskRunTrace(rootTaskRunId)` for one run's directly attached executions and logs. The `rootTaskRunId` argument name is legacy; clients should pass the specific `TaskRun` ID they want to inspect.
 
 Do not infer TaskRun parentage from task hierarchy. Parent/child run lineage is explicit:
 
@@ -303,9 +303,9 @@ query TaskRuns($taskId: Uuid4!) {
 }
 ```
 
-### Recursive Run Trace
+### Single Run Trace
 
-Use this for trace/debug views that need parent/child orchestration.
+Use this for trace/debug views that need one `TaskRun` and its directly attached attempts and logs. It does not include parent, child, sibling, grandchild, or legacy task-level executions.
 
 ```graphql
 query TaskRunTrace($rootTaskRunId: Uuid4!) {
@@ -507,7 +507,7 @@ Update CLI commands as follows:
 - `status` / `show`: show both workflow position and active run state.
 - `run`: call `runWorkflow(taskId)`.
 - `stop`: call `stopRun(taskRunId)` when an active run is known; otherwise call `stopRun(taskId)`.
-- `trace`: use `taskRunTrace(rootTaskRunId)`.
+- `trace`: use `taskRunTrace(rootTaskRunId)` for the selected `TaskRun` only.
 - `logs`: prefer `StepExecution` and `SessionLog` data scoped by `TaskRun` when available.
 
 Suggested CLI language:
