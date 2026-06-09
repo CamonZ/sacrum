@@ -103,6 +103,12 @@ defmodule Sacrum.SessionLogRollups do
       is_integer(usage["cache_read_input_tokens"]) ->
         usage["cache_read_input_tokens"]
 
+      # Codex `exec --json` reports cache reads on the `turn.completed` usage as
+      # `cached_input_tokens` — not under the Chat Completions
+      # (`prompt_tokens_details`) or Responses (`input_token_details`) shapes.
+      is_integer(usage["cached_input_tokens"]) ->
+        usage["cached_input_tokens"]
+
       is_map(usage["input_token_details"]) ->
         integer(usage["input_token_details"]["cached_tokens"])
 

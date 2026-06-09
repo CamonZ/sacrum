@@ -135,6 +135,37 @@ defmodule Sacrum.Accounts.SessionLogsTest do
       assert reloaded.context_window_cache_read_input_tokens == 30
       assert reloaded.context_window_total_tokens == 125
     end
+
+    test "rolls up Codex cache reads reported as cached_input_tokens" do
+      user = create_user()
+      {project, execution} = create_step_execution(user)
+
+      # Codex `exec --json` emits cache reads on the turn.completed usage under
+      # the `cached_input_tokens` key, distinct from the OpenAI Chat/Responses
+      # shapes — the rollup must recognize it or cache reads silently read 0.
+      assert {:ok, %SessionLog{}} =
+               SessionLogs.insert(user.id, %{
+                 "step_execution_id" => execution.id,
+                 "project_id" => project.id,
+                 "format" => "openai",
+                 "content" =>
+                   Jason.encode!(%{
+                     "type" => "turn.completed",
+                     "usage" => %{
+                       "input_tokens" => 1500,
+                       "cached_input_tokens" => 200,
+                       "output_tokens" => 800,
+                       "reasoning_output_tokens" => 120
+                     }
+                   })
+               })
+
+      reloaded = Repo.get!(StepExecution, execution.id)
+      assert reloaded.session_input_tokens == 1500
+      assert reloaded.session_cache_read_input_tokens == 200
+      assert reloaded.session_output_tokens == 800
+      assert reloaded.context_window_cache_read_input_tokens == 200
+    end
   end
 
   describe "get_by/2" do
