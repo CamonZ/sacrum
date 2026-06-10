@@ -21,6 +21,19 @@ defmodule Sacrum.SessionLogRollups do
     end
   end
 
+  @spec refresh_step_execution(SessionLog.t()) ::
+          {:ok, StepExecution.t()} | {:error, Ecto.Changeset.t()} | {:error, :not_found}
+  def refresh_step_execution(%SessionLog{step_execution_id: step_execution_id} = log)
+      when is_binary(step_execution_id) do
+    case lock_step_execution(step_execution_id) do
+      nil ->
+        {:error, :not_found}
+
+      execution ->
+        refresh_log_rollups(execution, log)
+    end
+  end
+
   defp lock_step_execution(step_execution_id) do
     StepExecution
     |> where([execution], execution.id == ^step_execution_id)
@@ -40,6 +53,27 @@ defmodule Sacrum.SessionLogRollups do
     end
   end
 
+  defp refresh_log_rollups(%StepExecution{} = execution, %SessionLog{} = log) do
+    total_usage = aggregate_usage(log.step_execution_id)
+    latest_usage = usage_from_log(log) || empty_usage()
+
+    execution
+    |> StepExecution.update_changeset(refresh_attrs(total_usage, latest_usage))
+    |> Repo.update()
+  end
+
+  defp aggregate_usage(step_execution_id) do
+    SessionLog
+    |> where([log], log.step_execution_id == ^step_execution_id)
+    |> Repo.all()
+    |> Enum.reduce(empty_usage(), fn log, acc ->
+      case usage_from_log(log) do
+        nil -> acc
+        usage -> merge_usage(acc, usage)
+      end
+    end)
+  end
+
   defp rollup_attrs(%StepExecution{} = execution, usage) do
     %{
       session_input_tokens: token_count(execution.session_input_tokens) + usage.input_tokens,
@@ -50,6 +84,36 @@ defmodule Sacrum.SessionLogRollups do
       context_window_input_tokens: usage.input_tokens,
       context_window_cache_read_input_tokens: usage.cache_read_input_tokens,
       context_window_total_tokens: usage.total_tokens
+    }
+  end
+
+  defp refresh_attrs(total_usage, latest_usage) do
+    %{
+      session_input_tokens: total_usage.input_tokens,
+      session_cache_read_input_tokens: total_usage.cache_read_input_tokens,
+      session_output_tokens: total_usage.output_tokens,
+      session_total_tokens: total_usage.total_tokens,
+      context_window_input_tokens: latest_usage.input_tokens,
+      context_window_cache_read_input_tokens: latest_usage.cache_read_input_tokens,
+      context_window_total_tokens: latest_usage.total_tokens
+    }
+  end
+
+  defp empty_usage do
+    %{
+      input_tokens: 0,
+      cache_read_input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0
+    }
+  end
+
+  defp merge_usage(acc, usage) do
+    %{
+      input_tokens: acc.input_tokens + usage.input_tokens,
+      cache_read_input_tokens: acc.cache_read_input_tokens + usage.cache_read_input_tokens,
+      output_tokens: acc.output_tokens + usage.output_tokens,
+      total_tokens: acc.total_tokens + usage.total_tokens
     }
   end
 

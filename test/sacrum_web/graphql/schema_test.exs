@@ -2842,6 +2842,74 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["stepExecutionId"] == exec.id
     end
 
+    test "upserts a session log by logicalKey", %{user: user, project: project} do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+
+      {:ok, exec} =
+        Accounts.StepExecutions.insert(user.id, %{
+          task_id: task.id,
+          workflow_id: wf.id,
+          project_id: project.id,
+          step_name: "step_1"
+        })
+
+      first =
+        build_conn()
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createSessionLog(
+              stepExecutionId: "#{exec.id}"
+              logicalKey: "system/thinking_tokens"
+              content: "first snapshot"
+              format: "anthropic"
+            ) { id content format logicalKey }
+          }
+        """)
+        |> json_response(200)
+
+      first_log = first["data"]["createSessionLog"]
+      assert first_log["content"] == "first snapshot"
+      assert first_log["format"] == "anthropic"
+      assert first_log["logicalKey"] == "system/thinking_tokens"
+
+      second =
+        build_conn()
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createSessionLog(
+              stepExecutionId: "#{exec.id}"
+              logicalKey: "system/thinking_tokens"
+              content: "latest snapshot"
+              format: "openai"
+            ) { id content format logicalKey }
+          }
+        """)
+        |> json_response(200)
+
+      second_log = second["data"]["createSessionLog"]
+      assert second_log["id"] == first_log["id"]
+      assert second_log["content"] == "latest snapshot"
+      assert second_log["format"] == "openai"
+      assert second_log["logicalKey"] == "system/thinking_tokens"
+
+      result =
+        build_conn()
+        |> authenticate(user)
+        |> graphql(
+          ~s|{ sessionLogs(stepExecutionId: "#{exec.id}") { id content format logicalKey } }|
+        )
+        |> json_response(200)
+
+      assert [found] = result["data"]["sessionLogs"]
+      assert found["id"] == first_log["id"]
+      assert found["content"] == "latest snapshot"
+      assert found["format"] == "openai"
+      assert found["logicalKey"] == "system/thinking_tokens"
+    end
+
     test "rejects unsupported session log format", %{conn: conn, user: user, project: project} do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})

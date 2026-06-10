@@ -129,6 +129,7 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
     field :id, :id
     field :content, :string
     field :format, :string
+    field :logical_key, :string
     field :inserted_at, :datetime
     field :updated_at, :datetime
 
@@ -343,6 +344,7 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
       arg(:step_execution_id, non_null(:uuid4))
       arg(:content, non_null(:string))
       arg(:format, :string)
+      arg(:logical_key, :string)
 
       resolve(fn args, %{context: %{current_user: user}} ->
         exec_id = Map.get(args, :step_execution_id)

@@ -65,7 +65,8 @@ instead of silently applying a payload with an unsupported shape.
 | `task_run_updated` | Status projection | `task_runs` update after image with before `status` and `latest_step_execution_id`, plus server-side run-control enrichment inputs. | Same full TaskRun row plus replacement `run_controls`; clients should prefer these controls over local recomputation. |
 | `task_run_step_changed` | Semantic delta | Derived from `tasks` and `task_runs`; see below. | `{task_run_id, task_id, from_step_id, to_step_id, status, level}`. |
 | `task_step_changed` | Semantic delta | Derived from `tasks`; see below. | `{task_id, from_step_id, to_step_id, workflow_id, level}`. |
-| `session_log_created` | Entity projection | `session_logs` insert after image. | Full log row: `id`, `step_execution_id`, `project_id`, `content`, `format`, timestamps. |
+| `session_log_created` | Entity projection | `session_logs` insert after image. | Full log row: `id`, `step_execution_id`, `project_id`, `content`, `format`, nullable `logical_key`, timestamps. Clients append. |
+| `session_log_updated` | Entity projection | `session_logs` update after image. | Full log row: `id`, `step_execution_id`, `project_id`, `content`, `format`, nullable `logical_key`, timestamps. Clients replace by `id`. |
 | `section_created` | Entity projection | `task_sections` insert after image. | Full section row: `id`, `task_id`, `project_id`, type/content/order/done fields, timestamps. |
 | `section_updated` | Entity projection | `task_sections` update after image. | Same full section row. |
 | `section_deleted` | Entity projection | `task_sections` delete before image. | `{id, task_id}` tombstone. |

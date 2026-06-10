@@ -312,6 +312,15 @@ defmodule SacrumWeb.ProjectChannel do
     )
   end
 
+  @spec broadcast_session_log_updated(String.t(), map()) :: :ok | {:error, term()}
+  def broadcast_session_log_updated(project_id, log) do
+    SacrumWeb.Endpoint.broadcast(
+      "project:#{project_id}",
+      "session_log_updated",
+      session_log_payload(log)
+    )
+  end
+
   # Chat broadcasts
 
   @spec broadcast_chat_event(String.t(), map()) :: :ok | {:error, term()}
@@ -627,6 +636,7 @@ defmodule SacrumWeb.ProjectChannel do
       project_id: log.project_id,
       content: log.content,
       format: field_value(log, :format),
+      logical_key: field_value(log, :logical_key),
       inserted_at: log.inserted_at,
       updated_at: log.updated_at
     })

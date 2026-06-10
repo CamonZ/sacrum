@@ -720,6 +720,108 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
     end)
   end
 
+  test "logical-key session log mutations project created then updated" do
+    with_project(fn user, project ->
+      {workflow, step, _next_step} = create_workflow_with_steps(user, project)
+      task = create_task(project, "CDC logical session log", %{workflow_id: workflow.id})
+
+      {:ok, execution} =
+        %StepExecution{user_id: user.id, task_id: task.id, project_id: project.id}
+        |> StepExecution.create_changeset(%{
+          task_id: task.id,
+          workflow_id: workflow.id,
+          step_id: step.id,
+          step_name: step.name,
+          status: "started"
+        })
+        |> Repo.insert()
+
+      :ok = subscribe_project(project.id)
+
+      first_log =
+        run_graphql!(user, """
+        mutation {
+          createSessionLog(
+            stepExecutionId: "#{execution.id}"
+            logicalKey: "system/thinking_tokens"
+            content: "first snapshot"
+            format: "anthropic"
+          ) { id content logicalKey }
+        }
+        """)
+        |> get_in(["createSessionLog"])
+
+      assert first_log["content"] == "first snapshot"
+      assert first_log["logicalKey"] == "system/thinking_tokens"
+
+      created_payload =
+        assert_project_broadcast(
+          "session_log_created",
+          %{
+            id: first_log["id"],
+            step_execution_id: execution.id,
+            project_id: project.id,
+            content: "first snapshot",
+            logical_key: "system/thinking_tokens"
+          },
+          1_000
+        )
+
+      second_log =
+        run_graphql!(user, """
+        mutation {
+          createSessionLog(
+            stepExecutionId: "#{execution.id}"
+            logicalKey: "system/thinking_tokens"
+            content: "latest snapshot"
+            format: "anthropic"
+          ) { id content logicalKey }
+        }
+        """)
+        |> get_in(["createSessionLog"])
+
+      assert second_log["id"] == first_log["id"]
+      assert second_log["content"] == "latest snapshot"
+
+      updated_payload =
+        assert_project_broadcast(
+          "session_log_updated",
+          %{
+            id: first_log["id"],
+            step_execution_id: execution.id,
+            project_id: project.id,
+            content: "latest snapshot",
+            logical_key: "system/thinking_tokens"
+          },
+          1_000
+        )
+
+      assert updated_payload.inserted_at == created_payload.inserted_at
+
+      listed_logs =
+        run_graphql!(user, """
+        {
+          sessionLogs(stepExecutionId: "#{execution.id}") {
+            id
+            content
+            logicalKey
+          }
+        }
+        """)
+        |> get_in(["sessionLogs"])
+
+      assert [
+               %{
+                 "id" => id,
+                 "content" => "latest snapshot",
+                 "logicalKey" => "system/thinking_tokens"
+               }
+             ] = listed_logs
+
+      assert id == first_log["id"]
+    end)
+  end
+
   test "committed public chat session creates and updates are projected" do
     with_project(fn user, project ->
       :ok = subscribe_project(project.id)
@@ -856,6 +958,13 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
 
   defp committed_db(fun) do
     Sandbox.unboxed_run(Repo, fun)
+  end
+
+  defp run_graphql!(user, document) do
+    assert {:ok, %{data: data}} =
+             Absinthe.run(document, SacrumWeb.Graphql.Schema, context: %{current_user: user})
+
+    data
   end
 
   defp with_project(fun) do

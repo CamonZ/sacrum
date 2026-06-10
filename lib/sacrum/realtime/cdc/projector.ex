@@ -74,6 +74,7 @@ defmodule Sacrum.Realtime.Cdc.Projector do
     "task_run_step_changed" => :broadcast_task_run_step_changed,
     "task_step_changed" => :broadcast_task_step_changed,
     "session_log_created" => :broadcast_session_log_created,
+    "session_log_updated" => :broadcast_session_log_updated,
     "section_created" => :broadcast_section_created,
     "section_updated" => :broadcast_section_updated,
     "section_deleted" => :broadcast_section_deleted,
@@ -286,6 +287,15 @@ defmodule Sacrum.Realtime.Cdc.Projector do
        }) do
     log = record_to_struct!("session_logs", record)
     [projection("session_log_created", log.project_id, log)]
+  end
+
+  defp projections(%WalEx.Event{
+         source: %{table: "session_logs"},
+         type: :update,
+         new_record: record
+       }) do
+    log = record_to_struct!("session_logs", record)
+    [projection("session_log_updated", log.project_id, log)]
   end
 
   defp projections(%WalEx.Event{

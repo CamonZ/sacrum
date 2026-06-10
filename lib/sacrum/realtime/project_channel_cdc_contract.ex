@@ -141,7 +141,7 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
   )a
 
   @session_log_payload_keys ~w(
-    id step_execution_id project_id content format inserted_at updated_at
+    id step_execution_id project_id content format logical_key inserted_at updated_at
   )a
 
   @session_log_event_payload_keys [:schema_version | @session_log_payload_keys]
@@ -565,7 +565,23 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
       ],
       payload_keys: @session_log_event_payload_keys,
       schema_version: @schema_version,
-      completeness: "Complete append-only log projection keyed by step_execution_id."
+      completeness:
+        "Complete log projection keyed by step_execution_id; clients append this event."
+    },
+    %{
+      event: "session_log_updated",
+      classification: @entity_projection,
+      source_changes: [
+        %{
+          table: "session_logs",
+          operation: :update,
+          after_image_fields: @session_log_payload_keys
+        }
+      ],
+      payload_keys: @session_log_event_payload_keys,
+      schema_version: @schema_version,
+      completeness:
+        "Complete logical-key log projection keyed by id and step_execution_id; clients replace the existing log row."
     },
     %{
       event: "section_created",
