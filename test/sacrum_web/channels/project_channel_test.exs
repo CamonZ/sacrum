@@ -469,6 +469,10 @@ defmodule SacrumWeb.ProjectChannelTest do
         SacrumWeb.ProjectChannel.broadcast_session_log_created(project.id, session_log)
       end)
 
+      assert_broadcast_payload_keys("session_log_updated", fn ->
+        SacrumWeb.ProjectChannel.broadcast_session_log_updated(project.id, session_log)
+      end)
+
       assert_broadcast_payload_keys("section_created", fn ->
         SacrumWeb.ProjectChannel.broadcast_section_created(project.id, section)
       end)
@@ -1024,6 +1028,7 @@ defmodule SacrumWeb.ProjectChannelTest do
       step_execution_id: Ecto.UUID.generate(),
       project_id: project.id,
       content: "session log",
+      logical_key: "system/thinking_tokens",
       inserted_at: now,
       updated_at: now
     }

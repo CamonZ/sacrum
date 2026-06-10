@@ -347,6 +347,7 @@ query TaskRunTrace($rootTaskRunId: Uuid4!) {
         id
         content
         format
+        logicalKey
         insertedAt
       }
     }
@@ -355,6 +356,7 @@ query TaskRunTrace($rootTaskRunId: Uuid4!) {
       stepExecutionId
       content
       format
+      logicalKey
       insertedAt
     }
   }
@@ -388,13 +390,22 @@ Handle these events for run-aware GUI/CLI state:
 | `task_run_updated` | Upsert TaskRun; replace row controls with payload `run_controls`. |
 | `task_run_step_changed` | Emitted whenever a task's `current_step_id` changes while a TaskRun exists, and at run-end paths (completion, retry exhaustion, stop). Lets pipeline views decrement the `from_step_id` bucket and increment the `to_step_id` bucket without refetching. |
 | `task_step_changed` | Emitted whenever a task's `current_step_id` changes outside orchestrator execution (manual `assign_workflow`, `advance_to_step`, `move_to_step`). Same pipeline use as `task_run_step_changed`, without `task_run_id` / `status` since no run is involved. |
-| `session_log_created` | Append log to the matching step execution. |
+| `session_log_created` | Append log to the matching step execution. Payload includes `logical_key` when the daemon supplied an opaque logical key. |
+| `session_log_updated` | Replace the existing log row by `id` for logical-key upserts; do not append a second transcript line. |
 | `code_ref_created` / `code_ref_updated` / `code_ref_deleted` | Upsert/remove task or section code references in detail/evidence stores by id. |
 | `chat_session_created` / `chat_session_updated` / `chat_message_created` / `chat_event_created` | Apply public chat transcript/progress events projected from `chat_events.public_payload`; internal chat events are not delivered. |
 
 Channel payloads are snake_case. GraphQL fields are camelCase.
 Default-client channel payloads include `schema_version: 1`; clients should
 reject unknown versions as a binding/contract mismatch.
+
+Session logs are append-only unless the daemon sends a `logicalKey` through
+`createSessionLog`. For logical-key writes, the first write emits
+`session_log_created`; later writes for the same `(stepExecutionId, logicalKey)`
+emit `session_log_updated` with the same `id`, original `inserted_at`, latest
+`content`, latest `format`, latest `updated_at`, and `logical_key`. Clients
+should key log rows by `id` and treat `logical_key` as opaque backend/daemon
+metadata.
 
 `task_run_created` and `task_run_updated` payloads include:
 

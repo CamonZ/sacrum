@@ -221,6 +221,21 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContractTest do
       :updated_at
     ])
 
+    session_log_payload_keys = [
+      :schema_version,
+      :id,
+      :step_execution_id,
+      :project_id,
+      :content,
+      :format,
+      :logical_key,
+      :inserted_at,
+      :updated_at
+    ]
+
+    assert_payload_includes("session_log_created", session_log_payload_keys)
+    assert_payload_includes("session_log_updated", session_log_payload_keys)
+
     assert_payload_includes("chat_message_created", [
       :schema_version,
       :id,

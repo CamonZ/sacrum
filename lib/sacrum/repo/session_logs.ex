@@ -32,21 +32,46 @@ defmodule Sacrum.Repo.SessionLogs do
     project_id = Map.get(attrs, "project_id") || Map.get(attrs, :project_id)
 
     Repo.transaction(fn ->
+      changeset =
+        SessionLog.create_changeset(
+          %SessionLog{
+            user_id: user_id,
+            step_execution_id: step_execution_id,
+            project_id: project_id
+          },
+          attrs
+        )
+
+      logical_key = Ecto.Changeset.get_field(changeset, :logical_key)
+
       with {:ok, log} <-
-             %SessionLog{
-               user_id: user_id,
-               step_execution_id: step_execution_id,
-               project_id: project_id
-             }
-             |> SessionLog.create_changeset(attrs)
-             |> Repo.insert(),
-           {:ok, _execution} <- SessionLogRollups.rollup_step_execution(log) do
+             insert_or_upsert(changeset, logical_key),
+           {:ok, _execution} <- rollup_step_execution(log, logical_key) do
         log
       else
         {:error, reason} -> Repo.rollback(reason)
       end
     end)
   end
+
+  defp insert_or_upsert(changeset, logical_key) when is_binary(logical_key),
+    do: upsert_by_logical_key(changeset)
+
+  defp insert_or_upsert(changeset, _logical_key), do: Repo.insert(changeset)
+
+  defp upsert_by_logical_key(changeset) do
+    Repo.insert(changeset,
+      on_conflict: {:replace, [:content, :format, :updated_at]},
+      conflict_target:
+        {:unsafe_fragment, "(step_execution_id, logical_key) WHERE logical_key IS NOT NULL"},
+      returning: true
+    )
+  end
+
+  defp rollup_step_execution(log, logical_key) when is_binary(logical_key),
+    do: SessionLogRollups.refresh_step_execution(log)
+
+  defp rollup_step_execution(log, _logical_key), do: SessionLogRollups.rollup_step_execution(log)
 
   defoverridable insert: 2
 end
