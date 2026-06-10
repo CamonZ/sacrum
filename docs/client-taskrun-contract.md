@@ -401,7 +401,7 @@ reject unknown versions as a binding/contract mismatch.
 
 Session logs are append-only unless the daemon sends a `logicalKey` through
 `createSessionLog`. For logical-key writes, the first write emits
-`session_log_created`; later writes for the same `(stepExecutionId, logicalKey)`
+`session_log_created`; later writes for the same `(step_execution_id, logical_key)`
 emit `session_log_updated` with the same `id`, original `inserted_at`, latest
 `content`, latest `format`, latest `updated_at`, and `logical_key`. Clients
 should key log rows by `id` and treat `logical_key` as opaque backend/daemon

@@ -161,6 +161,26 @@ defmodule Sacrum.Repo.SessionLogsTest do
       assert reloaded.context_window_input_tokens == 31
       assert reloaded.context_window_cache_read_input_tokens == 4
       assert reloaded.context_window_total_tokens == 37
+
+      assert {:ok, plain_log} =
+               SessionLogs.insert(user_id, %{
+                 project_id: project.id,
+                 step_execution_id: execution.id,
+                 logical_key: "system/thinking_tokens",
+                 format: "anthropic",
+                 content: "latest snapshot without usage"
+               })
+
+      assert plain_log.id == first_log.id
+
+      reloaded = Repo.get!(StepExecution, execution.id)
+      assert reloaded.session_input_tokens == 0
+      assert reloaded.session_cache_read_input_tokens == 0
+      assert reloaded.session_output_tokens == 0
+      assert reloaded.session_total_tokens == 0
+      assert reloaded.context_window_input_tokens == 0
+      assert reloaded.context_window_cache_read_input_tokens == 0
+      assert reloaded.context_window_total_tokens == 0
     end
 
     test "appends logs when logical key is nil" do

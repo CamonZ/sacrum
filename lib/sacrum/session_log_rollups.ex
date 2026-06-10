@@ -54,17 +54,12 @@ defmodule Sacrum.SessionLogRollups do
   end
 
   defp refresh_log_rollups(%StepExecution{} = execution, %SessionLog{} = log) do
-    case usage_from_log(log) do
-      nil ->
-        {:ok, execution}
+    total_usage = aggregate_usage(log.step_execution_id)
+    latest_usage = usage_from_log(log) || empty_usage()
 
-      latest_usage ->
-        total_usage = aggregate_usage(log.step_execution_id)
-
-        execution
-        |> StepExecution.update_changeset(refresh_attrs(total_usage, latest_usage))
-        |> Repo.update()
-    end
+    execution
+    |> StepExecution.update_changeset(refresh_attrs(total_usage, latest_usage))
+    |> Repo.update()
   end
 
   defp aggregate_usage(step_execution_id) do
