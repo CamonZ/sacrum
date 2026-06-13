@@ -3007,6 +3007,75 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["taskId"] == task.id
     end
 
+    test "createSection auto-assigns sectionOrder when omitted", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createSection(
+              taskId: "#{task.id}"
+              sectionType: "checklist_item"
+              content: "Auto ordered"
+            ) { id sectionType content sectionOrder taskId }
+          }
+        """)
+        |> json_response(200)
+
+      data = result["data"]["createSection"]
+      assert data["sectionType"] == "checklist_item"
+      assert data["content"] == "Auto ordered"
+      assert data["sectionOrder"] == 0
+      assert data["taskId"] == task.id
+    end
+
+    test "concurrent createSection calls for the same task and type get distinct sectionOrders",
+         %{user: user, project: project} do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      parent = self()
+
+      results =
+        1..2
+        |> Task.async_stream(
+          fn i ->
+            Ecto.Adapters.SQL.Sandbox.allow(Sacrum.Repo, parent, self())
+
+            build_conn()
+            |> authenticate(user)
+            |> graphql("""
+              mutation {
+                createSection(
+                  taskId: "#{task.id}"
+                  sectionType: "testing_criterion"
+                  content: "Concurrent criterion #{i}"
+                ) { id content sectionOrder }
+              }
+            """)
+            |> json_response(200)
+          end,
+          max_concurrency: 2,
+          ordered: false,
+          timeout: 10_000
+        )
+        |> Enum.map(fn {:ok, result} -> result end)
+
+      sections = Enum.map(results, & &1["data"]["createSection"])
+
+      assert Enum.all?(results, &(Map.get(&1, "errors") in [nil, []]))
+      assert Enum.sort(Enum.map(sections, & &1["sectionOrder"])) == [0, 1]
+
+      assert Enum.sort(Enum.map(sections, & &1["content"])) == [
+               "Concurrent criterion 1",
+               "Concurrent criterion 2"
+             ]
+    end
+
     test "updates a section", %{conn: conn, user: user, project: project} do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
 

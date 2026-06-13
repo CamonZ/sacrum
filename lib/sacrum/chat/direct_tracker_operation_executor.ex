@@ -7,8 +7,6 @@ defmodule Sacrum.Chat.DirectTrackerOperationExecutor do
   to the vtb CLI, or route mutations through authoring draft services.
   """
 
-  import Ecto.Query
-
   alias Sacrum.Accounts
   alias Sacrum.Orchestrator.Routing.InterWorkflow
   alias Sacrum.Repo
@@ -307,29 +305,13 @@ defmodule Sacrum.Chat.DirectTrackerOperationExecutor do
         {:error, :invalid_direct_tracker_operation}
 
       nil ->
-        Accounts.Sections.insert(
-          task.user_id,
-          Map.put(attrs, "section_order", next_section_order(task.id, attrs["section_type"]))
-        )
+        Accounts.Sections.insert(task.user_id, attrs)
     end
   end
 
   defp section_target(targets) when is_map(targets) do
     Map.get(targets, :task_section) || Map.get(targets, :section)
   end
-
-  defp next_section_order(task_id, section_type) when is_binary(section_type) do
-    max_order =
-      Repo.one(
-        from section in TaskSections.query(),
-          where: section.task_id == ^task_id and section.section_type == ^section_type,
-          select: max(section.section_order)
-      )
-
-    (max_order || 0) + 1
-  end
-
-  defp next_section_order(_task_id, _section_type), do: nil
 
   defp task_sections(task_id, section_type) when is_binary(section_type) do
     TaskSections.all(

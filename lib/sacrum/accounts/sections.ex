@@ -40,7 +40,7 @@ defmodule Sacrum.Accounts.Sections do
 
     %TaskSection{task_id: task_id, project_id: project_id, user_id: user_id}
     |> TaskSection.changeset(attrs)
-    |> Repo.insert()
+    |> TaskSections.insert()
   end
 
   @doc """
