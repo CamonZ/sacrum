@@ -42,6 +42,7 @@ defmodule Sacrum.Accounts.SectionsTest do
       assert section.task_id == task.id
       assert section.section_type == "context"
       assert section.content == "Some content"
+      assert section.section_order == 0
     end
   end
 

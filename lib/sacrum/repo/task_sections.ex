@@ -19,16 +19,28 @@ defmodule Sacrum.Repo.TaskSections do
 
   use Sacrum.GenericRepo, schema: Sacrum.Repo.Schemas.TaskSection
 
+  alias Ecto.Changeset
   import Ecto.Query
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.Schemas.TaskSection
 
+  @order_retry_count 1
+
+  @spec insert(Changeset.t()) :: {:ok, TaskSection.t()} | {:error, Changeset.t()}
+  def insert(%Changeset{} = changeset) do
+    if auto_order_required?(changeset) and order_scope_present?(changeset) do
+      insert_with_order_retry(changeset, @order_retry_count)
+    else
+      Repo.insert(changeset)
+    end
+  end
+
   @spec insert(Task.t(), map()) :: {:ok, TaskSection.t()} | {:error, Ecto.Changeset.t()}
   def insert(%Task{id: task_id, project_id: project_id, user_id: user_id}, attrs) do
     %TaskSection{task_id: task_id, project_id: project_id, user_id: user_id}
     |> TaskSection.changeset(attrs)
-    |> Repo.insert()
+    |> insert()
   end
 
   @spec update(TaskSection.t(), map()) :: {:ok, TaskSection.t()} | {:error, Ecto.Changeset.t()}
@@ -51,5 +63,107 @@ defmodule Sacrum.Repo.TaskSections do
       subject_id: section.id,
       relationship_kind: to_string(relationship_kind)
     }
+  end
+
+  defp insert_with_order_retry(%Changeset{} = changeset, retries_remaining) do
+    case insert_with_next_order(changeset) do
+      {:ok, section} ->
+        {:ok, section}
+
+      {:error, %Changeset{} = error_changeset} = error ->
+        if retries_remaining > 0 and unique_section_order_error?(error_changeset) do
+          insert_with_order_retry(changeset, retries_remaining - 1)
+        else
+          error
+        end
+    end
+  end
+
+  defp insert_with_next_order(%Changeset{} = changeset) do
+    with_section_order_transaction(fn ->
+      lock_task_for_section_order(changeset)
+
+      changeset
+      |> assign_next_section_order()
+      |> Repo.insert(mode: :savepoint)
+    end)
+  end
+
+  defp with_section_order_transaction(fun) when is_function(fun, 0) do
+    if Repo.in_transaction?() do
+      fun.()
+    else
+      fun
+      |> run_section_order_transaction()
+      |> unwrap_section_order_transaction()
+    end
+  end
+
+  defp run_section_order_transaction(fun) when is_function(fun, 0) do
+    Repo.transaction(fn -> commit_or_rollback(fun.()) end)
+  end
+
+  defp commit_or_rollback({:ok, section}), do: section
+
+  defp commit_or_rollback({:error, %Changeset{} = error_changeset}),
+    do: Repo.rollback(error_changeset)
+
+  defp unwrap_section_order_transaction({:ok, section}), do: {:ok, section}
+
+  defp unwrap_section_order_transaction({:error, %Changeset{} = error_changeset}),
+    do: {:error, error_changeset}
+
+  defp auto_order_required?(%Changeset{} = changeset) do
+    is_nil(Changeset.get_field(changeset, :section_order))
+  end
+
+  defp order_scope_present?(%Changeset{} = changeset) do
+    is_binary(Changeset.get_field(changeset, :task_id)) and
+      is_binary(Changeset.get_field(changeset, :section_type))
+  end
+
+  defp lock_task_for_section_order(%Changeset{} = changeset) do
+    task_id = Changeset.get_field(changeset, :task_id)
+
+    Repo.one(
+      from task in Task,
+        where: task.id == ^task_id,
+        lock: "FOR UPDATE",
+        select: task.id
+    )
+
+    :ok
+  end
+
+  defp assign_next_section_order(%Changeset{} = changeset) do
+    task_id = Changeset.get_field(changeset, :task_id)
+    section_type = Changeset.get_field(changeset, :section_type)
+
+    Changeset.put_change(changeset, :section_order, next_section_order(task_id, section_type))
+  end
+
+  defp next_section_order(task_id, section_type) do
+    max_order =
+      Repo.one(
+        from section in query(),
+          where: section.task_id == ^task_id and section.section_type == ^section_type,
+          select: max(section.section_order)
+      )
+
+    case max_order do
+      nil -> 0
+      value -> value + 1
+    end
+  end
+
+  defp unique_section_order_error?(%Changeset{} = changeset) do
+    Enum.any?(changeset.errors, fn
+      {:section_order, {_message, opts}} ->
+        opts[:constraint] == :unique and
+          to_string(opts[:constraint_name]) == "task_sections_unique_order_per_task_and_type"
+
+      _other ->
+        false
+    end)
   end
 end

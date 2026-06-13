@@ -41,6 +41,19 @@ defmodule Sacrum.Repo.TaskSectionsTest do
       assert section.task_id == task.id
     end
 
+    test "honors explicit section_order unchanged" do
+      task = setup_task()
+
+      {:ok, section} =
+        TaskSections.insert(task, %{
+          section_type: "checklist_item",
+          content: "Explicit order",
+          section_order: 12
+        })
+
+      assert section.section_order == 12
+    end
+
     test "rejects missing section_type or content" do
       task = setup_task()
 
@@ -63,26 +76,51 @@ defmodule Sacrum.Repo.TaskSectionsTest do
       assert first_section.section_order == 1
     end
 
-    test "allows repeated nil section_order for the same task and section_type" do
+    test "auto-assigns omitted and nil section_order for the same task and section_type" do
       task = setup_task()
 
       {:ok, first_section} =
         TaskSections.insert(task, %{
           section_type: "checklist_item",
-          content: "First unordered item",
-          section_order: nil
+          content: "First ordered item"
         })
 
       {:ok, second_section} =
         TaskSections.insert(task, %{
           section_type: "checklist_item",
-          content: "Second unordered item",
+          content: "Second ordered item",
           section_order: nil
         })
 
-      assert is_nil(first_section.section_order)
-      assert is_nil(second_section.section_order)
+      assert first_section.section_order == 0
+      assert second_section.section_order == 1
       assert first_section.id != second_section.id
+    end
+
+    test "create-delete-create keeps gaps and assigns max section_order plus one" do
+      task = setup_task()
+
+      {:ok, first_section} =
+        TaskSections.insert(task, %{section_type: "checklist_item", content: "First"})
+
+      {:ok, second_section} =
+        TaskSections.insert(task, %{section_type: "checklist_item", content: "Second"})
+
+      {:ok, third_section} =
+        TaskSections.insert(task, %{section_type: "checklist_item", content: "Third"})
+
+      assert Enum.map([first_section, second_section, third_section], & &1.section_order) == [
+               0,
+               1,
+               2
+             ]
+
+      {:ok, _deleted} = TaskSections.delete(first_section)
+
+      {:ok, fourth_section} =
+        TaskSections.insert(task, %{section_type: "checklist_item", content: "Fourth"})
+
+      assert fourth_section.section_order == 3
     end
 
     test "allows the same non-null section_order for different tasks" do
