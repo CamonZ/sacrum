@@ -8,7 +8,7 @@ defmodule Sacrum.Accounts.CodeRefs do
   use Sacrum.GenericResource,
     repo: Sacrum.Repo.CodeRefs,
     preloads: [],
-    default_order: [asc: :inserted_at]
+    default_order: [asc: :order_index, asc: :inserted_at]
 
   alias Sacrum.Accounts.Tasks
   alias Sacrum.Repo.CodeRefs, as: CodeRefsRepo
@@ -22,9 +22,7 @@ defmodule Sacrum.Accounts.CodeRefs do
     task_id = Map.get(attrs, "task_id") || Map.get(attrs, :task_id)
     project_id = Map.get(attrs, "project_id") || Map.get(attrs, :project_id)
 
-    %CodeRef{task_id: task_id, project_id: project_id, user_id: user_id}
-    |> CodeRef.changeset(attrs)
-    |> CodeRefsRepo.insert()
+    CodeRefsRepo.insert_for_task(task_id, project_id, user_id, attrs)
   end
 
   @doc """
@@ -35,9 +33,7 @@ defmodule Sacrum.Accounts.CodeRefs do
     section_id = Map.get(attrs, "section_id") || Map.get(attrs, :section_id)
     project_id = Map.get(attrs, "project_id") || Map.get(attrs, :project_id)
 
-    %CodeRef{section_id: section_id, project_id: project_id, user_id: user_id}
-    |> CodeRef.changeset(attrs)
-    |> CodeRefsRepo.insert()
+    CodeRefsRepo.insert_for_section(section_id, project_id, user_id, attrs)
   end
 
   @doc """
@@ -59,6 +55,22 @@ defmodule Sacrum.Accounts.CodeRefs do
     case Tasks.find(user_id, task_id) do
       {:ok, _task} ->
         CodeRefsRepo.delete_by_task(task_id)
+
+      {:error, _} ->
+        {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Replace all code refs for a task atomically.
+  """
+  @spec set_for_task(String.t(), String.t(), [map()]) ::
+          {:ok, [CodeRef.t()]} | {:error, Ecto.Changeset.t()} | {:error, :not_found}
+  def set_for_task(user_id, task_id, refs)
+      when is_binary(user_id) and is_binary(task_id) and is_list(refs) do
+    case Tasks.find(user_id, task_id) do
+      {:ok, task} ->
+        CodeRefsRepo.set_for_task(task, refs)
 
       {:error, _} ->
         {:error, :not_found}

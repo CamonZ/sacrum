@@ -6,7 +6,7 @@ defmodule Sacrum.Repo.Schemas.CodeRef do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @fields [:path, :line_start, :line_end, :name, :description]
+  @fields [:path, :line_start, :line_end, :name, :description, :order_index]
 
   schema "code_refs" do
     field :path, :string
@@ -14,6 +14,7 @@ defmodule Sacrum.Repo.Schemas.CodeRef do
     field :line_end, :integer
     field :name, :string
     field :description, :string
+    field :order_index, :integer
 
     belongs_to :task, Sacrum.Repo.Schemas.Task
     belongs_to :section, Sacrum.Repo.Schemas.TaskSection
@@ -28,6 +29,7 @@ defmodule Sacrum.Repo.Schemas.CodeRef do
     code_ref
     |> cast(attrs, @fields)
     |> validate_required([:path])
+    |> validate_number(:order_index, greater_than_or_equal_to: 0)
     |> validate_exactly_one_parent()
     |> check_constraint(:task_id,
       name: :exactly_one_parent,

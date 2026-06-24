@@ -633,6 +633,352 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert blocker_id == blocker.id
     end
 
+    test "clears depends_on_ids via updateTask", %{conn: conn, user: user, project: project} do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      {:ok, blocker} = Accounts.Tasks.insert(user.id, project.id, %{title: "Blocker"})
+      {:ok, _} = Accounts.Tasks.add_dependency(task, blocker)
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            updateTask(id: "#{task.id}", dependsOnIds: []) {
+              id blockers { id }
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] == nil
+      assert result["data"]["updateTask"]["blockers"] == []
+      assert Sacrum.Repo.TaskDependencies.get_direct_blockers(task) == []
+    end
+
+    test "rolls back dependency replace via updateTask when one dependency is invalid", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, other_project} = Accounts.Projects.insert(user.id, %{name: "Other Project"})
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      {:ok, old_blocker} = Accounts.Tasks.insert(user.id, project.id, %{title: "Old Blocker"})
+      {:ok, kept_blocker} = Accounts.Tasks.insert(user.id, project.id, %{title: "Kept Blocker"})
+      {:ok, new_blocker} = Accounts.Tasks.insert(user.id, project.id, %{title: "New Blocker"})
+
+      {:ok, foreign_blocker} =
+        Accounts.Tasks.insert(user.id, other_project.id, %{title: "Foreign"})
+
+      {:ok, _} = Accounts.Tasks.add_dependency(task, old_blocker)
+      {:ok, _} = Accounts.Tasks.add_dependency(task, kept_blocker)
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            updateTask(
+              id: "#{task.id}"
+              dependsOnIds: ["#{kept_blocker.id}", "#{new_blocker.id}", "#{foreign_blocker.id}"]
+            ) {
+              id blockers { id }
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] != nil
+
+      blocker_ids =
+        task
+        |> Sacrum.Repo.TaskDependencies.get_direct_blockers()
+        |> Enum.map(& &1.id)
+        |> MapSet.new()
+
+      assert blocker_ids == MapSet.new([old_blocker.id, kept_blocker.id])
+    end
+
+    test "rolls back task fields when dependency replace fails", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, other_project} = Accounts.Projects.insert(user.id, %{name: "Other Project"})
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Original"})
+
+      {:ok, foreign_blocker} =
+        Accounts.Tasks.insert(user.id, other_project.id, %{title: "Foreign"})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            updateTask(
+              id: "#{task.id}"
+              title: "Should rollback"
+              dependsOnIds: ["#{foreign_blocker.id}"]
+            ) {
+              id title
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["updateTask"] == nil
+      assert [%{"message" => "one or more dependencies not found"}] = result["errors"]
+
+      {:ok, found_task} = Accounts.Tasks.find(user.id, task.id)
+      assert found_task.title == "Original"
+    end
+
+    test "does not reveal cross-project dependency task existence", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, other_project} = Accounts.Projects.insert(user.id, %{name: "Other Project"})
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+
+      {:ok, foreign_blocker} =
+        Accounts.Tasks.insert(user.id, other_project.id, %{title: "Foreign"})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            syncTaskDependencies(taskId: "#{task.id}", dependsOnIds: ["#{foreign_blocker.id}"]) {
+              id
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["syncTaskDependencies"] == nil
+      assert [%{"message" => "one or more dependencies not found"}] = result["errors"]
+    end
+
+    test "updates task fields and section creates updates and deletions atomically", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Original"})
+
+      {:ok, existing} =
+        Accounts.Sections.insert(user.id, %{
+          task_id: task.id,
+          project_id: project.id,
+          section_type: "context",
+          content: "Old context"
+        })
+
+      {:ok, deleted} =
+        Accounts.Sections.insert(user.id, %{
+          task_id: task.id,
+          project_id: project.id,
+          section_type: "constraint",
+          content: "Remove me"
+        })
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            updateTask(
+              id: "#{task.id}"
+              title: "Updated"
+              sections: [
+                {id: "#{existing.id}", content: "New context"}
+                {sectionType: "checklist_item", content: "Created item"}
+              ]
+              sectionDeletions: ["#{deleted.id}"]
+            ) {
+              id
+              title
+              sections { id sectionType content }
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] == nil
+      assert result["data"]["updateTask"]["title"] == "Updated"
+
+      sections = result["data"]["updateTask"]["sections"]
+      assert Enum.any?(sections, &(&1["id"] == existing.id and &1["content"] == "New context"))
+
+      assert Enum.any?(
+               sections,
+               &(&1["sectionType"] == "checklist_item" and &1["content"] == "Created item")
+             )
+
+      refute Enum.any?(sections, &(&1["id"] == deleted.id))
+
+      assert {:error, :not_found} =
+               Accounts.Sections.get_by(user.id, conditions: [id: deleted.id])
+    end
+
+    test "updateTask sections dedupe id-less single-instance sections", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+
+      {:ok, section} =
+        Accounts.Sections.insert(user.id, %{
+          task_id: task.id,
+          project_id: project.id,
+          section_type: "goal",
+          content: "Old goal"
+        })
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            updateTask(
+              id: "#{task.id}"
+              sections: [{sectionType: "goal", content: "New goal"}]
+            ) {
+              sections { id sectionType content }
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] == nil
+
+      goals =
+        result["data"]["updateTask"]["sections"]
+        |> Enum.filter(&(&1["sectionType"] == "goal"))
+
+      assert [%{"id" => section_id, "content" => "New goal"}] = goals
+      assert section_id == section.id
+    end
+
+    test "rolls back task field changes when a section edit is invalid", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Original"})
+
+      {:ok, section} =
+        Accounts.Sections.insert(user.id, %{
+          task_id: task.id,
+          project_id: project.id,
+          section_type: "context",
+          content: "Original context"
+        })
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            updateTask(
+              id: "#{task.id}"
+              title: "Should rollback"
+              sections: [{id: "#{section.id}", content: ""}]
+            ) {
+              id title
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["updateTask"] == nil
+      assert result["errors"] != nil
+
+      {:ok, found_task} = Accounts.Tasks.find(user.id, task.id)
+      {:ok, found_section} = Accounts.Sections.get_by(user.id, conditions: [id: section.id])
+
+      assert found_task.title == "Original"
+      assert found_section.content == "Original context"
+    end
+
+    test "rejects section ids listed for both update and deletion", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Original"})
+
+      {:ok, section} =
+        Accounts.Sections.insert(user.id, %{
+          task_id: task.id,
+          project_id: project.id,
+          section_type: "context",
+          content: "Original context"
+        })
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            updateTask(
+              id: "#{task.id}"
+              sections: [{id: "#{section.id}", content: "Updated"}]
+              sectionDeletions: ["#{section.id}"]
+            ) {
+              id
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["updateTask"] == nil
+      assert result["errors"] != nil
+
+      {:ok, found_section} = Accounts.Sections.get_by(user.id, conditions: [id: section.id])
+      assert found_section.content == "Original context"
+    end
+
+    test "rejects section deletions from another task", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Original"})
+      {:ok, other_task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Other"})
+
+      {:ok, foreign_section} =
+        Accounts.Sections.insert(user.id, %{
+          task_id: other_task.id,
+          project_id: project.id,
+          section_type: "context",
+          content: "Foreign"
+        })
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            updateTask(
+              id: "#{task.id}"
+              title: "Should rollback"
+              sectionDeletions: ["#{foreign_section.id}"]
+            ) {
+              id title
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["updateTask"] == nil
+      assert result["errors"] != nil
+
+      {:ok, found_task} = Accounts.Tasks.find(user.id, task.id)
+      assert found_task.title == "Original"
+    end
+
     test "deletes a task", %{conn: conn, user: user, project: project} do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "To Delete"})
 
@@ -3103,6 +3449,121 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert result["data"]["updateSection"]["done"] == true
     end
 
+    test "upsertSection replaces single-instance sections", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+
+      first =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            upsertSection(
+              taskId: "#{task.id}"
+              sectionType: "goal"
+              content: "First goal"
+            ) { id content }
+          }
+        """)
+        |> json_response(200)
+
+      second =
+        build_conn()
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            upsertSection(
+              taskId: "#{task.id}"
+              sectionType: "goal"
+              content: "Second goal"
+            ) { id content }
+          }
+        """)
+        |> json_response(200)
+
+      assert first["errors"] == nil
+      assert second["errors"] == nil
+      assert first["data"]["upsertSection"]["id"] == second["data"]["upsertSection"]["id"]
+      assert second["data"]["upsertSection"]["content"] == "Second goal"
+
+      sections =
+        task
+        |> Sacrum.Repo.preload(:sections, force: true)
+        |> Map.fetch!(:sections)
+        |> Enum.filter(&(&1.section_type == "goal"))
+
+      assert length(sections) == 1
+    end
+
+    test "upsertSection appends multi-instance sections", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+
+      conn
+      |> authenticate(user)
+      |> graphql("""
+        mutation {
+          upsertSection(
+            taskId: "#{task.id}"
+            sectionType: "checklist_item"
+            content: "First item"
+          ) { id }
+        }
+      """)
+      |> json_response(200)
+
+      result =
+        build_conn()
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            upsertSection(
+              taskId: "#{task.id}"
+              sectionType: "checklist_item"
+              content: "Second item"
+            ) { id }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] == nil
+
+      sections =
+        task
+        |> Sacrum.Repo.preload(:sections, force: true)
+        |> Map.fetch!(:sections)
+        |> Enum.filter(&(&1.section_type == "checklist_item"))
+
+      assert Enum.map(sections, & &1.content) |> Enum.sort() == ["First item", "Second item"]
+    end
+
+    test "upsertSection returns error for non-existent task", %{conn: conn, user: user} do
+      fake_task_id = Ecto.UUID.generate()
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            upsertSection(
+              taskId: "#{fake_task_id}"
+              sectionType: "goal"
+              content: "No task"
+            ) { id }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["upsertSection"] == nil
+      assert result["errors"] != nil
+    end
+
     test "deletes a section", %{conn: conn, user: user, project: project} do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
 
@@ -3157,6 +3618,46 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["taskId"] == task.id
     end
 
+    test "createCodeRef appends orderIndex for normal inserts", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+
+      for path <- ["lib/a.ex", "lib/b.ex"] do
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createCodeRef(taskId: "#{task.id}", path: "#{path}") {
+              id
+            }
+          }
+        """)
+        |> json_response(200)
+      end
+
+      result =
+        build_conn()
+        |> authenticate(user)
+        |> graphql("""
+          {
+            task(id: "#{task.id}") {
+              codeRefs { path orderIndex }
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] == nil
+
+      assert [
+               %{"path" => "lib/a.ex", "orderIndex" => 0},
+               %{"path" => "lib/b.ex", "orderIndex" => 1}
+             ] = result["data"]["task"]["codeRefs"]
+    end
+
     test "deletes a code ref", %{conn: conn, user: user, project: project} do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
 
@@ -3208,6 +3709,149 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
       assert Enum.map(refs, & &1["id"]) |> Enum.sort() ==
                [ref1.id, ref2.id] |> Enum.sort()
+    end
+
+    test "sets all code refs for a task", %{conn: conn, user: user, project: project} do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+
+      {:ok, old_ref} =
+        Accounts.CodeRefs.insert_for_task(user.id, %{
+          task_id: task.id,
+          project_id: project.id,
+          path: "lib/old.ex"
+        })
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            setCodeRefs(
+              taskId: "#{task.id}"
+              refs: [
+                {path: "lib/new_a.ex", lineStart: 10, lineEnd: 12, name: "new_a"}
+                {path: "lib/new_b.ex", lineStart: 20, lineEnd: 22, name: "new_b"}
+              ]
+            ) {
+              path lineStart lineEnd name orderIndex
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] == nil
+
+      assert [
+               %{"path" => "lib/new_a.ex", "orderIndex" => 0},
+               %{"path" => "lib/new_b.ex", "orderIndex" => 1}
+             ] = result["data"]["setCodeRefs"]
+
+      assert {:error, :not_found} =
+               Accounts.CodeRefs.get_by(user.id, conditions: [id: old_ref.id])
+    end
+
+    test "setCodeRefs preserves submission order through task codeRefs", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+
+      conn
+      |> authenticate(user)
+      |> graphql("""
+        mutation {
+          setCodeRefs(
+            taskId: "#{task.id}"
+            refs: [
+              {path: "lib/first.ex"}
+              {path: "lib/second.ex"}
+              {path: "lib/third.ex"}
+            ]
+          ) { id }
+        }
+      """)
+      |> json_response(200)
+
+      result =
+        build_conn()
+        |> authenticate(user)
+        |> graphql("""
+          {
+            task(id: "#{task.id}") {
+              codeRefs { path orderIndex }
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] == nil
+
+      assert [
+               %{"path" => "lib/first.ex", "orderIndex" => 0},
+               %{"path" => "lib/second.ex", "orderIndex" => 1},
+               %{"path" => "lib/third.ex", "orderIndex" => 2}
+             ] = result["data"]["task"]["codeRefs"]
+    end
+
+    test "setCodeRefs rolls back when one ref is invalid", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+
+      {:ok, old_ref} =
+        Accounts.CodeRefs.insert_for_task(user.id, %{
+          task_id: task.id,
+          project_id: project.id,
+          path: "lib/old.ex"
+        })
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            setCodeRefs(
+              taskId: "#{task.id}"
+              refs: [
+                {path: "lib/new.ex"}
+                {path: ""}
+              ]
+            ) {
+              path
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["setCodeRefs"] == nil
+      assert result["errors"] != nil
+
+      assert [%{id: ref_id, path: "lib/old.ex"}] =
+               Accounts.CodeRefs.list_by(user.id, conditions: [task_id: task.id])
+
+      assert ref_id == old_ref.id
+    end
+
+    test "setCodeRefs returns error for non-existent task", %{conn: conn, user: user} do
+      fake_task_id = Ecto.UUID.generate()
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            setCodeRefs(taskId: "#{fake_task_id}", refs: [{path: "lib/new.ex"}]) {
+              path
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["setCodeRefs"] == nil
+      assert result["errors"] != nil
     end
 
     test "deleteTaskCodeRefs returns error for non-existent task", %{conn: conn, user: user} do
@@ -4004,6 +4648,92 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         |> json_response(200)
 
       assert result["errors"] != nil
+    end
+  end
+
+  describe "syncTaskDependencies mutation" do
+    setup [:setup_user_and_project]
+
+    test "replaces a task dependency set", %{conn: conn, user: user, project: project} do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      {:ok, old_blocker} = Accounts.Tasks.insert(user.id, project.id, %{title: "Old Blocker"})
+      {:ok, new_blocker} = Accounts.Tasks.insert(user.id, project.id, %{title: "New Blocker"})
+      {:ok, _} = Accounts.Tasks.add_dependency(task, old_blocker)
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            syncTaskDependencies(taskId: "#{task.id}", dependsOnIds: ["#{new_blocker.id}"]) {
+              id blockers { id }
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] == nil
+      assert [%{"id" => blocker_id}] = result["data"]["syncTaskDependencies"]["blockers"]
+      assert blocker_id == new_blocker.id
+    end
+
+    test "clears a task dependency set", %{conn: conn, user: user, project: project} do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      {:ok, old_blocker} = Accounts.Tasks.insert(user.id, project.id, %{title: "Old Blocker"})
+      {:ok, _} = Accounts.Tasks.add_dependency(task, old_blocker)
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            syncTaskDependencies(taskId: "#{task.id}", dependsOnIds: []) {
+              id blockers { id }
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] == nil
+      assert result["data"]["syncTaskDependencies"]["blockers"] == []
+      assert Sacrum.Repo.TaskDependencies.get_direct_blockers(task) == []
+    end
+
+    test "rolls back the full dependency set when one dependency is invalid", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, other_project} = Accounts.Projects.insert(user.id, %{name: "Other Project"})
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      {:ok, old_blocker} = Accounts.Tasks.insert(user.id, project.id, %{title: "Old Blocker"})
+      {:ok, new_blocker} = Accounts.Tasks.insert(user.id, project.id, %{title: "New Blocker"})
+
+      {:ok, foreign_blocker} =
+        Accounts.Tasks.insert(user.id, other_project.id, %{title: "Foreign"})
+
+      {:ok, _} = Accounts.Tasks.add_dependency(task, old_blocker)
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            syncTaskDependencies(
+              taskId: "#{task.id}"
+              dependsOnIds: ["#{new_blocker.id}", "#{foreign_blocker.id}"]
+            ) {
+              id blockers { id }
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["syncTaskDependencies"] == nil
+      assert result["errors"] != nil
+
+      assert [%{id: blocker_id}] = Sacrum.Repo.TaskDependencies.get_direct_blockers(task)
+      assert blocker_id == old_blocker.id
     end
   end
 

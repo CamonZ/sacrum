@@ -54,7 +54,10 @@ defmodule Sacrum.Repo.Schemas.Task do
     belongs_to :user, Sacrum.Repo.Schemas.User
 
     has_many :sections, Sacrum.Repo.Schemas.TaskSection, on_replace: :delete
-    has_many :code_refs, Sacrum.Repo.Schemas.CodeRef
+
+    has_many :code_refs, Sacrum.Repo.Schemas.CodeRef,
+      preload_order: [asc: :order_index, asc: :inserted_at]
+
     has_many :task_runs, Sacrum.Repo.Schemas.TaskRun
     has_many :step_executions, Sacrum.Repo.Schemas.StepExecution
 

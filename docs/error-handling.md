@@ -47,26 +47,26 @@ Business rule violations return `{:error, atom}`:
 | `:no_transition` | `TaskWorkflows` | No valid transition path between steps |
 | `:not_in_started_status` | `TaskWorkflows` | Step execution isn't in "started" status |
 
-### 3. Business Logic Errors (Three-Tuple)
+### 3. Business Logic Errors (GraphQL Messages)
 
-The accounts layer translates domain atoms into HTTP-friendly error tuples:
+The accounts layer translates domain atoms into resolver-friendly error tuples:
 
 ```elixir
-{:error, :unprocessable_entity, "a task cannot depend on itself"}
-{:error, :unprocessable_entity, "would create a circular dependency"}
-{:error, :unprocessable_entity, "one or more dependencies not found"}
+{:error, "a task cannot depend on itself"}
+{:error, "would create a circular dependency"}
+{:error, "one or more dependencies not found"}
 ```
 
 This translation happens in modules like `Sacrum.Accounts.Tasks`:
 
 ```elixir
-case Enum.find(results, &match?({:error, _}, &1)) do
+case error do
   {:error, :self_dependency} ->
-    {:error, :unprocessable_entity, "a task cannot depend on itself"}
+    {:error, "a task cannot depend on itself"}
   {:error, :circular_dependency} ->
-    {:error, :unprocessable_entity, "would create a circular dependency"}
+    {:error, "would create a circular dependency"}
   {:error, :not_found} ->
-    {:error, :unprocessable_entity, "one or more dependencies not found"}
+    {:error, "one or more dependencies not found"}
 end
 ```
 
@@ -112,7 +112,7 @@ Repository Modules (Sacrum.Repo.*)
     │  Returns: {:error, changeset} or {:error, atom}
     ▼
 Accounts Layer (Sacrum.Accounts.*)
-    │  Translates: {:error, atom} → {:error, :status, "message"}
+    │  Translates: {:error, atom} → {:error, "message"} or changeset errors
     ▼
 GraphQL Resolvers
     │  Absinthe serializes errors to JSON

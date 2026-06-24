@@ -6,6 +6,7 @@ defmodule Sacrum.Accounts.Sections do
   """
 
   alias Sacrum.Repo
+  alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.Schemas.TaskSection
   alias Sacrum.Repo.TaskSections
 
@@ -49,6 +50,27 @@ defmodule Sacrum.Accounts.Sections do
   @spec update(TaskSection.t(), map()) :: {:ok, TaskSection.t()} | {:error, Ecto.Changeset.t()}
   def update(%TaskSection{} = section, attrs) do
     TaskSections.update(section, attrs)
+  end
+
+  @doc """
+  Upsert a section for a task.
+
+  Single-instance section types replace the existing section for the task.
+  Multi-instance section types insert a new section.
+  """
+  @spec upsert_for_task(String.t(), Task.t(), map()) ::
+          {:ok, TaskSection.t()} | {:error, Ecto.Changeset.t()}
+  def upsert_for_task(user_id, %Task{} = task, attrs) when is_binary(user_id) and is_map(attrs) do
+    if task.user_id == user_id do
+      attrs =
+        attrs
+        |> Map.put(:task_id, task.id)
+        |> Map.put(:project_id, task.project_id)
+
+      TaskSections.upsert(task, attrs)
+    else
+      {:error, :not_found}
+    end
   end
 
   @doc """

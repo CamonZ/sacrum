@@ -5,13 +5,8 @@ defmodule Sacrum.Repo.Tasks do
   ## Error Contract
 
   - `insert/2` returns `{:ok, task}` or `{:error, changeset}`
-  - `update/2` returns `{:ok, task}` or `{:error, changeset}`
+  - `update/1` returns `{:ok, task}` or `{:error, changeset}`
   - `delete/1` returns `{:ok, task}` or `{:error, changeset}`
-
-  ## Domain-Specific Errors
-
-  `update/2` may return `{:error, changeset}` with validation errors for:
-  - Invalid section IDs provided in the `:sections` field
   """
 
   use Sacrum.GenericRepo, schema: Sacrum.Repo.Schemas.Task
@@ -21,8 +16,6 @@ defmodule Sacrum.Repo.Tasks do
   alias Sacrum.Repo.Schemas.Project
   alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.Schemas.TaskDependency
-  alias Sacrum.Repo.TaskDependencies
-  alias Sacrum.Repo.TaskHierarchy
   alias Sacrum.Repo.UuidPrefixResolver
 
   @doc """
@@ -266,10 +259,10 @@ defmodule Sacrum.Repo.Tasks do
 
   defp do_insert(%Task{} = task, project_id, user_id, attrs) do
     with {:ok, prepared_attrs} <- prepare_workflow_attrs(attrs, project_id, user_id) do
-      task
-      |> Task.create_changeset(prepared_attrs)
-      |> Repo.insert()
-      |> preload_sections()
+      case task |> Task.create_changeset(prepared_attrs) |> Repo.insert() do
+        {:ok, task} -> {:ok, Repo.preload(task, :sections, force: true)}
+        error -> error
+      end
     end
   end
 
@@ -349,98 +342,6 @@ defmodule Sacrum.Repo.Tasks do
     )
   end
 
-  @spec update(Task.t(), map()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
-  def update(%Task{} = task, attrs) do
-    task = Repo.preload(task, :sections)
-
-    with :ok <- validate_section_ownership(task, attrs),
-         {:ok, updated_task} <- do_update_task(task, attrs),
-         {:ok, updated_task} <- maybe_update_parent(updated_task, attrs),
-         :ok <- maybe_update_dependencies(updated_task, attrs) do
-      {:ok, updated_task}
-    end
-  end
-
-  defp do_update_task(task, attrs) do
-    task
-    |> Task.update_changeset(attrs)
-    |> Repo.update()
-    |> preload_sections()
-  end
-
-  defp maybe_update_parent(task, %{"parent_id" => nil}) do
-    case TaskHierarchy.remove_parent(task) do
-      {:ok, updated} -> {:ok, updated}
-      {:error, :not_found} -> {:ok, task}
-      error -> error
-    end
-  end
-
-  defp maybe_update_parent(task, %{"parent_id" => parent_id}) do
-    case Repo.get(Task, parent_id) do
-      nil ->
-        {:error, :not_found}
-
-      parent ->
-        TaskHierarchy.set_parent(task, parent)
-    end
-  end
-
-  defp maybe_update_parent(task, _attrs), do: {:ok, task}
-
-  defp maybe_update_dependencies(task, %{"depends_on_ids" => ids}) when is_list(ids) do
-    current = TaskDependencies.get_direct_blockers(task)
-    current_ids = MapSet.new(Enum.map(current, & &1.id))
-    desired_ids = MapSet.new(ids)
-
-    remove_stale_dependencies(task, MapSet.difference(current_ids, desired_ids))
-    to_add = MapSet.difference(desired_ids, current_ids)
-    results = add_new_dependencies(to_add, task)
-    translate_dependency_error(results)
-  end
-
-  defp maybe_update_dependencies(_task, _attrs), do: :ok
-
-  defp remove_stale_dependencies(task, to_remove) do
-    for id <- to_remove do
-      case Repo.get(Task, id) do
-        nil -> :ok
-        dep -> TaskDependencies.remove_dependency(task, dep)
-      end
-    end
-  end
-
-  defp add_new_dependencies(to_add, task) do
-    for id <- to_add do
-      case Repo.get(Task, id) do
-        nil -> {:error, :not_found}
-        dep -> TaskDependencies.add_dependency(task, dep)
-      end
-    end
-  end
-
-  defp translate_dependency_error(results) do
-    case Enum.find(results, &match?({:error, _}, &1)) do
-      nil ->
-        :ok
-
-      {:error, :different_projects} ->
-        {:error, :unprocessable_entity, "depends_on_ids must be in the same project"}
-
-      {:error, :self_dependency} ->
-        {:error, :unprocessable_entity, "a task cannot depend on itself"}
-
-      {:error, :circular_dependency} ->
-        {:error, :unprocessable_entity, "would create a circular dependency"}
-
-      {:error, :not_found} ->
-        {:error, :unprocessable_entity, "one or more dependencies not found"}
-
-      error ->
-        error
-    end
-  end
-
   @spec delete(Task.t(), keyword()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
   def delete(%Task{} = task, opts \\ []) do
     cascade = Keyword.get(opts, :cascade, true)
@@ -454,33 +355,4 @@ defmodule Sacrum.Repo.Tasks do
 
     Repo.delete(task)
   end
-
-  defp validate_section_ownership(%Task{} = task, %{"sections" => sections})
-       when is_list(sections) do
-    existing_ids = MapSet.new(Enum.map(task.sections, &to_string(&1.id)))
-
-    incoming_ids =
-      sections
-      |> Enum.map(& &1["id"])
-      |> Enum.reject(&is_nil/1)
-      |> MapSet.new(&to_string/1)
-
-    foreign_ids = MapSet.difference(incoming_ids, existing_ids)
-
-    if MapSet.size(foreign_ids) == 0 do
-      :ok
-    else
-      changeset =
-        task
-        |> Ecto.Changeset.change()
-        |> Ecto.Changeset.add_error(:sections, "contain IDs not belonging to this task")
-
-      {:error, changeset}
-    end
-  end
-
-  defp validate_section_ownership(_task, _attrs), do: :ok
-
-  defp preload_sections({:ok, task}), do: {:ok, Repo.preload(task, :sections, force: true)}
-  defp preload_sections(error), do: error
 end

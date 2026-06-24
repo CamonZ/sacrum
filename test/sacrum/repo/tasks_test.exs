@@ -26,6 +26,12 @@ defmodule Sacrum.Repo.TasksTest do
     project
   end
 
+  defp update_task(task, attrs) do
+    task
+    |> Task.update_changeset(attrs)
+    |> Tasks.update()
+  end
+
   describe "insert/2" do
     test "creates task with valid attrs" do
       user = create_user()
@@ -139,7 +145,8 @@ defmodule Sacrum.Repo.TasksTest do
       project = create_project(user)
       {:ok, task} = Tasks.insert(project, %{title: "Original"})
 
-      {:ok, updated} = Tasks.update(task, %{title: "Updated", description: "New desc"})
+      {:ok, updated} = update_task(task, %{title: "Updated", description: "New desc"})
+
       assert updated.title == "Updated"
       assert updated.description == "New desc"
     end
@@ -169,7 +176,8 @@ defmodule Sacrum.Repo.TasksTest do
         project = create_project(user)
         {:ok, task} = Tasks.insert(project, %{title: "Level Update"})
 
-        {:ok, updated} = Tasks.update(task, %{level: unquote(valid_level)})
+        {:ok, updated} = update_task(task, %{level: unquote(valid_level)})
+
         assert updated.level == unquote(valid_level)
       end
     end
@@ -180,7 +188,8 @@ defmodule Sacrum.Repo.TasksTest do
         project = create_project(user)
         {:ok, task} = Tasks.insert(project, %{title: "Bad Update"})
 
-        {:error, changeset} = Tasks.update(task, %{level: unquote(invalid_level)})
+        {:error, changeset} = update_task(task, %{level: unquote(invalid_level)})
+
         assert %{level: ["is invalid"]} = errors_on(changeset)
       end
     end
@@ -191,7 +200,8 @@ defmodule Sacrum.Repo.TasksTest do
         project = create_project(user)
         {:ok, task} = Tasks.insert(project, %{title: "Priority Update"})
 
-        {:ok, updated} = Tasks.update(task, %{priority: unquote(valid_priority)})
+        {:ok, updated} = update_task(task, %{priority: unquote(valid_priority)})
+
         assert updated.priority == unquote(valid_priority)
       end
     end
@@ -202,7 +212,8 @@ defmodule Sacrum.Repo.TasksTest do
         project = create_project(user)
         {:ok, task} = Tasks.insert(project, %{title: "Bad Priority Update"})
 
-        {:error, changeset} = Tasks.update(task, %{priority: unquote(invalid_priority)})
+        {:error, changeset} = update_task(task, %{priority: unquote(invalid_priority)})
+
         assert %{priority: ["is invalid"]} = errors_on(changeset)
       end
     end

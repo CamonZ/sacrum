@@ -258,7 +258,8 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContractTest do
       :line_start,
       :line_end,
       :name,
-      :description
+      :description,
+      :order_index
     ])
 
     assert_payload_includes("code_ref_updated", [
@@ -271,7 +272,8 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContractTest do
       :line_start,
       :line_end,
       :name,
-      :description
+      :description,
+      :order_index
     ])
 
     assert_payload_includes("code_ref_deleted", [
@@ -284,7 +286,8 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContractTest do
       :line_start,
       :line_end,
       :name,
-      :description
+      :description,
+      :order_index
     ])
 
     assert_payload_includes("task_run_step_changed", [
