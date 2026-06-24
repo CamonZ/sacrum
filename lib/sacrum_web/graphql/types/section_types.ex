@@ -51,6 +51,7 @@ defmodule SacrumWeb.Graphql.Types.SectionTypes do
     field :line_end, :integer
     field :name, :string
     field :description, :string
+    field :order_index, :integer
     field :inserted_at, :datetime
     field :updated_at, :datetime
 
@@ -104,6 +105,22 @@ defmodule SacrumWeb.Graphql.Types.SectionTypes do
         with {:ok, section} <- Accounts.Sections.get_by(user.id, conditions: [id: id]) do
           attrs = Map.drop(args, [:id])
           Accounts.Sections.update(section, attrs)
+        end
+      end)
+    end
+
+    field :upsert_section, :task_section do
+      arg(:task_id, non_null(:uuid4))
+      arg(:section_type, non_null(:string))
+      arg(:content, non_null(:string))
+      arg(:section_order, :integer)
+      arg(:done, :boolean)
+
+      resolve(fn args, %{context: %{current_user: user}} ->
+        task_id = Map.get(args, :task_id)
+
+        with {:ok, task} <- Accounts.Tasks.find(user.id, task_id) do
+          Accounts.Sections.upsert_for_task(user.id, task, args)
         end
       end)
     end
@@ -171,6 +188,24 @@ defmodule SacrumWeb.Graphql.Types.SectionTypes do
         Accounts.CodeRefs.delete_task_refs(user.id, task_id)
       end)
     end
+
+    field :set_code_refs, list_of(:code_ref) do
+      arg(:task_id, non_null(:uuid4))
+      arg(:refs, non_null(list_of(non_null(:code_ref_input))))
+
+      resolve(fn %{task_id: task_id, refs: refs}, %{context: %{current_user: user}} ->
+        Accounts.CodeRefs.set_for_task(user.id, task_id, refs)
+      end)
+    end
+  end
+
+  input_object :code_ref_input do
+    field :path, non_null(:string)
+    field :line_start, :integer
+    field :line_end, :integer
+    field :name, :string
+    field :description, :string
+    field :order, :integer
   end
 
   defp resolve_section_artifacts(section, _args, %{context: %{current_user: user}}) do

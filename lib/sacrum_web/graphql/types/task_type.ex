@@ -215,7 +215,7 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
       arg(:worktree, :string)
       arg(:parent_id, :uuid4)
       arg(:workflow_id, :uuid4)
-      arg(:sections, list_of(:task_section_input))
+      arg(:sections, list_of(:task_section_create_input))
 
       resolve(fn args, %{context: %{current_user: user}} ->
         project_id = Map.get(args, :project_id)
@@ -242,6 +242,7 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
       arg(:parent_id, :uuid4)
       arg(:depends_on_ids, list_of(:uuid4))
       arg(:sections, list_of(:task_section_input))
+      arg(:section_deletions, list_of(:uuid4))
 
       resolve(fn %{id: id} = args, %{context: %{current_user: user}} ->
         with {:ok, task} <- Accounts.Tasks.find(user.id, id) do
@@ -282,6 +283,18 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
         with {:ok, task} <- Accounts.Tasks.find(user.id, task_id),
              {:ok, dep_task} <- Accounts.Tasks.find(user.id, dep_id) do
           TaskDependencies.remove_dependency(task, dep_task)
+        end
+      end)
+    end
+
+    field :sync_task_dependencies, :task do
+      arg(:task_id, non_null(:uuid4))
+      arg(:depends_on_ids, non_null(list_of(:uuid4)))
+
+      resolve(fn %{task_id: task_id, depends_on_ids: depends_on_ids},
+                 %{context: %{current_user: user}} ->
+        with {:ok, task} <- Accounts.Tasks.find(user.id, task_id) do
+          Accounts.Tasks.sync_dependencies(task, depends_on_ids)
         end
       end)
     end
@@ -344,6 +357,14 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
 
   input_object :task_section_input do
     field :id, :uuid4
+    field :section_type, :string
+    field :content, :string
+    field :section_order, :integer
+    field :done, :boolean
+    field :done_at, :datetime
+  end
+
+  input_object :task_section_create_input do
     field :section_type, non_null(:string)
     field :content, non_null(:string)
     field :section_order, :integer

@@ -153,7 +153,7 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
   @section_event_payload_keys [:schema_version | @section_payload_keys]
 
   @code_ref_payload_keys ~w(
-    id task_id section_id project_id path line_start line_end name description inserted_at updated_at
+    id task_id section_id project_id path line_start line_end name description order_index inserted_at updated_at
   )a
 
   @code_ref_event_payload_keys [:schema_version | @code_ref_payload_keys]

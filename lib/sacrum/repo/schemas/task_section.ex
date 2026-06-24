@@ -30,7 +30,10 @@ defmodule Sacrum.Repo.Schemas.TaskSection do
     belongs_to :task, Sacrum.Repo.Schemas.Task
     belongs_to :project, Sacrum.Repo.Schemas.Project
     belongs_to :user, Sacrum.Repo.Schemas.User
-    has_many :code_refs, Sacrum.Repo.Schemas.CodeRef, foreign_key: :section_id
+
+    has_many :code_refs, Sacrum.Repo.Schemas.CodeRef,
+      foreign_key: :section_id,
+      preload_order: [asc: :order_index, asc: :inserted_at]
 
     timestamps(type: :utc_datetime_usec)
   end

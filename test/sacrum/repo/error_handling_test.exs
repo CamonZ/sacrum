@@ -15,6 +15,7 @@ defmodule Sacrum.Repo.ErrorHandlingTest do
   alias Sacrum.Repo.TaskDependencies
   alias Sacrum.Repo.TaskHierarchy
   alias Sacrum.Repo.WorkflowTransitions
+  alias Sacrum.Repo.Schemas.Task
 
   @valid_user_attrs %{
     email: "test@example.com",
@@ -141,7 +142,11 @@ defmodule Sacrum.Repo.ErrorHandlingTest do
       {:ok, task} = Tasks.insert(project, %{title: "Test Task"})
 
       # Attempt to update with valid data
-      assert {:ok, updated} = Tasks.update(task, %{title: "Updated Task"})
+      assert {:ok, updated} =
+               task
+               |> Task.update_changeset(%{title: "Updated Task"})
+               |> Tasks.update()
+
       assert updated.title == "Updated Task"
     end
   end

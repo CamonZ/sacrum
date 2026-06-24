@@ -26,6 +26,7 @@ defmodule Sacrum.Repo.TaskSections do
   alias Sacrum.Repo.Schemas.TaskSection
 
   @order_retry_count 1
+  @single_instance_section_types ~w(goal context current_behavior desired_behavior)
 
   @spec insert(Changeset.t()) :: {:ok, TaskSection.t()} | {:error, Changeset.t()}
   def insert(%Changeset{} = changeset) do
@@ -48,6 +49,17 @@ defmodule Sacrum.Repo.TaskSections do
     section
     |> TaskSection.changeset(attrs)
     |> Repo.update()
+  end
+
+  @spec upsert(Task.t(), map()) :: {:ok, TaskSection.t()} | {:error, Ecto.Changeset.t()}
+  def upsert(%Task{} = task, attrs) do
+    section_type = Map.get(attrs, :section_type, Map.get(attrs, "section_type"))
+
+    if single_instance_section_type?(section_type) do
+      upsert_single_instance(task, attrs, section_type)
+    else
+      insert(task, attrs)
+    end
   end
 
   @spec delete(TaskSection.t()) :: {:ok, TaskSection.t()} | {:error, Ecto.Changeset.t()}
@@ -89,6 +101,17 @@ defmodule Sacrum.Repo.TaskSections do
     end)
   end
 
+  defp upsert_single_instance(task, attrs, section_type) do
+    with_section_order_transaction(fn ->
+      lock_task(task.id)
+
+      case get_single_instance_section(task.id, section_type) do
+        nil -> insert(task, attrs)
+        section -> __MODULE__.update(section, attrs)
+      end
+    end)
+  end
+
   defp with_section_order_transaction(fun) when is_function(fun, 0) do
     if Repo.in_transaction?() do
       fun.()
@@ -124,7 +147,10 @@ defmodule Sacrum.Repo.TaskSections do
 
   defp lock_task_for_section_order(%Changeset{} = changeset) do
     task_id = Changeset.get_field(changeset, :task_id)
+    lock_task(task_id)
+  end
 
+  defp lock_task(task_id) do
     Repo.one(
       from task in Task,
         where: task.id == ^task_id,
@@ -133,6 +159,19 @@ defmodule Sacrum.Repo.TaskSections do
     )
 
     :ok
+  end
+
+  defp get_single_instance_section(task_id, section_type) do
+    Repo.one(
+      from section in query(),
+        where: section.task_id == ^task_id and section.section_type == ^section_type,
+        order_by: [asc: section.inserted_at],
+        limit: 1
+    )
+  end
+
+  defp single_instance_section_type?(section_type) do
+    section_type in @single_instance_section_types
   end
 
   defp assign_next_section_order(%Changeset{} = changeset) do
