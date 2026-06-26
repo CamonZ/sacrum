@@ -355,20 +355,20 @@ defmodule Sacrum.Accounts.Tasks do
 
     case sections do
       nil ->
-        validate_section_ids(task, MapSet.new(), deletion_ids)
+        validate_section_ids(task, [], deletion_ids)
 
       sections when is_list(sections) ->
-        existing_ids = MapSet.new(Enum.map(task.sections, &to_string(&1.id)))
+        existing_ids = Enum.map(task.sections, &to_string(&1.id))
 
         incoming_ids =
           sections
           |> Enum.map(&(Map.get(&1, "id") || Map.get(&1, :id)))
           |> Enum.reject(&is_nil/1)
-          |> MapSet.new(&to_string/1)
+          |> Enum.map(&to_string/1)
 
-        foreign_ids = MapSet.difference(incoming_ids, existing_ids)
+        foreign_ids = Enum.reject(incoming_ids, &(&1 in existing_ids))
 
-        if MapSet.size(foreign_ids) == 0 do
+        if foreign_ids == [] do
           validate_section_ids(task, incoming_ids, deletion_ids)
         else
           changeset =
@@ -380,25 +380,27 @@ defmodule Sacrum.Accounts.Tasks do
         end
 
       _ ->
-        validate_section_ids(task, MapSet.new(), deletion_ids)
+        validate_section_ids(task, [], deletion_ids)
     end
   end
 
+  @spec validate_section_ids(Task.t(), [String.t()], term()) ::
+          :ok | {:error, Ecto.Changeset.t()}
   defp validate_section_ids(%Task{} = task, incoming_ids, deletion_ids)
        when is_list(deletion_ids) do
-    existing_ids = MapSet.new(Enum.map(task.sections, &to_string(&1.id)))
-    deletion_ids = MapSet.new(deletion_ids, &to_string/1)
-    foreign_ids = MapSet.difference(deletion_ids, existing_ids)
-    duplicate_ids = MapSet.intersection(incoming_ids, deletion_ids)
+    existing_ids = Enum.map(task.sections, &to_string(&1.id))
+    deletion_ids = Enum.map(deletion_ids, &to_string/1)
+    foreign_ids = Enum.reject(deletion_ids, &(&1 in existing_ids))
+    duplicate? = Enum.any?(deletion_ids, &(&1 in incoming_ids))
 
     cond do
-      MapSet.size(foreign_ids) > 0 ->
+      foreign_ids != [] ->
         task
         |> Ecto.Changeset.change()
         |> Ecto.Changeset.add_error(:section_deletions, "contain IDs not belonging to this task")
         |> then(&{:error, &1})
 
-      MapSet.size(duplicate_ids) > 0 ->
+      duplicate? ->
         task
         |> Ecto.Changeset.change()
         |> Ecto.Changeset.add_error(:sections, "cannot include IDs also listed for deletion")

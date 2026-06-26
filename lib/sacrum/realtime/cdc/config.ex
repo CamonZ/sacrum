@@ -13,9 +13,6 @@ defmodule Sacrum.Realtime.Cdc.Config do
     task_sections
     task_dependencies
     code_refs
-    chat_sessions
-    chat_messages
-    chat_events
   )
 
   @spec start_consumer?() :: boolean()

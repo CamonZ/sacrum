@@ -21,12 +21,6 @@ Sacrum now separates four different questions:
 
 `TaskRun` is not a replacement for `Task`. It is a run session for automation over a task. A task can have many historical TaskRuns, but should be represented with at most one active run in normal client state.
 
-Chat runs that create tasks use a separate `ChatRun` / `ChatSession`
-contract. Do not represent those conversations as `TaskRun`s. If a chat run
-creates tasks, clients should use each task's chat-origin link to navigate back
-to the run, with session detail available when a specific execution attempt
-matters. See [Chat Runs Contract](chat-runs.md).
-
 See [Domain Model: Status and Run State](domain-model.md#status-and-run-state) for the source-of-truth field ownership.
 
 ## Representing TaskRuns
@@ -393,7 +387,6 @@ Handle these events for run-aware GUI/CLI state:
 | `session_log_created` | Append log to the matching step execution. Payload includes `logical_key` when the daemon supplied an opaque logical key. |
 | `session_log_updated` | Replace the existing log row by `id` for logical-key upserts; do not append a second transcript line. |
 | `code_ref_created` / `code_ref_updated` / `code_ref_deleted` | Upsert/remove task or section code references in detail/evidence stores by id. |
-| `chat_session_created` / `chat_session_updated` / `chat_message_created` / `chat_event_created` | Apply public chat transcript/progress events projected from `chat_events.public_payload`; internal chat events are not delivered. |
 
 Channel payloads are snake_case. GraphQL fields are camelCase.
 Default-client channel payloads include `schema_version: 1`; clients should

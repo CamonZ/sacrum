@@ -7,7 +7,6 @@ defmodule Sacrum.Accounts.ArtifactsTest do
   alias Sacrum.Repo
   alias Sacrum.Repo.ArtifactLinks
   alias Sacrum.Repo.Artifacts, as: ArtifactsRepo
-  alias Sacrum.Repo.ChatSessions
   alias Sacrum.Repo.Schemas.{Artifact, ArtifactLink}
   alias Sacrum.Repo.TaskSections
   alias Sacrum.Repo.Users
@@ -44,11 +43,6 @@ defmodule Sacrum.Accounts.ArtifactsTest do
       })
 
     section
-  end
-
-  defp create_chat_session(user, project) do
-    {:ok, session} = ChatSessions.insert(user.id, project.id, %{session_kind: "planning"})
-    session
   end
 
   defp create_artifact(user, project, attrs) do
@@ -111,14 +105,12 @@ defmodule Sacrum.Accounts.ArtifactsTest do
     project = create_project(user)
     task = create_task(user, project)
     section = create_section(task)
-    chat_session = create_chat_session(user, project)
 
     %{
       user: user,
       project: project,
       task: task,
-      section: section,
-      chat_session: chat_session
+      section: section
     }
   end
 
@@ -252,46 +244,6 @@ defmodule Sacrum.Accounts.ArtifactsTest do
         |> Enum.map(& &1.id)
 
       assert listed_ids == [public_artifact.id]
-    end
-
-    test "returns only public and redaction-safe artifacts for a chat_session subject", %{
-      user: user,
-      project: project,
-      chat_session: chat_session
-    } do
-      public_artifact = create_artifact(user, project, %{title: "Chat planning output"})
-
-      redacted_artifact =
-        create_artifact(user, project, %{
-          title: "Redacted chat summary",
-          redaction_state: "redacted"
-        })
-
-      internal_artifact =
-        create_artifact(user, project, %{
-          title: "Internal chat trace",
-          visibility: "internal"
-        })
-
-      blocked_artifact =
-        create_artifact(user, project, %{
-          title: "Blocked chat draft",
-          redaction_state: "blocked"
-        })
-
-      for artifact <- [public_artifact, redacted_artifact, internal_artifact, blocked_artifact] do
-        link_artifact(user, project, artifact, "chat_session", chat_session.id)
-      end
-
-      listed_ids =
-        user.id
-        |> Artifacts.list_for_subject(project.id, "chat_session", chat_session.id)
-        |> Enum.map(& &1.id)
-
-      assert public_artifact.id in listed_ids
-      assert redacted_artifact.id in listed_ids
-      refute internal_artifact.id in listed_ids
-      refute blocked_artifact.id in listed_ids
     end
 
     test "does not leak visible artifacts to another caller", %{

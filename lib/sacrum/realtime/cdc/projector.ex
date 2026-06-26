@@ -10,11 +10,9 @@ defmodule Sacrum.Realtime.Cdc.Projector do
 
   import Ecto.Query
 
-  alias Sacrum.Chat.PublicEvents
   alias Sacrum.Repo
 
   alias Sacrum.Repo.Schemas.{
-    ChatEvent,
     CodeRef,
     SessionLog,
     StepExecution,
@@ -46,8 +44,7 @@ defmodule Sacrum.Realtime.Cdc.Projector do
     "session_logs" => SessionLog,
     "task_sections" => TaskSection,
     "task_dependencies" => TaskDependency,
-    "code_refs" => CodeRef,
-    "chat_events" => ChatEvent
+    "code_refs" => CodeRef
   }
 
   @channel_broadcasts %{
@@ -350,22 +347,6 @@ defmodule Sacrum.Realtime.Cdc.Projector do
        }) do
     code_ref = record_to_struct!("code_refs", record)
     [projection("code_ref_deleted", code_ref.project_id, code_ref)]
-  end
-
-  defp projections(%WalEx.Event{
-         source: %{table: "chat_events"},
-         type: :insert,
-         new_record: record
-       }) do
-    chat_event = record_to_struct!("chat_events", record)
-
-    case PublicEvents.channel_event(chat_event) do
-      {:ok, event_name, _payload} ->
-        [projection(event_name, chat_event.project_id, chat_event, :broadcast_chat_event)]
-
-      :ignore ->
-        []
-    end
   end
 
   defp projections(%WalEx.Event{}), do: []

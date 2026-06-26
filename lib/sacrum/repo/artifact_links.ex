@@ -6,17 +6,20 @@ defmodule Sacrum.Repo.ArtifactLinks do
   use Sacrum.GenericRepo, schema: Sacrum.Repo.Schemas.ArtifactLink
 
   import Ecto.Query
-  import Sacrum.Chat.Guards
 
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.Artifact
   alias Sacrum.Repo.Schemas.ArtifactLink
-  alias Sacrum.Repo.Schemas.ChatSession
   alias Sacrum.Repo.Schemas.StepExecution
   alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.Schemas.TaskRun
   alias Sacrum.Repo.Schemas.TaskSection
   alias Sacrum.Repo.Schemas.Workflow
+
+  defguardp is_user_project_scope(user_id, project_id)
+            when is_binary(user_id) and is_binary(project_id)
+
+  defguardp is_attrs(attrs) when is_map(attrs)
 
   @spec insert(String.t(), String.t(), String.t(), map()) ::
           {:ok, ArtifactLink.t()}
@@ -123,16 +126,6 @@ defmodule Sacrum.Repo.ArtifactLinks do
       [section],
       section.id == ^subject_id and section.user_id == ^user_id and
         section.project_id == ^project_id
-    )
-    |> Repo.exists?()
-  end
-
-  defp subject_exists?(user_id, project_id, "chat_session", subject_id) do
-    ChatSession
-    |> where(
-      [session],
-      session.id == ^subject_id and session.user_id == ^user_id and
-        session.project_id == ^project_id
     )
     |> Repo.exists?()
   end

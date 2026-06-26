@@ -450,8 +450,8 @@ task = Repo.preload(task, :sections, force: true)
 ## Realtime Projection Boundary
 
 Regular/default-client ProjectChannel state is owned by the WalEx CDC projector.
-Repo, Accounts, routing, and chat persistence paths should commit rows and
-return their results without directly calling ProjectChannel broadcast helpers.
+Repo, Accounts, and routing paths should commit rows and return their results
+without directly calling ProjectChannel broadcast helpers.
 
 ```elixir
 def insert(project, attrs) do

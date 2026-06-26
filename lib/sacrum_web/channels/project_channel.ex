@@ -2,7 +2,6 @@ defmodule SacrumWeb.ProjectChannel do
   use Phoenix.Channel
 
   alias Sacrum.Accounts.Projects
-  alias Sacrum.Chat.PublicEvents
   alias Sacrum.Realtime.ProjectChannelCdcContract
   alias Sacrum.TaskRuns.RunControls
   alias Sacrum.TaskRuns.Status, as: TaskRunStatus
@@ -319,19 +318,6 @@ defmodule SacrumWeb.ProjectChannel do
       "session_log_updated",
       session_log_payload(log)
     )
-  end
-
-  # Chat broadcasts
-
-  @spec broadcast_chat_event(String.t(), map()) :: :ok | {:error, term()}
-  def broadcast_chat_event(project_id, chat_event) do
-    case PublicEvents.channel_event(chat_event) do
-      {:ok, event, payload} ->
-        SacrumWeb.Endpoint.broadcast("project:#{project_id}", event, version_payload(payload))
-
-      :ignore ->
-        :ok
-    end
   end
 
   # Section broadcasts

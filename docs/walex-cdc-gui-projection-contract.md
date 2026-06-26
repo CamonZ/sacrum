@@ -27,8 +27,8 @@ rows and is complete enough for normal GUI store updates. Clients should not use
 ordinary events as invalidation signals or perform routine GraphQL refetches
 after each event.
 
-Repo, Accounts, routing, and chat persistence paths must not emit these
-default-client events directly. They commit rows; `Sacrum.Realtime.Cdc.Projector`
+Repo, Accounts, and routing paths must not emit these default-client events
+directly. They commit rows; `Sacrum.Realtime.Cdc.Projector`
 owns the ProjectChannel payload construction for regular clients. The only
 imperative ProjectChannel broadcasts are daemon commands such as `run_step` and
 `cancel_step`.
@@ -73,10 +73,6 @@ instead of silently applying a payload with an unsupported shape.
 | `code_ref_created` | Relation change | `code_refs` insert after image. | Full code reference row: `id`, `task_id`, `section_id`, `project_id`, file path, line range, name, description, timestamps. |
 | `code_ref_updated` | Relation change | `code_refs` update after image. | Same full code reference row for detail/evidence replacement. |
 | `code_ref_deleted` | Relation change | `code_refs` delete before image. | Full code reference tombstone so clients can remove by id without refetching. |
-| `chat_session_created` | Public chat projection | Public `chat_events` insert carrying `chat_sessions` public payload. | Public chat session payload from `chat_events.public_payload`. |
-| `chat_session_updated` | Public chat projection | Public `chat_events` insert carrying `chat_sessions` status payload. | Public chat session payload from `chat_events.public_payload`. |
-| `chat_message_created` | Public chat projection | Public `chat_events` insert carrying `chat_messages` public payload. | Public chat message payload from `chat_events.public_payload`. |
-| `chat_event_created` | Public chat projection | Public `chat_events` insert for other public event types. | Generic public event wrapper: event id, project/session ids, event type, public payload, inserted timestamp. |
 
 ## Derived Step Movement Events
 
@@ -154,7 +150,7 @@ Initial load is separate from healthy live CDC. A GUI store should:
 1. Capture a CDC cursor/LSN for the snapshot boundary.
 2. Read all project rows at or before that boundary.
 3. Build the equivalent of the GraphQL task list/detail, pipeline summary, run
-   trace, sections, and public chat views.
+   trace, and sections.
 4. Include archived tasks when building a full local store.
 5. Apply WalEx changes committed after the snapshot cursor in order.
 
@@ -172,9 +168,6 @@ Snapshot source tables are:
 - `task_sections`
 - `task_dependencies`
 - `code_refs`
-- `chat_sessions`
-- `chat_messages`
-- `chat_events`
 
 ## Reconnect And Gap Recovery
 

@@ -4,8 +4,6 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
   import Sacrum.CdcAssertions
 
   alias Ecto.Adapters.SQL.Sandbox
-  alias Sacrum.Accounts
-  alias Sacrum.ChatSessionRunner.Events.ActivityEvents
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{CodeRef, StepExecution, Task}
 
@@ -822,140 +820,6 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
     end)
   end
 
-  test "committed public chat session creates and updates are projected" do
-    with_project(fn user, project ->
-      :ok = subscribe_project(project.id)
-
-      {:ok, session} =
-        Accounts.LiveChat.create_session(user.id, project.id, %{
-          status: :running,
-          public_metadata: %{"topic" => "cdc"}
-        })
-
-      assert_project_broadcast(
-        "chat_session_created",
-        %{
-          id: session.id,
-          project_id: project.id,
-          status: "running",
-          public_metadata: %{"topic" => "cdc"}
-        },
-        1_000
-      )
-
-      {:ok, _cancelled_session} =
-        Accounts.LiveChat.cancel_session(user.id, project.id, session.id)
-
-      assert_project_broadcast(
-        "chat_session_updated",
-        %{
-          id: session.id,
-          project_id: project.id,
-          status: "cancelled"
-        },
-        1_000
-      )
-    end)
-  end
-
-  test "committed public chat messages are projected" do
-    with_project(fn user, project ->
-      {:ok, session} = Accounts.LiveChat.create_session(user.id, project.id, %{status: :running})
-
-      :ok = subscribe_project(project.id)
-
-      {:ok, message} =
-        Accounts.LiveChat.send_message(user.id, project.id, session.id, %{
-          content: "hello from cdc",
-          client_message_id: "cdc-client-message"
-        })
-
-      assert_project_broadcast(
-        "chat_message_created",
-        %{
-          id: message.id,
-          project_id: project.id,
-          chat_session_id: session.id,
-          content: "hello from cdc",
-          client_message_id: "cdc-client-message"
-        },
-        1_000
-      )
-    end)
-  end
-
-  test "committed generic public chat events are projected" do
-    with_project(fn user, project ->
-      {:ok, session} = Accounts.LiveChat.create_session(user.id, project.id, %{status: :running})
-
-      :ok = subscribe_project(project.id)
-
-      {:ok, chat_event} =
-        Accounts.ChatEvents.append(user.id, project.id, session.id, %{
-          event_type: "runner.progress",
-          visibility: :public,
-          public_payload: %{"message" => "done"},
-          internal_payload: %{}
-        })
-
-      assert_project_broadcast(
-        "chat_event_created",
-        %{
-          id: chat_event.id,
-          project_id: project.id,
-          chat_session_id: session.id,
-          event_type: "runner.progress",
-          payload: %{"message" => "done"}
-        },
-        1_000
-      )
-    end)
-  end
-
-  test "committed public runner activity events are projected for live chat clients" do
-    with_project(fn user, project ->
-      {:ok, session} = Accounts.LiveChat.create_session(user.id, project.id, %{status: :running})
-      turn_message_id = Ecto.UUID.generate()
-
-      attrs =
-        ActivityEvents.invoking_model_attrs(session, %{
-          "turn_message_id" => turn_message_id,
-          "provider" => "fake",
-          "model" => "runner-test",
-          "display" => %{"label" => "Invoking model"}
-        })
-
-      :ok = subscribe_project(project.id)
-
-      {:ok, chat_event} =
-        Accounts.ChatEvents.append(user.id, project.id, session.id, attrs)
-
-      payload =
-        assert_project_broadcast(
-          "chat_event_created",
-          %{
-            id: chat_event.id,
-            project_id: project.id,
-            chat_session_id: session.id,
-            event_type: "chat_runner_activity.invoking_model",
-            payload: %{
-              "chat_session_id" => session.id,
-              "phase" => "invoking_model",
-              "status" => "running",
-              "turn_message_id" => turn_message_id,
-              "provider" => "fake",
-              "model" => "runner-test",
-              "display" => %{"label" => "Invoking model"}
-            }
-          },
-          1_000
-        )
-
-      refute Map.has_key?(payload, :internal_payload)
-      refute Map.has_key?(payload, "internal_payload")
-    end)
-  end
-
   defp committed_db(fun) do
     Sandbox.unboxed_run(Repo, fun)
   end
@@ -1083,9 +947,6 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
 
     for table <- [
           "session_logs",
-          "chat_events",
-          "chat_messages",
-          "chat_sessions",
           "code_refs",
           "task_sections",
           "task_dependencies",

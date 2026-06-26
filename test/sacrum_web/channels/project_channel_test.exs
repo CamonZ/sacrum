@@ -1,5 +1,5 @@
 defmodule SacrumWeb.ProjectChannelTest do
-  use Sacrum.DataCase, async: true
+  use Sacrum.DataCase, async: false
 
   import Phoenix.ChannelTest
   alias SacrumWeb.UserSocket
@@ -813,14 +813,14 @@ defmodule SacrumWeb.ProjectChannelTest do
     end
   end
 
-  describe "public chat event filtering" do
-    test "token for another user cannot subscribe to public chat events" do
+  describe "project authorization" do
+    test "token for another user cannot subscribe to project events" do
       {_user, project, _socket} = setup_socket()
 
       {:ok, other_user} =
         Users.insert(%{
-          email: "other-token-chat@example.com",
-          username: "other_token_chat",
+          email: "other-token-project@example.com",
+          username: "other_token_project",
           password: "password123"
         })
 

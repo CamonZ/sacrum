@@ -18,8 +18,6 @@ Sacrum is an API-only workflow engine and task management system built with Phoe
 
 **Execution tracking** — Durable `TaskRun` records track automation lifecycle for a task run. `StepExecution` records track individual step attempts inside a run, including the step name, attempt status, and optional LLM metadata (model, provider, token counts, cost, duration). Session logs attach free-text content to executions.
 
-**Chat runs contract** — Backend-owned chat work is modeled as user-facing runs that may span multiple chat sessions while researching, planning, and creating tasks. The V0 persistence slice is session-first and stores `ChatSession`, `ChatMessage`, and `ChatEvent` records before adding `ChatRun`, artifacts, or task-origin links. Chat persistence does not replace `TaskRun` or `StepExecution`. See [Chat Runs Contract](chat-runs.md).
-
 **Real-time updates** — State changes broadcast to a Phoenix channel (`ProjectChannel`) keyed by project ID (`project:<project_id>`), so connected clients receive live events for task, workflow, and step mutations.
 
 ## Domain Model
@@ -31,13 +29,8 @@ User
       │    ├── WorkflowStep ──→ StepTransition (step-to-step edges)
       │    └── WorkflowTransition (workflow-to-workflow edges)
       ├── Artifact (planned, generic)
-      │    ├── ArtifactLink ──→ ChatRun / ChatSession / Task / TaskRun / StepExecution
+      │    ├── ArtifactLink ──→ Task / TaskRun / StepExecution / Workflow
       │    └── ArtifactDecision
-      ├── ChatSession (V0 persisted)
-      │    ├── ChatMessage
-      │    └── ChatEvent
-      ├── ChatRun (planned)
-      │    └── ChatRunTask ──→ Task
       └── Task
            ├── TaskSection ──→ CodeRef
            ├── CodeRef (direct)
@@ -208,7 +201,6 @@ rules are defined in
 | `session_log_updated` | Log fields, including nullable `logical_key` | Existing logical-key log row updated in place |
 | `section_created` / `section_updated` / `section_deleted` | Section fields | Task section changes |
 | `code_ref_created` / `code_ref_updated` / `code_ref_deleted` | Code reference fields: task/section owner, path, line range, name, description, timestamps | Task detail and evidence reference changes |
-| `chat_session_created` / `chat_session_updated` / `chat_message_created` / `chat_event_created` | Public payloads projected from public `chat_events` rows | Public live-chat transcript and progress events; internal events are suppressed |
 | `run_step` | Execution + step config | **Daemon only** — Run a step |
 | `cancel_step` | Execution ID, task ID | **Daemon only** — Cancel running step |
 
@@ -240,12 +232,8 @@ Sacrum has separate status fields for separate questions. Do not collapse them i
 | `TaskRun.status` | What is the automation run doing now? | Durable run lifecycle |
 | `StepExecution.status` | What happened to one step attempt? | Daemon/orchestrator attempt updates |
 | `SessionLog` | What text/content was emitted during an attempt? | Append-only log content, no lifecycle status |
-| `ChatRun.status` (planned) | What is happening in a user-facing chat run? | Durable chat run lifecycle, separate from task automation |
-| `ChatSession.status` (planned) | What happened during one chat session attempt? | Chat session attempt state, separate from `StepExecution` |
 
 Use `Task.status` only as a compatibility list/filter field for queue states that Sacrum still persists on `tasks`. New derivations write `ready` or `done`; historical `running` and `waiting` values remain valid database/filter values until clients finish migrating. Use `TaskRun.status` for automation controls such as whether a run is active or stoppable. Use `Task.workflow` and `Task.current_step` for workflow position. Use `StepExecution.status` for attempt history, retry diagnostics, and LLM metadata. `SessionLog` has no state/status field; it records content attached to a `StepExecution` and must not be used to infer run state.
-
-Chat runs answer a different question: what happened in a user-facing conversation/work container that can span multiple chat sessions and produce zero, one, or many tasks. A `ChatRun` may create tasks, artifacts, and public chat messages, but it must not be treated as a `TaskRun` unless a created task later enters normal workflow execution. `ChatSession` is the chat-side execution-attempt layer, closer to `StepExecution` than to `TaskRun`.
 
 ### Task.status
 

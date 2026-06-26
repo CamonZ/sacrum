@@ -126,19 +126,19 @@ defmodule Sacrum.Repo.CodeRefs do
   """
   @spec set_for_task(Task.t(), [map()]) :: {:ok, [CodeRef.t()]} | {:error, Ecto.Changeset.t()}
   def set_for_task(%Task{} = task, refs) when is_list(refs) do
-    multi =
-      Ecto.Multi.new()
-      |> Ecto.Multi.delete_all(
-        :delete_existing,
-        from(cr in CodeRef, where: cr.task_id == ^task.id)
-      )
-      |> Ecto.Multi.run(:insert_refs, fn _repo, _changes ->
-        insert_ordered_task_refs(task, refs)
+    result =
+      Repo.transaction(fn ->
+        Repo.delete_all(from(cr in CodeRef, where: cr.task_id == ^task.id))
+
+        case insert_ordered_task_refs(task, refs) do
+          {:ok, inserted_refs} -> inserted_refs
+          {:error, changeset} -> Repo.rollback(changeset)
+        end
       end)
 
-    case Repo.transaction(multi) do
-      {:ok, %{insert_refs: inserted_refs}} -> {:ok, inserted_refs}
-      {:error, _step, %Ecto.Changeset{} = changeset, _changes} -> {:error, changeset}
+    case result do
+      {:ok, inserted_refs} -> {:ok, inserted_refs}
+      {:error, %Ecto.Changeset{} = changeset} -> {:error, changeset}
     end
   end
 
