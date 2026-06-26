@@ -88,66 +88,6 @@ defmodule SacrumWeb.Layouts do
     """
   end
 
-  @nav_items [
-    {:dashboard, "Dashboard", "hero-home", "/dashboard"}
-  ]
-
-  @doc """
-  Renders the authenticated app shell: top scope strip, left icon nav,
-  header with user menu, optional right chat sidebar, and the main slot.
-  """
-  attr :flash, :map, required: true
-  attr :current_user, :map, required: true
-  attr :active, :atom, required: true, doc: "active left-nav surface"
-  slot :inner_block, required: true
-
-  @spec app_shell(map()) :: Phoenix.LiveView.Rendered.t()
-  def app_shell(assigns) do
-    assigns = assign(assigns, :nav_items, @nav_items)
-
-    ~H"""
-    <div class="h-screen bg-bg text-text-primary font-sans flex flex-col overflow-hidden">
-      <header class="h-14 border-b border-border bg-surface flex items-center justify-end px-4 sm:px-6 lg:px-8 flex-shrink-0">
-        <div class="flex items-center gap-4">
-          <div class="text-xs text-text-muted">
-            {@current_user.name || @current_user.email}
-          </div>
-          <form action="/auth/session" method="post" class="inline">
-            <input type="hidden" name="_csrf_token" value={Phoenix.Controller.get_csrf_token()} />
-            <button
-              type="submit"
-              class="cursor-pointer text-xs text-text-secondary hover:text-text-primary transition-colors"
-            >
-              Sign out
-            </button>
-          </form>
-        </div>
-      </header>
-
-      <div class="flex flex-1 overflow-hidden">
-        <nav class="w-14 border-r border-border bg-surface flex flex-col items-center py-4 gap-2 flex-shrink-0">
-          <.link
-            :for={{key, label, icon, path} <- @nav_items}
-            navigate={path}
-            title={label}
-            class={[
-              "cursor-pointer w-10 h-10 rounded-lg flex items-center justify-center transition-all",
-              "border border-border hover:border-accent hover:bg-surface-raised",
-              @active == key && "bg-accent text-accent-fg border-accent"
-            ]}
-          >
-            <.icon name={icon} class="w-5 h-5" />
-          </.link>
-        </nav>
-
-        <main class="flex-1 overflow-auto">{render_slot(@inner_block)}</main>
-      </div>
-
-      <.flash_group flash={@flash} />
-    </div>
-    """
-  end
-
   @doc """
   Shows the flash group with standard titles and content.
 

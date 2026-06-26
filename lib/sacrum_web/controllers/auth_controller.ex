@@ -154,7 +154,7 @@ defmodule SacrumWeb.AuthController do
         conn
         |> put_session(:user_id, user.id)
         |> configure_session(max_age: 30 * 24 * 60 * 60)
-        |> redirect(to: "/dashboard")
+        |> redirect(to: "/")
 
       {:error, :not_invited} ->
         redirect(conn, to: "/not-invited")

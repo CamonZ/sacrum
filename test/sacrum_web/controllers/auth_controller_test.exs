@@ -5,7 +5,7 @@ defmodule SacrumWeb.AuthControllerTest do
   alias Sacrum.Repo.Schemas.{User, Invite}
 
   describe "Google Sign-In flow" do
-    test "invited user signing in creates a users row and redirects to onboarding" do
+    test "invited user signing in creates a user row" do
       # Create an invite for the email
       {:ok, _invite} =
         Repo.Invites.insert(Invite.create_changeset(%Invite{}, %{email: "newuser@example.com"}))

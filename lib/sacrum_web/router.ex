@@ -11,10 +11,6 @@ defmodule SacrumWeb.Router do
     plug SacrumWeb.Plugs.FetchCurrentUser
   end
 
-  pipeline :require_authenticated_user do
-    plug SacrumWeb.Plugs.RequireAuth
-  end
-
   pipeline :api do
     plug :accepts, ["json"]
   end
@@ -40,15 +36,6 @@ defmodule SacrumWeb.Router do
     get "/auth/google", AuthController, :request
     get "/auth/google/callback", AuthController, :callback
     post "/auth/session", AuthController, :signout
-  end
-
-  scope "/", SacrumWeb do
-    pipe_through [:browser, :require_authenticated_user]
-
-    live_session :authenticated,
-      on_mount: {SacrumWeb.Live.Hooks.AssignCurrentUser, :require_authenticated} do
-      live "/dashboard", DashboardLive
-    end
   end
 
   scope "/graphql" do
@@ -77,12 +64,6 @@ defmodule SacrumWeb.Router do
     # you can use Plug.BasicAuth to set up some basic authentication
     # as long as you are also using SSL (which you should anyway).
     import Phoenix.LiveDashboard.Router
-
-    scope "/dev", SacrumWeb do
-      pipe_through :browser
-
-      live "/design", DesignSystemLive
-    end
 
     scope "/dev" do
       pipe_through :browser
