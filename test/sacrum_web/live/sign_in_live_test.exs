@@ -3,6 +3,11 @@ defmodule SacrumWeb.SignInLiveTest do
 
   import Phoenix.LiveViewTest
 
+  defp authed_conn(user) do
+    Phoenix.ConnTest.build_conn()
+    |> Plug.Test.init_test_session(%{"user_id" => user.id})
+  end
+
   describe "sign-in page" do
     test "renders the sign-in page with Google button", %{conn: conn} do
       {:ok, _view, html} = live(conn, "/sign-in")
@@ -37,6 +42,12 @@ defmodule SacrumWeb.SignInLiveTest do
       {:ok, _view, html} = live(conn, "/sign-in")
 
       assert html =~ "Vertebrae"
+    end
+
+    test "authenticated users are sent to the preserved home route" do
+      user = create_user(%{email: "signedin@example.com", username: "signedin"})
+
+      assert {:error, {:live_redirect, %{to: "/"}}} = live(authed_conn(user), "/sign-in")
     end
   end
 end
