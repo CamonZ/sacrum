@@ -6,7 +6,6 @@ defmodule Sacrum.Repo.Artifacts do
   use Sacrum.GenericRepo, schema: Sacrum.Repo.Schemas.Artifact
 
   import Ecto.Query
-  import Sacrum.Chat.Guards
 
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.Artifact
@@ -15,6 +14,12 @@ defmodule Sacrum.Repo.Artifacts do
 
   @default_limit 50
   @public_redaction_states ~w(not_needed redacted)
+
+  defguardp is_user_project_scope(user_id, project_id)
+            when is_binary(user_id) and is_binary(project_id)
+
+  defguardp is_attrs(attrs) when is_map(attrs)
+  defguardp is_options(opts) when is_list(opts)
 
   @spec insert(String.t(), String.t(), map()) ::
           {:ok, Artifact.t()} | {:error, Ecto.Changeset.t()} | {:error, :not_found}

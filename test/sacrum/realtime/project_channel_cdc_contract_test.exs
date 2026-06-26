@@ -1,7 +1,6 @@
 defmodule Sacrum.Realtime.ProjectChannelCdcContractTest do
   use ExUnit.Case, async: true
 
-  alias Sacrum.Chat.PublicEvents
   alias Sacrum.Realtime.ProjectChannelCdcContract
   alias SacrumWeb.ProjectChannel
 
@@ -9,8 +8,7 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContractTest do
     :entity_projection,
     :status_projection,
     :semantic_delta,
-    :relation_change,
-    :public_chat_projection
+    :relation_change
   ]
 
   test "covers every runtime non-daemon ProjectChannel event" do
@@ -35,13 +33,6 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContractTest do
       assert ProjectChannelCdcContract.daemon_event?(event)
       assert {:error, :daemon_event} = ProjectChannelCdcContract.contract_for(event)
     end
-  end
-
-  test "keeps public chat channel events in the CDC contract" do
-    assert Enum.sort(PublicEvents.channel_event_names()) ==
-             ProjectChannelCdcContract.regular_event_names()
-             |> Enum.filter(&String.starts_with?(&1, "chat_"))
-             |> Enum.sort()
   end
 
   test "each regular event declares source rows, change images, projection keys, and completeness" do
@@ -236,18 +227,6 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContractTest do
     assert_payload_includes("session_log_created", session_log_payload_keys)
     assert_payload_includes("session_log_updated", session_log_payload_keys)
 
-    assert_payload_includes("chat_message_created", [
-      :schema_version,
-      :id,
-      :project_id,
-      :chat_session_id,
-      :role,
-      :content,
-      :content_format,
-      :client_message_id,
-      :metadata
-    ])
-
     assert_payload_includes("code_ref_created", [
       :schema_version,
       :id,
@@ -320,7 +299,6 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContractTest do
     assert "task_runs" in snapshot.source_tables
     assert "task_dependencies" in snapshot.source_tables
     assert "code_refs" in snapshot.source_tables
-    assert "chat_events" in snapshot.source_tables
 
     assert recovery.healthy_reconnect =~ "replay changes"
     assert recovery.gap_detected =~ "rerun the initial snapshot"
@@ -366,7 +344,5 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContractTest do
     |> Enum.map(&elem(&1, 0))
     |> Enum.filter(&String.starts_with?(Atom.to_string(&1), "broadcast_"))
     |> Enum.map(&String.replace_prefix(Atom.to_string(&1), "broadcast_", ""))
-    |> Enum.reject(&(&1 == "chat_event"))
-    |> Kernel.++(PublicEvents.channel_event_names())
   end
 end

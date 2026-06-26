@@ -141,7 +141,7 @@ defmodule Sacrum.Accounts.SessionLogsTest do
       {project, execution} = create_step_execution(user)
 
       # Codex `exec --json` emits cache reads on the turn.completed usage under
-      # the `cached_input_tokens` key, distinct from the OpenAI Chat/Responses
+      # the `cached_input_tokens` key, distinct from other OpenAI response
       # shapes — the rollup must recognize it or cache reads silently read 0.
       assert {:ok, %SessionLog{}} =
                SessionLogs.insert(user.id, %{

@@ -20,9 +20,6 @@ defmodule Sacrum.Application do
       {Absinthe.Subscription, SacrumWeb.Endpoint},
       # WalEx CDC projection for default-client realtime events
       Sacrum.Realtime.Cdc.Supervisor,
-      # Chat session runner processes
-      {Registry, keys: :unique, name: Sacrum.ChatSessionRegistry},
-      Sacrum.ChatSessionSupervisor,
       # Task registry for orchestration
       {Registry, keys: :unique, name: Sacrum.Orchestrator.TaskRegistry},
       # Orchestrator supervision tree

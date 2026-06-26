@@ -41,7 +41,6 @@ defmodule Sacrum.Repo.Schemas.ArtifactLinkTest do
       for subject_type <- [
             "task",
             "task_section",
-            "chat_session",
             "workflow",
             "task_run",
             "step_execution"

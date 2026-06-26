@@ -61,8 +61,6 @@ defmodule Sacrum.MixProject do
        depth: 1},
       {:swoosh, "~> 1.16"},
       {:req, "~> 0.5"},
-      {:jido, "~> 2.2"},
-      {:req_llm, "~> 1.11"},
       {:zoi, "~> 0.17"},
       {:solid, "~> 1.2"},
       {:telemetry_metrics, "~> 1.0"},

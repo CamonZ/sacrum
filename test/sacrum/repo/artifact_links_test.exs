@@ -3,7 +3,6 @@ defmodule Sacrum.Repo.ArtifactLinksTest do
 
   alias Sacrum.Repo.ArtifactLinks
   alias Sacrum.Repo.Artifacts
-  alias Sacrum.Repo.ChatSessions
   alias Sacrum.Repo.Projects
   alias Sacrum.Repo.StepExecutions
   alias Sacrum.Repo.TaskSections
@@ -68,11 +67,6 @@ defmodule Sacrum.Repo.ArtifactLinksTest do
     section
   end
 
-  defp create_chat_session(user, project) do
-    {:ok, chat_session} = ChatSessions.insert(user.id, project.id, %{session_kind: "planning"})
-    chat_session
-  end
-
   defp create_workflow(_user, project) do
     suffix = System.unique_integer([:positive])
 
@@ -106,7 +100,6 @@ defmodule Sacrum.Repo.ArtifactLinksTest do
     project = create_project(user)
     task = create_task(project)
     section = create_section(task)
-    chat_session = create_chat_session(user, project)
     workflow = create_workflow(user, project)
     task_run = create_task_run(user, project, task)
     step_execution = create_step_execution(user, project, task, workflow, task_run)
@@ -117,7 +110,6 @@ defmodule Sacrum.Repo.ArtifactLinksTest do
       project: project,
       task: task,
       section: section,
-      chat_session: chat_session,
       workflow: workflow,
       task_run: task_run,
       step_execution: step_execution,
@@ -134,7 +126,6 @@ defmodule Sacrum.Repo.ArtifactLinksTest do
       artifact: artifact,
       task: task,
       section: section,
-      chat_session: chat_session,
       workflow: workflow,
       task_run: task_run,
       step_execution: step_execution
@@ -142,7 +133,6 @@ defmodule Sacrum.Repo.ArtifactLinksTest do
       subjects = [
         {"task", task.id, "attached_to"},
         {"task_section", section.id, "evidence_for"},
-        {"chat_session", chat_session.id, "attached_to"},
         {"workflow", workflow.id, "attached_to"},
         {"task_run", task_run.id, "produced_by"},
         {"step_execution", step_execution.id, "evidence_for"}

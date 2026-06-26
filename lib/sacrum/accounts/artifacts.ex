@@ -3,7 +3,7 @@ defmodule Sacrum.Accounts.Artifacts do
   User-scoped artifact operations.
 
   Artifacts are generic records that can be attached to supported subjects
-  without depending on API resolver or chat-run modules.
+  without depending on API resolver modules.
   """
 
   alias Sacrum.Repo

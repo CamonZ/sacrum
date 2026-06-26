@@ -19,15 +19,12 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
   treat ordinary CDC events as invalidation/refetch hints.
   """
 
-  alias Sacrum.Chat.PublicEvents
-
   @daemon_event_names ["run_step", "cancel_step"]
 
   @entity_projection :entity_projection
   @status_projection :status_projection
   @semantic_delta :semantic_delta
   @relation_change :relation_change
-  @public_chat_projection :public_chat_projection
 
   @schema_version 1
 
@@ -157,24 +154,6 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
   )a
 
   @code_ref_event_payload_keys [:schema_version | @code_ref_payload_keys]
-
-  @chat_session_payload_keys ~w(
-    id project_id status session_kind started_at ended_at stop_requested_at public_metadata
-    inserted_at updated_at
-  )a
-
-  @chat_session_event_payload_keys [:schema_version | @chat_session_payload_keys]
-
-  @chat_message_payload_keys ~w(
-    id project_id chat_session_id role content content_format client_message_id metadata
-    inserted_at updated_at
-  )a
-
-  @chat_message_event_payload_keys [:schema_version | @chat_message_payload_keys]
-
-  @chat_event_payload_keys ~w(
-    schema_version id project_id chat_session_id event_type payload inserted_at
-  )a
 
   @contracts [
     %{
@@ -659,111 +638,6 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
       schema_version: @schema_version,
       completeness:
         "Complete code reference tombstone from the before image so clients can remove by id without refetching."
-    },
-    %{
-      event: PublicEvents.event_type(:session_created),
-      classification: @public_chat_projection,
-      source_changes: [
-        %{
-          table: "chat_events",
-          operation: :insert,
-          after_image_fields: [
-            :id,
-            :project_id,
-            :chat_session_id,
-            :event_type,
-            :visibility,
-            :public_payload
-          ]
-        },
-        %{
-          table: "chat_sessions",
-          operation: :insert,
-          after_image_fields: @chat_session_payload_keys
-        }
-      ],
-      payload_keys: @chat_session_event_payload_keys,
-      schema_version: @schema_version,
-      completeness:
-        "Public chat session projection from chat_events.public_payload; internal payloads are never pushed."
-    },
-    %{
-      event: PublicEvents.event_type(:session_updated),
-      classification: @public_chat_projection,
-      source_changes: [
-        %{
-          table: "chat_events",
-          operation: :insert,
-          after_image_fields: [
-            :id,
-            :project_id,
-            :chat_session_id,
-            :event_type,
-            :visibility,
-            :public_payload
-          ]
-        },
-        %{
-          table: "chat_sessions",
-          operation: :update,
-          before_image_fields: [:id, :status],
-          after_image_fields: @chat_session_payload_keys
-        }
-      ],
-      payload_keys: @chat_session_event_payload_keys,
-      schema_version: @schema_version,
-      completeness:
-        "Public chat session status projection from chat_events.public_payload; clients update session state without fetching."
-    },
-    %{
-      event: PublicEvents.event_type(:message_created),
-      classification: @public_chat_projection,
-      source_changes: [
-        %{
-          table: "chat_events",
-          operation: :insert,
-          after_image_fields: [
-            :id,
-            :project_id,
-            :chat_session_id,
-            :event_type,
-            :visibility,
-            :public_payload
-          ]
-        },
-        %{
-          table: "chat_messages",
-          operation: :insert,
-          after_image_fields: @chat_message_payload_keys
-        }
-      ],
-      payload_keys: @chat_message_event_payload_keys,
-      schema_version: @schema_version,
-      completeness:
-        "Public chat message projection from chat_events.public_payload; clients append the message without fetching."
-    },
-    %{
-      event: PublicEvents.event_type(:generic_event_created),
-      classification: @public_chat_projection,
-      source_changes: [
-        %{
-          table: "chat_events",
-          operation: :insert,
-          after_image_fields: [
-            :id,
-            :project_id,
-            :chat_session_id,
-            :event_type,
-            :visibility,
-            :public_payload,
-            :inserted_at
-          ]
-        }
-      ],
-      payload_keys: @chat_event_payload_keys,
-      schema_version: @schema_version,
-      completeness:
-        "Generic public chat event wrapper for public chat_events whose event_type is not one of the known stable channel names."
     }
   ]
 
@@ -775,11 +649,10 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
       "Capture a CDC cursor/LSN for the snapshot boundary, read all project rows at or before that boundary, then apply committed WalEx changes after that cursor in commit order.",
     source_tables: ~w(
       projects workflows workflow_steps step_transitions workflow_transitions tasks task_runs
-      step_executions session_logs task_sections task_dependencies code_refs chat_sessions
-      chat_messages chat_events
+      step_executions session_logs task_sections task_dependencies code_refs
     ),
     gui_projection:
-      "Equivalent to the GraphQL task list/detail, pipeline summary, run trace, section, and public chat queries for the project. Include archived tasks when building a full local store."
+      "Equivalent to the GraphQL task list/detail, pipeline summary, run trace, and section queries for the project. Include archived tasks when building a full local store."
   }
 
   @reconnect_gap_recovery_contract %{

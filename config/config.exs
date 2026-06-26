@@ -15,12 +15,6 @@ config :sacrum,
   # Orchestrator configuration
   max_concurrent_executions: 5
 
-# Authoring verifier gate.
-# When disabled, VerifyAuthoringIntent only runs rule-based schema checks and
-# lets schema-pass intents through unchanged. Flip this to `true` once the
-# verifier provider config is in place.
-config :sacrum, :authoring_verifier, enabled: false
-
 config :sacrum, :cdc,
   start_consumer: true,
   publication: "sacrum_cdc_publication",
@@ -37,10 +31,7 @@ config :sacrum, :cdc,
     "session_logs",
     "task_sections",
     "task_dependencies",
-    "code_refs",
-    "chat_sessions",
-    "chat_messages",
-    "chat_events"
+    "code_refs"
   ],
   modules: [Sacrum.Realtime.Cdc.WalExConsumer]
 

@@ -169,8 +169,8 @@ custom classes must fully style the input
   along with the updated assign:
 
       def handle_event("edit_message", %{"message_id": message_id}, socket) do
-        message = Chat.get_message!(message_id)
-        edit_form = to_form(Chat.change_message(message, %{content: message.content}))
+        message = Messages.get_message!(message_id)
+        edit_form = to_form(Messages.change_message(message, %{content: message.content}))
 
         # re-insert message so @editing_message_id toggle logic takes effect for that stream item
         {:noreply,
