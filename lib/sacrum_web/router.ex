@@ -8,7 +8,6 @@ defmodule SacrumWeb.Router do
     plug :put_root_layout, html: {SacrumWeb.Layouts, :root}
     plug :protect_from_forgery
     plug :put_secure_browser_headers
-    plug SacrumWeb.Plugs.FetchCurrentUser
   end
 
   pipeline :api do
@@ -26,16 +25,7 @@ defmodule SacrumWeb.Router do
   scope "/", SacrumWeb do
     pipe_through :browser
 
-    live_session :public, on_mount: {SacrumWeb.Live.Hooks.AssignCurrentUser, :default} do
-      live "/", HomeLive
-      live "/sign-in", SignInLive
-      live "/not-invited", NotInvitedLive
-      live "/auth-error", AuthErrorLive
-    end
-
-    get "/auth/google", AuthController, :request
-    get "/auth/google/callback", AuthController, :callback
-    post "/auth/session", AuthController, :signout
+    live "/", HomeLive
   end
 
   scope "/graphql" do

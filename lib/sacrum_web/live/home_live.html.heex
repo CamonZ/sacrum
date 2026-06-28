@@ -36,68 +36,9 @@
           Orchestrate Agents. <br /> Ship Faster.
         </h1>
 
-        <%= if @submitted do %>
-          <div class="mx-auto max-w-md mb-16">
-            <div class="p-6 rounded-lg bg-surface border border-border">
-              <div class="flex items-center justify-center mb-3">
-                <svg
-                  class="w-6 h-6 text-success"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2"
-                    d="M5 13l4 4L19 7"
-                  />
-                </svg>
-              </div>
-              <h3 class="text-lg font-semibold text-text-primary mb-2">
-                Welcome to the waitlist!
-              </h3>
-              <p class="text-sm text-text-secondary">
-                We'll notify you when early access is available.
-              </p>
-            </div>
-          </div>
-        <% else %>
-          <div class="mx-auto max-w-md">
-            <form phx-submit="submit_waitlist" class="space-y-4">
-              <div>
-                <input
-                  type="email"
-                  name="email"
-                  value={@form[:email].value}
-                  placeholder="you@example.com"
-                  class="w-full px-4 py-3 rounded-lg bg-surface border border-border text-text-primary placeholder-text-muted focus:outline-none focus:border-accent transition-all"
-                  required
-                />
-                <%= if @submission_error do %>
-                  <p class="text-sm text-error mt-2">{@submission_error}</p>
-                <% end %>
-              </div>
-              <button
-                type="submit"
-                class="w-full px-4 py-3 rounded-lg bg-accent text-accent-fg font-semibold transition-colors hover:bg-accent-hover disabled:opacity-50"
-              >
-                Join Waitlist
-              </button>
-            </form>
-            <p class="text-xs text-text-muted mt-4">
-              We respect your privacy. No spam, ever.
-            </p>
-            <p class="text-xs text-text-muted mt-6">
-              <a
-                href="/sign-in"
-                class="text-accent hover:text-accent-hover transition-colors font-semibold"
-              >
-                Already have an invite? Sign in
-              </a>
-            </p>
-          </div>
-        <% end %>
+        <p class="mx-auto max-w-xl text-lg text-text-secondary">
+          Vertebrae coordinates local task execution, workflow state, and implementation traces.
+        </p>
       </div>
     </div>
   </main>
