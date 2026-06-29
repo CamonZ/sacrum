@@ -9,6 +9,12 @@ Now you can visit [`localhost:4000`](http://localhost:4000) from your browser.
 
 Ready to run in production? Please [check our deployment guides](https://hexdocs.pm/phoenix/deployment.html).
 
+## License
+
+Copyright 2026 Rafael Simon Garcia Rodriguez.
+
+Sacrum is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
+
 ## Learn more
 
 * Official website: https://www.phoenixframework.org/
