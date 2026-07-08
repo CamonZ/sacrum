@@ -51,3 +51,34 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          provenance: false
+
+      - name: Publish manifest with explicit arm64v8 variant
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+
+          tmpdir="$(mktemp -d)"
+          trap 'rm -rf "$tmpdir"' EXIT
+
+          while IFS= read -r tag; do
+            if [ -z "$tag" ]; then
+              continue
+            fi
+
+            raw="$(docker buildx imagetools inspect --raw "$tag")"
+
+            printf '%s' "$raw" |
+              jq -c '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64")' \
+                > "$tmpdir/amd64.json"
+
+            printf '%s' "$raw" |
+              jq -c '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64") | .platform.variant = "v8"' \
+                > "$tmpdir/arm64v8.json"
+
+            docker buildx imagetools create \
+              --tag "$tag" \
+              -f "$tmpdir/amd64.json" \
+              -f "$tmpdir/arm64v8.json"
+          done <<< "$TAGS"
