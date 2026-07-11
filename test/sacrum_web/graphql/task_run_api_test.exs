@@ -151,6 +151,105 @@ defmodule SacrumWeb.Graphql.TaskRunApiTest do
       assert no_run_result["data"]["activeRun"] == nil
     end
 
+    test "activeRuns filters terminal runs and scopes to the requested project", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      older_task = create_task(user, project, "Older active task")
+
+      {:ok, older_run} =
+        Accounts.TaskRuns.insert(user.id, project.id, older_task.id, %{status: :queued})
+
+      newer_task = create_task(user, project, "Newer active task")
+
+      {:ok, newer_run} =
+        Accounts.TaskRuns.insert(user.id, project.id, newer_task.id, %{status: :waiting})
+
+      {:ok, latest_execution} =
+        create_step_execution(user, newer_task, newer_run.id, "in_progress")
+
+      {:ok, _newer_run} =
+        Accounts.TaskRuns.update(newer_run, %{latest_step_execution_id: latest_execution.id})
+
+      terminal_task = create_task(user, project, "Terminal task")
+
+      {:ok, terminal_run} =
+        Accounts.TaskRuns.insert(user.id, project.id, terminal_task.id, %{status: :completed})
+
+      {:ok, other_project} =
+        Accounts.Projects.insert(user.id, %{name: "Other active-runs project"})
+
+      other_project_task = create_task(user, other_project, "Other project task")
+
+      {:ok, other_project_run} =
+        Accounts.TaskRuns.insert(user.id, other_project.id, other_project_task.id, %{
+          status: :executing
+        })
+
+      result =
+        graphql_result(conn, user, """
+        {
+          activeRuns(projectId: "#{project.id}") {
+            id
+            projectId
+            status
+            latestStepExecution { id }
+          }
+        }
+        """)
+
+      assert result["errors"] == nil
+
+      runs = result["data"]["activeRuns"]
+      assert Enum.map(runs, & &1["id"]) == [newer_run.id, older_run.id]
+      assert Enum.map(runs, & &1["status"]) == ["waiting", "queued"]
+      assert Enum.all?(runs, &(&1["projectId"] == project.id))
+      assert hd(runs)["latestStepExecution"]["id"] == latest_execution.id
+      refute terminal_run.id in Enum.map(runs, & &1["id"])
+      refute other_project_run.id in Enum.map(runs, & &1["id"])
+    end
+
+    test "activeRuns returns an empty list when a project has no active runs", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      task = create_task(user, project, "Completed task")
+      {:ok, _run} = Accounts.TaskRuns.insert(user.id, project.id, task.id, %{status: :completed})
+
+      result =
+        graphql_result(conn, user, """
+        { activeRuns(projectId: "#{project.id}") { id } }
+        """)
+
+      assert result["errors"] == nil
+      assert result["data"]["activeRuns"] == []
+    end
+
+    test "activeRuns rejects a project that is not owned by the current user", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      task = create_task(user, project, "Owned task")
+      {:ok, _run} = Accounts.TaskRuns.insert(user.id, project.id, task.id, %{status: :executing})
+
+      other_user =
+        create_user(%{
+          email: "unauthorized-active-runs@example.com",
+          username: "unauthorized_active_runs"
+        })
+
+      result =
+        graphql_result(conn, other_user, """
+        { activeRuns(projectId: "#{project.id}") { id } }
+        """)
+
+      assert result["data"]["activeRuns"] == nil
+      assert [%{"message" => _}] = result["errors"]
+    end
+
     test "taskRunTrace returns only parent run executions and logs", %{
       conn: conn,
       user: user,

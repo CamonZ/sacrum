@@ -31,6 +31,9 @@ defmodule Sacrum.Accounts.TaskRuns do
   @spec list_active_for_tasks(String.t(), [String.t()]) :: [TaskRun.t()]
   defdelegate list_active_for_tasks(user_id, task_ids), to: TaskRunsRepo
 
+  @spec list_active_for_project(String.t(), String.t()) :: [TaskRun.t()]
+  defdelegate list_active_for_project(user_id, project_id), to: TaskRunsRepo
+
   @spec list_step_executions(String.t(), String.t()) :: [StepExecution.t()]
   def list_step_executions(user_id, task_run_id)
       when is_binary(user_id) and is_binary(task_run_id) do

@@ -160,6 +160,64 @@ defmodule Sacrum.Accounts.TaskRunsTest do
     end
   end
 
+  describe "list_active_for_project/2" do
+    test "returns active runs for the project in descending insertion order with latest execution preloaded" do
+      user = create_user()
+      {project, older_task, workflow} = create_task_with_workflow(user)
+      {:ok, older_run} = TaskRuns.insert(user.id, project.id, older_task.id, %{status: :queued})
+
+      {:ok, newer_task} = Tasks.insert(user.id, project.id, %{title: "Newer task"})
+      {:ok, newer_run} = TaskRuns.insert(user.id, project.id, newer_task.id, %{status: :waiting})
+
+      {:ok, latest_execution} =
+        StepExecutions.insert(user.id, %{
+          task_id: newer_task.id,
+          task_run_id: newer_run.id,
+          project_id: project.id,
+          workflow_id: workflow.id,
+          step_name: "execute",
+          status: "in_progress"
+        })
+
+      {:ok, _newer_run} =
+        TaskRuns.update(newer_run, %{latest_step_execution_id: latest_execution.id})
+
+      {:ok, terminal_task} = Tasks.insert(user.id, project.id, %{title: "Terminal task"})
+
+      {:ok, terminal_run} =
+        TaskRuns.insert(user.id, project.id, terminal_task.id, %{status: :completed})
+
+      {:ok, other_project} = Projects.insert(user.id, %{name: "Other TaskRun Project"})
+      {:ok, other_task} = Tasks.insert(user.id, other_project.id, %{title: "Other project task"})
+
+      {:ok, other_project_run} =
+        TaskRuns.insert(user.id, other_project.id, other_task.id, %{status: :executing})
+
+      other_user = create_user()
+
+      runs = TaskRuns.list_active_for_project(user.id, project.id)
+      run_ids = Enum.map(runs, & &1.id)
+
+      assert run_ids == [newer_run.id, older_run.id]
+
+      assert [%TaskRun{latest_step_execution: %StepExecution{id: execution_id}}, %TaskRun{}] =
+               runs
+
+      assert execution_id == latest_execution.id
+      refute terminal_run.id in run_ids
+      refute other_project_run.id in run_ids
+      assert TaskRuns.list_active_for_project(other_user.id, project.id) == []
+    end
+
+    test "returns an empty list when the project has no active runs" do
+      user = create_user()
+      {project, task, _workflow} = create_task_with_workflow(user)
+      {:ok, _run} = TaskRuns.insert(user.id, project.id, task.id, %{status: :failed})
+
+      assert TaskRuns.list_active_for_project(user.id, project.id) == []
+    end
+  end
+
   describe "run-scoped lookups" do
     test "lists single-run executions and session logs without descendants or legacy task rows" do
       user = create_user()

@@ -168,6 +168,16 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
       end)
     end
 
+    field :active_runs, list_of(:task_run) do
+      arg(:project_id, non_null(:uuid4))
+
+      resolve(fn %{project_id: project_id}, %{context: %{current_user: user}} ->
+        with {:ok, _project} <- Accounts.Projects.get_by(user.id, conditions: [id: project_id]) do
+          {:ok, Accounts.TaskRuns.list_active_for_project(user.id, project_id)}
+        end
+      end)
+    end
+
     field :task_runs, list_of(:task_run) do
       arg(:task_id, non_null(:uuid4))
 
