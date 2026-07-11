@@ -59,6 +59,18 @@ defmodule Sacrum.Repo.TaskRuns do
     |> Repo.preload(:latest_step_execution)
   end
 
+  @spec list_active_for_project(String.t(), String.t()) :: [TaskRun.t()]
+  def list_active_for_project(user_id, project_id)
+      when is_binary(user_id) and is_binary(project_id) do
+    TaskRun
+    |> where([tr], tr.user_id == ^user_id)
+    |> where([tr], tr.project_id == ^project_id)
+    |> where([tr], tr.status in ^TaskRunStatus.active_statuses())
+    |> order_by([tr], desc: tr.inserted_at)
+    |> Repo.all()
+    |> Repo.preload(:latest_step_execution)
+  end
+
   @spec list_step_executions_for_run(String.t(), String.t()) :: [StepExecution.t()]
   def list_step_executions_for_run(user_id, task_run_id)
       when is_binary(user_id) and is_binary(task_run_id) do
