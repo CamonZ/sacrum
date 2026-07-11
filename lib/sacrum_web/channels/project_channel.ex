@@ -3,6 +3,7 @@ defmodule SacrumWeb.ProjectChannel do
 
   alias Sacrum.Accounts.Projects
   alias Sacrum.Realtime.ProjectChannelCdcContract
+  alias Sacrum.Repo.Schemas.Task
   alias Sacrum.TaskRuns.RunControls
   alias Sacrum.TaskRuns.Status, as: TaskRunStatus
 
@@ -400,6 +401,7 @@ defmodule SacrumWeb.ProjectChannel do
       status: task.status,
       archived: task.archived,
       worktree: task.worktree,
+      run_controls: task_controls_payload(task),
       inserted_at: task.inserted_at,
       updated_at: task.updated_at
     })
@@ -606,13 +608,27 @@ defmodule SacrumWeb.ProjectChannel do
   defp task_run_controls_payload(task_run) do
     case RunControls.for_task_run(task_run) do
       {:ok, controls} ->
-        controls
-        |> RunControls.to_payload()
-        |> Map.update!(:active_run, &task_run_base_payload/1)
+        run_controls_payload(controls)
 
       {:error, :not_found} ->
         nil
     end
+  end
+
+  defp task_controls_payload(%{user_id: user_id} = task) when is_binary(user_id) do
+    case RunControls.for_task(user_id, task_struct(task)) do
+      {:ok, controls} -> run_controls_payload(controls)
+      {:error, :not_found} -> nil
+    end
+  end
+
+  defp task_struct(%Task{} = task), do: task
+  defp task_struct(task), do: struct(Task, task)
+
+  defp run_controls_payload(controls) do
+    controls
+    |> RunControls.to_payload()
+    |> Map.update!(:active_run, &task_run_base_payload/1)
   end
 
   defp session_log_payload(log) do

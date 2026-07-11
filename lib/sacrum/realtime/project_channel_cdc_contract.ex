@@ -30,8 +30,10 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
 
   @task_payload_keys ~w(
     id title description level priority tags rejection_reason started_at completed_at project_id workflow_id
-    current_step_id parent_id status archived worktree inserted_at updated_at
+    current_step_id parent_id status archived worktree inserted_at updated_at run_controls
   )a
+
+  @task_source_image_fields [:user_id | @task_payload_keys -- [:run_controls]]
 
   @task_event_payload_keys [:schema_version | @task_payload_keys]
 
@@ -101,6 +103,25 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
     runnable stoppable disabled_reason_code disabled_reason active_run
   )a
 
+  @task_control_enrichment_source_changes [
+    %{
+      table: "task_runs",
+      operation: [:insert, :update],
+      after_image_fields: @task_run_base_payload_keys
+    },
+    %{
+      table: "step_executions",
+      operation: [:insert, :update],
+      after_image_fields: [:id, :task_run_id, :status]
+    },
+    %{
+      table: "task_dependencies",
+      operation: [:insert, :update, :delete],
+      before_image_fields: [:task_id, :depends_on_id, :project_id],
+      after_image_fields: [:task_id, :depends_on_id, :project_id]
+    }
+  ]
+
   @task_run_control_source_changes [
     %{
       table: "tasks",
@@ -160,12 +181,21 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
       event: "task_created",
       classification: @entity_projection,
       source_changes: [
-        %{table: "tasks", operation: :insert, after_image_fields: @task_payload_keys}
+        %{table: "tasks", operation: :insert, after_image_fields: @task_source_image_fields}
       ],
       payload_keys: @task_event_payload_keys,
+      nested_payload_keys: %{
+        run_controls: @task_run_controls_payload_keys,
+        "run_controls.active_run": @task_run_base_payload_keys
+      },
       schema_version: @schema_version,
+      enrichment_source_changes: @task_control_enrichment_source_changes,
+      derivation: %{
+        run_controls:
+          "post-commit server enrichment computed through Sacrum.TaskRuns.RunControls from the task after image, current active TaskRun, direct blockers, latest step execution, and TaskRegistry process state"
+      },
       completeness:
-        "Complete task row projection for list/detail stores, hierarchy placement, workflow position, archive visibility, and compatibility status."
+        "Complete task row projection plus server-derived run controls for list/detail stores, hierarchy placement, workflow position, archive visibility, and compatibility status."
     },
     %{
       event: "task_updated",
@@ -175,13 +205,22 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
           table: "tasks",
           operation: :update,
           before_image_fields: [:id],
-          after_image_fields: @task_payload_keys
+          after_image_fields: @task_source_image_fields
         }
       ],
       payload_keys: @task_event_payload_keys,
+      nested_payload_keys: %{
+        run_controls: @task_run_controls_payload_keys,
+        "run_controls.active_run": @task_run_base_payload_keys
+      },
       schema_version: @schema_version,
+      enrichment_source_changes: @task_control_enrichment_source_changes,
+      derivation: %{
+        run_controls:
+          "post-commit server enrichment computed through Sacrum.TaskRuns.RunControls from the task after image, current active TaskRun, direct blockers, latest step execution, and TaskRegistry process state"
+      },
       completeness:
-        "Complete task row projection; clients can upsert the task and recalculate local task buckets without fetching the task."
+        "Complete task row projection plus replacement run controls; clients can upsert the task and local control state without fetching the task."
     },
     %{
       event: "task_deleted",

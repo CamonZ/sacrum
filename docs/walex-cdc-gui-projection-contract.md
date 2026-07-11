@@ -43,8 +43,8 @@ instead of silently applying a payload with an unsupported shape.
 
 | Event | Class | Source change image | Payload contract |
 | --- | --- | --- | --- |
-| `task_created` | Entity projection | `tasks` insert after image. | Full task row: identity, title/body, level/priority/tags, review fields, timestamps, `project_id`, `workflow_id`, `current_step_id`, `parent_id`, `status`, `archived`, `worktree`. |
-| `task_updated` | Entity projection | `tasks` update after image, with before `id`. | Same full task row; clients upsert task state and update local hierarchy/archive/status/workflow placement. |
+| `task_created` | Entity projection | `tasks` insert after image plus post-commit server-side run-control enrichment inputs. | Full task row plus `run_controls` with server-derived `runnable`, `stoppable`, reason fields, and `active_run`; clients can seed task controls before any `TaskRun` event exists. |
+| `task_updated` | Entity projection | `tasks` update after image, with before `id`, plus post-commit server-side run-control enrichment inputs. | Same full task row plus replacement `run_controls`; clients upsert task state and controls without refetching, including when an active run changed in the same committed transaction. |
 | `task_deleted` | Entity projection | `tasks` delete before image. | Tombstone with `id`, `current_step_id`, `workflow_id`, `level`, and `archived` from the before image so clients can remove the row and update pipeline buckets without a task-position cache. |
 | `task_parent_changed` | Semantic delta | `tasks` update with before/after `parent_id`. | `{task_id, project_id, from_parent_id, to_parent_id, level}`. Gives tree stores the exact parent move while `task_updated` carries the full task row. |
 | `task_dependency_created` | Relation change | `task_dependencies` insert after image. | Full dependency edge row: `id`, `task_id`, `depends_on_id`, `project_id`, timestamps. |
@@ -125,23 +125,28 @@ upsert or remove the reference by id using these events.
 
 ## Run Control Enrichment
 
-`run_controls` is part of the client payload, but it is not derived from the
-`task_runs` row alone. The WalEx projector enqueues the committed row event into
-Sacrum; a Sacrum process then enriches the event with the same server-side
+`run_controls` is part of task and TaskRun client payloads, but it is not derived
+from a single row alone. The WalEx projector enqueues the committed row event
+into Sacrum; a Sacrum process then enriches the event with the same server-side
 presenter used by the current channel path: `Sacrum.TaskRuns.RunControls`.
 
 That presenter combines:
 
-- the TaskRun after image;
+- the task after image and, for TaskRun events, the TaskRun after image;
 - the owning task row, including workflow/current-step/archive/completion state;
 - direct blocker rows and blocker task completion state;
 - the latest step execution status when checking stale active runs;
 - `TaskRegistry` process state for active orchestrators.
 
-The payload remains a complete replacement for GUI controls. The boundary is
-that WalEx supplies committed row changes, while Sacrum performs synchronous
-server enrichment before pushing to subscribers. Do not design this path as a
-pure CDC publisher that bypasses Sacrum runtime state.
+The payload remains a complete replacement for GUI controls. For
+`task_created` and `task_updated`, the task after image is paired with the
+current active run as observed after commit; if the task and run changes were
+committed together, the task event reflects those post-commit run conditions.
+The later `task_run_created` or `task_run_updated` event is a compatible
+replacement update. The boundary is that WalEx supplies committed row changes,
+while Sacrum performs synchronous server enrichment before pushing to
+subscribers. Do not design this path as a pure CDC publisher that bypasses
+Sacrum runtime state.
 
 ## Initial Snapshot
 

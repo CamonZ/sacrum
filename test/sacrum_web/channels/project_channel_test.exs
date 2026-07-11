@@ -365,6 +365,84 @@ defmodule SacrumWeb.ProjectChannelTest do
       assert payload.workflow_id == task.workflow_id
     end
 
+    test "task payload includes runnable controls for a task with a workflow position" do
+      {_user, project, socket} = setup_socket()
+      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}", %{})
+
+      task =
+        build_task(project)
+        |> Map.put(:workflow_id, Ecto.UUID.generate())
+        |> Map.put(:current_step_id, Ecto.UUID.generate())
+
+      SacrumWeb.ProjectChannel.broadcast_task_created(project.id, task)
+
+      assert_push "task_created", payload
+
+      assert payload.run_controls == %{
+               runnable: true,
+               stoppable: false,
+               disabled_reason_code: nil,
+               disabled_reason: nil,
+               active_run: nil
+             }
+    end
+
+    test "task payload reports missing workflow controls" do
+      {_user, project, socket} = setup_socket()
+      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}", %{})
+
+      SacrumWeb.ProjectChannel.broadcast_task_updated(project.id, build_task(project))
+
+      assert_push "task_updated", payload
+
+      assert payload.run_controls == %{
+               runnable: false,
+               stoppable: false,
+               disabled_reason_code: "missing_workflow",
+               disabled_reason: "Task has no workflow assigned",
+               active_run: nil
+             }
+    end
+
+    test "task payload serializes queued, executing, and waiting active runs" do
+      {_user, project, socket} = setup_socket()
+      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}", %{})
+
+      for status <- [:queued, :executing, :waiting] do
+        {:ok, task} = Sacrum.Accounts.Tasks.insert(project, %{title: "Active #{status}"})
+
+        {:ok, task_run} =
+          Sacrum.Accounts.TaskRuns.insert(project.user_id, project.id, task.id, %{status: status})
+
+        SacrumWeb.ProjectChannel.broadcast_task_updated(project.id, task)
+
+        assert_push "task_updated", payload
+
+        assert payload.run_controls.runnable == false
+        assert payload.run_controls.stoppable == true
+        assert payload.run_controls.disabled_reason_code == "active_run"
+        assert payload.run_controls.disabled_reason == "Task already has an active run"
+
+        assert payload.run_controls.active_run == %{
+                 id: task_run.id,
+                 task_id: task_run.task_id,
+                 project_id: task_run.project_id,
+                 status: Atom.to_string(status),
+                 started_at: task_run.started_at,
+                 ended_at: task_run.ended_at,
+                 stop_requested_at: task_run.stop_requested_at,
+                 latest_step_execution_id: task_run.latest_step_execution_id,
+                 outcome_kind: task_run.outcome_kind,
+                 outcome_context: task_run.outcome_context,
+                 parent_task_run_id: task_run.parent_task_run_id,
+                 root_task_run_id: task_run.root_task_run_id,
+                 triggered_by_step_execution_id: task_run.triggered_by_step_execution_id,
+                 inserted_at: task_run.inserted_at,
+                 updated_at: task_run.updated_at
+               }
+      end
+    end
+
     test "runtime payload keys match CDC contract for regular broadcast helpers" do
       {_user, project, socket} = setup_socket()
       {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}", %{})
@@ -938,6 +1016,7 @@ defmodule SacrumWeb.ProjectChannelTest do
       status: "ready",
       archived: false,
       worktree: nil,
+      user_id: project.user_id,
       inserted_at: now,
       updated_at: now
     }
