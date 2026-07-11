@@ -37,6 +37,10 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
 
   @task_event_payload_keys [:schema_version | @task_payload_keys]
 
+  @task_bucket_identity_fields [:archived, :level, :current_step_id, :workflow_id]
+
+  @task_updated_event_payload_keys [:previous | @task_event_payload_keys]
+
   @task_deleted_payload_keys ~w(
     schema_version id current_step_id workflow_id level archived
   )a
@@ -204,23 +208,26 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
         %{
           table: "tasks",
           operation: :update,
-          before_image_fields: [:id],
+          before_image_fields: @task_bucket_identity_fields,
           after_image_fields: @task_source_image_fields
         }
       ],
-      payload_keys: @task_event_payload_keys,
+      payload_keys: @task_updated_event_payload_keys,
       nested_payload_keys: %{
+        previous: @task_bucket_identity_fields,
         run_controls: @task_run_controls_payload_keys,
         "run_controls.active_run": @task_run_base_payload_keys
       },
       schema_version: @schema_version,
       enrichment_source_changes: @task_control_enrichment_source_changes,
       derivation: %{
+        previous:
+          "sparse before-image delta containing only changed fields among archived, level, current_step_id, and workflow_id; values come from the tasks before image and the map is empty when none changed",
         run_controls:
           "post-commit server enrichment computed through Sacrum.TaskRuns.RunControls from the task after image, current active TaskRun, direct blockers, latest step execution, and TaskRegistry process state"
       },
       completeness:
-        "Complete task row projection plus replacement run controls; clients can upsert the task and local control state without fetching the task."
+        "Complete task row projection plus sparse previous bucket identity and replacement run controls; clients can upsert the task, move pipeline counts, and update local control state without fetching the task."
     },
     %{
       event: "task_deleted",

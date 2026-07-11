@@ -169,12 +169,13 @@ defmodule SacrumWeb.ProjectChannelTest do
       {_user, project, socket} = setup_socket()
       {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}")
 
-      task = build_task(project)
+      task = Map.put(build_task(project), :previous, %{archived: false})
 
       SacrumWeb.ProjectChannel.broadcast_task_updated(project.id, task)
 
       assert_broadcast "task_updated", payload
       assert payload.id == task.id
+      assert payload.previous == %{archived: false}
     end
 
     test "broadcast_task_deleted sends task_deleted event with position before-image" do
@@ -461,7 +462,10 @@ defmodule SacrumWeb.ProjectChannelTest do
       end)
 
       assert_broadcast_payload_keys("task_updated", fn ->
-        SacrumWeb.ProjectChannel.broadcast_task_updated(project.id, task)
+        SacrumWeb.ProjectChannel.broadcast_task_updated(
+          project.id,
+          Map.put(task, :previous, %{})
+        )
       end)
 
       assert_broadcast_payload_keys("task_deleted", fn ->

@@ -84,7 +84,11 @@ defmodule SacrumWeb.ProjectChannel do
 
   @spec broadcast_task_updated(String.t(), map()) :: :ok | {:error, term()}
   def broadcast_task_updated(project_id, task) do
-    SacrumWeb.Endpoint.broadcast("project:#{project_id}", "task_updated", task_payload(task))
+    SacrumWeb.Endpoint.broadcast(
+      "project:#{project_id}",
+      "task_updated",
+      task_updated_payload(task)
+    )
   end
 
   @spec broadcast_task_deleted(String.t(), map()) :: :ok | {:error, term()}
@@ -405,6 +409,12 @@ defmodule SacrumWeb.ProjectChannel do
       inserted_at: task.inserted_at,
       updated_at: task.updated_at
     })
+  end
+
+  defp task_updated_payload(task) do
+    task
+    |> task_payload()
+    |> Map.put(:previous, Map.get(task, :previous, %{}))
   end
 
   defp task_deleted_payload(task) do
