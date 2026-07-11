@@ -115,15 +115,18 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
         |> Task.update_changeset(%{title: "CDC task updated"})
         |> Tasks.update()
 
-      assert_project_broadcast(
-        "task_updated",
-        %{
-          id: task.id,
-          title: "CDC task updated",
-          project_id: project.id
-        },
-        1_000
-      )
+      updated_payload =
+        assert_project_broadcast(
+          "task_updated",
+          %{
+            id: task.id,
+            title: "CDC task updated",
+            project_id: project.id
+          },
+          1_000
+        )
+
+      assert updated_payload.previous == %{}
 
       {:ok, _deleted_task} = Tasks.delete(updated_task)
 
@@ -134,6 +137,41 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
         },
         1_000
       )
+    end)
+  end
+
+  test "task updates publish sparse previous bucket identity fields" do
+    with_project(fn _user, project ->
+      task = create_task(project, "CDC bucket identity task", %{})
+      :ok = subscribe_project(project.id)
+
+      {:ok, archived_task} =
+        task
+        |> Task.update_changeset(%{archived: true})
+        |> Tasks.update()
+
+      archived_payload =
+        assert_project_broadcast(
+          "task_updated",
+          %{id: task.id, archived: true, project_id: project.id},
+          1_000
+        )
+
+      assert archived_payload.previous == %{archived: false}
+
+      {:ok, _ticket_task} =
+        archived_task
+        |> Task.update_changeset(%{level: "ticket"})
+        |> Tasks.update()
+
+      level_payload =
+        assert_project_broadcast(
+          "task_updated",
+          %{id: task.id, level: "ticket", project_id: project.id},
+          1_000
+        )
+
+      assert level_payload.previous == %{level: "task"}
     end)
   end
 

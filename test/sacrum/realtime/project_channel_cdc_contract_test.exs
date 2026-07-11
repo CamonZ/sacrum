@@ -119,9 +119,32 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContractTest do
       :parent_id,
       :status,
       :archived,
+      :previous,
       :run_controls,
       :updated_at
     ])
+
+    assert {:ok, task_updated_contract} =
+             ProjectChannelCdcContract.contract_for("task_updated")
+
+    assert task_updated_contract.nested_payload_keys.previous == [
+             :archived,
+             :level,
+             :current_step_id,
+             :workflow_id
+           ]
+
+    task_updated_source = source_change(task_updated_contract, "tasks")
+
+    assert task_updated_source.before_image_fields == [
+             :archived,
+             :level,
+             :current_step_id,
+             :workflow_id
+           ]
+
+    assert task_updated_contract.derivation.previous =~ "sparse before-image delta"
+    assert task_updated_contract.derivation.previous =~ "map is empty when none changed"
 
     assert_payload_excludes("task_updated", [
       :needs_human_review,

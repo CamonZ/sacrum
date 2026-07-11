@@ -33,6 +33,8 @@ defmodule Sacrum.Realtime.Cdc.Projector do
 
   @name __MODULE__
 
+  @task_bucket_identity_fields [:archived, :level, :current_step_id, :workflow_id]
+
   @schema_by_table %{
     "tasks" => Task,
     "workflows" => Workflow,
@@ -122,7 +124,13 @@ defmodule Sacrum.Realtime.Cdc.Projector do
 
   defp projections(%WalEx.Event{source: %{table: "tasks"}, type: :update} = event, context) do
     task = record_to_struct!("tasks", event.new_record)
-    base_projection = projection("task_updated", task.project_id, task)
+
+    base_projection =
+      projection(
+        "task_updated",
+        task.project_id,
+        Map.put(task, :previous, previous_task_bucket_identity(event))
+      )
 
     [
       base_projection
@@ -567,6 +575,13 @@ defmodule Sacrum.Realtime.Cdc.Projector do
   end
 
   defp changed?(_event, _field), do: false
+
+  defp previous_task_bucket_identity(%WalEx.Event{} = event) do
+    Map.new(
+      Enum.filter(@task_bucket_identity_fields, &changed?(event, &1)),
+      &{&1, old_value(event, &1)}
+    )
+  end
 
   defp old_value(%WalEx.Event{changes: changes}, field) when is_map(changes) do
     case value(changes, field) do
