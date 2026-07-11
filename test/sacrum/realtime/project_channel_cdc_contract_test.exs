@@ -119,6 +119,7 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContractTest do
       :parent_id,
       :status,
       :archived,
+      :run_controls,
       :updated_at
     ])
 
@@ -127,6 +128,39 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContractTest do
       :review_comment,
       :revision_feedback
     ])
+
+    for event <- ["task_created", "task_updated"] do
+      assert {:ok, contract} = ProjectChannelCdcContract.contract_for(event)
+
+      assert contract.nested_payload_keys.run_controls == [
+               :runnable,
+               :stoppable,
+               :disabled_reason_code,
+               :disabled_reason,
+               :active_run
+             ]
+
+      assert contract.nested_payload_keys[:"run_controls.active_run"] == [
+               :id,
+               :task_id,
+               :project_id,
+               :status,
+               :started_at,
+               :ended_at,
+               :stop_requested_at,
+               :latest_step_execution_id,
+               :outcome_kind,
+               :outcome_context,
+               :parent_task_run_id,
+               :root_task_run_id,
+               :triggered_by_step_execution_id,
+               :inserted_at,
+               :updated_at
+             ]
+
+      assert contract.derivation.run_controls =~ "post-commit"
+      assert Enum.any?(contract.enrichment_source_changes, &(&1.table == "task_runs"))
+    end
 
     assert_payload_includes("task_deleted", [
       :schema_version,

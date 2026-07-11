@@ -4,6 +4,7 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
   import Sacrum.CdcAssertions
 
   alias Ecto.Adapters.SQL.Sandbox
+  alias Sacrum.Orchestrator.{ExecutionDispatcher, PromptRenderer}
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{CodeRef, StepExecution, Task}
 
@@ -90,15 +91,24 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
 
       {:ok, task} = Tasks.insert(project, %{title: "CDC task"})
 
-      assert_project_broadcast(
-        "task_created",
-        %{
-          id: task.id,
-          title: "CDC task",
-          project_id: project.id
-        },
-        1_000
-      )
+      created_payload =
+        assert_project_broadcast(
+          "task_created",
+          %{
+            id: task.id,
+            title: "CDC task",
+            project_id: project.id
+          },
+          1_000
+        )
+
+      assert created_payload.run_controls == %{
+               runnable: true,
+               stoppable: false,
+               disabled_reason_code: nil,
+               disabled_reason: nil,
+               active_run: nil
+             }
 
       {:ok, updated_task} =
         task
@@ -124,6 +134,73 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
         },
         1_000
       )
+    end)
+  end
+
+  test "task updates project controls from the current active run" do
+    with_project(fn user, project ->
+      task = create_task(project, "CDC active task", %{})
+      {:ok, task_run} = TaskRuns.insert(user.id, project.id, task.id, %{status: :queued})
+
+      :ok = subscribe_project(project.id)
+
+      {:ok, _updated_task} =
+        task
+        |> Task.update_changeset(%{title: "CDC active task updated"})
+        |> Tasks.update()
+
+      payload =
+        assert_project_broadcast(
+          "task_updated",
+          %{id: task.id, title: "CDC active task updated", project_id: project.id},
+          1_000
+        )
+
+      assert payload.run_controls.runnable == false
+      assert payload.run_controls.stoppable == true
+      assert payload.run_controls.disabled_reason_code == "active_run"
+      assert payload.run_controls.disabled_reason == "Task already has an active run"
+      assert payload.run_controls.active_run.id == task_run.id
+      assert payload.run_controls.active_run.status == "queued"
+    end)
+  end
+
+  test "dispatcher transaction emits compatible task and task run controls" do
+    with_project(fn user, project ->
+      {_workflow, step, _next_step} = create_workflow_with_steps(user, project)
+      task = create_task(project, "CDC dispatched task", %{})
+      {:ok, task_run} = TaskRuns.insert(user.id, project.id, task.id, %{status: :queued})
+      task = PromptRenderer.preload_for_rendering(task)
+
+      :ok = subscribe_project(project.id)
+
+      {:ok, execution} =
+        ExecutionDispatcher.create_and_dispatch(user.id, task, step.id, task_run)
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "step_execution_created"}, 1_000
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "task_run_updated",
+                       payload: task_run_payload
+                     },
+                     1_000
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "task_updated",
+                       payload: task_payload
+                     },
+                     1_000
+
+      assert task_run_payload.id == task_run.id
+      assert task_run_payload.status == "executing"
+      assert task_run_payload.latest_step_execution_id == execution.id
+      assert task_payload.id == task.id
+      assert task_payload.run_controls == task_run_payload.run_controls
+      assert task_payload.run_controls.runnable == false
+      assert task_payload.run_controls.stoppable == false
+      assert task_payload.run_controls.disabled_reason_code == "stale_active_run"
+      assert task_payload.run_controls.active_run.id == task_run.id
+      assert task_payload.run_controls.active_run.latest_step_execution_id == execution.id
     end)
   end
 

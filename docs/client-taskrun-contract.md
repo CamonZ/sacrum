@@ -375,13 +375,15 @@ Handle these events for run-aware GUI/CLI state:
 
 | Event | Client action |
 |-------|---------------|
-| `task_created` / `task_updated` / `task_deleted` | Upsert/remove task row. The `task_updated` payload carries `archived` so archive/unarchive toggles can immediately move the row in or out of pipeline buckets without a refetch. `task_deleted` carries before-image `current_step_id`, `workflow_id`, `level`, and `archived` so clients can remove the task from pipeline buckets without a position cache. |
+| `task_created` | Upsert the task row and seed `task.runControls` from the included server-computed `run_controls`; this is complete even before a `TaskRun` exists. |
+| `task_updated` | Replace the task row and `task.runControls` from the included server-computed `run_controls`. The payload reflects post-commit active-run state, including a task/run transaction committed together, so no refetch is needed. |
+| `task_deleted` | Remove the task and its cached controls. Do not recalculate controls for a missing task. The payload carries before-image `current_step_id`, `workflow_id`, `level`, and `archived` so clients can remove the task from pipeline buckets without a position cache. |
 | `task_parent_changed` | Move a task between local tree buckets using `from_parent_id` and `to_parent_id`; replace the full row from the paired `task_updated` payload. |
 | `task_dependency_created` / `task_dependency_deleted` | Add/remove blocker edges in dependency views by id or by `task_id` + `depends_on_id` without refetching the task list. |
 | `step_execution_created` | Append attempt history; update latest execution view if it belongs to the active run. Do **not** use this as a from/to step signal for pipeline counts; not every step transition dispatches a new execution. |
 | `step_execution_status_changed` | Update attempt history. Do not infer run terminal state from this alone. |
-| `task_run_created` | Upsert TaskRun; set `task.runControls.activeRun` from payload if present. |
-| `task_run_updated` | Upsert TaskRun; replace row controls with payload `run_controls`. |
+| `task_run_created` | Upsert TaskRun and replace `task.runControls` with payload `run_controls` when present. |
+| `task_run_updated` | Upsert TaskRun and replace `task.runControls` with payload `run_controls`; TaskRun events remain authoritative replacement updates after task events. |
 | `task_run_step_changed` | Emitted whenever a task's `current_step_id` changes while a TaskRun exists, and at run-end paths (completion, retry exhaustion, stop). Lets pipeline views decrement the `from_step_id` bucket and increment the `to_step_id` bucket without refetching. |
 | `task_step_changed` | Emitted whenever a task's `current_step_id` changes outside orchestrator execution (manual `assign_workflow`, `advance_to_step`, `move_to_step`). Same pipeline use as `task_run_step_changed`, without `task_run_id` / `status` since no run is involved. |
 | `session_log_created` | Append log to the matching step execution. Payload includes `logical_key` when the daemon supplied an opaque logical key. |
@@ -433,7 +435,30 @@ type TaskRunChannelPayload = TaskRunChannelBase & {
 };
 ```
 
-When applying a `task_run_updated` event, prefer the included `run_controls` over local recomputation.
+Task events carry the same control shape alongside the task row:
+
+```ts
+type TaskChannelPayload = {
+  schema_version: 1;
+  id: string;
+  // ...the complete task projection...
+  run_controls: {
+    runnable: boolean;
+    stoppable: boolean;
+    disabled_reason_code: string | null;
+    disabled_reason: string | null;
+    active_run: TaskRunChannelBase | null;
+  };
+};
+```
+
+When applying `task_created` or `task_updated`, seed or replace the task row
+and its controls from the payload. When applying `task_run_created` or
+`task_run_updated`, replace those controls again with the TaskRun event's
+`run_controls`. The server computes controls after commit from the task after
+image, current active run, blockers, latest step execution, and
+`TaskRegistry`; clients must not recompute the precedence rules or refetch
+task detail for routine live events.
 
 `task_run_step_changed` is an additive pipeline-oriented signal. It does not
 replace `task_updated` or `task_run_updated`; clients still need those for full
