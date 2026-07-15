@@ -1,51 +1,283 @@
-<Layouts.flash_group flash={@flash} />
+<Layouts.app flash={@flash}>
+  <SacrumWeb.CookieBanner.cookie_banner />
 
-<SacrumWeb.CookieBanner.cookie_banner />
+  <div id="marketing-page" class="marketing-shell min-h-screen">
+    <header id="site-header" class="border-b border-border" aria-label="Site header">
+      <div class="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-5 px-5 py-5 sm:px-8 lg:px-12">
+        <a id="brand-link" href="#hero" aria-label="Vertebrae home">
+          <.brand_mark />
+        </a>
 
-<div class="relative z-10 min-h-screen flex flex-col bg-bg">
-  <header class="flex h-14 items-center justify-between border-b border-border bg-bg px-6">
-    <div class="flex items-center gap-3">
-      <div class="w-8 h-8 rounded-lg bg-accent flex items-center justify-center">
-        <svg
-          viewBox="0 0 24 24"
-          class="w-5 h-5 text-accent-fg"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.5"
-          stroke-linecap="round"
-          stroke-linejoin="round"
+        <nav
+          id="primary-navigation"
+          class="order-3 flex w-full items-center gap-5 text-xs text-text-muted sm:order-none sm:w-auto sm:gap-7"
+          aria-label="Primary navigation"
         >
-          <path d="M12 2v20M12 6c-2 0-3.5 1-3.5 2s1.5 2 3.5 2 3.5-1 3.5-2-1.5-2-3.5-2z" />
-          <path d="M12 10c-2 0-3.5 1-3.5 2s1.5 2 3.5 2 3.5-1 3.5-2-1.5-2-3.5-2z" />
-          <path d="M12 14c-2 0-3.5 1-3.5 2s1.5 2 3.5 2 3.5-1 3.5-2-1.5-2-3.5-2z" />
-        </svg>
+          <a class="marketing-link" href="#spine">How it works</a>
+          <a class="marketing-link" href="#capabilities">Capabilities</a>
+          <a class="marketing-link" href="#repositories">Repositories</a>
+        </nav>
+
+        <Layouts.theme_toggle />
       </div>
-      <h1 class="text-sm font-medium text-text-primary">Vertebrae</h1>
-    </div>
-    <div class="flex items-center gap-4">
-      <Layouts.theme_toggle />
-    </div>
-  </header>
+    </header>
 
-  <.spine_rule />
+    <.spine_rule id="header-spine-rule" segments={9} aria-hidden="true" />
 
-  <main class="flex-1 flex flex-col items-center justify-center px-4 py-16 sm:px-6 lg:px-8">
-    <div class="w-full max-w-3xl mx-auto">
-      <div class="text-center mb-16">
-        <h1 class="text-6xl lg:text-7xl font-bold tracking-tight font-sans text-text-primary mb-10">
-          Orchestrate Agents. <br /> Ship Faster.
-        </h1>
+    <main id="landing-main">
+      <section
+        id="hero"
+        class="mx-auto grid max-w-7xl gap-14 px-5 pb-24 pt-16 sm:px-8 sm:pb-32 sm:pt-24 lg:grid-cols-[1.1fr_0.9fr] lg:items-center lg:gap-20 lg:px-12 lg:pt-30"
+        aria-labelledby="hero-heading"
+      >
+        <div>
+          <.eyebrow id="hero-eyebrow" label="The execution spine" />
+          <h1
+            id="hero-heading"
+            class="marketing-display mt-7 max-w-4xl text-[clamp(3.75rem,10vw,8.25rem)] text-text-primary"
+          >
+            Make agentic work <em class="text-accent">move.</em>
+          </h1>
+          <p class="mt-8 max-w-xl text-base leading-8 text-text-secondary sm:text-lg sm:leading-9">
+            Vertebrae is the product surface for reliable agentic work: durable workflows, visible
+            execution, and the state that keeps every handoff connected.
+          </p>
+          <div class="mt-10 flex flex-col gap-3 sm:flex-row sm:items-center">
+            <.marketing_button
+              id="hero-vertebrae-cta"
+              href="https://github.com/CamonZ/vertebrae"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Explore Frontend Source <.icon name="hero-arrow-up-right" class="size-4" />
+            </.marketing_button>
+            <.marketing_button
+              id="hero-sacrum-cta"
+              href="https://github.com/CamonZ/sacrum"
+              target="_blank"
+              rel="noreferrer"
+              variant="secondary"
+            >
+              Explore Backend Source
+            </.marketing_button>
+          </div>
+        </div>
 
-        <p class="mx-auto max-w-xl text-lg text-text-secondary">
-          Vertebrae coordinates local task execution, workflow state, and implementation traces.
-        </p>
+        <div
+          id="hero-workflow-visual"
+          class="marketing-surface-raised relative rounded-md p-5 sm:p-7"
+          aria-label="A workflow moving from intent to completion"
+        >
+          <div class="flex items-center justify-between border-b border-border pb-5">
+            <p class="font-mono text-xs text-text-muted">RUN / 0042</p>
+            <p class="flex items-center gap-2 font-mono text-xs text-accent">
+              <span class="size-1.5 rounded-full bg-accent" aria-hidden="true"></span> IN MOTION
+            </p>
+          </div>
+
+          <div class="py-10">
+            <div class="marketing-spine-line flex items-center justify-between gap-3">
+              <span class="size-3 rounded-full border-2 border-accent bg-bg" aria-hidden="true">
+              </span>
+              <span
+                class="size-3 rounded-full border-2 border-border-strong bg-bg"
+                aria-hidden="true"
+              >
+              </span>
+              <span
+                class="size-3 rounded-full border-2 border-border-strong bg-bg"
+                aria-hidden="true"
+              >
+              </span>
+              <span
+                class="size-3 rounded-full border-2 border-border-strong bg-bg"
+                aria-hidden="true"
+              >
+              </span>
+            </div>
+            <div class="mt-5 grid grid-cols-4 gap-2 text-center font-mono text-[0.625rem] text-text-muted">
+              <span class="text-accent">INTENT</span>
+              <span>PLAN</span>
+              <span>EXECUTE</span>
+              <span>VERIFY</span>
+            </div>
+          </div>
+
+          <div class="space-y-2 border-t border-border pt-5">
+            <div class="flex items-center justify-between rounded-sm bg-surface px-3 py-2.5 text-xs">
+              <span class="text-text-secondary">Workflow state</span>
+              <span class="font-mono text-accent">persisted</span>
+            </div>
+            <div class="flex items-center justify-between rounded-sm bg-surface px-3 py-2.5 text-xs">
+              <span class="text-text-secondary">Agent handoff</span>
+              <span class="font-mono text-success">connected</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <.spine_rule id="hero-spine-rule" segments={7} aria-hidden="true" />
+
+      <section
+        id="spine"
+        class="mx-auto max-w-7xl px-5 py-24 sm:px-8 sm:py-32 lg:px-12"
+        aria-labelledby="spine-heading"
+      >
+        <div class="grid gap-12 lg:grid-cols-[0.8fr_1.2fr] lg:gap-24">
+          <div>
+            <.eyebrow label="One spine, two surfaces" />
+            <h2
+              id="spine-heading"
+              class="marketing-display mt-6 max-w-md text-5xl text-text-primary sm:text-6xl"
+            >
+              The work stays connected.
+            </h2>
+          </div>
+          <div class="max-w-2xl">
+            <p class="text-lg leading-8 text-text-secondary">
+              Vertebrae gives agentic work a clear place to be seen, steered, and reviewed. Sacrum
+              holds the durable backend coordination layer beneath it. Together they turn scattered
+              agent activity into a traceable path from intent to outcome.
+            </p>
+            <div
+              class="mt-12 overflow-x-auto pb-2"
+              aria-label="The Sacrum and Vertebrae workflow relationship"
+            >
+              <.spine_chain
+                id="workflow-spine-chain"
+                steps={[
+                  %{label: "intent", state: :completed},
+                  %{label: "workflow", state: :active},
+                  %{label: "execution", state: :pending},
+                  %{label: "review", state: :pending}
+                ]}
+                aria-label="Intent to review workflow"
+              />
+            </div>
+            <div class="mt-10 grid gap-5 border-t border-border pt-6 sm:grid-cols-2">
+              <div>
+                <p class="font-mono text-xs text-accent">SACRUM</p>
+                <p class="mt-2 text-sm leading-7 text-text-secondary">
+                  The backend spine for workflows, state, and execution traces.
+                </p>
+              </div>
+              <div>
+                <p class="font-mono text-xs text-accent">VERTEBRAE</p>
+                <p class="mt-2 text-sm leading-7 text-text-secondary">
+                  The visual surface for understanding and guiding the work.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <.spine_rule id="spine-capabilities-rule" segments={7} aria-hidden="true" />
+
+      <section
+        id="capabilities"
+        class="mx-auto max-w-7xl px-5 py-24 sm:px-8 sm:py-32 lg:px-12"
+        aria-labelledby="capabilities-heading"
+      >
+        <div class="flex flex-col justify-between gap-6 sm:flex-row sm:items-end">
+          <div>
+            <.eyebrow label="What the spine carries" />
+            <h2
+              id="capabilities-heading"
+              class="marketing-display mt-6 max-w-xl text-5xl text-text-primary sm:text-6xl"
+            >
+              Built for work that has a next step.
+            </h2>
+          </div>
+          <p class="max-w-xs text-sm leading-7 text-text-muted">
+            A small set of durable primitives for complex, moving work.
+          </p>
+        </div>
+
+        <div id="capability-grid" class="mt-14 grid gap-4 md:grid-cols-3">
+          <.feature_block
+            id="capability-workflows"
+            number="01"
+            title="Durable workflows"
+            description="Model ordered steps, branching decisions, and human review as state that can be resumed and trusted."
+          />
+          <.feature_block
+            id="capability-execution"
+            number="02"
+            title="Live execution"
+            description="Keep every run, handoff, and attempt visible so agents can act with context instead of guesswork."
+          />
+          <.feature_block
+            id="capability-traces"
+            number="03"
+            title="Useful traces"
+            description="Capture the path behind an outcome: logs, artifacts, transitions, and the decisions that shaped it."
+          />
+        </div>
+      </section>
+
+      <.spine_rule id="capabilities-repositories-rule" segments={7} aria-hidden="true" />
+
+      <section
+        id="repositories"
+        class="mx-auto max-w-7xl px-5 py-24 sm:px-8 sm:py-32 lg:px-12"
+        aria-labelledby="repositories-heading"
+      >
+        <div class="max-w-2xl">
+          <.eyebrow label="Follow the work" />
+          <h2
+            id="repositories-heading"
+            class="marketing-display mt-6 text-5xl text-text-primary sm:text-6xl"
+          >
+            Start at the source.
+          </h2>
+          <p class="mt-6 text-base leading-8 text-text-secondary sm:text-lg">
+            Explore the coordination layer or step into its visual counterpart. Both repositories
+            are open, connected, and built to be understood.
+          </p>
+        </div>
+
+        <div id="repository-cards" class="mt-14 grid gap-4 lg:grid-cols-2">
+          <.repository_card
+            id="repository-vertebrae"
+            name="vertebrae"
+            label="Frontend repository"
+            description="The Hearth-inspired GUI for shaping workflows, watching execution, and keeping humans in the loop."
+            href="https://github.com/CamonZ/vertebrae"
+          />
+          <.repository_card
+            id="repository-sacrum"
+            name="sacrum"
+            label="Coordination repository"
+            description="The Phoenix API and execution spine that makes agentic work durable, observable, and composable."
+            href="https://github.com/CamonZ/sacrum"
+          />
+        </div>
+      </section>
+    </main>
+
+    <footer id="site-footer" class="border-t border-border" aria-label="Site footer">
+      <div class="mx-auto flex max-w-7xl flex-col gap-6 px-5 py-8 sm:px-8 md:flex-row md:items-center md:justify-between lg:px-12">
+        <div>
+          <.brand_mark compact? />
+          <p class="mt-3 text-xs text-text-muted">The execution spine for agentic work.</p>
+        </div>
+        <.footer_links links={[
+          %{
+            label: "Vertebrae",
+            href: "https://github.com/CamonZ/vertebrae",
+            target: "_blank",
+            rel: "noreferrer"
+          },
+          %{
+            label: "Sacrum",
+            href: "https://github.com/CamonZ/sacrum",
+            target: "_blank",
+            rel: "noreferrer"
+          },
+          %{label: "Back to top", href: "#hero"}
+        ]} />
       </div>
-    </div>
-  </main>
-
-  <footer class="border-t border-border bg-surface px-6 py-8">
-    <div class="max-w-5xl mx-auto text-center text-sm text-text-muted">
-      <p>&copy; 2026. All rights reserved.</p>
-    </div>
-  </footer>
-</div>
+    </footer>
+  </div>
+</Layouts.app>

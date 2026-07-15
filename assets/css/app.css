@@ -1,66 +1,256 @@
-/* See the Tailwind configuration guide for advanced usage
-   https://tailwindcss.com/docs/configuration */
-
-@import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap");
+/* Hearth typography: display serif, UI sans, and technical mono. */
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,300;1,6..72,400&display=swap");
 
 @import "tailwindcss" source(none);
 @source "../css";
 @source "../js";
 @source "../../lib/sacrum_web";
 
-/* A Tailwind plugin that makes "hero-#{ICON}" classes available.
-   The heroicons installation itself is managed by your mix.exs */
 @plugin "../vendor/heroicons";
 
-/* daisyUI Tailwind Plugin. You can update this file by fetching the latest version with:
-   curl -sLO https://github.com/saadeghi/daisyui/releases/latest/download/daisyui.js
-   Make sure to look at the daisyUI changelog: https://daisyui.com/docs/changelog/ */
+/* Keep daisyUI available for the generated core components, but the marketing
+   composition below uses only the tokens and primitives in this file. */
 @plugin "../vendor/daisyui" {
   themes: false;
 }
 
+/*
+ * SACRUM · HEARTH
+ *
+ * The landing page has one token layer. Dark is the base ramp; the light ramp
+ * overrides the same variables, so templates never need theme-specific values.
+ */
 @theme {
-  --color-bg: #0a0a0a;
-  --color-surface: #111111;
-  --color-surface-raised: #161616;
-  --color-border: #1f1f1f;
-  --color-border-strong: #2a2a2a;
-  --color-text-primary: #f4f1ec;
-  --color-text-secondary: #b8b5af;
-  --color-text-muted: #6f6c66;
-  --color-accent: #ff5c2e;
-  --color-accent-hover: #e84a1e;
-  --color-accent-fg: #0a0a0a;
-  --color-success: #22c55e;
-  --color-warning: #eab308;
-  --color-error: #ef4444;
+  --color-bg: #100e0c;
+  --color-surface: #181513;
+  --color-surface-raised: #221d1a;
+  --color-surface-high: #2c2622;
+  --color-border: #2c2622;
+  --color-border-strong: #463f38;
+  --color-text-primary: #e8e5dd;
+  --color-text-secondary: #ccc8c0;
+  --color-text-muted: #9c988e;
+  --color-text-faint: #645f57;
+  --color-accent: #e9784c;
+  --color-accent-hover: #f28c5d;
+  --color-accent-fg: #100e0c;
+  --color-accent-wash: #2b1d17;
+  --color-success: #8fca9a;
+  --color-warning: #e2b76b;
+  --color-error: #e68b7e;
 
+  --font-serif: "Newsreader", "Iowan Old Style", Georgia, serif;
   --font-sans: "Geist", system-ui, -apple-system, sans-serif;
-  --font-mono: "Geist Mono", "SF Mono", "Monaco", monospace;
-}
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
 
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) {
-    --color-bg: #f7f4ee;
-    --color-surface: #ffffff;
-    --color-surface-raised: #ffffff;
-    --color-border: #e6e1d7;
-    --color-border-strong: #c9c3b5;
-    --color-text-primary: #0a0a0a;
-    --color-text-secondary: #4a4742;
-    --color-text-muted: #807c75;
-  }
+  --text-eyebrow: 0.6875rem;
+  --text-display: clamp(3.75rem, 10vw, 8.25rem);
+  --tracking-eyebrow: 0.16em;
+  --tracking-tight: -0.025em;
+  --tracking-wide: 0.04em;
+  --leading-display: 0.91;
+
+  --spacing-18: 4.5rem;
+  --spacing-22: 5.5rem;
+  --spacing-26: 6.5rem;
+  --spacing-30: 7.5rem;
+
+  --radius-xs: 0.1875rem;
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-full: 9999px;
+
+  --shadow-focus: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-accent);
+  --shadow-card: 0 16px 40px rgba(0, 0, 0, 0.16);
+  --ease-hearth: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 [data-theme="light"] {
-  --color-bg: #f7f4ee;
-  --color-surface: #ffffff;
+  color-scheme: light;
+  --color-bg: #faf6ec;
+  --color-surface: #f2ede0;
   --color-surface-raised: #ffffff;
-  --color-border: #e6e1d7;
-  --color-border-strong: #c9c3b5;
-  --color-text-primary: #0a0a0a;
-  --color-text-secondary: #4a4742;
-  --color-text-muted: #807c75;
+  --color-surface-high: #e9e3d3;
+  --color-border: #dcd4c1;
+  --color-border-strong: #b9b09c;
+  --color-text-primary: #1a1a20;
+  --color-text-secondary: #3a3a44;
+  --color-text-muted: #66665e;
+  --color-text-faint: #8e8e83;
+  --color-accent: #b6502c;
+  --color-accent-hover: #963e20;
+  --color-accent-fg: #fffaf2;
+  --color-accent-wash: #f6e4d8;
+  --color-success: #2f7a42;
+  --color-warning: #916c1f;
+  --color-error: #a9463b;
+  --shadow-card: 0 16px 40px rgba(77, 63, 42, 0.1);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]):not([data-theme="light"]) {
+    color-scheme: light;
+    --color-bg: #faf6ec;
+    --color-surface: #f2ede0;
+    --color-surface-raised: #ffffff;
+    --color-surface-high: #e9e3d3;
+    --color-border: #dcd4c1;
+    --color-border-strong: #b9b09c;
+    --color-text-primary: #1a1a20;
+    --color-text-secondary: #3a3a44;
+    --color-text-muted: #66665e;
+    --color-text-faint: #8e8e83;
+    --color-accent: #b6502c;
+    --color-accent-hover: #963e20;
+    --color-accent-fg: #fffaf2;
+    --color-accent-wash: #f6e4d8;
+    --color-success: #2f7a42;
+    --color-warning: #916c1f;
+    --color-error: #a9463b;
+    --shadow-card: 0 16px 40px rgba(77, 63, 42, 0.1);
+  }
+}
+
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+@custom-variant phx-click-loading (.phx-click-loading&, .phx-click-loading &);
+
+[data-phx-session],
+[data-phx-teleported-src] {
+  display: contents;
+}
+
+html {
+  background: var(--color-bg);
+  color-scheme: dark;
+  scroll-behavior: smooth;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  min-width: 320px;
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+a {
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 3px;
+}
+
+::selection {
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+}
+
+.marketing-display {
+  font-family: var(--font-serif);
+  font-weight: 400;
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--leading-display);
+}
+
+.marketing-eyebrow {
+  color: var(--color-accent);
+  font-family: var(--font-mono);
+  font-size: var(--text-eyebrow);
+  font-weight: 500;
+  letter-spacing: var(--tracking-eyebrow);
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
+.marketing-shell {
+  overflow: hidden;
+  background: var(--color-bg);
+}
+
+.marketing-surface {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+}
+
+.marketing-surface-raised {
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border-strong);
+}
+
+.marketing-link,
+.marketing-button {
+  transition:
+    background-color 180ms var(--ease-hearth),
+    border-color 180ms var(--ease-hearth),
+    color 180ms var(--ease-hearth),
+    transform 180ms var(--ease-hearth);
+}
+
+.marketing-link:hover {
+  color: var(--color-accent);
+}
+
+.marketing-button:hover {
+  transform: translateY(-1px);
+}
+
+.marketing-card {
+  transition:
+    background-color 180ms var(--ease-hearth),
+    border-color 180ms var(--ease-hearth),
+    transform 180ms var(--ease-hearth);
+}
+
+.marketing-card:hover {
+  background: var(--color-surface-raised);
+  border-color: var(--color-border-strong);
+  transform: translateY(-2px);
+}
+
+.marketing-spine-line {
+  position: relative;
+}
+
+.marketing-spine-line::before {
+  background: var(--color-border-strong);
+  content: "";
+  height: 1px;
+  left: 0;
+  position: absolute;
+  right: 0;
+  top: 50%;
+}
+
+.marketing-spine-line > * {
+  position: relative;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 @plugin "../vendor/daisyui-theme" {
@@ -68,31 +258,21 @@
   default: false;
   prefersdark: true;
   color-scheme: "dark";
-  --color-base-100: #09090b;
-  --color-base-200: #0c0c0e;
-  --color-base-300: #18181b;
-  --color-base-content: #fafaf9;
-  --color-primary: #ff5c2e;
-  --color-primary-content: #09090b;
-  --color-secondary: #78716c;
-  --color-secondary-content: #fafaf9;
-  --color-accent: #ff5c2e;
-  --color-accent-content: #fafaf9;
-  --color-neutral: #27272a;
-  --color-neutral-content: #fafaf9;
-  --color-info: #a78bfa;
-  --color-info-content: #09090b;
-  --color-success: #22c55e;
-  --color-success-content: #09090b;
-  --color-warning: #eab308;
-  --color-warning-content: #09090b;
-  --color-error: #ef4444;
-  --color-error-content: #09090b;
-  --radius-selector: 0.5rem;
+  --color-base-100: #100e0c;
+  --color-base-200: #181513;
+  --color-base-300: #221d1a;
+  --color-base-content: #e8e5dd;
+  --color-primary: #e9784c;
+  --color-primary-content: #100e0c;
+  --color-secondary: #9c988e;
+  --color-secondary-content: #100e0c;
+  --color-accent: #e9784c;
+  --color-accent-content: #100e0c;
+  --color-neutral: #2c2622;
+  --color-neutral-content: #e8e5dd;
+  --radius-selector: 0.375rem;
   --radius-field: 0.5rem;
   --radius-box: 0.75rem;
-  --size-selector: 0.25rem;
-  --size-field: 0.25rem;
   --border: 1px;
   --depth: 0;
   --noise: 0;
@@ -103,67 +283,22 @@
   default: true;
   prefersdark: false;
   color-scheme: "light";
-  --color-base-100: #f7f4ee;
-  --color-base-200: #ede9e3;
-  --color-base-300: #e0dbd3;
-  --color-base-content: #1c1917;
-  --color-primary: #ff5c2e;
-  --color-primary-content: #09090b;
-  --color-secondary: #78716c;
-  --color-secondary-content: #1c1917;
-  --color-accent: #ff5c2e;
-  --color-accent-content: #1c1917;
-  --color-neutral: #d6d3d1;
-  --color-neutral-content: #1c1917;
-  --color-info: #a78bfa;
-  --color-info-content: #fafaf9;
-  --color-success: #22c55e;
-  --color-success-content: #fafaf9;
-  --color-warning: #eab308;
-  --color-warning-content: #09090b;
-  --color-error: #ef4444;
-  --color-error-content: #fafaf9;
-  --radius-selector: 0.5rem;
+  --color-base-100: #faf6ec;
+  --color-base-200: #f2ede0;
+  --color-base-300: #e9e3d3;
+  --color-base-content: #1a1a20;
+  --color-primary: #b6502c;
+  --color-primary-content: #fffaf2;
+  --color-secondary: #66665e;
+  --color-secondary-content: #faf6ec;
+  --color-accent: #b6502c;
+  --color-accent-content: #fffaf2;
+  --color-neutral: #dcd4c1;
+  --color-neutral-content: #1a1a20;
+  --radius-selector: 0.375rem;
   --radius-field: 0.5rem;
   --radius-box: 0.75rem;
-  --size-selector: 0.25rem;
-  --size-field: 0.25rem;
   --border: 1px;
   --depth: 0;
   --noise: 0;
-}
-
-/* Add variants based on LiveView classes */
-@custom-variant phx-click-loading (.phx-click-loading&, .phx-click-loading &);
-@custom-variant phx-submit-loading (.phx-submit-loading&, .phx-submit-loading &);
-@custom-variant phx-change-loading (.phx-change-loading&, .phx-change-loading &);
-
-/* Use the data attribute for dark mode  */
-@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
-
-/* Make LiveView wrapper divs transparent for layout */
-[data-phx-session], [data-phx-teleported-src] { display: contents }
-
-::selection {
-  background-color: rgba(255, 92, 46, 0.3);
-  color: #0a0a0a;
-}
-
-/* Scrollbar styling - Thin, subtle */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-  background: rgba(168, 162, 158, 0.2);
-  border-radius: 9999px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(168, 162, 158, 0.4);
 }
