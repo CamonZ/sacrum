@@ -3,115 +3,132 @@ defmodule SacrumWeb.HomeLiveTest do
 
   import Phoenix.LiveViewTest
 
-  describe "mount" do
-    test "displays the home page" do
-      {:ok, _view, html} = live(build_conn(), "/")
+  @vertebrae_repo "https://github.com/CamonZ/vertebrae"
+  @sacrum_repo "https://github.com/CamonZ/sacrum"
 
-      assert html =~ "Orchestrate Agents"
-      assert html =~ "Ship Faster"
-      assert html =~ "workflow state"
+  describe "landing page components" do
+    test "renders the Vertebrae brand, hero, and marketing primitives" do
+      {:ok, view, _html} = live(build_conn(), "/")
+
+      assert has_element?(view, "#brand-link", "Vertebrae")
+      assert has_element?(view, "#hero-eyebrow", "The execution spine")
+      assert has_element?(view, "h1#hero-heading", "Make agentic work move.")
+      assert has_element?(view, "#hero-workflow-visual")
+      assert has_element?(view, "#workflow-spine-chain")
+      assert has_element?(view, "#capability-workflows")
+      assert has_element?(view, "#repository-cards")
     end
 
-    test "does not render a browser signup form" do
-      {:ok, _view, html} = live(build_conn(), "/")
+    test "renders labeled calls to action and theme controls" do
+      {:ok, view, _html} = live(build_conn(), "/")
 
-      refute html =~ "<form"
-      refute html =~ ~s(type="email")
-      refute html =~ "<a "
-    end
-
-    test "displays Articulated design system properly" do
-      {:ok, _view, html} = live(build_conn(), "/")
-
-      assert html =~ "bg-border"
-    end
-  end
-
-  describe "ui elements" do
-    test "has header with logo" do
-      {:ok, _view, html} = live(build_conn(), "/")
-
-      assert html =~ "Vertebrae"
-    end
-
-    test "footer exists but has no references to implementation" do
-      {:ok, _view, html} = live(build_conn(), "/")
-
-      assert html =~ "footer"
-      refute html =~ "Built with Phoenix"
-      refute html =~ "github.com"
-    end
-
-    test "no reference to Sacrum in user-facing copy" do
-      {:ok, _view, html} = live(build_conn(), "/")
-
-      assert html =~ "Vertebrae"
-      refute html =~ ~r/sacrum/i
-    end
-
-    test "theme toggle is present" do
-      {:ok, _view, html} = live(build_conn(), "/")
-
-      assert html =~ "data-phx-theme"
+      assert has_element?(view, "#hero-vertebrae-cta", "Explore Frontend Source")
+      assert has_element?(view, "#hero-sacrum-cta", "Explore Backend Source")
+      assert has_element?(view, "#theme-toggle")
+      assert has_element?(view, "#theme-system[data-phx-theme=system]")
+      assert has_element?(view, "#theme-light[data-phx-theme=light]")
+      assert has_element?(view, "#theme-dark[data-phx-theme=dark]")
     end
   end
 
-  describe "Articulated design system components" do
-    test "renders spine_rule component" do
-      {:ok, _view, html} = live(build_conn(), "/")
+  describe "GET / integration" do
+    test "renders semantic landmarks and the primary heading hierarchy" do
+      {:ok, view, html} = live(build_conn(), "/")
 
-      assert html =~ ~r/flex.*gap.*bg-border/
+      assert has_element?(view, "header#site-header")
+      assert has_element?(view, "nav#primary-navigation")
+      assert has_element?(view, "main#landing-main")
+      assert has_element?(view, "footer#site-footer")
+      assert has_element?(view, "h1#hero-heading")
+      assert has_element?(view, "h2#spine-heading")
+      assert has_element?(view, "h2#capabilities-heading")
+      assert has_element?(view, "h2#repositories-heading")
+
+      assert html =~ ~r/<h1\b/
     end
 
-    test "no decorative classes present" do
+    test "links to the canonical Sacrum and Vertebrae repositories" do
+      {:ok, view, _html} = live(build_conn(), "/")
+
+      assert has_element?(view, ~s|#hero-vertebrae-cta[href="#{@vertebrae_repo}"]|)
+      assert has_element?(view, ~s|#hero-sacrum-cta[href="#{@sacrum_repo}"]|)
+      assert has_element?(view, ~s|#repository-vertebrae[href="#{@vertebrae_repo}"]|)
+      assert has_element?(view, ~s|#repository-sacrum[href="#{@sacrum_repo}"]|)
+    end
+
+    test "uses Vertebrae-first copy and describes Sacrum as the backend" do
+      {:ok, view, html} = live(build_conn(), "/")
+
+      assert has_element?(view, "#marketing-page", "Vertebrae")
+      assert has_element?(view, "#spine", "backend coordination layer")
+      refute html =~ "Orchestrate Agents"
+      refute html =~ "Vertebrae coordinates local task execution"
+    end
+  end
+
+  describe "accessibility and design guardrails" do
+    test "provides keyboard focus styling and reduced-motion handling" do
+      css = File.read!(Path.expand("../../../assets/css/app.css", __DIR__))
+
+      assert css =~ ":focus-visible"
+      assert css =~ "outline: 2px solid var(--color-accent)"
+      assert css =~ "prefers-reduced-motion: reduce"
+      assert css =~ "transition-duration: 0.01ms !important"
+      assert css =~ "--font-serif: \"Newsreader\""
+      assert css =~ "--font-mono: \"JetBrains Mono\""
+    end
+
+    test "defines readable light and dark theme ramps in one token layer" do
+      css = File.read!(Path.expand("../../../assets/css/app.css", __DIR__))
+
+      assert css =~ ~s([data-theme="light"])
+      assert css =~ ~s([data-theme="dark"])
+      assert css =~ "--color-bg: #100e0c"
+      assert css =~ "--color-bg: #faf6ec"
+      assert css =~ "--color-text-primary: #e8e5dd"
+      assert css =~ "--color-text-primary: #1a1a20"
+
+      js = File.read!(Path.expand("../../../assets/js/app.js", __DIR__))
+      assert js =~ ~s(const THEME_KEY = "phx:theme")
+      assert js =~ ~s(const CONSENT_KEY = "sacrum_consent")
+      assert js =~ "sacrum_consent=([^;]+)"
+      assert js =~ "aria-pressed"
+      assert js =~ "localStorage"
+    end
+
+    test "keeps navigation, sections, and cards usable at mobile widths" do
+      {:ok, view, _html} = live(build_conn(), "/")
+
+      assert has_element?(view, "#site-header div.flex-wrap")
+      assert has_element?(view, "#primary-navigation.w-full")
+      assert has_element?(view, "#hero-workflow-visual")
+      assert has_element?(view, "#capability-grid.md\\:grid-cols-3")
+      assert has_element?(view, "#repository-cards.lg\\:grid-cols-2")
+      assert has_element?(view, "#spine div.overflow-x-auto")
+
+      assert has_element?(
+               view,
+               "#workflow-spine-chain [role=listitem][aria-current=step][aria-label='Workflow, current step']"
+             )
+    end
+
+    test "does not introduce generic SaaS decoration" do
       {:ok, _view, html} = live(build_conn(), "/")
 
-      refute html =~ "aurora-bg"
-      refute html =~ "glow-orb"
+      refute html =~ "aurora"
       refute html =~ "gradient-text"
-      refute html =~ "shadow-glow"
-      refute html =~ "magnetic-btn"
+      refute html =~ "glow-orb"
       refute html =~ "tilt-card"
-    end
-
-    test "uses Articulated color tokens not Neural Pathways palette" do
-      {:ok, _view, html} = live(build_conn(), "/")
-
-      refute html =~ "gradient-to-r"
-      refute html =~ "via-primary/30"
-      refute html =~ "from-primary to-accent"
-    end
-
-    test "minimal borders only, no shadows in structure" do
-      {:ok, _view, html} = live(build_conn(), "/")
-
-      assert html =~ "border-b"
-      assert html =~ "border-border"
-      refute html =~ "shadow-"
     end
   end
 
   describe "cookie banner" do
-    test "is rendered on the landing page" do
-      {:ok, _view, html} = live(build_conn(), "/")
+    test "is rendered as an initially hidden accessible region" do
+      {:ok, view, _html} = live(build_conn(), "/")
 
-      assert html =~ ~s(id="cookie-banner")
-      assert html =~ "This website utilizes cookies"
-      assert html =~ ~s(id="cookie-ok")
-    end
-
-    test "is hidden by default and gated by the consent hook" do
-      {:ok, _view, html} = live(build_conn(), "/")
-
-      assert html =~ ~s(phx-hook="CookieConsent")
-      assert html =~ "hidden"
-    end
-
-    test "exposes an accessible region for screen readers" do
-      {:ok, _view, html} = live(build_conn(), "/")
-
-      assert html =~ ~s(role="region")
-      assert html =~ ~s(aria-label="Cookie consent")
+      assert has_element?(view, "#cookie-banner[hidden]")
+      assert has_element?(view, "#cookie-banner[role=region][aria-label='Cookie consent']")
+      assert has_element?(view, "#cookie-ok", "OK")
     end
   end
 end

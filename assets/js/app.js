@@ -25,14 +25,61 @@ import {LiveSocket} from "phoenix_live_view"
 import {hooks as colocatedHooks} from "phoenix-colocated/sacrum"
 import topbar from "../vendor/topbar"
 
-const CONSENT_KEY = "vertebrae_consent"
+const THEME_KEY = "phx:theme"
+
+function setTheme(theme) {
+  const selectedTheme = theme === "light" || theme === "dark" ? theme : "system"
+
+  try {
+    if (selectedTheme === "system") {
+      window.localStorage.removeItem(THEME_KEY)
+      document.documentElement.removeAttribute("data-theme")
+    } else {
+      window.localStorage.setItem(THEME_KEY, selectedTheme)
+      document.documentElement.setAttribute("data-theme", selectedTheme)
+    }
+  } catch (_error) {
+    if (selectedTheme === "system") {
+      document.documentElement.removeAttribute("data-theme")
+    } else {
+      document.documentElement.setAttribute("data-theme", selectedTheme)
+    }
+  }
+
+  document.querySelectorAll("[data-phx-theme]").forEach((control) => {
+    const isSelected = control.dataset.phxTheme === selectedTheme
+    control.setAttribute("aria-pressed", String(isSelected))
+  })
+}
+
+function initializeTheme() {
+  let savedTheme = "system"
+
+  try {
+    savedTheme = window.localStorage.getItem(THEME_KEY) || "system"
+  } catch (_error) {}
+
+  setTheme(savedTheme)
+  window.addEventListener("DOMContentLoaded", () => setTheme(savedTheme), {once: true})
+  window.addEventListener("storage", (event) => {
+    if (event.key === THEME_KEY) setTheme(event.newValue || "system")
+  })
+  window.addEventListener("phx:set-theme", (event) => {
+    const control = event.target?.closest?.("[data-phx-theme]") || event.target
+    setTheme(event.detail?.theme || control?.dataset?.phxTheme || "system")
+  })
+}
+
+initializeTheme()
+
+const CONSENT_KEY = "sacrum_consent"
 
 function readConsent() {
   try {
     const value = window.localStorage.getItem(CONSENT_KEY)
     if (value) return value
   } catch (_e) {}
-  const match = document.cookie.match(/(?:^|; )vertebrae_consent=([^;]+)/)
+  const match = document.cookie.match(/(?:^|; )sacrum_consent=([^;]+)/)
   return match ? match[1] : null
 }
 
@@ -112,4 +159,3 @@ if (process.env.NODE_ENV === "development") {
     window.liveReloader = reloader
   })
 }
-

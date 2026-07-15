@@ -540,13 +540,18 @@ defmodule SacrumWeb.CoreComponents do
   @spec spine_chain(map()) :: Phoenix.LiveView.Rendered.t()
   def spine_chain(assigns) do
     ~H"""
-    <div class={["flex items-center gap-3", @class]} {@rest}>
+    <div class={["flex items-center gap-3", @class]} role="list" {@rest}>
       <%= for {step, idx} <- Enum.with_index(@steps) do %>
         <div :if={idx > 0} class="flex items-center gap-3">
           <div class="h-px w-4 bg-border-strong" />
           <div class={["w-1.5 h-1.5 rounded-full flex-shrink-0", step_dot_class(step.state)]} />
         </div>
-        <div class={["text-sm font-mono whitespace-nowrap", step_label_class(step.state)]}>
+        <div
+          class={["text-sm font-mono whitespace-nowrap", step_label_class(step.state)]}
+          role="listitem"
+          aria-label={step_aria_label(step)}
+          aria-current={step.state == :active && "step"}
+        >
           {step.label}
         </div>
       <% end %>
@@ -561,6 +566,14 @@ defmodule SacrumWeb.CoreComponents do
   defp step_label_class(:active), do: "text-accent font-medium"
   defp step_label_class(:completed), do: "text-text-secondary"
   defp step_label_class(:pending), do: "text-text-muted"
+
+  defp step_aria_label(%{label: label, state: state}) do
+    "#{String.capitalize(label)}, #{state_label(state)}"
+  end
+
+  defp state_label(:active), do: "current step"
+  defp state_label(:completed), do: "completed"
+  defp state_label(:pending), do: "upcoming"
 
   @doc """
   Pulse strip component for the Command Center.

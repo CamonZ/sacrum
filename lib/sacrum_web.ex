@@ -93,6 +93,7 @@ defmodule SacrumWeb do
       import Phoenix.HTML
       # Core UI components
       import SacrumWeb.CoreComponents
+      import SacrumWeb.MarketingComponents
 
       # Common modules used in templates
       alias Phoenix.LiveView.JS

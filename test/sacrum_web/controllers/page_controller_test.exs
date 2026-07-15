@@ -3,6 +3,11 @@ defmodule SacrumWeb.PageControllerTest do
 
   test "GET /", %{conn: conn} do
     conn = get(conn, ~p"/")
-    assert html_response(conn, 200) =~ "Orchestrate Agents."
+    html = html_response(conn, 200)
+
+    assert html =~ "Vertebrae"
+    assert html =~ "Make agentic work"
+    assert html =~ "https://github.com/CamonZ/vertebrae"
+    assert html =~ "https://github.com/CamonZ/sacrum"
   end
 end

@@ -601,17 +601,17 @@ defmodule SacrumWeb.ProjectChannel do
       task_id: task_run.task_id,
       project_id: task_run.project_id,
       status: TaskRunStatus.wire_value(task_run.status),
-      started_at: task_run.started_at,
-      ended_at: task_run.ended_at,
-      stop_requested_at: task_run.stop_requested_at,
+      started_at: normalize_timestamp(task_run.started_at),
+      ended_at: normalize_timestamp(task_run.ended_at),
+      stop_requested_at: normalize_timestamp(task_run.stop_requested_at),
       latest_step_execution_id: task_run.latest_step_execution_id,
       outcome_kind: task_run.outcome_kind,
       outcome_context: task_run.outcome_context,
       parent_task_run_id: task_run.parent_task_run_id,
       root_task_run_id: task_run.root_task_run_id,
       triggered_by_step_execution_id: task_run.triggered_by_step_execution_id,
-      inserted_at: task_run.inserted_at,
-      updated_at: task_run.updated_at
+      inserted_at: normalize_timestamp(task_run.inserted_at),
+      updated_at: normalize_timestamp(task_run.updated_at)
     }
   end
 
@@ -640,6 +640,15 @@ defmodule SacrumWeb.ProjectChannel do
     |> RunControls.to_payload()
     |> Map.update!(:active_run, &task_run_base_payload/1)
   end
+
+  # Ecto returns timestamps with six-digit microsecond precision while WalEx
+  # preserves the precision present in the replication timestamp string.
+  # Normalize both sources before comparing or broadcasting nested task runs.
+  defp normalize_timestamp(%DateTime{microsecond: {microseconds, _precision}} = timestamp) do
+    %{timestamp | microsecond: {microseconds, 6}}
+  end
+
+  defp normalize_timestamp(timestamp), do: timestamp
 
   defp session_log_payload(log) do
     version_payload(%{
