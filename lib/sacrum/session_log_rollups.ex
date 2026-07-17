@@ -1,10 +1,11 @@
 defmodule Sacrum.SessionLogRollups do
   @moduledoc """
-  Rolls provider session-log token usage into the owning StepExecution row.
+  Rolls provider and normalized harness session-log usage into StepExecution.
   """
 
   import Ecto.Query
 
+  alias Sacrum.HarnessEventV1Usage
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{SessionLog, StepExecution}
 
@@ -42,7 +43,7 @@ defmodule Sacrum.SessionLogRollups do
   end
 
   defp rollup_log(%StepExecution{} = execution, %SessionLog{} = log) do
-    case usage_from_log(log) do
+    case provider_usage_from_log(log) do
       nil ->
         {:ok, execution}
 
@@ -53,25 +54,161 @@ defmodule Sacrum.SessionLogRollups do
     end
   end
 
+  defp refresh_log_rollups(%StepExecution{} = execution, %SessionLog{format: "harness"} = log) do
+    case HarnessEventV1Usage.parse(log) do
+      {:ok, _event} -> refresh_from_logs(execution, log)
+      :error -> normalize_unset_rollups(execution)
+    end
+  end
+
   defp refresh_log_rollups(%StepExecution{} = execution, %SessionLog{} = log) do
-    total_usage = aggregate_usage(log.step_execution_id)
-    latest_usage = usage_from_log(log) || empty_usage()
+    refresh_from_logs(execution, log)
+  end
+
+  defp refresh_from_logs(execution, triggering_log) do
+    parsed_logs = parsed_logs(execution.id)
+    total_usage = aggregate_usage(parsed_logs)
+
+    latest_context =
+      if harness_rollups?(parsed_logs) do
+        deterministic_context(parsed_logs)
+      else
+        provider_usage_from_log(triggering_log) || empty_usage()
+      end
 
     execution
-    |> StepExecution.update_changeset(refresh_attrs(total_usage, latest_usage))
+    |> StepExecution.update_changeset(refresh_attrs(total_usage, latest_context))
     |> Repo.update()
   end
 
-  defp aggregate_usage(step_execution_id) do
+  defp harness_rollups?(parsed_logs) do
+    Enum.any?(parsed_logs, fn
+      {_log, %{kind: :harness}} -> true
+      {_log, _rollup} -> false
+    end)
+  end
+
+  defp normalize_unset_rollups(execution) do
+    attrs = %{
+      session_input_tokens: token_count(execution.session_input_tokens),
+      session_cache_read_input_tokens: token_count(execution.session_cache_read_input_tokens),
+      session_output_tokens: token_count(execution.session_output_tokens),
+      session_total_tokens: token_count(execution.session_total_tokens),
+      context_window_input_tokens: token_count(execution.context_window_input_tokens),
+      context_window_cache_read_input_tokens:
+        token_count(execution.context_window_cache_read_input_tokens),
+      context_window_total_tokens: token_count(execution.context_window_total_tokens)
+    }
+
+    execution
+    |> StepExecution.update_changeset(attrs)
+    |> Repo.update()
+  end
+
+  defp parsed_logs(step_execution_id) do
     SessionLog
     |> where([log], log.step_execution_id == ^step_execution_id)
     |> Repo.all()
-    |> Enum.reduce(empty_usage(), fn log, acc ->
-      case usage_from_log(log) do
-        nil -> acc
-        usage -> merge_usage(acc, usage)
-      end
+    |> Enum.map(&{&1, rollup_from_log(&1)})
+  end
+
+  defp aggregate_usage(parsed_logs) do
+    Enum.reduce(parsed_logs, empty_usage(), fn
+      {_log, %{delta: usage}}, acc when not is_nil(usage) -> merge_usage(acc, usage)
+      {_log, _rollup}, acc -> acc
     end)
+  end
+
+  defp deterministic_context(parsed_logs) do
+    legacy_candidates =
+      for {log, %{kind: :legacy, context: context}} <- parsed_logs,
+          do: context_candidate(log, context)
+
+    harness_candidates =
+      parsed_logs
+      |> Enum.reduce(%{}, fn
+        {log, %{kind: :harness, context: context, stream_id: stream_id, sequence: sequence}},
+        candidates
+        when not is_nil(context) ->
+          candidate =
+            log
+            |> context_candidate(context)
+            |> Map.put(:sequence, sequence)
+
+          Map.update(candidates, stream_id, candidate, fn current ->
+            later_stream_candidate(current, candidate)
+          end)
+
+        {_log, _rollup}, candidates ->
+          candidates
+      end)
+      |> Map.values()
+
+    case Enum.max_by(legacy_candidates ++ harness_candidates, & &1.insertion_order, fn -> nil end) do
+      nil -> empty_usage()
+      candidate -> candidate.usage
+    end
+  end
+
+  defp context_candidate(log, usage) do
+    %{
+      insertion_order: {DateTime.to_unix(log.inserted_at, :microsecond), log.id},
+      usage: usage
+    }
+  end
+
+  defp later_stream_candidate(current, candidate) do
+    if {candidate.sequence, candidate.insertion_order} >
+         {current.sequence, current.insertion_order} do
+      candidate
+    else
+      current
+    end
+  end
+
+  defp rollup_from_log(%SessionLog{format: "harness"} = log) do
+    case HarnessEventV1Usage.parse(log) do
+      {:ok, event} ->
+        %{
+          kind: :harness,
+          stream_id: event.stream_id,
+          sequence: event.sequence,
+          delta: harness_delta_usage(event.turn_delta),
+          context: harness_context_usage(event.session_snapshot)
+        }
+
+      :error ->
+        nil
+    end
+  end
+
+  defp rollup_from_log(%SessionLog{} = log) do
+    case provider_usage_from_log(log) do
+      nil -> nil
+      usage -> %{kind: :legacy, delta: usage, context: usage}
+    end
+  end
+
+  defp harness_delta_usage(nil), do: nil
+
+  defp harness_delta_usage(%{tokens: tokens}) do
+    %{
+      input_tokens: tokens.input_tokens,
+      cache_read_input_tokens: tokens.cached_input_tokens,
+      output_tokens: tokens.output_tokens,
+      total_tokens: tokens.input_tokens + tokens.output_tokens
+    }
+  end
+
+  defp harness_context_usage(nil), do: nil
+
+  defp harness_context_usage(%{tokens: tokens, context_tokens: context_tokens}) do
+    %{
+      input_tokens: tokens.input_tokens,
+      cache_read_input_tokens: tokens.cached_input_tokens,
+      output_tokens: tokens.output_tokens,
+      total_tokens: context_tokens || tokens.input_tokens + tokens.output_tokens
+    }
   end
 
   defp rollup_attrs(%StepExecution{} = execution, usage) do
@@ -117,7 +254,8 @@ defmodule Sacrum.SessionLogRollups do
     }
   end
 
-  defp usage_from_log(%SessionLog{content: content, format: format}) do
+  defp provider_usage_from_log(%SessionLog{content: content, format: format})
+       when format in ["anthropic", "openai"] do
     with {:ok, decoded} <- Jason.decode(content),
          %{} = usage <- find_usage(decoded) do
       usage_from_payload(format, usage)
@@ -126,7 +264,9 @@ defmodule Sacrum.SessionLogRollups do
     end
   end
 
-  defp usage_from_payload(format, usage) when format == "anthropic" do
+  defp provider_usage_from_log(%SessionLog{}), do: nil
+
+  defp usage_from_payload("anthropic", usage) do
     input = integer(usage["input_tokens"])
     cache_create = integer(usage["cache_creation_input_tokens"])
     cache_read = integer(usage["cache_read_input_tokens"])
@@ -141,7 +281,7 @@ defmodule Sacrum.SessionLogRollups do
     }
   end
 
-  defp usage_from_payload(format, usage) when format == "openai" do
+  defp usage_from_payload("openai", usage) do
     input = integer(usage["input_tokens"] || usage["prompt_tokens"])
     cache_read = openai_cache_read_tokens(usage)
     output = integer(usage["output_tokens"] || usage["completion_tokens"])
@@ -153,8 +293,6 @@ defmodule Sacrum.SessionLogRollups do
       total_tokens: total_tokens(usage, input, output)
     }
   end
-
-  defp usage_from_payload(_format, _usage), do: nil
 
   defp find_usage(%{"usage" => %{} = usage}), do: usage
   defp find_usage(%{"response" => %{} = response}), do: find_usage(response)

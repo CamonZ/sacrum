@@ -16,7 +16,8 @@ defmodule Sacrum.Accounts.SessionLogs do
   Insert a new session log for a user.
   Extracts step_execution_id and project_id from attrs.
   """
-  @spec insert(String.t(), map()) :: {:ok, SessionLog.t()} | {:error, Ecto.Changeset.t()}
+  @spec insert(String.t(), map()) ::
+          {:ok, SessionLog.t()} | {:error, Ecto.Changeset.t() | :event_identity_conflict}
   def insert(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
     RepoModule.insert(user_id, attrs)
   end

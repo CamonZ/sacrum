@@ -5,7 +5,7 @@ defmodule Sacrum.Repo.Schemas.SessionLog do
   @type t :: %__MODULE__{}
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
-  @supported_formats ["openai", "anthropic"]
+  @supported_formats ["openai", "anthropic", "harness"]
   @default_format "anthropic"
   @max_logical_key_length 255
 
