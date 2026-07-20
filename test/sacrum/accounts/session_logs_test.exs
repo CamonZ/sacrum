@@ -57,7 +57,7 @@ defmodule Sacrum.Accounts.SessionLogsTest do
       assert log.format == "anthropic"
     end
 
-    test "accepts only supported provider formats" do
+    test "accepts only supported session log formats" do
       changeset =
         SessionLog.create_changeset(%SessionLog{}, %{
           "step_execution_id" => Ecto.UUID.generate(),
@@ -66,6 +66,15 @@ defmodule Sacrum.Accounts.SessionLogsTest do
         })
 
       assert changeset.valid?
+
+      harness_changeset =
+        SessionLog.create_changeset(%SessionLog{}, %{
+          "step_execution_id" => Ecto.UUID.generate(),
+          "content" => "{}",
+          "format" => "harness"
+        })
+
+      assert harness_changeset.valid?
 
       changeset =
         SessionLog.create_changeset(%SessionLog{}, %{

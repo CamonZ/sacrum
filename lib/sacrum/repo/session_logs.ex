@@ -8,7 +8,8 @@ defmodule Sacrum.Repo.SessionLogs do
   - `get!/1` returns log or raises
   - `get_by/1` returns `{:ok, log}` or `{:error, :not_found}`
   - `all/0` returns `[log]`
-  - `insert/1` returns `{:ok, log}` or `{:error, changeset}`
+  - `insert/2` returns `{:ok, log}`, `{:error, changeset}`, or
+    `{:error, :event_identity_conflict}` for an immutable harness event key
 
   ## Preload Strategy
 
@@ -22,11 +23,14 @@ defmodule Sacrum.Repo.SessionLogs do
   alias Sacrum.Repo.Schemas.SessionLog
   alias Sacrum.SessionLogRollups
 
+  @harness_format "harness"
+
   @doc """
   Insert a new session log with user_id.
   Extracts step_execution_id and project_id from attrs.
   """
-  @spec insert(String.t(), map()) :: {:ok, SessionLog.t()} | {:error, Ecto.Changeset.t()}
+  @spec insert(String.t(), map()) ::
+          {:ok, SessionLog.t()} | {:error, Ecto.Changeset.t() | :event_identity_conflict}
   def insert(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
     step_execution_id = Map.get(attrs, "step_execution_id") || Map.get(attrs, :step_execution_id)
     project_id = Map.get(attrs, "project_id") || Map.get(attrs, :project_id)
@@ -43,9 +47,10 @@ defmodule Sacrum.Repo.SessionLogs do
         )
 
       logical_key = Ecto.Changeset.get_field(changeset, :logical_key)
+      format = Ecto.Changeset.get_field(changeset, :format)
 
       with {:ok, log} <-
-             insert_or_upsert(changeset, logical_key),
+             insert_or_upsert(changeset, logical_key, format),
            {:ok, _execution} <- rollup_step_execution(log, logical_key) do
         log
       else
@@ -54,10 +59,44 @@ defmodule Sacrum.Repo.SessionLogs do
     end)
   end
 
-  defp insert_or_upsert(changeset, logical_key) when is_binary(logical_key),
+  defp insert_or_upsert(changeset, "harness:" <> _event_id, _format),
+    do: insert_immutable_event(changeset)
+
+  defp insert_or_upsert(changeset, logical_key, @harness_format) when is_binary(logical_key),
+    do: insert_immutable_event(changeset)
+
+  defp insert_or_upsert(changeset, logical_key, _format) when is_binary(logical_key),
     do: upsert_by_logical_key(changeset)
 
-  defp insert_or_upsert(changeset, _logical_key), do: Repo.insert(changeset)
+  defp insert_or_upsert(changeset, _logical_key, _format), do: Repo.insert(changeset)
+
+  defp insert_immutable_event(changeset) do
+    step_execution_id = Ecto.Changeset.get_field(changeset, :step_execution_id)
+    logical_key = Ecto.Changeset.get_field(changeset, :logical_key)
+    content = Ecto.Changeset.get_field(changeset, :content)
+    format = Ecto.Changeset.get_field(changeset, :format)
+
+    with {:ok, _log} <-
+           Repo.insert(changeset,
+             on_conflict: :nothing,
+             conflict_target:
+               {:unsafe_fragment,
+                "(step_execution_id, logical_key) WHERE logical_key IS NOT NULL"}
+           ),
+         %SessionLog{} = persisted <-
+           Repo.one(
+             from(log in SessionLog,
+               where:
+                 log.step_execution_id == ^step_execution_id and log.logical_key == ^logical_key
+             )
+           ) do
+      if persisted.content == content and persisted.format == format do
+        {:ok, persisted}
+      else
+        {:error, :event_identity_conflict}
+      end
+    end
+  end
 
   defp upsert_by_logical_key(changeset) do
     Repo.insert(changeset,
