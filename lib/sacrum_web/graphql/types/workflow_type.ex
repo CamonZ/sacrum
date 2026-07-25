@@ -149,10 +149,6 @@ defmodule SacrumWeb.Graphql.Types.WorkflowType do
           attrs = Map.drop(args, [:id])
 
           case Accounts.Workflows.update(workflow, attrs) do
-            {:error, :is_final_with_outgoing_transitions} ->
-              {:error,
-               "cannot mark workflow as final: workflow has outgoing transitions. Remove the transitions first."}
-
             other ->
               other
           end

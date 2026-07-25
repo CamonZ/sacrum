@@ -59,13 +59,13 @@ defmodule Sacrum.Repo.WorkflowTransitionsTest do
                errors_on(changeset)
     end
 
-    test "rejects outgoing transition from a workflow marked is_final" do
+    test "allows workflow transition regardless of the legacy is_final flag" do
       {:ok, user} = Users.insert(@valid_user_attrs)
       {:ok, project} = Projects.insert(user, %{name: "Proj"})
       {:ok, terminal} = Workflows.insert(project, %{name: "Done", is_final: true})
       {:ok, target} = Workflows.insert(project, %{name: "Other"})
 
-      assert {:error, :from_workflow_is_final} =
+      assert {:ok, %WorkflowTransition{}} =
                WorkflowTransitions.insert(user.id, %{
                  project_id: project.id,
                  from_workflow_id: terminal.id,

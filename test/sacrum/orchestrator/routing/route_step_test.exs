@@ -285,7 +285,9 @@ defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
         create_step(user, workflow, %{
           "name" => "done",
           "step_order" => 2,
-          "is_final" => true
+          "is_final" => false,
+          "step_type" => "finish",
+          "prompt" => nil
         })
 
       dependent_step = create_step(user, dependent_workflow, %{"name" => "execute"})
@@ -349,7 +351,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
       assert completed_run.outcome_kind == "completed"
 
       assert completed_run.outcome_context == %{
-               "reason" => "terminal_route",
+               "reason" => "finish_step",
                "current_step_id" => final_step.id
              }
 
@@ -445,7 +447,9 @@ defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
       done_step =
         create_step(user, done_workflow, %{
           "name" => "done",
-          "is_final" => true
+          "is_final" => false,
+          "step_type" => "finish",
+          "prompt" => nil
         })
 
       create_workflow_transition(user, from_workflow, done_workflow, done_step)
@@ -496,7 +500,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
       assert completed_run.outcome_kind == "completed"
 
       assert completed_run.outcome_context == %{
-               "reason" => "terminal_route",
+               "reason" => "finish_step",
                "current_step_id" => done_step.id
              }
     end
@@ -511,7 +515,15 @@ defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
       dependent_workflow = create_workflow(user, project, %{name: "Dependent Workflow"})
 
       from_step = create_step(user, from_workflow, %{"name" => "route_step"})
-      done_step = create_step(user, done_workflow, %{"name" => "done", "is_final" => true})
+
+      done_step =
+        create_step(user, done_workflow, %{
+          "name" => "done",
+          "is_final" => false,
+          "step_type" => "finish",
+          "prompt" => nil
+        })
+
       dependent_step = create_step(user, dependent_workflow, %{"name" => "execute"})
 
       {:ok, _} =

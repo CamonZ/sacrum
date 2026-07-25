@@ -178,8 +178,9 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
       data = %{data | task: task}
 
       case current_step.step_type do
-        "wait_children" -> {:keep_state_and_data, [{:state_timeout, 0, :wait_children}]}
-        "human_input" -> handle_human_input_entry(data, task, current_step)
+        :finish -> complete_finish_step(data)
+        :wait_children -> {:keep_state_and_data, [{:state_timeout, 0, :wait_children}]}
+        :human_input -> handle_human_input_entry(data, task, current_step)
         _ -> dispatch_execution(data, task, current_step)
       end
     else
@@ -243,27 +244,33 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   def handle_event(:state_timeout, :run, :awaiting_execution, data) do
     task_id = data.task.id
 
-    case resume_reason(data) do
-      :wait_children ->
-        Logger.info(
-          "[TaskOrchestrator:#{task_id}] Resuming from wait_children, transitioning directly"
-        )
+    case WorkflowGraph.get_current_step(data) do
+      {:ok, %{step_type: :finish}} ->
+        complete_finish_step(data)
 
-        {:next_state, :transitioning, data}
+      _ ->
+        case resume_reason(data) do
+          :wait_children ->
+            Logger.info(
+              "[TaskOrchestrator:#{task_id}] Resuming from wait_children, transitioning directly"
+            )
 
-      :human_input_completed ->
-        Logger.info(
-          "[TaskOrchestrator:#{task_id}] Resuming from human_input, transitioning directly"
-        )
+            {:next_state, :transitioning, data}
 
-        {:next_state, :transitioning, data}
+          :human_input_completed ->
+            Logger.info(
+              "[TaskOrchestrator:#{task_id}] Resuming from human_input, transitioning directly"
+            )
 
-      :human_input_waiting ->
-        Logger.info("[TaskOrchestrator:#{task_id}] human_input is still waiting, stopping")
-        {:stop, :normal, data}
+            {:next_state, :transitioning, data}
 
-      :fresh ->
-        request_execution_slot(task_id, data)
+          :human_input_waiting ->
+            Logger.info("[TaskOrchestrator:#{task_id}] human_input is still waiting, stopping")
+            {:stop, :normal, data}
+
+          :fresh ->
+            request_execution_slot(task_id, data)
+        end
     end
   end
 
@@ -271,14 +278,14 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     task_id = data.task.id
 
     case WorkflowGraph.get_current_step(data) do
-      {:ok, %{step_type: "route"} = current_step} ->
+      {:ok, %{step_type: :route} = current_step} ->
         RouteStep.handle_route_step_transition(data, current_step)
 
       {:ok, %{step_type: type} = current_step}
-      when type in ["execute", "evaluate", "human_input"] ->
+      when type in [:execute, :evaluate, :human_input] ->
         handle_single_transition_step(data, current_step)
 
-      {:ok, %{step_type: "wait_children"} = current_step} ->
+      {:ok, %{step_type: :wait_children} = current_step} ->
         handle_wait_children_transition(data, current_step)
 
       {:ok, %{step_type: other}} ->
@@ -359,12 +366,12 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
       })
     else
       {:error, :no_outgoing_transitions} ->
-        Logger.info(
-          "[TaskOrchestrator:#{task_id}] No outgoing transitions from wait_children, treating as final"
+        Logger.error(
+          "[TaskOrchestrator:#{task_id}] Malformed wait_children step has no outgoing transitions"
         )
 
         ExecutionPool.release_slot(data.slot_id)
-        {:next_state, :completing, %{data | slot_id: nil}}
+        {:next_state, :failed, %{data | slot_id: nil}}
 
       {:error, reason} ->
         Logger.error(
@@ -400,9 +407,12 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
       })
     else
       {:error, :no_outgoing_transitions} ->
-        Logger.info("[TaskOrchestrator:#{task_id}] No outgoing transitions, treating as final")
+        Logger.error(
+          "[TaskOrchestrator:#{task_id}] Malformed non-finish step has no outgoing transitions"
+        )
+
         ExecutionPool.release_slot(data.slot_id)
-        {:next_state, :completing, %{data | slot_id: nil}}
+        {:next_state, :failed, %{data | slot_id: nil}}
 
       {:error, reason} ->
         Logger.error(
@@ -513,6 +523,25 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     end
   end
 
+  @spec complete_finish_step(FSMData.t()) :: fsm_transition()
+  defp complete_finish_step(data) do
+    if data.slot_id, do: ExecutionPool.release_slot(data.slot_id)
+
+    data = %{data | slot_id: nil}
+
+    case TaskCompletion.handle_completion(data) do
+      {:ok, :completed, new_data} ->
+        {:next_state, :completed, new_data}
+
+      {:error, reason} ->
+        Logger.error(
+          "[TaskOrchestrator:#{data.task.id}] Finish completion failed: #{inspect(reason)}"
+        )
+
+        {:next_state, :failed, data}
+    end
+  end
+
   @spec handle_execution_status_changed(binary(), String.t(), FSMData.t()) :: fsm_transition()
   defp handle_execution_status_changed(execution_id, _status, %{current_execution_id: current})
        when execution_id != current,
@@ -592,10 +621,10 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
           :wait_children | :human_input_completed | :human_input_waiting | :fresh
   defp resume_reason(data) do
     case WorkflowGraph.get_current_step(data) do
-      {:ok, %{step_type: "wait_children"}} ->
+      {:ok, %{step_type: :wait_children}} ->
         if latest_waiting_execution(data.task.id), do: :wait_children, else: :fresh
 
-      {:ok, %{step_type: "human_input"}} ->
+      {:ok, %{step_type: :human_input}} ->
         case human_input_latest_execution_status(data) do
           "completed" -> :human_input_completed
           "waiting" -> :human_input_waiting

@@ -69,16 +69,17 @@ defmodule Sacrum.Accounts.StepExecutions do
       nil ->
         {:ok, put_step_type(attrs, step_type)}
 
-      ^step_type ->
-        {:ok, put_step_type(attrs, step_type)}
+      value ->
+        if value == step_type or value == WorkflowStep.step_type_wire_value(step_type) do
+          {:ok, put_step_type(attrs, step_type)}
+        else
+          changeset =
+            attrs
+            |> changeset_with_step_type(step_type)
+            |> Ecto.Changeset.add_error(:step_type, "must match the referenced workflow step")
 
-      _other ->
-        changeset =
-          attrs
-          |> changeset_with_step_type(step_type)
-          |> Ecto.Changeset.add_error(:step_type, "must match the referenced workflow step")
-
-        {:error, changeset}
+          {:error, changeset}
+        end
     end
   end
 
@@ -173,12 +174,12 @@ defmodule Sacrum.Accounts.StepExecutions do
   @spec human_input_execution?(StepExecution.t()) :: boolean()
   defp human_input_execution?(%StepExecution{step_id: nil}), do: false
 
-  defp human_input_execution?(%StepExecution{step: %WorkflowStep{step_type: "human_input"}}),
+  defp human_input_execution?(%StepExecution{step: %WorkflowStep{step_type: :human_input}}),
     do: true
 
   defp human_input_execution?(%StepExecution{step_id: step_id}) do
     case Repo.get(WorkflowStep, step_id) do
-      %WorkflowStep{step_type: "human_input"} -> true
+      %WorkflowStep{step_type: :human_input} -> true
       _ -> false
     end
   end
@@ -233,7 +234,7 @@ defmodule Sacrum.Accounts.StepExecutions do
     do: {:error, :human_input_execution_missing_task_run}
 
   defp validate_human_input_completion_target(%StepExecution{
-         step: %WorkflowStep{step_type: "human_input"}
+         step: %WorkflowStep{step_type: :human_input}
        }),
        do: :ok
 

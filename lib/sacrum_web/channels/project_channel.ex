@@ -3,7 +3,7 @@ defmodule SacrumWeb.ProjectChannel do
 
   alias Sacrum.Accounts.Projects
   alias Sacrum.Realtime.ProjectChannelCdcContract
-  alias Sacrum.Repo.Schemas.Task
+  alias Sacrum.Repo.Schemas.{Task, WorkflowStep}
   alias Sacrum.TaskRuns.RunControls
   alias Sacrum.TaskRuns.Status, as: TaskRunStatus
 
@@ -515,7 +515,7 @@ defmodule SacrumWeb.ProjectChannel do
       agent_config: step.agent_config,
       is_final: step.is_final,
       step_order: step.step_order,
-      step_type: step.step_type,
+      step_type: WorkflowStep.step_type_wire_value(step.step_type),
       prompt: step.prompt,
       output_schema: step.output_schema,
       verbose_daemon_logging: step.verbose_daemon_logging,
@@ -560,7 +560,7 @@ defmodule SacrumWeb.ProjectChannel do
       step_id: field_value(execution, :step_id),
       project_id: field_value(execution, :project_id),
       step_name: field_value(execution, :step_name),
-      step_type: field_value(execution, :step_type),
+      step_type: WorkflowStep.step_type_wire_value(field_value(execution, :step_type)),
       status: field_value(execution, :status),
       context: field_value(execution, :context),
       prompt: field_value(execution, :prompt),

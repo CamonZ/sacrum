@@ -72,7 +72,7 @@ defmodule Sacrum.Repo.Pulse do
         on: se.step_id == ws.id,
         where:
           se.inserted_at >= ^cutoff() and se.status == "completed" and
-            ws.is_final == true,
+            ws.step_type == :finish,
         select: count(se.task_id, :distinct)
 
     Repo.one(scope(query, project_id)) || 0
@@ -92,7 +92,7 @@ defmodule Sacrum.Repo.Pulse do
         on: se.step_id == ws.id,
         where:
           se.inserted_at >= ^cutoff and se.status == "completed" and
-            ws.is_final == true,
+            ws.step_type == :finish,
         select: se.task_id,
         distinct: true
 
@@ -124,7 +124,7 @@ defmodule Sacrum.Repo.Pulse do
         on: se.step_id == ws.id,
         where:
           se.task_id == ^task_id and se.inserted_at >= ^cutoff and
-            se.status == "completed" and ws.is_final == true,
+            se.status == "completed" and ws.step_type == :finish,
         order_by: [desc: se.inserted_at],
         limit: 1,
         select: se.inserted_at

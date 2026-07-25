@@ -76,6 +76,24 @@ defmodule Sacrum.Repo.StepTransitionsTest do
       assert %{from_step_id: ["transition already exists between these steps"]} =
                errors_on(changeset)
     end
+
+    test "rejects an outgoing transition from a finish step" do
+      {:ok, user} = Users.insert(@valid_user_attrs)
+      {:ok, project} = Projects.insert(user, %{name: "My Project"})
+      {:ok, workflow} = Workflows.insert(project, %{name: "Default"})
+
+      {:ok, finish_step} =
+        WorkflowSteps.insert(workflow, %{name: "Done", step_order: 1, step_type: "finish"})
+
+      {:ok, target_step} = WorkflowSteps.insert(workflow, %{name: "Target", step_order: 2})
+
+      assert {:error, :finish_step_cannot_have_outgoing_transition} =
+               StepTransitions.insert(user.id, %{
+                 project_id: project.id,
+                 from_step_id: finish_step.id,
+                 to_step_id: target_step.id
+               })
+    end
   end
 
   describe "all/1" do

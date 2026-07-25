@@ -162,11 +162,18 @@ defmodule Sacrum.Orchestrator.TaskCompletionTest do
                {:next_state, :awaiting_execution, data}
     end
 
-    test "completes instead of dispatching a promptless final sink step in a final workflow" do
+    test "stops normally for a promptless finish step regardless of legacy final flags" do
       user = create_user()
       project = create_project(user)
       workflow = create_workflow(user, project, %{is_final: true})
-      final_step = create_step(user, workflow, %{"is_final" => true, "prompt" => nil})
+
+      final_step =
+        create_step(user, workflow, %{
+          "is_final" => false,
+          "step_type" => "finish",
+          "prompt" => nil
+        })
+
       task = create_task(user, project, workflow)
       task_run = create_task_run(user, project, task)
 
@@ -177,11 +184,11 @@ defmodule Sacrum.Orchestrator.TaskCompletionTest do
         workflow: workflow
       }
 
-      assert TaskCompletion.determine_next_state(final_step.id, data) ==
-               {:next_state, :completing, data}
+      assert {:stop, :normal, _attrs} = TaskCompletion.determine_next_state(final_step.id, data)
 
-      assert TaskCompletion.next_state_decision(final_step.id, data) ==
-               {:next_state, :completing}
+      assert {:stop, :normal, attrs} = TaskCompletion.next_state_decision(final_step.id, data)
+      assert attrs.outcome_kind == "completed"
+      assert attrs.outcome_context["reason"] == "finish_step"
     end
 
     test "transitions to awaiting_execution when destination step has a prompt" do

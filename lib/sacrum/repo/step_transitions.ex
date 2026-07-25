@@ -15,6 +15,7 @@ defmodule Sacrum.Repo.StepTransitions do
 
   `insert/1` may return `{:error, atom}` for:
   - `:different_workflows` - when step transitions belong to different workflows
+  - `:finish_step_cannot_have_outgoing_transition` - when the source step is a finish step
 
   ## Preload Strategy
 
@@ -39,7 +40,8 @@ defmodule Sacrum.Repo.StepTransitions do
     to_step_id = Map.get(attrs, "to_step_id") || Map.get(attrs, :to_step_id)
     project_id = Map.get(attrs, "project_id") || Map.get(attrs, :project_id)
 
-    with :ok <- validate_same_workflow(attrs) do
+    with :ok <- validate_same_workflow(attrs),
+         :ok <- validate_from_step_type(attrs) do
       %StepTransition{
         user_id: user_id,
         from_step_id: from_step_id,
@@ -61,6 +63,22 @@ defmodule Sacrum.Repo.StepTransitions do
       :ok
     else
       compare_step_workflows(from_id, to_id)
+    end
+  end
+
+  defp validate_from_step_type(attrs) do
+    from_id = attrs[:from_step_id] || attrs["from_step_id"]
+
+    if is_nil(from_id) do
+      :ok
+    else
+      case Repo.get(WorkflowStep, from_id) do
+        %WorkflowStep{step_type: :finish} ->
+          {:error, :finish_step_cannot_have_outgoing_transition}
+
+        _step ->
+          :ok
+      end
     end
   end
 

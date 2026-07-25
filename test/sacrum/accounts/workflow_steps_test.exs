@@ -119,18 +119,23 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
       assert {:ok, %WorkflowStep{} = step} =
                WorkflowSteps.insert(workflow, %{name: "Draft"})
 
-      assert step.step_type == "execute"
+      assert step.step_type == :execute
     end
 
     test "creates step with each valid step_type" do
       user = create_user()
       {_project, workflow} = create_workflow(user)
 
-      for type <- ~w(execute evaluate route) do
-        assert {:ok, %WorkflowStep{} = step} =
-                 WorkflowSteps.insert(workflow, %{name: "Step #{type}", step_type: type})
+      for type <- ~w(execute evaluate route finish) do
+        attrs = if type == "finish", do: %{prompt: nil}, else: %{}
 
-        assert step.step_type == type
+        assert {:ok, %WorkflowStep{} = step} =
+                 WorkflowSteps.insert(
+                   workflow,
+                   Map.merge(%{name: "Step #{type}", step_type: type}, attrs)
+                 )
+
+        assert step.step_type == String.to_existing_atom(type)
       end
     end
 
@@ -149,10 +154,10 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
       {_project, workflow} = create_workflow(user)
 
       {:ok, step} = WorkflowSteps.insert(workflow, %{name: "Draft"})
-      assert step.step_type == "execute"
+      assert step.step_type == :execute
 
       assert {:ok, updated} = WorkflowSteps.update(step, %{step_type: "route"})
-      assert updated.step_type == "route"
+      assert updated.step_type == :route
     end
   end
 

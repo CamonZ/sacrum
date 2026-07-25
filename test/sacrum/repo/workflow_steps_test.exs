@@ -1,6 +1,7 @@
 defmodule Sacrum.Repo.WorkflowStepsTest do
   use Sacrum.DataCase, async: true
 
+  alias Sacrum.Repo
   alias Sacrum.Repo.WorkflowSteps
   alias Sacrum.Repo.Workflows
   alias Sacrum.Repo.Projects
@@ -58,16 +59,17 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
     test "defaults step_type to execute" do
       workflow = create_workflow()
       assert {:ok, %WorkflowStep{} = step} = WorkflowSteps.insert(workflow, @valid_attrs)
-      assert step.step_type == "execute"
+      assert step.step_type == :execute
     end
 
     test "creates step with explicit step_type" do
       workflow = create_workflow()
 
-      for type <- ~w(execute evaluate route wait_children human_input) do
+      for type <- ~w(execute evaluate route wait_children human_input finish) do
         attrs = Map.put(@valid_attrs, :step_type, type)
+        attrs = if type == "finish", do: Map.put(attrs, :prompt, nil), else: attrs
         assert {:ok, %WorkflowStep{} = step} = WorkflowSteps.insert(workflow, attrs)
-        assert step.step_type == type
+        assert step.step_type == String.to_existing_atom(type)
       end
     end
 
@@ -76,6 +78,30 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       attrs = Map.put(@valid_attrs, :step_type, "invalid")
       assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
       assert %{step_type: ["is invalid"]} = errors_on(changeset)
+    end
+
+    test "accepts finish as a promptless step and persists its string value" do
+      workflow = create_workflow()
+
+      assert {:ok, %WorkflowStep{step_type: :finish, prompt: nil} = step} =
+               WorkflowSteps.insert(workflow, Map.merge(@valid_attrs, %{step_type: "finish"}))
+
+      assert %{rows: [["finish"]]} =
+               Repo.query!("SELECT step_type FROM workflow_steps WHERE id = $1", [
+                 Ecto.UUID.dump!(step.id)
+               ])
+    end
+
+    test "rejects a nonblank prompt on a finish step" do
+      workflow = create_workflow()
+
+      assert {:error, changeset} =
+               WorkflowSteps.insert(
+                 workflow,
+                 Map.merge(@valid_attrs, %{step_type: "finish", prompt: "Done"})
+               )
+
+      assert %{prompt: ["must be blank for finish steps"]} = errors_on(changeset)
     end
 
     test "rejects missing name" do
@@ -112,6 +138,20 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
     end
   end
 
+  describe "sync_transitions/2" do
+    test "rejects outgoing transitions from a finish step" do
+      workflow = create_workflow()
+
+      {:ok, finish_step} =
+        WorkflowSteps.insert(workflow, %{name: "Done", step_order: 1, step_type: "finish"})
+
+      {:ok, target_step} = WorkflowSteps.insert(workflow, %{name: "Target", step_order: 2})
+
+      assert {:error, :finish_step_cannot_have_outgoing_transition} =
+               WorkflowSteps.sync_transitions(finish_step, [%{to_step_id: target_step.id}])
+    end
+  end
+
   describe "get/1" do
     test "returns step by ID" do
       workflow = create_workflow()
@@ -141,10 +181,10 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
     test "updates step_type" do
       workflow = create_workflow()
       {:ok, step} = WorkflowSteps.insert(workflow, @valid_attrs)
-      assert step.step_type == "execute"
+      assert step.step_type == :execute
 
       assert {:ok, updated} = WorkflowSteps.update(step, %{step_type: "evaluate"})
-      assert updated.step_type == "evaluate"
+      assert updated.step_type == :evaluate
     end
 
     test "rejects invalid step_type on update" do
@@ -199,7 +239,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
 
       attrs = Map.merge(@valid_attrs, %{step_type: "route"})
 
-      assert {:ok, %WorkflowStep{step_type: "route"} = step} =
+      assert {:ok, %WorkflowStep{step_type: :route} = step} =
                WorkflowSteps.insert(workflow, attrs)
 
       assert step.output_schema == WorkflowStep.routing_contract_schema()

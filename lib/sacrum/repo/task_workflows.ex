@@ -58,7 +58,7 @@ defmodule Sacrum.Repo.TaskWorkflows do
       else
         task
         |> task_workflow_changeset(workflow.id, initial_step.id)
-        |> maybe_put_completed_at(workflow, initial_step)
+        |> maybe_put_completed_at(initial_step)
         |> Status.put_status()
         |> Repo.update()
       end
@@ -124,7 +124,7 @@ defmodule Sacrum.Repo.TaskWorkflows do
       changeset =
         task
         |> Ecto.Changeset.change(%{current_step_id: target_step.id})
-        |> maybe_put_completed_at(task.workflow_id, target_step)
+        |> maybe_put_completed_at(target_step)
         |> Status.put_status()
 
       {:ok, changeset}
@@ -190,11 +190,11 @@ defmodule Sacrum.Repo.TaskWorkflows do
 
   @spec maybe_complete_terminal_position(Task.t(), Workflow.t(), WorkflowStep.t()) ::
           {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
-  defp maybe_complete_terminal_position(task, workflow, step) do
+  defp maybe_complete_terminal_position(task, _workflow, step) do
     changeset =
       task
       |> Ecto.Changeset.change()
-      |> maybe_put_completed_at(workflow, step)
+      |> maybe_put_completed_at(step)
       |> Status.put_status()
 
     if changeset.changes == %{} do
@@ -204,31 +204,24 @@ defmodule Sacrum.Repo.TaskWorkflows do
     end
   end
 
-  @spec maybe_put_completed_at(
-          Ecto.Changeset.t(),
-          Workflow.t() | String.t() | nil,
-          WorkflowStep.t()
-        ) ::
-          Ecto.Changeset.t()
-  defp maybe_put_completed_at(changeset, workflow, %WorkflowStep{is_final: true})
-       when not is_nil(workflow) do
+  @doc """
+  Stamps task completion when a task enters a finish step.
+
+  The change is idempotent and intentionally does not inspect workflow or step
+  `is_final` metadata.
+  """
+  @spec maybe_put_completed_at(Ecto.Changeset.t(), WorkflowStep.t()) :: Ecto.Changeset.t()
+  def maybe_put_completed_at(changeset, %WorkflowStep{step_type: :finish}) do
     task = Ecto.Changeset.apply_changes(changeset)
 
-    if is_nil(task.completed_at) and terminal_workflow?(workflow) do
+    if is_nil(task.completed_at) do
       Ecto.Changeset.put_change(changeset, :completed_at, DateTime.utc_now())
     else
       changeset
     end
   end
 
-  defp maybe_put_completed_at(changeset, _workflow, _step), do: changeset
-
-  @spec terminal_workflow?(Workflow.t() | String.t()) :: boolean()
-  defp terminal_workflow?(%Workflow{is_final: is_final}), do: is_final
-
-  defp terminal_workflow?(workflow_id) when is_binary(workflow_id) do
-    Repo.one(from(w in Workflow, where: w.id == ^workflow_id, select: w.is_final)) == true
-  end
+  def maybe_put_completed_at(changeset, _step), do: changeset
 
   @spec task_workflow_changeset(Task.t(), String.t() | nil, String.t() | nil) ::
           Ecto.Changeset.t()

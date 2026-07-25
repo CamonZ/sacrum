@@ -133,7 +133,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       {:ok, exec} = create_and_dispatch(ctx, task, step)
 
       assert exec.step_name == "Human approval"
-      assert exec.step_type == "human_input"
+      assert exec.step_type == :human_input
     end
 
     test "renders {{ task.title }} in step prompt", ctx do

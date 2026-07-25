@@ -7,6 +7,7 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
   import Absinthe.Resolution.Helpers
 
   alias Sacrum.Accounts
+  alias Sacrum.Repo.Schemas.WorkflowStep
   alias SacrumWeb.Graphql.ChangesetErrors
   alias SacrumWeb.Graphql.ShortIdErrors
 
@@ -22,7 +23,13 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
     field :agent_config, :json
     field :is_final, :boolean
     field :step_order, :integer
-    field :step_type, :string
+
+    field :step_type, :string do
+      resolve(fn step, _args, _resolution ->
+        {:ok, WorkflowStep.step_type_wire_value(step.step_type)}
+      end)
+    end
+
     field :prompt, :string
     field :output_schema, :json
     field :verbose_daemon_logging, :boolean

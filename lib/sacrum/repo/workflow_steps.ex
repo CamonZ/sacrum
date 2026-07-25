@@ -18,6 +18,7 @@ defmodule Sacrum.Repo.WorkflowSteps do
   `sync_transitions/2` may return `{:error, atom}` for:
   - `:duplicate_to_step_ids` - when transition list has duplicate target steps
   - `:different_workflows` - when target steps belong to different workflows
+  - `:finish_step_cannot_have_outgoing_transition` - when the step is a finish step and transitions are supplied
 
   ## Preload Strategy
 
@@ -111,7 +112,8 @@ defmodule Sacrum.Repo.WorkflowSteps do
   def sync_transitions(%WorkflowStep{} = step, transitions) when is_list(transitions) do
     step = Repo.preload(step, :workflow)
 
-    with :ok <- validate_no_duplicate_targets(transitions),
+    with :ok <- validate_finish_step(step, transitions),
+         :ok <- validate_no_duplicate_targets(transitions),
          :ok <- validate_same_workflow(step, transitions) do
       existing =
         Repo.all(from(t in StepTransition, where: t.from_step_id == ^step.id))
@@ -163,6 +165,11 @@ defmodule Sacrum.Repo.WorkflowSteps do
   end
 
   # sync_transitions helpers
+
+  defp validate_finish_step(%WorkflowStep{step_type: :finish}, [_ | _]),
+    do: {:error, :finish_step_cannot_have_outgoing_transition}
+
+  defp validate_finish_step(_step, _transitions), do: :ok
 
   defp to_step_id(%{"to_step_id" => id}), do: id
   defp to_step_id(%{to_step_id: id}), do: id
