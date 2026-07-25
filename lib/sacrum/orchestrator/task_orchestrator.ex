@@ -359,7 +359,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
            commit_wait_children_transition(data, next_step_id) do
       ExecutionPool.release_slot(data.slot_id)
 
-      TaskCompletion.determine_next_state(next_step_id, %{
+      continue_after_step_transition(next_step_id, %{
         data
         | task: updated_task,
           slot_id: nil
@@ -400,7 +400,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
          {:ok, %{task: updated_task}} <- commit_task_step_transition(data, next_step_id) do
       ExecutionPool.release_slot(data.slot_id)
 
-      TaskCompletion.determine_next_state(next_step_id, %{
+      continue_after_step_transition(next_step_id, %{
         data
         | task: updated_task,
           slot_id: nil
@@ -453,6 +453,19 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
         {:error, reason} -> Repo.rollback(reason)
       end
     end)
+  end
+
+  @spec continue_after_step_transition(binary(), FSMData.t()) :: fsm_transition()
+  defp continue_after_step_transition(next_step_id, data) do
+    case TaskCompletion.next_state_decision(next_step_id, data) do
+      {:stop, :normal,
+       %{outcome_kind: "completed", outcome_context: %{"reason" => "finish_step"}}} ->
+        :ok = Scheduler.notify_task_completed(data.task.id, %{status: "completed"})
+        {:stop, :normal, data}
+
+      _decision ->
+        TaskCompletion.determine_next_state(next_step_id, data)
+    end
   end
 
   @spec maybe_complete_waiting_execution(FSMData.t(), map()) :: {:ok, map()} | {:error, term()}
