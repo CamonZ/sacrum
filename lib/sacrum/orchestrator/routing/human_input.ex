@@ -102,7 +102,7 @@ defmodule Sacrum.Orchestrator.Routing.HumanInput do
 
   @spec human_input_output_schema(StepExecution.t()) :: {:ok, map() | nil} | {:error, term()}
   defp human_input_output_schema(%StepExecution{
-         step: %WorkflowStep{step_type: "human_input", output_schema: output_schema}
+         step: %WorkflowStep{step_type: :human_input, output_schema: output_schema}
        }),
        do: {:ok, output_schema}
 

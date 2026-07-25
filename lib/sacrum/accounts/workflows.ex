@@ -12,7 +12,6 @@ defmodule Sacrum.Accounts.Workflows do
 
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.Workflow
-  alias Sacrum.Repo.Schemas.WorkflowTransition
   alias Sacrum.Repo.Workflows, as: WorkflowsRepo
 
   import Ecto.Query
@@ -52,14 +51,12 @@ defmodule Sacrum.Accounts.Workflows do
   @spec update(Workflow.t(), map()) ::
           {:ok, Workflow.t()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
   def update(%Workflow{} = workflow, attrs) do
-    with :ok <- validate_is_final_no_outgoing_transitions(workflow, attrs) do
-      maybe_with_demote(
-        fn -> do_update(workflow, attrs) end,
-        workflow.project_id,
-        workflow.id,
-        attrs
-      )
-    end
+    maybe_with_demote(
+      fn -> do_update(workflow, attrs) end,
+      workflow.project_id,
+      workflow.id,
+      attrs
+    )
   end
 
   defp maybe_with_demote(mutate_fun, project_id, exclude_id, attrs) do
@@ -108,25 +105,6 @@ defmodule Sacrum.Accounts.Workflows do
 
   defp default_requested?(attrs) do
     Map.get(attrs, :is_default, Map.get(attrs, "is_default")) == true
-  end
-
-  defp validate_is_final_no_outgoing_transitions(%Workflow{id: id}, attrs) do
-    is_final = Map.get(attrs, :is_final, Map.get(attrs, "is_final"))
-
-    if is_final == true do
-      count =
-        Sacrum.Repo.one(
-          from(t in WorkflowTransition, where: t.from_workflow_id == ^id, select: count(t.id))
-        )
-
-      if count > 0 do
-        {:error, :is_final_with_outgoing_transitions}
-      else
-        :ok
-      end
-    else
-      :ok
-    end
   end
 
   @doc """

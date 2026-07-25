@@ -198,7 +198,7 @@ defmodule Sacrum.Accounts.WorkflowsTest do
       assert defaults == []
     end
 
-    test "update with is_final: true while workflow has outgoing transitions returns is_final_with_outgoing_transitions" do
+    test "update with is_final: true while workflow has outgoing transitions succeeds" do
       user = create_user()
       project = create_project(user)
       {:ok, from_wf} = Workflows.insert(user.id, project.id, %{name: "From"})
@@ -212,7 +212,7 @@ defmodule Sacrum.Accounts.WorkflowsTest do
         label: "go"
       })
 
-      assert {:error, :is_final_with_outgoing_transitions} =
+      assert {:ok, %Workflow{is_final: true}} =
                Workflows.update(from_wf, %{is_final: true})
     end
   end

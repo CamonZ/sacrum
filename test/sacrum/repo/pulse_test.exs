@@ -26,17 +26,18 @@ defmodule Sacrum.Repo.PulseTest do
     workflow
   end
 
-  defp create_workflow_step(user, workflow, attrs \\ %{name: "Step 1", is_final: false}) do
+  defp create_workflow_step(_user, workflow, attrs \\ %{name: "Step 1", is_final: false}) do
     {:ok, step} =
       Repo.WorkflowSteps.insert(workflow, %{
         name: Map.get(attrs, :name, "Step 1"),
-        is_final: Map.get(attrs, :is_final, false)
+        is_final: Map.get(attrs, :is_final, false),
+        step_type: Map.get(attrs, :step_type, "execute")
       })
 
     step
   end
 
-  defp create_task(user, project, attrs \\ %{title: "Test Task"}) do
+  defp create_task(_user, project, attrs \\ %{title: "Test Task"}) do
     {:ok, task} =
       Repo.Tasks.insert(project, %{
         title: Map.get(attrs, :title, "Test Task")
@@ -277,7 +278,7 @@ defmodule Sacrum.Repo.PulseTest do
       project = create_project(user)
       workflow = create_workflow(user, project)
       step_normal = create_workflow_step(user, workflow, %{is_final: false})
-      step_final = create_workflow_step(user, workflow, %{is_final: true})
+      step_final = create_workflow_step(user, workflow, %{step_type: "finish"})
 
       task1 = create_task(user, project, %{title: "Task 1"})
       task2 = create_task(user, project, %{title: "Task 2"})
@@ -338,7 +339,7 @@ defmodule Sacrum.Repo.PulseTest do
       user = create_user()
       project = create_project(user)
       workflow = create_workflow(user, project)
-      step_final = create_workflow_step(user, workflow, %{is_final: true})
+      step_final = create_workflow_step(user, workflow, %{step_type: "finish"})
       step_normal = create_workflow_step(user, workflow, %{is_final: false})
 
       old_task = create_task(user, project, %{title: "Old Task"})
@@ -383,7 +384,7 @@ defmodule Sacrum.Repo.PulseTest do
       user = create_user()
       project = create_project(user)
       workflow = create_workflow(user, project)
-      step_final = create_workflow_step(user, workflow, %{is_final: true})
+      step_final = create_workflow_step(user, workflow, %{step_type: "finish"})
       step_normal = create_workflow_step(user, workflow, %{is_final: false})
 
       # Task 1: 1000ms duration
@@ -473,7 +474,7 @@ defmodule Sacrum.Repo.PulseTest do
       user = create_user()
       project = create_project(user)
       workflow = create_workflow(user, project)
-      step_final = create_workflow_step(user, workflow, %{is_final: true})
+      step_final = create_workflow_step(user, workflow, %{step_type: "finish"})
       step_normal = create_workflow_step(user, workflow, %{is_final: false})
 
       task = create_task(user, project)

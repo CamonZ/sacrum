@@ -541,12 +541,12 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
     end
   end
 
-  describe "terminal workflow completion stamping" do
-    test "assign_workflow stamps completed_at when terminal workflow lands on terminal step" do
+  describe "finish step completion stamping" do
+    test "assign_workflow stamps completed_at when it lands on a finish step" do
       user = create_user()
       project = create_project(user)
-      {:ok, workflow} = Workflows.insert(project, %{name: "Done Workflow", is_final: true})
-      step = create_step(workflow, %{name: "done", step_order: 1, is_final: true})
+      workflow = create_workflow(project)
+      step = create_step(workflow, %{name: "done", step_order: 1, step_type: "finish"})
       {:ok, workflow} = Workflows.update(workflow, %{initial_step_id: step.id})
       task = create_task(project)
 
@@ -558,7 +558,7 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
       assert assigned.status == "done"
     end
 
-    test "assign_workflow does not stamp completed_at for non-terminal initial step" do
+    test "assign_workflow ignores workflow and step is_final flags for non-finish steps" do
       user = create_user()
       project = create_project(user)
       {:ok, workflow} = Workflows.insert(project, %{name: "Terminal Workflow", is_final: true})
@@ -572,7 +572,7 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
       assert assigned.status == "ready"
     end
 
-    test "assign_workflow does not stamp completed_at for terminal step in non-terminal workflow" do
+    test "assign_workflow does not stamp completed_at for an is_final step without finish type" do
       user = create_user()
       project = create_project(user)
       workflow = create_workflow(project)
@@ -586,12 +586,12 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
       assert assigned.status == "ready"
     end
 
-    test "move_to_step stamps completed_at when moving into terminal step in terminal workflow" do
+    test "move_to_step stamps completed_at when moving into a finish step" do
       user = create_user()
       project = create_project(user)
-      {:ok, workflow} = Workflows.insert(project, %{name: "Terminal Workflow", is_final: true})
+      workflow = create_workflow(project)
       start_step = create_step(workflow, %{name: "review", step_order: 1})
-      done_step = create_step(workflow, %{name: "done", step_order: 2, is_final: true})
+      done_step = create_step(workflow, %{name: "done", step_order: 2, step_type: "finish"})
       {:ok, workflow} = Workflows.update(workflow, %{initial_step_id: start_step.id})
       create_transition(start_step, done_step)
       task = create_task(project)
@@ -604,12 +604,12 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
       assert moved.status == "done"
     end
 
-    test "advance_to_step stamps completed_at when advancing into terminal step in terminal workflow" do
+    test "advance_to_step stamps completed_at when advancing into a finish step" do
       user = create_user()
       project = create_project(user)
-      {:ok, workflow} = Workflows.insert(project, %{name: "Terminal Workflow", is_final: true})
+      workflow = create_workflow(project)
       start_step = create_step(workflow, %{name: "review", step_order: 1})
-      done_step = create_step(workflow, %{name: "done", step_order: 2, is_final: true})
+      done_step = create_step(workflow, %{name: "done", step_order: 2, step_type: "finish"})
       {:ok, workflow} = Workflows.update(workflow, %{initial_step_id: start_step.id})
       task = create_task(project)
       {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
@@ -619,6 +619,21 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
       assert advanced.current_step_id == done_step.id
       assert advanced.completed_at != nil
       assert advanced.status == "done"
+    end
+
+    test "finish completion is idempotent when completed_at is already set" do
+      %{workflow: workflow, steps: steps, task: task} = setup_workflow_with_steps()
+      finish = create_step(workflow, %{name: "finish", step_order: 4, step_type: "finish"})
+      {:ok, _workflow} = Workflows.update(workflow, %{initial_step_id: steps.backlog.id})
+      create_transition(steps.done, finish)
+      {:ok, assigned} = TaskWorkflows.assign_workflow(task, workflow)
+      {:ok, completed} = TaskWorkflows.advance_to_step(assigned, finish.id)
+      completed_at = completed.completed_at
+
+      {:ok, unchanged} = TaskWorkflows.advance_to_step(completed, finish.id)
+
+      assert unchanged.completed_at == completed_at
+      assert unchanged.status == "done"
     end
   end
 

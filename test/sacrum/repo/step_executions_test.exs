@@ -1,6 +1,7 @@
 defmodule Sacrum.Repo.StepExecutionsTest do
   use Sacrum.DataCase, async: false
 
+  alias Sacrum.Repo
   alias Sacrum.Repo.StepExecutions
   alias Sacrum.Repo.Workflows
   alias Sacrum.Repo.Projects
@@ -46,7 +47,7 @@ defmodule Sacrum.Repo.StepExecutionsTest do
 
       assert execution.task_id == task.id
       assert execution.step_name == "review"
-      assert execution.step_type == "evaluate"
+      assert execution.step_type == :evaluate
       assert execution.status == "completed"
       assert execution.model == "claude-3"
     end
@@ -63,7 +64,7 @@ defmodule Sacrum.Repo.StepExecutionsTest do
                  step_name: "manual"
                })
 
-      assert execution.step_type == "execute"
+      assert execution.step_type == :execute
 
       assert {:error, changeset} =
                StepExecutions.insert(workflow.user_id, %{
@@ -75,6 +76,26 @@ defmodule Sacrum.Repo.StepExecutionsTest do
                })
 
       assert %{step_type: ["is invalid"]} = errors_on(changeset)
+    end
+
+    test "accepts finish and persists the existing string representation" do
+      {workflow, project, user} = create_workflow()
+      task = create_task(project, user.id)
+
+      assert {:ok, %StepExecution{step_type: :finish} = execution} =
+               StepExecutions.insert(workflow.user_id, %{
+                 project_id: project.id,
+                 task_id: task.id,
+                 workflow_id: workflow.id,
+                 step_name: "finish",
+                 step_type: "finish",
+                 status: "completed"
+               })
+
+      assert %{rows: [["finish"]]} =
+               Repo.query!("SELECT step_type FROM step_executions WHERE id = $1", [
+                 Ecto.UUID.dump!(execution.id)
+               ])
     end
 
     test "rejects missing task_id" do

@@ -93,6 +93,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
 
   defp setup_linear_workflow(opts) do
     step_count = Keyword.get(opts, :step_count, 3)
+    finish_last_step = Keyword.get(opts, :finish_last_step, true)
     user = create_user()
     project = create_project(user)
     workflow = create_workflow(user, project)
@@ -102,7 +103,10 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
         create_step(user, workflow, %{
           name: "step_#{i}",
           step_order: i,
-          is_final: i == step_count
+          is_final: i == step_count,
+          step_type: if(i == step_count and finish_last_step, do: "finish", else: "execute"),
+          prompt:
+            if(i == step_count and finish_last_step, do: nil, else: "Run step for task {task_id}")
         })
       end
 
@@ -150,7 +154,8 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
         name: "after_human_input",
         step_order: 2,
         is_final: next_final?,
-        prompt: next_prompt
+        step_type: if(next_final?, do: "finish", else: "execute"),
+        prompt: if(next_final?, do: nil, else: next_prompt)
       })
 
     create_transition(user, human_step, next_step)
@@ -416,7 +421,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
                %StepExecution{
                  step_id: step_id,
                  step_name: "human_input",
-                 step_type: "human_input",
+                 step_type: :human_input,
                  status: "waiting",
                  output: nil,
                  prompt: "Approve Integration Task"
@@ -541,7 +546,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
     end
 
     test "valid human output can complete the workflow when the next step is final" do
-      %{user: user, project: project, task: task} =
+      %{user: user, project: _project, task: task} =
         setup_human_input_workflow(next_final?: true)
 
       pid = start_orchestrator(task, user)
@@ -552,8 +557,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
                HumanInput.resume(user.id, waiting_execution.id, %{"approved" => true})
 
       resumed_pid = wait_for_orchestrator(task.id)
-      wait_for_state(resumed_pid, :executing)
-      simulate_daemon_completion(task.id, project.id, "final step done")
+      assert is_pid(resumed_pid)
 
       wait_until(
         fn -> Repo.get!(Sacrum.Repo.Schemas.Task, task.id).completed_at != nil end,
@@ -637,7 +641,8 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
     end
 
     test "stop is idempotent and terminates the FSM" do
-      %{user: user, project: _project, task: task} = setup_linear_workflow(step_count: 1)
+      %{user: user, project: _project, task: task} =
+        setup_linear_workflow(step_count: 1, finish_last_step: false)
 
       pid = start_orchestrator(task, user)
       wait_for_state(pid, :executing)
@@ -655,7 +660,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
   describe "execution failure retry" do
     test "single failure inserts a fresh started execution and re-broadcasts run_step for the same step" do
       %{user: user, project: project, steps: [s1 | _], task: task} =
-        setup_linear_workflow(step_count: 1)
+        setup_linear_workflow(step_count: 1, finish_last_step: false)
 
       subscribe_project(project.id)
 
@@ -692,7 +697,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
 
     test "five consecutive failures exhaust retries: FSM goes :failed and no further run_step fires" do
       %{user: user, project: project, task: task} =
-        setup_linear_workflow(step_count: 1)
+        setup_linear_workflow(step_count: 1, finish_last_step: false)
 
       subscribe_project(project.id)
 
@@ -732,7 +737,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
     end
 
     test "successful completion resets the retry counter so the next step gets a full retry budget" do
-      %{user: user, project: project, steps: [s1, s2, _s3], task: task} =
+      %{user: user, project: project, steps: [s1, s2, s3], task: task} =
         setup_linear_workflow(step_count: 3)
 
       pid = start_orchestrator(task, user)
@@ -757,12 +762,11 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
       assert {:executing, _} = :sys.get_state(pid)
 
       simulate_daemon_completion(task.id, project.id, "step_2 done")
-
-      wait_for_state(pid, :executing)
-      simulate_daemon_completion(task.id, project.id, "step_3 done")
       wait_for_exit(pid)
 
-      assert Repo.get!(Sacrum.Repo.Schemas.Task, task.id).completed_at != nil
+      completed_task = Repo.get!(Sacrum.Repo.Schemas.Task, task.id)
+      assert completed_task.completed_at != nil
+      refute Enum.any?(executions_for_task(task.id), &(&1.step_id == s3.id))
     end
   end
 end

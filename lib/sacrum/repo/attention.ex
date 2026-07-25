@@ -90,7 +90,7 @@ defmodule Sacrum.Repo.Attention do
     base_query()
     |> where(
       [se, _t, _w, _p, ws],
-      ws.step_type == "wait_children" and se.status == "pending"
+      ws.step_type == :wait_children and se.status == "pending"
     )
     |> scope_query(project_id)
     |> Repo.all()

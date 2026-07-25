@@ -6,6 +6,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
   @type t :: %__MODULE__{}
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
+  @step_types [:execute, :evaluate, :route, :wait_children, :human_input, :finish]
 
   schema "workflow_steps" do
     field :name, :string
@@ -15,7 +16,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     field :agent_config, :map, default: %{}
     field :is_final, :boolean, default: false
     field :step_order, :integer
-    field :step_type, :string, default: "execute"
+    field :step_type, Ecto.Enum, values: @step_types, default: :execute
     field :prompt, :string
     field :output_schema, :map
     field :verbose_daemon_logging, :boolean, default: false
@@ -29,12 +30,16 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     timestamps(type: :utc_datetime_usec)
   end
 
-  @step_types ~w(execute evaluate route wait_children human_input)
   @create_fields ~w(name goal agents skills agent_config is_final step_order step_type prompt output_schema)a
   @update_fields ~w(name goal agents skills agent_config is_final step_order step_type prompt output_schema)a
 
-  @spec step_types() :: [String.t()]
+  @spec step_types() :: [atom()]
   def step_types, do: @step_types
+
+  @spec step_type_wire_value(atom() | String.t() | nil) :: String.t() | nil
+  def step_type_wire_value(nil), do: nil
+  def step_type_wire_value(step_type) when is_atom(step_type), do: Atom.to_string(step_type)
+  def step_type_wire_value(step_type), do: step_type
 
   @spec create_changeset(t(), map()) :: Ecto.Changeset.t()
   def create_changeset(step, attrs) do
@@ -42,7 +47,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     |> cast(attrs, @create_fields)
     |> validate_required([:name])
     |> validate_length(:name, min: 1, max: 255)
-    |> validate_inclusion(:step_type, @step_types)
+    |> validate_finish_step_prompt()
     |> validate_output_schema()
     |> validate_route_step_schema()
     |> foreign_key_constraint(:workflow_id)
@@ -54,12 +59,24 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     step
     |> cast(attrs, @update_fields)
     |> validate_length(:name, min: 1, max: 255)
-    |> validate_inclusion(:step_type, @step_types)
+    |> validate_finish_step_prompt()
     |> validate_output_schema()
     |> validate_route_step_schema()
   end
 
   # Private validation functions
+
+  defp validate_finish_step_prompt(changeset) do
+    if get_field(changeset, :step_type) == :finish and
+         nonblank_prompt?(get_field(changeset, :prompt)) do
+      add_error(changeset, :prompt, "must be blank for finish steps")
+    else
+      changeset
+    end
+  end
+
+  defp nonblank_prompt?(prompt) when is_binary(prompt), do: String.trim(prompt) != ""
+  defp nonblank_prompt?(_prompt), do: false
 
   defp validate_output_schema(changeset) do
     case get_field(changeset, :output_schema) do
@@ -132,7 +149,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     output_schema = get_field(changeset, :output_schema)
 
     case step_type do
-      "route" ->
+      :route ->
         if output_schema == nil do
           put_change(changeset, :output_schema, routing_contract_schema())
         else

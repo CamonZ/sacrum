@@ -9,7 +9,7 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
   alias Sacrum.Orchestrator.FSMData
   alias Sacrum.Orchestrator.TaskRuns.{Completion, Lookup}
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.{TaskRun, Workflow, WorkflowStep}
+  alias Sacrum.Repo.Schemas.{TaskRun, WorkflowStep}
   alias Sacrum.Tasks.Status
 
   @doc """
@@ -54,9 +54,9 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
   - `{:stop, :normal, data}` if the next step has no prompt
   - `{:next_state, :failed, data}` on error (nil step_id / not found)
 
-  `:completing` is reached only after the executed step's StepExecution reports
-  completed and the orchestrator finds no outgoing transitions; it is not a
-  shortcut for final steps at this decision point.
+  A finish destination is promptless and stops normally. The task has already
+  been marked complete by the step-transition changeset before this decision is
+  applied, so the finish step is never dispatched.
   """
   @spec determine_next_state(binary() | nil, FSMData.t()) ::
           {:next_state, atom(), FSMData.t()} | {:stop, atom(), FSMData.t()}
@@ -83,7 +83,7 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
         {:failed, {:step_not_found, next_step_id}}
 
       step ->
-        next_state_for_step(data.workflow, step, next_step_id)
+        next_state_for_step(step, next_step_id)
     end
   end
 
@@ -102,15 +102,15 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
   def prompted_step?(%{prompt: prompt}) when is_binary(prompt), do: String.trim(prompt) != ""
   def prompted_step?(_step), do: false
 
-  @spec next_state_for_step(Workflow.t() | struct(), WorkflowStep.t() | struct(), binary()) ::
-          {:next_state, :awaiting_execution | :completing} | {:stop, :normal, map()}
-  defp next_state_for_step(workflow, step, next_step_id) do
+  @spec next_state_for_step(WorkflowStep.t() | struct(), binary()) ::
+          {:next_state, :awaiting_execution} | {:stop, :normal, map()}
+  defp next_state_for_step(step, next_step_id) do
     cond do
+      step.step_type == :finish ->
+        {:stop, :normal, finish_step_completed_attrs(next_step_id)}
+
       prompted_step?(step) ->
         {:next_state, :awaiting_execution}
-
-      terminal_route_destination?(workflow, step) ->
-        {:next_state, :completing}
 
       true ->
         {:stop, :normal, promptless_step_completed_attrs(next_step_id)}
@@ -139,46 +139,15 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
     end
   end
 
-  @doc """
-  Returns true when a route destination is the final step of a final workflow.
-  """
-  @spec terminal_route_destination?(Workflow.t() | struct(), WorkflowStep.t()) :: boolean()
-  def terminal_route_destination?(%{is_final: true}, %WorkflowStep{is_final: true}), do: true
-  def terminal_route_destination?(_workflow, _step), do: false
-
-  @doc """
-  Stop decision attrs for terminal route completion.
-  """
-  @spec terminal_route_completed_attrs(binary()) :: map()
-  def terminal_route_completed_attrs(step_id) do
+  @spec finish_step_completed_attrs(binary()) :: map()
+  def finish_step_completed_attrs(step_id) do
     %{
       outcome_kind: "completed",
       outcome_context: %{
-        "reason" => "terminal_route",
+        "reason" => "finish_step",
         "current_step_id" => step_id
       }
     }
-  end
-
-  @doc """
-  Marks a routed terminal destination as a completed task and active run.
-
-  Call this inside the caller's route transaction after the route decision and
-  task movement have been persisted.
-  """
-  @spec complete_terminal_route(TaskRun.t() | nil, struct(), map()) ::
-          {:ok, map()} | {:error, term()}
-  def complete_terminal_route(task_run, task, changes) do
-    with {:ok, refreshed} <- Repo.update(completion_changeset(task)) do
-      maybe_mark_task_run_completed(
-        task_run,
-        terminal_route_completed_attrs(refreshed.current_step_id),
-        %{
-          changes
-          | task: refreshed
-        }
-      )
-    end
   end
 
   @spec completion_changeset(struct()) :: Ecto.Changeset.t()

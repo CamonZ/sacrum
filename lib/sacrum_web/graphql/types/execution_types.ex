@@ -14,6 +14,7 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
   alias Sacrum.Orchestrator.TaskRuns.Root
   alias Sacrum.Realtime.CommandBroadcaster
   alias Sacrum.Repo.Schemas.TaskRun
+  alias Sacrum.Repo.Schemas.WorkflowStep
   alias Sacrum.TaskRuns.Status, as: TaskRunStatus
   alias SacrumWeb.Graphql.ChangesetErrors
 
@@ -80,7 +81,13 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
     field :task_run_id, :id
     field :step_id, :id
     field :step_name, :string
-    field :step_type, :string
+
+    field :step_type, :string do
+      resolve(fn execution, _args, _resolution ->
+        {:ok, WorkflowStep.step_type_wire_value(execution.step_type)}
+      end)
+    end
+
     field :status, :string
     field :context, :json
     field :prompt, :string

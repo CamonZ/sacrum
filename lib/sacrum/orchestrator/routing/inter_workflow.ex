@@ -17,6 +17,8 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflow do
   alias Sacrum.Orchestrator.{FSMData, TaskCompletion, WorkflowGraph}
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{Task, Workflow, WorkflowStep, WorkflowTransition}
+  alias Sacrum.Repo.TaskWorkflows
+  alias Sacrum.Tasks.Status
 
   @doc """
   Routes to a destination workflow.
@@ -158,7 +160,7 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflow do
     with {:ok, target_step} <- resolve_target_step(dest_workflow, target_step_id) do
       {:ok,
        %{
-         changeset: Task.assign_workflow_changeset(task, dest_workflow.id, target_step.id),
+         changeset: destination_workflow_changeset(task, dest_workflow, target_step),
          target_step: target_step
        }}
     end
@@ -198,7 +200,7 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflow do
   @spec do_assign_destination_workflow(struct(), struct(), struct(), map() | nil) ::
           {:ok, struct()} | {:error, term()}
   def do_assign_destination_workflow(task, dest_workflow, target_step, handoff) do
-    changeset = Task.assign_workflow_changeset(task, dest_workflow.id, target_step.id)
+    changeset = destination_workflow_changeset(task, dest_workflow, target_step)
 
     case Repo.update(changeset) do
       {:ok, updated_task} ->
@@ -217,5 +219,12 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflow do
 
         {:error, changeset}
     end
+  end
+
+  defp destination_workflow_changeset(task, dest_workflow, target_step) do
+    task
+    |> Task.assign_workflow_changeset(dest_workflow.id, target_step.id)
+    |> TaskWorkflows.maybe_put_completed_at(target_step)
+    |> Status.put_status()
   end
 end

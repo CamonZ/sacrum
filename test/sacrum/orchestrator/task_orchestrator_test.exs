@@ -92,6 +92,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
   defp setup_linear_workflow(opts) do
     step_count = Keyword.get(opts, :step_count, 3)
+    finish_last_step = Keyword.get(opts, :finish_last_step, true)
 
     user = create_user()
     project = create_project(user)
@@ -100,7 +101,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     steps =
       for i <- 1..step_count do
         prompt =
-          if Keyword.get(opts, :promptless_after_first, false) and i > 1 do
+          if i == step_count or
+               (Keyword.get(opts, :promptless_after_first, false) and i > 1) do
             nil
           else
             "Run step for task {task_id}"
@@ -110,6 +112,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
           name: "step_#{i}",
           step_order: i,
           is_final: i == step_count,
+          step_type: if(i == step_count and finish_last_step, do: "finish", else: "execute"),
           prompt: prompt
         })
       end
@@ -276,29 +279,22 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
   # ===== Tests =====
 
   describe "single-step workflow" do
-    test "completes a single final step" do
-      %{user: user, project: project, task: task} =
+    test "completes a single finish step without dispatching it" do
+      %{user: user, project: _project, task: task} =
         setup_linear_workflow(step_count: 1)
 
       pid = start_orchestrator(task, user)
-      wait_for_state(pid, :executing)
-
-      simulate_daemon_completion(task.id, project.id)
       wait_for_exit(pid)
 
       task = reload_task(task)
       assert task.completed_at != nil
 
       executions = get_all_executions(task.id)
-      assert length(executions) == 1
-      execution = hd(executions)
-      assert execution.status == "completed"
-      assert execution.step_name == "step_1"
-      assert execution.task_run_id != nil
+      assert executions == []
 
-      task_run = Repo.get!(Sacrum.Repo.Schemas.TaskRun, execution.task_run_id)
+      task_run = latest_task_run(task.id)
       assert task_run.status == :completed
-      assert task_run.latest_step_execution_id == execution.id
+      assert task_run.latest_step_execution_id == nil
       assert %DateTime{} = task_run.ended_at
       assert {:error, :not_found} = Accounts.TaskRuns.get_active_for_task(user.id, task.id)
     end
@@ -321,24 +317,18 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       assert reload_task(task).current_step_id == s2.id
       simulate_daemon_completion(task.id, project.id, "step 2 done")
 
-      wait_for_state(pid, :executing)
-      assert reload_task(task).current_step_id == s3.id
-      simulate_daemon_completion(task.id, project.id, "step 3 done")
-
       wait_for_exit(pid)
 
       task = reload_task(task)
       assert task.completed_at != nil
+      assert task.current_step_id == s3.id
     end
 
-    test "creates step executions for each step including the final one" do
+    test "does not create a step execution for the finish destination" do
       %{user: user, project: project, task: task} =
         setup_linear_workflow(step_count: 3)
 
       pid = start_orchestrator(task, user)
-
-      wait_for_state(pid, :executing)
-      simulate_daemon_completion(task.id, project.id)
 
       wait_for_state(pid, :executing)
       simulate_daemon_completion(task.id, project.id)
@@ -353,7 +343,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
       assert "step_1" in step_names
       assert "step_2" in step_names
-      assert "step_3" in step_names
+      refute "step_3" in step_names
       assert Enum.all?(executions, &(&1.status == "completed"))
     end
 
@@ -371,16 +361,13 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       assert reload_task(task).current_step_id == s2.id
 
       simulate_daemon_completion(task.id, project.id)
-      wait_for_state(pid, :executing)
-      assert reload_task(task).current_step_id == s3.id
-
-      simulate_daemon_completion(task.id, project.id)
       wait_for_exit(pid)
+      assert reload_task(task).current_step_id == s3.id
     end
   end
 
-  describe "final step dispatch" do
-    test "prompted workflow dispatches the final step and only completes after its StepExecution finishes" do
+  describe "finish step routing" do
+    test "routes to finish and completes without dispatching the destination" do
       %{user: user, project: project, steps: [s1, _s2, s3], task: task} =
         setup_linear_workflow(step_count: 3)
 
@@ -392,24 +379,14 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
       wait_for_state(pid, :executing)
       simulate_daemon_completion(task.id, project.id, "s2 done")
-
-      wait_for_state(pid, :executing)
-      reloaded = reload_task(task)
-      assert reloaded.current_step_id == s3.id
-      assert reloaded.completed_at == nil
-
-      final_started = get_latest_started_execution(task.id)
-      assert final_started.step_id == s3.id
-      assert final_started.step_name == "step_3"
-
-      simulate_daemon_completion(task.id, project.id, "s3 done")
       wait_for_exit(pid)
 
       completed = reload_task(task)
+      assert completed.current_step_id == s3.id
       assert completed.completed_at != nil
 
       executions = get_all_executions(task.id)
-      assert Enum.map(executions, & &1.step_name) == ["step_1", "step_2", "step_3"]
+      assert Enum.map(executions, & &1.step_name) == ["step_1", "step_2"]
       assert Enum.all?(executions, &(&1.status == "completed"))
     end
 
@@ -430,8 +407,9 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "final_step",
           step_order: 2,
-          is_final: true,
-          step_type: "execute"
+          is_final: false,
+          step_type: "finish",
+          prompt: nil
         })
 
       create_transition(user, wait_step, final_step)
@@ -442,23 +420,13 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
       pid = start_orchestrator(parent_task, user)
 
-      wait_for_state(pid, :executing)
-      reloaded = reload_task(parent_task)
-      assert reloaded.current_step_id == final_step.id
-      assert reloaded.completed_at == nil
-
-      final_started = get_latest_started_execution(parent_task.id)
-      assert final_started.step_id == final_step.id
-      assert final_started.step_name == "final_step"
-
-      simulate_daemon_completion(parent_task.id, project.id, "final done")
       wait_for_exit(pid)
 
       completed = reload_task(parent_task)
+      assert completed.current_step_id == final_step.id
       assert completed.completed_at != nil
 
-      final_exec = Repo.get!(StepExecution, final_started.id)
-      assert final_exec.status == "completed"
+      refute Enum.any?(get_all_executions(parent_task.id), &(&1.step_id == final_step.id))
     end
   end
 
@@ -496,7 +464,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "done_sink",
           step_order: 2,
-          is_final: true,
+          is_final: false,
+          step_type: "finish",
           prompt: nil
         })
 
@@ -523,7 +492,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
   describe "PubSub filtering" do
     test "ignores status changes for other execution IDs" do
       %{user: user, project: project, task: task} =
-        setup_linear_workflow(step_count: 1)
+        setup_linear_workflow(step_count: 1, finish_last_step: false)
 
       pid = start_orchestrator(task, user)
       wait_for_state(pid, :executing)
@@ -1264,8 +1233,9 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "final_step",
           step_order: 3,
-          is_final: true,
-          step_type: "execute"
+          is_final: false,
+          step_type: "finish",
+          prompt: nil
         })
 
       create_transition(user, route_step, dest_step)
@@ -1304,16 +1274,13 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       assert String.contains?(dest_exec.prompt, "approved_by")
 
       simulate_daemon_completion(task.id, project.id, "dest step done")
-
-      wait_for_state(pid, :executing)
-      assert reload_task(task).current_step_id == final_step.id
-
-      simulate_daemon_completion(task.id, project.id, "final step done")
       wait_for_exit(pid)
 
       # Task completed
       task = reload_task(task)
+      assert task.current_step_id == final_step.id
       assert task.completed_at != nil
+      refute Enum.any?(get_all_executions(task.id), &(&1.step_id == final_step.id))
     end
 
     test "route step without handoff still allows destination execution" do
@@ -1341,8 +1308,9 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "final_step",
           step_order: 3,
-          is_final: true,
-          step_type: "execute"
+          is_final: false,
+          step_type: "finish",
+          prompt: nil
         })
 
       create_transition(user, route_step, dest_step)
@@ -1373,16 +1341,13 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       assert dest_exec.handoff == nil
 
       simulate_daemon_completion(task.id, project.id, "dest step done")
-
-      wait_for_state(pid, :executing)
-      assert reload_task(task).current_step_id == final_step.id
-
-      simulate_daemon_completion(task.id, project.id, "final step done")
       wait_for_exit(pid)
 
       # Task completed
       task = reload_task(task)
+      assert task.current_step_id == final_step.id
       assert task.completed_at != nil
+      refute Enum.any?(get_all_executions(task.id), &(&1.step_id == final_step.id))
     end
   end
 
@@ -1812,7 +1777,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       import ExUnit.CaptureLog
 
       %{user: user, project: project, task: task} =
-        setup_linear_workflow(step_count: 1)
+        setup_linear_workflow(step_count: 1, finish_last_step: false)
 
       logs =
         capture_log(fn ->
@@ -1930,7 +1895,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
     test "failure log line includes the attempt counter" do
       %{user: user, project: project, task: task} =
-        setup_linear_workflow(step_count: 1)
+        setup_linear_workflow(step_count: 1, finish_last_step: false)
 
       pid = start_orchestrator(task, user)
       wait_for_state(pid, :executing)
@@ -1950,7 +1915,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       on_exit(fn -> Logger.configure(level: prev_level) end)
 
       %{user: user, project: project, task: task} =
-        setup_linear_workflow(step_count: 1)
+        setup_linear_workflow(step_count: 1, finish_last_step: false)
 
       pid = start_orchestrator(task, user)
       wait_for_state(pid, :executing)
@@ -2957,7 +2922,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
           from(e in StepExecution,
             where:
               e.task_id == ^parent_task.id and
-                e.step_type == "wait_children" and
+                e.step_type == :wait_children and
                 e.status == "completed",
             limit: 1
           )
@@ -2999,7 +2964,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
       assert length(waiting_executions) == 1
       waiting_exec = hd(waiting_executions)
-      assert waiting_exec.step_type == "wait_children"
+      assert waiting_exec.step_type == :wait_children
       assert waiting_exec.handoff["child_ids"] == [child_task.id]
 
       {:ok, parent_run} = Accounts.TaskRuns.get_active_for_task(user.id, parent_task.id)
