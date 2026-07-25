@@ -9,6 +9,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
   alias Sacrum.Orchestrator.TaskOrchestrator
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{StepExecution, TaskRun}
+  alias Sacrum.Repo.TaskDependencies
 
   # ===== Setup helpers =====
 
@@ -367,6 +368,28 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
   end
 
   describe "finish step routing" do
+    test "notifies dependents when a prompted step transitions into finish" do
+      %{user: user, project: project, task: task} = setup_linear_workflow(step_count: 2)
+      dependent_workflow = create_workflow(user, project, name: "Dependent Workflow")
+      dependent_step = create_step(user, dependent_workflow, %{name: "dependent_step"})
+
+      {:ok, _} =
+        Accounts.Workflows.update(dependent_workflow, %{initial_step_id: dependent_step.id})
+
+      dependent = create_task(user, project) |> assign_workflow_to_task(dependent_workflow)
+      {:ok, _dependency} = TaskDependencies.add_dependency(dependent, task)
+
+      pid = start_orchestrator(task, user)
+      wait_for_state(pid, :executing)
+      simulate_daemon_completion(task.id, project.id)
+      wait_for_exit(pid)
+
+      assert [{dependent_pid, _}] =
+               Registry.lookup(Sacrum.Orchestrator.TaskRegistry, dependent.id)
+
+      Process.exit(dependent_pid, :shutdown)
+    end
+
     test "routes to finish and completes without dispatching the destination" do
       %{user: user, project: project, steps: [s1, _s2, s3], task: task} =
         setup_linear_workflow(step_count: 3)
