@@ -42,7 +42,6 @@ defmodule Sacrum.Orchestrator.Routing.IntraWorkflowTest do
     default_attrs = %{
       "name" => "Test Step",
       "step_order" => 1,
-      "is_final" => false,
       "agents" => ["test"],
       "skills" => ["test_skill"],
       "agent_config" => %{"model" => "test-model"},
@@ -256,7 +255,7 @@ defmodule Sacrum.Orchestrator.Routing.IntraWorkflowTest do
       from_step = create_step(user, workflow, %{"name" => "from", "step_order" => 1})
 
       to_step =
-        create_step(user, workflow, %{"name" => "to", "step_order" => 2, "is_final" => false})
+        create_step(user, workflow, %{"name" => "to", "step_order" => 2})
 
       task = create_task(user, project, workflow)
 

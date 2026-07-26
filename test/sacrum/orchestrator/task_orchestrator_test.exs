@@ -32,8 +32,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
   defp create_workflow(user, project, opts \\ []) do
     {:ok, workflow} =
       Accounts.Workflows.insert(user.id, project.id, %{
-        name: Keyword.get(opts, :name, "Test Workflow"),
-        is_final: Keyword.get(opts, :is_final, false)
+        name: Keyword.get(opts, :name, "Test Workflow")
       })
 
     workflow
@@ -43,7 +42,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     default_attrs = %{
       "name" => "Test Step",
       "step_order" => 1,
-      "is_final" => false,
       "agents" => ["test"],
       "skills" => ["test_skill"],
       "agent_config" => %{"model" => "test-model"},
@@ -112,7 +110,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "step_#{i}",
           step_order: i,
-          is_final: i == step_count,
           step_type: if(i == step_count and finish_last_step, do: "finish", else: "execute"),
           prompt: prompt
         })
@@ -422,7 +419,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "wait_step",
           step_order: 1,
-          is_final: false,
           step_type: "wait_children"
         })
 
@@ -430,7 +426,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "final_step",
           step_order: 2,
-          is_final: false,
           step_type: "finish",
           prompt: nil
         })
@@ -473,13 +468,12 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     test "completes at a promptless final sink step in a final workflow without executing it" do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, is_final: true)
+      workflow = create_workflow(user, project)
 
       active_step =
         create_step(user, workflow, %{
           name: "active_step",
           step_order: 1,
-          is_final: false,
           prompt: "Run active step"
         })
 
@@ -487,7 +481,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "done_sink",
           step_order: 2,
-          is_final: false,
           step_type: "finish",
           prompt: nil
         })
@@ -547,7 +540,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "route_step",
           step_order: 1,
-          is_final: false,
           step_type: "route"
         })
 
@@ -555,7 +547,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "dest_step",
           step_order: 2,
-          is_final: false,
           step_type: "execute",
           prompt: nil
         })
@@ -564,7 +555,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "other_step",
           step_order: 3,
-          is_final: true,
           step_type: "execute"
         })
 
@@ -610,7 +600,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "route_step",
           step_order: 1,
-          is_final: false,
           step_type: "route"
         })
 
@@ -618,7 +607,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "dest_step",
           step_order: 2,
-          is_final: true,
           step_type: "execute"
         })
 
@@ -664,7 +652,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow1, %{
           name: "route_step",
           step_order: 1,
-          is_final: false,
           step_type: "route"
         })
 
@@ -677,7 +664,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow2, %{
           name: "step2_1",
           step_order: 1,
-          is_final: false,
           step_type: "execute",
           prompt: nil
         })
@@ -686,7 +672,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow2, %{
           name: "step2_2",
           step_order: 2,
-          is_final: true,
           step_type: "execute",
           prompt: nil
         })
@@ -739,7 +724,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow1, %{
           name: "route_step",
           step_order: 1,
-          is_final: false,
           step_type: "route"
         })
 
@@ -752,7 +736,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow2, %{
           name: "step2_1",
           step_order: 1,
-          is_final: false,
           step_type: "execute"
         })
 
@@ -760,7 +743,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow2, %{
           name: "step2_2",
           step_order: 2,
-          is_final: true,
           step_type: "execute",
           prompt: nil
         })
@@ -814,7 +796,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user1, workflow1, %{
           name: "route_step",
           step_order: 1,
-          is_final: false,
           step_type: "route"
         })
 
@@ -827,7 +808,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user2, workflow2, %{
           name: "step2",
           step_order: 1,
-          is_final: true,
           step_type: "execute"
         })
 
@@ -866,7 +846,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow1, %{
           name: "route_step",
           step_order: 1,
-          is_final: false,
           step_type: "route"
         })
 
@@ -878,7 +857,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow2, %{
           name: "step2",
           step_order: 1,
-          is_final: true,
           step_type: "execute"
         })
 
@@ -921,7 +899,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "route_step",
           step_order: 1,
-          is_final: false,
           step_type: "route"
         })
 
@@ -929,7 +906,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "dest_step",
           step_order: 2,
-          is_final: true,
           step_type: "execute",
           prompt: nil
         })
@@ -977,7 +953,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "route_step",
           step_order: 1,
-          is_final: false,
           step_type: "route"
         })
 
@@ -985,7 +960,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "dest_step",
           step_order: 2,
-          is_final: true,
           step_type: "execute",
           prompt: nil
         })
@@ -1020,7 +994,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "route_step",
           step_order: 1,
-          is_final: false,
           step_type: "route",
           output_schema: route_schema_with_handoff(["data"])
         })
@@ -1029,7 +1002,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "dest_step",
           step_order: 2,
-          is_final: true,
           step_type: "execute",
           prompt: nil
         })
@@ -1070,7 +1042,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "route_step",
           step_order: 1,
-          is_final: false,
           step_type: "route"
         })
 
@@ -1078,7 +1049,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "dest_step",
           step_order: 2,
-          is_final: true,
           step_type: "execute",
           prompt: nil
         })
@@ -1118,7 +1088,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "route_step",
           step_order: 1,
-          is_final: false,
           step_type: "route",
           output_schema: route_schema_with_handoff(["data"])
         })
@@ -1127,7 +1096,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "dest_step",
           step_order: 2,
-          is_final: true,
           step_type: "execute",
           prompt: nil
         })
@@ -1170,7 +1138,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "eval_step",
           step_order: 1,
-          is_final: false,
           step_type: "evaluate",
           prompt: "Evaluate the task"
         })
@@ -1179,7 +1146,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "dest_step",
           step_order: 2,
-          is_final: false,
           step_type: "execute",
           prompt: "Consider eval output: {{ execution.previous_output }}"
         })
@@ -1188,7 +1154,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "final_step",
           step_order: 3,
-          is_final: true,
           step_type: "execute",
           prompt: nil
         })
@@ -1237,7 +1202,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "route_step",
           step_order: 1,
-          is_final: false,
           step_type: "route",
           output_schema: route_schema_with_handoff(["approved_by", "priority"]),
           prompt: "Route the task"
@@ -1247,7 +1211,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "dest_step",
           step_order: 2,
-          is_final: false,
           step_type: "execute",
           prompt: "Handoff context: {{ execution.handoff | json_encode }}"
         })
@@ -1256,7 +1219,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "final_step",
           step_order: 3,
-          is_final: false,
           step_type: "finish",
           prompt: nil
         })
@@ -1315,7 +1277,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "route_step",
           step_order: 1,
-          is_final: false,
           step_type: "route"
         })
 
@@ -1323,7 +1284,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "dest_step",
           step_order: 2,
-          is_final: false,
           step_type: "execute"
         })
 
@@ -1331,7 +1291,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "final_step",
           step_order: 3,
-          is_final: false,
           step_type: "finish",
           prompt: nil
         })
@@ -1386,7 +1345,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow1, %{
           name: "route_step",
           step_order: 1,
-          is_final: true,
           step_type: "route",
           output_schema: route_schema_with_handoff(["transferred_from", "data"]),
           prompt: "Route to workflow 2"
@@ -1401,7 +1359,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow2, %{
           name: "dest_step",
           step_order: 1,
-          is_final: false,
           step_type: "execute",
           prompt: "Received handoff: {{ execution.handoff | json_encode }}"
         })
@@ -1410,7 +1367,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow2, %{
           name: "final_step",
           step_order: 2,
-          is_final: true,
           step_type: "execute"
         })
 
@@ -1474,7 +1430,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow1, %{
           name: "route_step",
           step_order: 1,
-          is_final: true,
           step_type: "route",
           output_schema: route_schema_with_handoff(["cross_workflow"])
         })
@@ -1488,7 +1443,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow2, %{
           name: "dest_step_1",
           step_order: 1,
-          is_final: false,
           step_type: "execute"
         })
 
@@ -1496,7 +1450,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow2, %{
           name: "dest_step_2",
           step_order: 2,
-          is_final: false,
           step_type: "execute",
           prompt: "Handoff context: {{ execution.handoff | json_encode }}"
         })
@@ -1505,7 +1458,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow2, %{
           name: "final_step",
           step_order: 3,
-          is_final: true,
           step_type: "execute"
         })
 
@@ -1569,7 +1521,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "route_step",
           step_order: 1,
-          is_final: false,
           step_type: "route",
           output_schema: route_schema_with_handoff(["data"])
         })
@@ -1578,7 +1529,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "dest_step",
           step_order: 2,
-          is_final: true,
           step_type: "execute",
           prompt: nil
         })
@@ -1632,7 +1582,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow1, %{
           name: "route_step",
           step_order: 1,
-          is_final: true,
           step_type: "route"
         })
 
@@ -1645,7 +1594,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow2, %{
           name: "dest_step",
           step_order: 1,
-          is_final: true,
           step_type: "execute",
           prompt: nil
         })
@@ -1707,7 +1655,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "route_step",
           step_order: 1,
-          is_final: false,
           step_type: "route"
         })
 
@@ -1715,7 +1662,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "dest_step",
           step_order: 2,
-          is_final: true,
           step_type: "execute",
           prompt: nil
         })
@@ -1760,7 +1706,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "route_step",
           step_order: 1,
-          is_final: true,
           step_type: "route"
         })
 
@@ -1824,7 +1769,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "route_step",
           step_order: 1,
-          is_final: false,
           step_type: "route",
           output_schema: route_schema_with_handoff(["feedback"])
         })
@@ -1833,7 +1777,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "dest_step",
           step_order: 2,
-          is_final: true,
           step_type: "execute",
           prompt: nil
         })
@@ -1877,7 +1820,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "route_step",
           step_order: 1,
-          is_final: false,
           step_type: "route"
         })
 
@@ -1885,7 +1827,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "dest_step",
           step_order: 2,
-          is_final: true,
           step_type: "execute"
         })
 
@@ -1958,8 +1899,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       create_step(user, workflow, %{
         name: "wait_children",
         step_order: 1,
-        step_type: "wait_children",
-        is_final: false
+        step_type: "wait_children"
       })
     end
 
@@ -1985,7 +1925,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "final_step",
           step_order: 2,
-          is_final: true,
           prompt: nil
         })
 
@@ -2018,7 +1957,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "final_step",
           step_order: 2,
-          is_final: true,
           prompt: nil
         })
 
@@ -2036,8 +1974,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       child_step_1 =
         create_step(user, child_workflow_1, %{
           name: "child_step_1",
-          step_order: 1,
-          is_final: true
+          step_order: 1
         })
 
       {:ok, _} = Accounts.Workflows.update(child_workflow_1, %{initial_step_id: child_step_1.id})
@@ -2050,8 +1987,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       child_step_2 =
         create_step(user, child_workflow_2, %{
           name: "child_step_2",
-          step_order: 1,
-          is_final: true
+          step_order: 1
         })
 
       {:ok, _} = Accounts.Workflows.update(child_workflow_2, %{initial_step_id: child_step_2.id})
@@ -2102,7 +2038,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "final_step",
           step_order: 2,
-          is_final: true,
           prompt: nil
         })
 
@@ -2119,8 +2054,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, child_workflow, %{
           name: "child_step",
           step_order: 1,
-          step_type: "human_input",
-          is_final: true
+          step_type: "human_input"
         })
 
       {:ok, _} = Accounts.Workflows.update(child_workflow, %{initial_step_id: child_step.id})
@@ -2152,7 +2086,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "final_step",
           step_order: 2,
-          is_final: true,
           prompt: nil
         })
 
@@ -2169,8 +2102,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       child_step_1 =
         create_step(user, child_workflow_1, %{
           name: "child_step_1",
-          step_order: 1,
-          is_final: true
+          step_order: 1
         })
 
       {:ok, _} = Accounts.Workflows.update(child_workflow_1, %{initial_step_id: child_step_1.id})
@@ -2183,8 +2115,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       child_step_2 =
         create_step(user, child_workflow_2, %{
           name: "child_step_2",
-          step_order: 1,
-          is_final: true
+          step_order: 1
         })
 
       {:ok, _} = Accounts.Workflows.update(child_workflow_2, %{initial_step_id: child_step_2.id})
@@ -2223,8 +2154,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       final_step =
         create_step(user, workflow, %{
           name: "final_step",
-          step_order: 2,
-          is_final: true
+          step_order: 2
         })
 
       create_transition(user, wait_step, final_step)
@@ -2240,8 +2170,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       child_step =
         create_step(user, child_workflow, %{
           name: "child_step",
-          step_order: 1,
-          is_final: true
+          step_order: 1
         })
 
       {:ok, _} = Accounts.Workflows.update(child_workflow, %{initial_step_id: child_step.id})
@@ -2291,8 +2220,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       final_step =
         create_step(user, workflow, %{
           name: "final_step",
-          step_order: 2,
-          is_final: true
+          step_order: 2
         })
 
       create_transition(user, wait_step, final_step)
@@ -2308,8 +2236,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       child_step =
         create_step(user, child_workflow, %{
           name: "child_step",
-          step_order: 1,
-          is_final: true
+          step_order: 1
         })
 
       {:ok, _} = Accounts.Workflows.update(child_workflow, %{initial_step_id: child_step.id})
@@ -2368,8 +2295,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       step =
         create_step(user, workflow, %{
           name: "step",
-          step_order: 1,
-          is_final: true
+          step_order: 1
         })
 
       {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: step.id})
@@ -2414,8 +2340,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       parent_final_step =
         create_step(user, parent_workflow, %{
           name: "parent_final",
-          step_order: 2,
-          is_final: true
+          step_order: 2
         })
 
       create_transition(user, parent_wait_step, parent_final_step)
@@ -2434,8 +2359,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       child_final_step =
         create_step(user, child_workflow, %{
           name: "child_final",
-          step_order: 2,
-          is_final: true
+          step_order: 2
         })
 
       create_transition(user, child_wait_step, child_final_step)
@@ -2453,8 +2377,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       leaf_step =
         create_step(user, leaf_workflow, %{
           name: "leaf_step",
-          step_order: 1,
-          is_final: true
+          step_order: 1
         })
 
       {:ok, _} = Accounts.Workflows.update(leaf_workflow, %{initial_step_id: leaf_step.id})
@@ -2560,8 +2483,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       final_step =
         create_step(user, workflow, %{
           name: "final_step",
-          step_order: 2,
-          is_final: true
+          step_order: 2
         })
 
       create_transition(user, wait_step, final_step)
@@ -2576,8 +2498,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       child_step =
         create_step(user, child_workflow, %{
           name: "child_step",
-          step_order: 1,
-          is_final: true
+          step_order: 1
         })
 
       {:ok, _} = Accounts.Workflows.update(child_workflow, %{initial_step_id: child_step.id})
@@ -2624,8 +2545,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       final_step =
         create_step(user, workflow, %{
           name: "final_step",
-          step_order: 2,
-          is_final: true
+          step_order: 2
         })
 
       create_transition(user, wait_step, final_step)
@@ -2640,8 +2560,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       child_step =
         create_step(user, child_workflow, %{
           name: "child_step",
-          step_order: 1,
-          is_final: true
+          step_order: 1
         })
 
       {:ok, _} = Accounts.Workflows.update(child_workflow, %{initial_step_id: child_step.id})
@@ -2687,7 +2606,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "final_step",
           step_order: 2,
-          is_final: true,
           prompt: nil
         })
 
@@ -2703,8 +2621,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       child_step_1 =
         create_step(user, child_workflow_1, %{
           name: "child_step_1",
-          step_order: 1,
-          is_final: true
+          step_order: 1
         })
 
       {:ok, _} = Accounts.Workflows.update(child_workflow_1, %{initial_step_id: child_step_1.id})
@@ -2770,8 +2687,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       final_step =
         create_step(user, workflow, %{
           name: "final_step",
-          step_order: 2,
-          is_final: true
+          step_order: 2
         })
 
       create_transition(user, wait_step, final_step)
@@ -2786,8 +2702,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       child_step_1 =
         create_step(user, child_workflow_1, %{
           name: "child_step_1",
-          step_order: 1,
-          is_final: true
+          step_order: 1
         })
 
       {:ok, _} = Accounts.Workflows.update(child_workflow_1, %{initial_step_id: child_step_1.id})
@@ -2832,8 +2747,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       source_step =
         create_step(user, source_workflow, %{
           name: "source_step",
-          step_order: 1,
-          is_final: false
+          step_order: 1
         })
 
       {:ok, _} = Accounts.Workflows.update(source_workflow, %{initial_step_id: source_step.id})
@@ -2843,8 +2757,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       dest_step =
         create_step(user, dest_workflow, %{
           name: "dest_step",
-          step_order: 1,
-          is_final: true
+          step_order: 1
         })
 
       {:ok, _} = Accounts.Workflows.update(dest_workflow, %{initial_step_id: dest_step.id})
@@ -2860,8 +2773,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, source_workflow, %{
           name: "route_step",
           step_order: 2,
-          step_type: "route",
-          is_final: false
+          step_type: "route"
         })
 
       create_transition(user, source_step, route_step)
@@ -2966,8 +2878,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       child_step =
         create_step(user, child_workflow, %{
           name: "child_step",
-          step_order: 1,
-          is_final: true
+          step_order: 1
         })
 
       {:ok, _} = Accounts.Workflows.update(child_workflow, %{initial_step_id: child_step.id})
@@ -3062,8 +2973,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       child_step =
         create_step(user, child_workflow, %{
           name: "child_step",
-          step_order: 1,
-          is_final: true
+          step_order: 1
         })
 
       {:ok, _} = Accounts.Workflows.update(child_workflow, %{initial_step_id: child_step.id})

@@ -40,7 +40,6 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       assert step.skills == ["code-review"]
       assert step.agent_config == %{"timeout" => 300}
       assert step.step_order == 1
-      assert step.is_final == false
       assert step.workflow_id == workflow.id
     end
 
@@ -171,11 +170,10 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       {:ok, step} = WorkflowSteps.insert(workflow, @valid_attrs)
 
       assert {:ok, updated} =
-               WorkflowSteps.update(step, %{name: "Updated", goal: "New goal", is_final: true})
+               WorkflowSteps.update(step, %{name: "Updated", goal: "New goal"})
 
       assert updated.name == "Updated"
       assert updated.goal == "New goal"
-      assert updated.is_final == true
     end
 
     test "updates step_type" do

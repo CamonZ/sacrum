@@ -35,7 +35,6 @@ defmodule Sacrum.Orchestrator.SchedulerTest do
     default_attrs = %{
       "name" => "Test Step",
       "step_order" => 1,
-      "is_final" => true,
       "agents" => ["test"],
       "skills" => ["test_skill"],
       "agent_config" => %{"model" => "test-model"},

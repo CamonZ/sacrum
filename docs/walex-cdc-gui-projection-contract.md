@@ -49,7 +49,7 @@ instead of silently applying a payload with an unsupported shape.
 | `task_parent_changed` | Semantic delta | `tasks` update with before/after `parent_id`. | `{task_id, project_id, from_parent_id, to_parent_id, level}`. Gives tree stores the exact parent move while `task_updated` carries the full task row. |
 | `task_dependency_created` | Relation change | `task_dependencies` insert after image. | Full dependency edge row: `id`, `task_id`, `depends_on_id`, `project_id`, timestamps. |
 | `task_dependency_deleted` | Relation change | `task_dependencies` delete before image. | Full dependency edge tombstone with `id`, `task_id`, `depends_on_id`, `project_id`, timestamps. |
-| `workflow_created` | Entity projection | `workflows` insert after image. | Full workflow row including default/final flags, ordering, metadata, `initial_step_id`, `kanban_column`, and `project_id`. |
+| `workflow_created` | Entity projection | `workflows` insert after image. | Full workflow row including default state, ordering, metadata, `initial_step_id`, `kanban_column`, and `project_id`. |
 | `workflow_updated` | Entity projection | `workflows` update after image. | Same full workflow row for graph/list replacement. |
 | `workflow_deleted` | Entity projection | `workflows` delete before image. | `{id}` tombstone scoped by the project channel. |
 | `step_created` | Entity projection | `workflow_steps` insert after image. | Full step row including prompt, output schema, step type, agent config, daemon logging flag, `workflow_id`, and `project_id`. |

@@ -64,7 +64,7 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
     workflow = create_workflow(project)
     step1 = create_step(workflow, %{name: "backlog", step_order: 1})
     step2 = create_step(workflow, %{name: "in_progress", step_order: 2})
-    step3 = create_step(workflow, %{name: "done", step_order: 3, is_final: true})
+    step3 = create_step(workflow, %{name: "done", step_order: 3})
 
     # Set initial step
     {:ok, workflow} = Workflows.update(workflow, %{initial_step_id: step1.id})
@@ -429,7 +429,7 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
 
       # Create additional steps to mimic workflow
       step2 = create_step(default_workflow, %{name: "in_progress", step_order: 2})
-      step3 = create_step(default_workflow, %{name: "done", step_order: 3, is_final: true})
+      step3 = create_step(default_workflow, %{name: "done", step_order: 3})
 
       create_transition(default_backlog_step, step2)
       create_transition(step2, step3)
@@ -558,11 +558,11 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
       assert assigned.status == "done"
     end
 
-    test "assign_workflow ignores workflow and step is_final flags for non-finish steps" do
+    test "assign_workflow does not complete non-finish steps" do
       user = create_user()
       project = create_project(user)
-      {:ok, workflow} = Workflows.insert(project, %{name: "Terminal Workflow", is_final: true})
-      step = create_step(workflow, %{name: "review", step_order: 1, is_final: false})
+      {:ok, workflow} = Workflows.insert(project, %{name: "Terminal Workflow"})
+      step = create_step(workflow, %{name: "review", step_order: 1})
       {:ok, workflow} = Workflows.update(workflow, %{initial_step_id: step.id})
       task = create_task(project)
 
@@ -572,11 +572,11 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
       assert assigned.status == "ready"
     end
 
-    test "assign_workflow does not stamp completed_at for an is_final step without finish type" do
+    test "assign_workflow does not complete execute steps" do
       user = create_user()
       project = create_project(user)
       workflow = create_workflow(project)
-      step = create_step(workflow, %{name: "done", step_order: 1, is_final: true})
+      step = create_step(workflow, %{name: "done", step_order: 1})
       {:ok, workflow} = Workflows.update(workflow, %{initial_step_id: step.id})
       task = create_task(project)
 

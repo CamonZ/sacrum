@@ -40,7 +40,6 @@ defmodule Sacrum.Repo.AttentionTest do
         WorkflowSteps.insert(workflow, %{
           name: "Final Step",
           step_type: "execute",
-          is_final: true,
           step_order: 3
         })
 

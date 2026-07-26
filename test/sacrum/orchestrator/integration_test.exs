@@ -54,7 +54,6 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
     default_attrs = %{
       "name" => "step",
       "step_order" => 1,
-      "is_final" => false,
       "agents" => ["test"],
       "skills" => ["test_skill"],
       "agent_config" => %{"model" => "test-model"},
@@ -103,7 +102,6 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
         create_step(user, workflow, %{
           name: "step_#{i}",
           step_order: i,
-          is_final: i == step_count,
           step_type: if(i == step_count and finish_last_step, do: "finish", else: "execute"),
           prompt:
             if(i == step_count and finish_last_step, do: nil, else: "Run step for task {task_id}")
@@ -153,7 +151,6 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
       create_step(user, workflow, %{
         name: "after_human_input",
         step_order: 2,
-        is_final: next_final?,
         step_type: if(next_final?, do: "finish", else: "execute"),
         prompt: if(next_final?, do: nil, else: next_prompt)
       })

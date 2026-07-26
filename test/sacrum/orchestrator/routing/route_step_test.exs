@@ -43,7 +43,6 @@ defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
     default_attrs = %{
       "name" => "Test Step",
       "step_order" => 1,
-      "is_final" => false,
       "agents" => ["test"],
       "skills" => ["test_skill"],
       "agent_config" => %{"model" => "test-model"},
@@ -128,7 +127,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
       current_step = create_step(user, workflow, %{"name" => "step_1", "step_order" => 1})
 
       next_step =
-        create_step(user, workflow, %{"name" => "step_2", "step_order" => 2, "is_final" => false})
+        create_step(user, workflow, %{"name" => "step_2", "step_order" => 2})
 
       create_transition(user, current_step, next_step)
 
@@ -201,7 +200,6 @@ defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
         create_step(user, workflow, %{
           "name" => "manual_review",
           "step_order" => 2,
-          "is_final" => false,
           "prompt" => nil
         })
 
@@ -276,7 +274,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
     } do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, %{is_final: true})
+      workflow = create_workflow(user, project, %{})
       dependent_workflow = create_workflow(user, project, %{name: "Dependent Workflow"})
 
       current_step = create_step(user, workflow, %{"name" => "route_step", "step_order" => 1})
@@ -285,7 +283,6 @@ defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
         create_step(user, workflow, %{
           "name" => "done",
           "step_order" => 2,
-          "is_final" => false,
           "step_type" => "finish",
           "prompt" => nil
         })
@@ -440,14 +437,13 @@ defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
       user = create_user()
       project = create_project(user)
       from_workflow = create_workflow(user, project, %{name: "From Workflow"})
-      done_workflow = create_workflow(user, project, %{name: "Done", is_final: true})
+      done_workflow = create_workflow(user, project, %{name: "Done"})
 
       from_step = create_step(user, from_workflow, %{"name" => "route_step"})
 
       done_step =
         create_step(user, done_workflow, %{
           "name" => "done",
-          "is_final" => false,
           "step_type" => "finish",
           "prompt" => nil
         })
@@ -511,7 +507,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
       user = create_user()
       project = create_project(user)
       from_workflow = create_workflow(user, project, %{name: "From Workflow"})
-      done_workflow = create_workflow(user, project, %{name: "Done", is_final: true})
+      done_workflow = create_workflow(user, project, %{name: "Done"})
       dependent_workflow = create_workflow(user, project, %{name: "Dependent Workflow"})
 
       from_step = create_step(user, from_workflow, %{"name" => "route_step"})
@@ -519,7 +515,6 @@ defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
       done_step =
         create_step(user, done_workflow, %{
           "name" => "done",
-          "is_final" => false,
           "step_type" => "finish",
           "prompt" => nil
         })
@@ -588,14 +583,13 @@ defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
       user = create_user()
       project = create_project(user)
       from_workflow = create_workflow(user, project, %{name: "From Workflow"})
-      to_workflow = create_workflow(user, project, %{name: "To Workflow", is_final: true})
+      to_workflow = create_workflow(user, project, %{name: "To Workflow"})
 
       from_step = create_step(user, from_workflow, %{"name" => "route_step"})
 
       to_step =
         create_step(user, to_workflow, %{
           "name" => "review",
-          "is_final" => false,
           "prompt" => nil
         })
 

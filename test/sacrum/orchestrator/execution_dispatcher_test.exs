@@ -33,7 +33,6 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
     default_attrs = %{
       "name" => "Test Step",
       "step_order" => 1,
-      "is_final" => false,
       "agents" => ["test"],
       "skills" => ["test_skill"],
       "agent_config" => %{"model" => "test-model"},

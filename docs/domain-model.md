@@ -109,8 +109,8 @@ The API is exposed via **GraphQL** at `/graphql` (GraphiQL playground available 
 **`workflow_step_type.ex`** — 4 mutations (all via `Accounts.WorkflowSteps`)
 | Mutation | Arguments | Returns |
 |----------|-----------|---------|
-| `createWorkflowStep` | `workflow_id!`, `name!`, `goal`, `agents`, `skills`, `agent_config`, `is_final`, `step_order` | `:workflow_step` |
-| `updateWorkflowStep` | `id!`, `name`, `goal`, `agents`, `skills`, `agent_config`, `is_final`, `step_order` | `:workflow_step` |
+| `createWorkflowStep` | `workflow_id!`, `name!`, `goal`, `agents`, `skills`, `agent_config`, `step_order` | `:workflow_step` |
+| `updateWorkflowStep` | `id!`, `name`, `goal`, `agents`, `skills`, `agent_config`, `step_order` | `:workflow_step` |
 | `deleteWorkflowStep` | `id!` | `:workflow_step` |
 | `syncStepTransitions` | `id!`, `transitions!` (list of `StepTransitionInput`) | `:workflow_step` |
 

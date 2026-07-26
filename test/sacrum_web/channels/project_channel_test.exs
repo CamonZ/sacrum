@@ -789,7 +789,6 @@ defmodule SacrumWeb.ProjectChannelTest do
       refute Map.has_key?(payload, :status)
       refute Map.has_key?(payload, :goal)
       refute Map.has_key?(payload, :auto_advance)
-      refute Map.has_key?(payload, :is_final)
       refute Map.has_key?(payload, :transitions)
     end
 
@@ -1034,7 +1033,6 @@ defmodule SacrumWeb.ProjectChannelTest do
       name: "Test Workflow",
       description: "A workflow",
       is_default: false,
-      is_final: false,
       display_order: 1,
       metadata: %{},
       initial_step_id: nil,
@@ -1127,7 +1125,6 @@ defmodule SacrumWeb.ProjectChannelTest do
       agents: ["test_agent"],
       skills: ["skill1"],
       agent_config: %{},
-      is_final: false,
       step_order: 1,
       step_type: "execute",
       workflow_id: Ecto.UUID.generate(),

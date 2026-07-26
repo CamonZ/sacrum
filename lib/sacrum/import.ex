@@ -259,7 +259,6 @@ defmodule Sacrum.Import do
         "goal" => step_data["goal"],
         "agents" => step_data["agents"] || [],
         "skills" => step_data["skills"] || [],
-        "is_final" => step_data["is_final"] || false,
         "step_order" => step_data["order"]
       }
 

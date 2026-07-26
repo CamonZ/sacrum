@@ -207,8 +207,7 @@ defmodule Sacrum.Repo.TaskWorkflows do
   @doc """
   Stamps task completion when a task enters a finish step.
 
-  The change is idempotent and intentionally does not inspect workflow or step
-  `is_final` metadata.
+  The change is idempotent and depends only on the step type.
   """
   @spec maybe_put_completed_at(Ecto.Changeset.t(), WorkflowStep.t()) :: Ecto.Changeset.t()
   def maybe_put_completed_at(changeset, %WorkflowStep{step_type: :finish}) do

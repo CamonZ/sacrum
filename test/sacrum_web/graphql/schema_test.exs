@@ -2129,8 +2129,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
               name: "Step 1"
               goal: "Test goal"
               stepOrder: 1
-              isFinal: false
-            ) { id name goal stepOrder isFinal }
+            ) { id name goal stepOrder }
           }
         """)
         |> json_response(200)
@@ -2139,7 +2138,6 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["name"] == "Step 1"
       assert data["goal"] == "Test goal"
       assert data["stepOrder"] == 1
-      assert data["isFinal"] == false
     end
 
     test "updates a workflow step", %{conn: conn, user: user, project: project} do
@@ -2151,15 +2149,14 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         |> authenticate(user)
         |> graphql("""
           mutation {
-            updateWorkflowStep(id: "#{step.id}", name: "Updated", isFinal: true) {
-              id name isFinal
+            updateWorkflowStep(id: "#{step.id}", name: "Updated") {
+              id name
             }
           }
         """)
         |> json_response(200)
 
       assert result["data"]["updateWorkflowStep"]["name"] == "Updated"
-      assert result["data"]["updateWorkflowStep"]["isFinal"] == true
     end
 
     test "deletes a workflow step", %{conn: conn, user: user, project: project} do
@@ -7219,7 +7216,6 @@ defmodule SacrumWeb.Graphql.SchemaTest do
           "workflow_id" => workflow.id,
           "project_id" => project.id,
           "step_order" => 1,
-          "is_final" => false,
           "agents" => ["test"],
           "skills" => ["test_skill"],
           "agent_config" => %{"model" => "test-model"},
@@ -7232,7 +7228,6 @@ defmodule SacrumWeb.Graphql.SchemaTest do
           "workflow_id" => workflow.id,
           "project_id" => project.id,
           "step_order" => 2,
-          "is_final" => true,
           "agents" => ["test"],
           "skills" => ["test_skill"],
           "agent_config" => %{"model" => "test-model"},
