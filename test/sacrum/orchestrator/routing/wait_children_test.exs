@@ -226,7 +226,6 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildrenTest do
       Accounts.WorkflowSteps.insert(user.id, %{
         "name" => "Wait Children",
         "step_order" => 1,
-        "is_final" => true,
         "step_type" => "wait_children",
         "agents" => ["test"],
         "skills" => ["test"],
@@ -243,7 +242,6 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildrenTest do
       Accounts.WorkflowSteps.insert(user.id, %{
         "name" => "Execute",
         "step_order" => 1,
-        "is_final" => true,
         "step_type" => "execute",
         "agents" => ["test"],
         "skills" => ["test"],

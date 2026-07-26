@@ -56,14 +56,14 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
   @task_dependency_event_payload_keys [:schema_version | @task_dependency_payload_keys]
 
   @workflow_payload_keys ~w(
-    id name description is_default is_final display_order metadata initial_step_id
+    id name description is_default display_order metadata initial_step_id
     kanban_column project_id inserted_at updated_at
   )a
 
   @workflow_event_payload_keys [:schema_version | @workflow_payload_keys]
 
   @step_payload_keys ~w(
-    id name goal agents skills agent_config is_final step_order step_type prompt output_schema
+    id name goal agents skills agent_config step_order step_type prompt output_schema
     verbose_daemon_logging workflow_id project_id inserted_at updated_at
   )a
 

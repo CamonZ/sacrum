@@ -17,7 +17,6 @@ defmodule SacrumWeb.Graphql.Types.WorkflowType do
     field :metadata, :json
     field :display_order, :integer
     field :is_default, :boolean
-    field :is_final, :boolean
     field :kanban_column, :string
     field :inserted_at, :datetime
     field :updated_at, :datetime
@@ -120,7 +119,6 @@ defmodule SacrumWeb.Graphql.Types.WorkflowType do
       arg(:metadata, :json)
       arg(:display_order, :integer)
       arg(:is_default, :boolean)
-      arg(:is_final, :boolean)
       arg(:kanban_column, :string)
 
       resolve(fn args, %{context: %{current_user: user}} ->
@@ -140,7 +138,6 @@ defmodule SacrumWeb.Graphql.Types.WorkflowType do
       arg(:metadata, :json)
       arg(:display_order, :integer)
       arg(:is_default, :boolean)
-      arg(:is_final, :boolean)
       arg(:initial_step_id, :uuid4)
       arg(:kanban_column, :string)
 

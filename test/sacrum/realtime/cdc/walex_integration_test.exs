@@ -252,27 +252,29 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
           display_order: 2
         })
 
-      assert_project_broadcast(
-        "workflow_created",
-        %{
-          id: workflow.id,
-          name: "CDC workflow",
-          project_id: project.id
-        },
-        1_000
-      )
+      _created_payload =
+        assert_project_broadcast(
+          "workflow_created",
+          %{
+            id: workflow.id,
+            name: "CDC workflow",
+            project_id: project.id
+          },
+          1_000
+        )
 
       {:ok, _updated_workflow} = Workflows.update(workflow, %{name: "CDC workflow updated"})
 
-      assert_project_broadcast(
-        "workflow_updated",
-        %{
-          id: workflow.id,
-          name: "CDC workflow updated",
-          project_id: project.id
-        },
-        1_000
-      )
+      _updated_payload =
+        assert_project_broadcast(
+          "workflow_updated",
+          %{
+            id: workflow.id,
+            name: "CDC workflow updated",
+            project_id: project.id
+          },
+          1_000
+        )
     end)
   end
 
@@ -314,29 +316,31 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
           step_type: "execute"
         })
 
-      assert_project_broadcast(
-        "step_created",
-        %{
-          id: step.id,
-          name: "CDC created step",
-          workflow_id: workflow.id,
-          project_id: project.id
-        },
-        1_000
-      )
+      _created_payload =
+        assert_project_broadcast(
+          "step_created",
+          %{
+            id: step.id,
+            name: "CDC created step",
+            workflow_id: workflow.id,
+            project_id: project.id
+          },
+          1_000
+        )
 
       {:ok, _updated_step} = WorkflowSteps.update(step, %{name: "CDC updated step"})
 
-      assert_project_broadcast(
-        "step_updated",
-        %{
-          id: step.id,
-          name: "CDC updated step",
-          workflow_id: workflow.id,
-          project_id: project.id
-        },
-        1_000
-      )
+      _updated_payload =
+        assert_project_broadcast(
+          "step_updated",
+          %{
+            id: step.id,
+            name: "CDC updated step",
+            workflow_id: workflow.id,
+            project_id: project.id
+          },
+          1_000
+        )
     end)
   end
 

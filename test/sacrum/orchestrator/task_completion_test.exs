@@ -38,7 +38,6 @@ defmodule Sacrum.Orchestrator.TaskCompletionTest do
     default_attrs = %{
       "name" => "Test Step",
       "step_order" => 1,
-      "is_final" => false,
       "agents" => ["test"],
       "skills" => ["test_skill"],
       "agent_config" => %{"model" => "test-model"},
@@ -149,7 +148,7 @@ defmodule Sacrum.Orchestrator.TaskCompletionTest do
       user = create_user()
       project = create_project(user)
       workflow = create_workflow(user, project)
-      final_step = create_step(user, workflow, %{"is_final" => true})
+      final_step = create_step(user, workflow, %{})
       task = create_task(user, project, workflow)
 
       data = %{
@@ -162,14 +161,13 @@ defmodule Sacrum.Orchestrator.TaskCompletionTest do
                {:next_state, :awaiting_execution, data}
     end
 
-    test "stops normally for a promptless finish step regardless of legacy final flags" do
+    test "stops normally for a promptless finish step" do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, %{is_final: true})
+      workflow = create_workflow(user, project, %{})
 
       final_step =
         create_step(user, workflow, %{
-          "is_final" => false,
           "step_type" => "finish",
           "prompt" => nil
         })
@@ -195,7 +193,7 @@ defmodule Sacrum.Orchestrator.TaskCompletionTest do
       user = create_user()
       project = create_project(user)
       workflow = create_workflow(user, project)
-      next_step = create_step(user, workflow, %{"is_final" => false})
+      next_step = create_step(user, workflow, %{})
       task = create_task(user, project, workflow)
 
       data = %{
@@ -213,7 +211,7 @@ defmodule Sacrum.Orchestrator.TaskCompletionTest do
       user = create_user()
       project = create_project(user)
       workflow = create_workflow(user, project)
-      next_step = create_step(user, workflow, %{"is_final" => false, "prompt" => " \n\t "})
+      next_step = create_step(user, workflow, %{"prompt" => " \n\t "})
       task = create_task(user, project, workflow)
       task_run = create_task_run(user, project, task)
 

@@ -14,7 +14,6 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     field :agents, {:array, :string}, default: []
     field :skills, {:array, :string}, default: []
     field :agent_config, :map, default: %{}
-    field :is_final, :boolean, default: false
     field :step_order, :integer
     field :step_type, Ecto.Enum, values: @step_types, default: :execute
     field :prompt, :string
@@ -30,8 +29,8 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     timestamps(type: :utc_datetime_usec)
   end
 
-  @create_fields ~w(name goal agents skills agent_config is_final step_order step_type prompt output_schema)a
-  @update_fields ~w(name goal agents skills agent_config is_final step_order step_type prompt output_schema)a
+  @create_fields ~w(name goal agents skills agent_config step_order step_type prompt output_schema)a
+  @update_fields ~w(name goal agents skills agent_config step_order step_type prompt output_schema)a
 
   @spec step_types() :: [atom()]
   def step_types, do: @step_types

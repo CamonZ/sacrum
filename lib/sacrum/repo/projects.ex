@@ -47,7 +47,7 @@ defmodule Sacrum.Repo.Projects do
             project_id: workflow.project_id,
             user_id: user_id
           },
-          %{name: "Backlog", step_order: 1, is_final: false}
+          %{name: "Backlog", step_order: 1}
         )
       end)
       |> Ecto.Multi.update(:workflow_with_step, fn %{workflow: workflow, step: step} ->

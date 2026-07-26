@@ -157,8 +157,8 @@ defmodule Sacrum.Tasks.StatusTest do
     test "returns :done when task completion has been stamped" do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, %{is_final: true})
-      final_step = create_step(workflow, %{is_final: true})
+      workflow = create_workflow(user, project, %{})
+      final_step = create_step(workflow, %{})
 
       task =
         user
@@ -172,8 +172,8 @@ defmodule Sacrum.Tasks.StatusTest do
     test "stays :done when the latest historical StepExecution failed after completion" do
       user = create_user()
       project = create_project(user)
-      workflow = create_workflow(user, project, %{is_final: true})
-      final_step = create_step(workflow, %{is_final: true})
+      workflow = create_workflow(user, project, %{})
+      final_step = create_step(workflow, %{})
 
       task =
         user

@@ -6,7 +6,6 @@ defmodule Sacrum.Accounts.WorkflowsTest do
   alias Sacrum.Repo
   alias Sacrum.Repo.Users
   alias Sacrum.Repo.Schemas.Workflow
-  alias Sacrum.Repo.Schemas.WorkflowTransition
 
   import Ecto.Query
 
@@ -196,24 +195,6 @@ defmodule Sacrum.Accounts.WorkflowsTest do
         Repo.all(from(w in Workflow, where: w.project_id == ^project.id and w.is_default == true))
 
       assert defaults == []
-    end
-
-    test "update with is_final: true while workflow has outgoing transitions succeeds" do
-      user = create_user()
-      project = create_project(user)
-      {:ok, from_wf} = Workflows.insert(user.id, project.id, %{name: "From"})
-      {:ok, to_wf} = Workflows.insert(user.id, project.id, %{name: "To"})
-
-      Repo.insert!(%WorkflowTransition{
-        from_workflow_id: from_wf.id,
-        to_workflow_id: to_wf.id,
-        user_id: user.id,
-        project_id: project.id,
-        label: "go"
-      })
-
-      assert {:ok, %Workflow{is_final: true}} =
-               Workflows.update(from_wf, %{is_final: true})
     end
   end
 
