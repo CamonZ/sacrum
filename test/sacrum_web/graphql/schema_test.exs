@@ -2497,91 +2497,6 @@ defmodule SacrumWeb.Graphql.SchemaTest do
   describe "step execution mutations" do
     setup [:setup_user_and_project]
 
-    test "creates a step execution", %{conn: conn, user: user, project: project} do
-      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
-      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-
-      result =
-        conn
-        |> authenticate(user)
-        |> graphql("""
-          mutation {
-            createStepExecution(
-              taskId: "#{task.id}"
-              workflowId: "#{wf.id}"
-              stepName: "analysis"
-              status: "running"
-              model: "claude-sonnet"
-              modelProvider: "anthropic"
-            ) { id stepName stepType status model modelProvider taskId }
-          }
-        """)
-        |> json_response(200)
-
-      data = result["data"]["createStepExecution"]
-      assert data["stepName"] == "analysis"
-      assert data["stepType"] == "execute"
-      assert data["status"] == "running"
-      assert data["model"] == "claude-sonnet"
-      assert data["modelProvider"] == "anthropic"
-      assert data["taskId"] == task.id
-    end
-
-    test "createStepExecution derives stepType from stepId and rejects spoofed values", %{
-      conn: conn,
-      user: user,
-      project: project
-    } do
-      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
-      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-
-      {:ok, step} =
-        Accounts.WorkflowSteps.insert(wf, %{
-          name: "Human input",
-          step_type: "human_input"
-        })
-
-      result =
-        conn
-        |> authenticate(user)
-        |> graphql("""
-          mutation {
-            createStepExecution(
-              taskId: "#{task.id}"
-              workflowId: "#{wf.id}"
-              stepId: "#{step.id}"
-              stepName: "manual alias"
-              stepType: "human_input"
-            ) { id stepId stepName stepType }
-          }
-        """)
-        |> json_response(200)
-
-      data = result["data"]["createStepExecution"]
-      assert data["stepId"] == step.id
-      assert data["stepName"] == "manual alias"
-      assert data["stepType"] == "human_input"
-
-      spoofed =
-        conn
-        |> authenticate(user)
-        |> graphql("""
-          mutation {
-            createStepExecution(
-              taskId: "#{task.id}"
-              workflowId: "#{wf.id}"
-              stepId: "#{step.id}"
-              stepName: "manual alias"
-              stepType: "execute"
-            ) { id stepType }
-          }
-        """)
-        |> json_response(200)
-
-      assert [%{"message" => message}] = spoofed["errors"]
-      assert message =~ "must match the referenced workflow step"
-    end
-
     test "updates a step execution", %{conn: conn, user: user, project: project} do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
@@ -5440,94 +5355,6 @@ defmodule SacrumWeb.Graphql.SchemaTest do
   describe "step execution field coverage" do
     setup [:setup_user_and_project]
 
-    test "createStepExecution with context, prompt, transitionResult, cost, durationMs", %{
-      conn: conn,
-      user: user,
-      project: project
-    } do
-      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
-      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-
-      context_json = ~S|{\"input\":\"data\"}|
-
-      result =
-        conn
-        |> authenticate(user)
-        |> graphql(~s"""
-          mutation {
-            createStepExecution(
-              taskId: "#{task.id}"
-              workflowId: "#{wf.id}"
-              stepName: "analysis"
-              status: "running"
-              context: "#{context_json}"
-              prompt: "Analyze this"
-              transitionResult: "approved"
-              sessionInputTokens: 0
-              sessionCacheReadInputTokens: 12
-              sessionOutputTokens: 8
-              sessionTotalTokens: 20
-              contextWindowInputTokens: 0
-              contextWindowCacheReadInputTokens: 12
-              contextWindowTotalTokens: 20
-              cost: "0.05"
-              durationMs: 1500
-            ) {
-              id stepName status context prompt transitionResult cost durationMs
-              sessionInputTokens sessionCacheReadInputTokens sessionOutputTokens sessionTotalTokens
-              contextWindowInputTokens contextWindowCacheReadInputTokens contextWindowTotalTokens
-            }
-          }
-        """)
-        |> json_response(200)
-
-      data = result["data"]["createStepExecution"]
-      assert data["stepName"] == "analysis"
-      assert data["status"] == "running"
-      assert data["context"] == %{"input" => "data"}
-      assert data["prompt"] == "Analyze this"
-      assert data["transitionResult"] == "approved"
-      assert data["durationMs"] == 1500
-      assert data["sessionInputTokens"] == 0
-      assert data["sessionCacheReadInputTokens"] == 12
-      assert data["sessionOutputTokens"] == 8
-      assert data["sessionTotalTokens"] == 20
-      assert data["contextWindowInputTokens"] == 0
-      assert data["contextWindowCacheReadInputTokens"] == 12
-      assert data["contextWindowTotalTokens"] == 20
-    end
-
-    test "createStepExecution rejects handoff argument (not exposed to mutations)", %{
-      conn: conn,
-      user: user,
-      project: project
-    } do
-      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
-      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-
-      # Attempt to set handoff in createStepExecution
-      result =
-        conn
-        |> authenticate(user)
-        |> graphql(~s"""
-          mutation {
-            createStepExecution(
-              taskId: "#{task.id}"
-              workflowId: "#{wf.id}"
-              stepName: "analysis"
-              status: "running"
-              handoff: "{\\"key\\": \\"value\\"}"
-            ) { id stepName status }
-          }
-        """)
-        |> json_response(200)
-
-      # Should get a GraphQL validation error (invalid argument)
-      assert result["errors"] != nil
-      error_message = Enum.find(result["errors"], &String.contains?(&1["message"], "handoff"))
-      assert error_message != nil
-    end
-
     test "updateStepExecution rejects handoff argument (not exposed to mutations)", %{
       conn: conn,
       user: user,
@@ -6782,20 +6609,6 @@ defmodule SacrumWeb.Graphql.SchemaTest do
           mutation {
             createSection(taskId: "#{task.id}", sectionType: "desc") { id }
           }
-        """)
-        |> json_response(200)
-
-      assert result["errors"] != nil
-    end
-
-    test "createStepExecution with missing required fields", %{conn: conn} do
-      user = create_user()
-
-      result =
-        conn
-        |> authenticate(user)
-        |> graphql("""
-          mutation { createStepExecution(stepName: "s1") { id } }
         """)
         |> json_response(200)
 

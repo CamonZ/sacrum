@@ -146,10 +146,9 @@ The API is exposed via **GraphQL** at `/graphql` (GraphiQL playground available 
 | `createStepTransition` | `from_step_id!`, `to_step_id!`, `label` | `:step_transition` |
 | `deleteStepTransition` | `id!` | `:step_transition` |
 
-**`execution_types.ex`** — 5 mutations (via `Accounts.StepExecutions` / `Accounts.SessionLogs`)
+**`execution_types.ex`** — 4 mutations (via `Accounts.StepExecutions` / `Accounts.SessionLogs`)
 | Mutation | Arguments | Returns |
 |----------|-----------|---------|
-| `createStepExecution` | `task_id!`, `workflow_id!`, `step_name!`, `status`, `context`, `prompt`, `output`, `transition_result`, `model`, `model_provider`, `input_tokens`, `output_tokens`, `session_input_tokens`, `session_cache_read_input_tokens`, `session_output_tokens`, `session_total_tokens`, `context_window_input_tokens`, `context_window_cache_read_input_tokens`, `context_window_total_tokens`, `cost`, `duration_ms` | `:step_execution` |
 | `updateStepExecution` | `id!`, `step_name`, `status`, `context`, `prompt`, `output`, `transition_result`, `model`, `model_provider`, `input_tokens`, `output_tokens`, `session_input_tokens`, `session_cache_read_input_tokens`, `session_output_tokens`, `session_total_tokens`, `context_window_input_tokens`, `context_window_cache_read_input_tokens`, `context_window_total_tokens`, `cost`, `duration_ms` | `:step_execution` |
 | `createSessionLog` | `step_execution_id!`, `content!`, `format` (`anthropic` default, or `openai`), optional opaque `logical_key` for in-place updates | `:session_log` |
 | `runStep` | `task_id!`, `workflow_id!`, `step_id!` | `:step_execution` |
