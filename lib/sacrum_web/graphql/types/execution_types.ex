@@ -275,43 +275,6 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
       end)
     end
 
-    field :create_step_execution, :step_execution do
-      arg(:task_id, non_null(:uuid4))
-      arg(:workflow_id, non_null(:uuid4))
-      arg(:step_id, :uuid4)
-      arg(:step_name, non_null(:string))
-      arg(:step_type, :string)
-      arg(:status, :string)
-      arg(:context, :json)
-      arg(:prompt, :string)
-      arg(:output, :string)
-      arg(:transition_result, :string)
-      arg(:model, :string)
-      arg(:model_provider, :string)
-      arg(:input_tokens, :integer)
-      arg(:output_tokens, :integer)
-      arg(:session_input_tokens, :integer)
-      arg(:session_cache_read_input_tokens, :integer)
-      arg(:session_output_tokens, :integer)
-      arg(:session_total_tokens, :integer)
-      arg(:context_window_input_tokens, :integer)
-      arg(:context_window_cache_read_input_tokens, :integer)
-      arg(:context_window_total_tokens, :integer)
-      arg(:cost, :decimal)
-      arg(:duration_ms, :integer)
-
-      resolve(fn args, %{context: %{current_user: user}} ->
-        task_id = Map.get(args, :task_id)
-        workflow_id = Map.get(args, :workflow_id)
-
-        with {:ok, task} <- Accounts.Tasks.find(user.id, task_id),
-             {:ok, _workflow} <- Accounts.Workflows.get_by(user.id, conditions: [id: workflow_id]) do
-          attrs = Map.put(args, :project_id, task.project_id)
-          Accounts.StepExecutions.insert(user.id, attrs)
-        end
-      end)
-    end
-
     field :update_step_execution, :step_execution do
       arg(:id, non_null(:uuid4))
       arg(:step_name, :string)
