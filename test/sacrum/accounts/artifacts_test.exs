@@ -8,8 +8,11 @@ defmodule Sacrum.Accounts.ArtifactsTest do
   alias Sacrum.Repo.ArtifactLinks
   alias Sacrum.Repo.Artifacts, as: ArtifactsRepo
   alias Sacrum.Repo.Schemas.{Artifact, ArtifactLink}
+  alias Sacrum.Repo.StepExecutions
   alias Sacrum.Repo.TaskSections
+  alias Sacrum.Repo.TaskRuns
   alias Sacrum.Repo.Users
+  alias Sacrum.Repo.Workflows
 
   defp create_user(prefix \\ "account-artifact") do
     suffix = System.unique_integer([:positive])
@@ -43,6 +46,31 @@ defmodule Sacrum.Accounts.ArtifactsTest do
       })
 
     section
+  end
+
+  defp create_workflow(project) do
+    suffix = System.unique_integer([:positive])
+    {:ok, workflow} = Workflows.insert(project, %{name: "Artifact workflow #{suffix}"})
+    workflow
+  end
+
+  defp create_task_run(user, project, task) do
+    {:ok, task_run} = TaskRuns.insert(user.id, project.id, task.id, %{})
+    task_run
+  end
+
+  defp create_step_execution(user, project, task, workflow, task_run) do
+    {:ok, step_execution} =
+      StepExecutions.insert(user.id, %{
+        project_id: project.id,
+        task_id: task.id,
+        task_run_id: task_run.id,
+        workflow_id: workflow.id,
+        step_name: "artifact_step",
+        status: "completed"
+      })
+
+    step_execution
   end
 
   defp create_artifact(user, project, attrs) do
@@ -140,6 +168,46 @@ defmodule Sacrum.Accounts.ArtifactsTest do
       assert Repo.aggregate(ArtifactLink, :count) == 1
     end
 
+    test "creates one artifact and attached_to link for every supported subject", %{
+      user: user,
+      project: project,
+      task: task,
+      section: section
+    } do
+      workflow = create_workflow(project)
+      task_run = create_task_run(user, project, task)
+      step_execution = create_step_execution(user, project, task, workflow, task_run)
+
+      subjects = [
+        {"project", project.id},
+        {"task", task.id},
+        {"task_section", section.id},
+        {"workflow", workflow.id},
+        {"task_run", task_run.id},
+        {"step_execution", step_execution.id}
+      ]
+
+      for {subject_type, subject_id} <- subjects do
+        assert {:ok, %{artifact: artifact, link: link}} =
+                 Artifacts.create_and_link(
+                   user.id,
+                   project.id,
+                   artifact_attrs(%{filename: "#{subject_type}.md"}),
+                   link_attrs(subject_type, subject_id)
+                 )
+
+        assert artifact.user_id == user.id
+        assert artifact.project_id == project.id
+        assert link.artifact_id == artifact.id
+        assert link.subject_type == subject_type
+        assert link.subject_id == subject_id
+        assert link.relationship_kind == "attached_to"
+      end
+
+      assert Repo.aggregate(Artifact, :count) == length(subjects)
+      assert Repo.aggregate(ArtifactLink, :count) == length(subjects)
+    end
+
     test "transactionally creates and links a file to its project", %{
       user: user,
       project: project
@@ -176,6 +244,35 @@ defmodule Sacrum.Accounts.ArtifactsTest do
                  link_attrs("project", Ecto.UUID.generate())
                )
 
+      assert Repo.aggregate(Artifact, :count) == 0
+      assert Repo.aggregate(ArtifactLink, :count) == 0
+    end
+
+    test "rejects malformed or unsupported destinations atomically", %{
+      user: user,
+      project: project
+    } do
+      assert {:error, changeset} =
+               Artifacts.create_and_link(
+                 user.id,
+                 project.id,
+                 artifact_attrs(),
+                 %{subject_type: "task", relationship_kind: "attached_to"}
+               )
+
+      assert %{subject_id: ["can't be blank"]} = errors_on(changeset)
+      assert Repo.aggregate(Artifact, :count) == 0
+      assert Repo.aggregate(ArtifactLink, :count) == 0
+
+      assert {:error, changeset} =
+               Artifacts.create_and_link(
+                 user.id,
+                 project.id,
+                 artifact_attrs(),
+                 link_attrs("unsupported", Ecto.UUID.generate())
+               )
+
+      assert %{subject_type: ["is invalid"]} = errors_on(changeset)
       assert Repo.aggregate(Artifact, :count) == 0
       assert Repo.aggregate(ArtifactLink, :count) == 0
     end

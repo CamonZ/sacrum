@@ -118,11 +118,11 @@ The `Project.artifacts(limit: 50, offset: 0)` field returns the caller's project
 **`artifact_types.ex`** — 3 mutations (via `Accounts.Artifacts`)
 | Mutation | Arguments | Returns |
 |----------|-----------|---------|
-| `createArtifact` | `project_id!`, `filename!`, `body!` | `:artifact` |
+| `createArtifact` | `project_id!`, `filename!`, `body!`, `subject_type`, `subject_id` | `:artifact` |
 | `updateArtifact` | `id!`, `filename`, `body`, `subject_type`, `subject_id` | `:artifact` |
 | `deleteArtifact` | `id!` | `:artifact` |
 
-`createArtifact` creates the file in the authenticated user's project and atomically adds the project `attached_to` link used by `Project.artifacts`. Requests for a project outside the caller's scope fail without persisting either row.
+`createArtifact` creates the file in the authenticated user's project and atomically adds an `attached_to` link. When `subject_type` and `subject_id` are omitted, the link targets the project for backward compatibility; when supplied together, the destination may be a project, task, task section, workflow, task run, or step execution in the same user and project scope. Requests for a project or destination outside the caller's scope fail without persisting either row.
 
 `updateArtifact` changes `filename`, `body`, or both. Supplying `subject_type` and `subject_id` together replaces the artifact's sole link while preserving its relationship kind and metadata. The target must belong to the artifact's existing user and project; ownership and project scope never move. Invalid targets roll back file edits and leave the original link intact. Artifacts with multiple links can still update file fields, but attachment replacement is rejected as ambiguous.
 
