@@ -20,24 +20,21 @@ defmodule SacrumWeb.Graphql.Types.ArtifactTypes do
       arg(:project_id, non_null(:uuid4))
       arg(:filename, non_null(:string))
       arg(:body, non_null(:string))
+      arg(:subject_type, :string)
+      arg(:subject_id, :uuid4)
 
       resolve(fn %{project_id: project_id} = args, %{context: %{current_user: user}} ->
         artifact_attrs = Map.take(args, [:filename, :body])
 
-        link_attrs = %{
-          subject_type: "project",
-          subject_id: project_id,
-          relationship_kind: "attached_to"
-        }
-
-        case Accounts.Artifacts.create_and_link(
-               user.id,
-               project_id,
-               artifact_attrs,
-               link_attrs
-             ) do
-          {:ok, %{artifact: artifact}} -> {:ok, artifact}
-          {:error, reason} -> {:error, reason}
+        with {:ok, link_attrs} <- create_link_attrs(args, project_id),
+             {:ok, %{artifact: artifact}} <-
+               Accounts.Artifacts.create_and_link(
+                 user.id,
+                 project_id,
+                 artifact_attrs,
+                 link_attrs
+               ) do
+          {:ok, artifact}
         end
       end)
     end
@@ -68,15 +65,29 @@ defmodule SacrumWeb.Graphql.Types.ArtifactTypes do
   end
 
   defp attachment_attrs(args) do
-    case Map.take(args, [:subject_type, :subject_id]) do
-      %{subject_type: subject_type, subject_id: subject_id} ->
-        {:ok, %{subject_type: subject_type, subject_id: subject_id}}
-
-      attrs when map_size(attrs) == 0 ->
+    case {Map.get(args, :subject_type), Map.get(args, :subject_id)} do
+      {nil, nil} ->
         {:ok, nil}
 
-      _attrs ->
+      {subject_type, subject_id} when is_binary(subject_type) and is_binary(subject_id) ->
+        {:ok, %{subject_type: subject_type, subject_id: subject_id}}
+
+      _ ->
         {:error, "subjectType and subjectId must be provided together"}
+    end
+  end
+
+  defp create_link_attrs(args, project_id) do
+    case attachment_attrs(args) do
+      {:ok, nil} ->
+        {:ok,
+         %{subject_type: "project", subject_id: project_id, relationship_kind: "attached_to"}}
+
+      {:ok, attachment_attrs} ->
+        {:ok, Map.put(attachment_attrs, :relationship_kind, "attached_to")}
+
+      error ->
+        error
     end
   end
 end

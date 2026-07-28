@@ -320,6 +320,173 @@ defmodule SacrumWeb.Graphql.SchemaTest do
              ]
     end
 
+    test "creates and attaches an artifact directly to a task", %{conn: conn} do
+      user = create_user()
+      {:ok, project} = Accounts.Projects.insert(user.id, %{name: "Task Artifact Project"})
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Artifact target"})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createArtifact(
+              projectId: "#{project.id}"
+              filename: "task-result.json"
+              body: "{\\"status\\":\\"ready\\"}"
+              subjectType: "task"
+              subjectId: "#{task.id}"
+            ) { id filename body }
+          }
+        """)
+        |> json_response(200)
+
+      assert %{"id" => artifact_id, "filename" => "task-result.json"} =
+               result["data"]["createArtifact"]
+
+      assert [link] = ArtifactLinks.list_by_subject(user.id, project.id, "task", task.id)
+      assert link.artifact_id == artifact_id
+      assert link.relationship_kind == "attached_to"
+
+      task_result =
+        conn
+        |> recycle()
+        |> authenticate(user)
+        |> graphql(~s|{ task(id: "#{task.id}") { artifacts { id filename body } } }|)
+        |> json_response(200)
+
+      assert task_result["data"]["task"]["artifacts"] == [
+               %{
+                 "body" => ~s({"status":"ready"}),
+                 "filename" => "task-result.json",
+                 "id" => artifact_id
+               }
+             ]
+    end
+
+    test "rejects incomplete, unsupported, and missing destinations atomically", %{
+      conn: conn
+    } do
+      user = create_user()
+      {:ok, project} = Accounts.Projects.insert(user.id, %{name: "Invalid Artifact Project"})
+
+      incomplete_results =
+        for destination <- [
+              "subjectType: \"task\"",
+              "subjectId: \"#{Ecto.UUID.generate()}\""
+            ] do
+          conn
+          |> recycle()
+          |> authenticate(user)
+          |> graphql("""
+            mutation {
+              createArtifact(
+                projectId: "#{project.id}"
+                filename: "invalid.md"
+                body: "invalid"
+                #{destination}
+              ) { id }
+            }
+          """)
+          |> json_response(200)
+        end
+
+      for result <- incomplete_results do
+        assert result["data"]["createArtifact"] == nil
+
+        assert [%{"message" => "subjectType and subjectId must be provided together"}] =
+                 result["errors"]
+      end
+
+      unsupported_result =
+        conn
+        |> recycle()
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createArtifact(
+              projectId: "#{project.id}"
+              filename: "unsupported.md"
+              body: "unsupported"
+              subjectType: "unsupported"
+              subjectId: "#{Ecto.UUID.generate()}"
+            ) { id }
+          }
+        """)
+        |> json_response(200)
+
+      assert unsupported_result["data"]["createArtifact"] == nil
+      assert [%{"message" => message}] = unsupported_result["errors"]
+      assert message =~ "subject_type: is invalid"
+
+      missing_result =
+        conn
+        |> recycle()
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createArtifact(
+              projectId: "#{project.id}"
+              filename: "missing.md"
+              body: "missing"
+              subjectType: "task"
+              subjectId: "#{Ecto.UUID.generate()}"
+            ) { id }
+          }
+        """)
+        |> json_response(200)
+
+      assert missing_result["data"]["createArtifact"] == nil
+      assert [%{"message" => _}] = missing_result["errors"]
+      assert ArtifactsRepo.count() == 0
+      assert ArtifactLinks.count() == 0
+    end
+
+    test "rejects a destination from another project or user atomically", %{conn: conn} do
+      user = create_user()
+      {:ok, project} = Accounts.Projects.insert(user.id, %{name: "Scoped Artifact Project"})
+      {:ok, other_project} = Accounts.Projects.insert(user.id, %{name: "Other Artifact Project"})
+
+      {:ok, other_project_task} =
+        Accounts.Tasks.insert(user.id, other_project.id, %{title: "Other project task"})
+
+      other_user =
+        create_user(%{
+          email: "other-scoped-artifact@example.com",
+          username: "other_scoped_artifact"
+        })
+
+      {:ok, other_user_project} =
+        Accounts.Projects.insert(other_user.id, %{name: "Other User Artifact Project"})
+
+      {:ok, other_user_task} =
+        Accounts.Tasks.insert(other_user.id, other_user_project.id, %{title: "Other user task"})
+
+      for task_id <- [other_project_task.id, other_user_task.id] do
+        result =
+          conn
+          |> recycle()
+          |> authenticate(user)
+          |> graphql("""
+            mutation {
+              createArtifact(
+                projectId: "#{project.id}"
+                filename: "forbidden.md"
+                body: "forbidden"
+                subjectType: "task"
+                subjectId: "#{task_id}"
+              ) { id }
+            }
+          """)
+          |> json_response(200)
+
+        assert result["data"]["createArtifact"] == nil
+        assert [%{"message" => _}] = result["errors"]
+        assert ArtifactsRepo.count() == 0
+        assert ArtifactLinks.count() == 0
+      end
+    end
+
     test "does not create an artifact in another user's project", %{conn: conn} do
       owner = create_user(%{email: "artifact-owner@example.com", username: "artifact_owner"})
       caller = create_user(%{email: "artifact-caller@example.com", username: "artifact_caller"})
