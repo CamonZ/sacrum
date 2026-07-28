@@ -10,6 +10,7 @@ defmodule Sacrum.Repo.ArtifactLinks do
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.Artifact
   alias Sacrum.Repo.Schemas.ArtifactLink
+  alias Sacrum.Repo.Schemas.Project
   alias Sacrum.Repo.Schemas.StepExecution
   alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.Schemas.TaskRun
@@ -116,6 +117,15 @@ defmodule Sacrum.Repo.ArtifactLinks do
     |> where(
       [task],
       task.id == ^subject_id and task.user_id == ^user_id and task.project_id == ^project_id
+    )
+    |> Repo.exists?()
+  end
+
+  defp subject_exists?(user_id, project_id, "project", subject_id) do
+    Project
+    |> where(
+      [project],
+      project.id == ^subject_id and project.id == ^project_id and project.user_id == ^user_id
     )
     |> Repo.exists?()
   end

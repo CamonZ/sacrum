@@ -39,6 +39,7 @@ defmodule Sacrum.Repo.Schemas.ArtifactLinkTest do
 
     test "accepts supported subject and relationship values" do
       for subject_type <- [
+            "project",
             "task",
             "task_section",
             "workflow",

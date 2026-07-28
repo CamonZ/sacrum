@@ -13,67 +13,82 @@ defmodule Sacrum.Repo.Schemas.ArtifactTest do
   defp valid_attrs(attrs) do
     Map.merge(
       %{
-        artifact_type: "task_draft",
-        artifact_state: "draft",
-        visibility: "public",
-        redaction_state: "not_needed",
-        title: "Draft task",
-        content: "Task body",
-        data: %{"title" => "Draft task"}
+        filename: "draft-task.md",
+        body: "# Draft task\n\nTask body"
       },
       attrs
     )
   end
 
   describe "create_changeset/2" do
-    test "requires ownership and artifact contract fields" do
+    test "requires ownership, filename, and body" do
       changeset = Artifact.create_changeset(struct(Artifact), %{})
 
       assert %{
                project_id: ["can't be blank"],
                user_id: ["can't be blank"],
-               artifact_type: ["can't be blank"],
-               artifact_state: ["can't be blank"],
-               visibility: ["can't be blank"],
-               redaction_state: ["can't be blank"]
+               filename: ["can't be blank"],
+               body: ["can't be blank"]
              } = errors_on(changeset)
     end
 
-    test "accepts documented lifecycle, visibility, and redaction values" do
-      for artifact_state <- ["draft", "pending_approval", "approved", "applied", "rejected"],
-          visibility <- ["public", "internal"],
-          redaction_state <- ["not_needed", "redacted", "blocked"] do
-        changeset =
-          artifact()
-          |> Artifact.create_changeset(
-            valid_attrs(%{
-              artifact_state: artifact_state,
-              visibility: visibility,
-              redaction_state: redaction_state
-            })
-          )
+    test "accepts Markdown and JSON filename/body artifacts" do
+      markdown_changeset = Artifact.create_changeset(artifact(), valid_attrs(%{}))
 
-        assert changeset.valid?,
-               "expected #{inspect({artifact_state, visibility, redaction_state})} to be valid"
-      end
+      json_changeset =
+        Artifact.create_changeset(
+          artifact(),
+          valid_attrs(%{filename: "result.json", body: ~s({"status":"ok"})})
+        )
+
+      assert markdown_changeset.valid?
+      assert json_changeset.valid?
+      assert get_change(markdown_changeset, :filename) == "draft-task.md"
+      assert get_change(json_changeset, :body) == ~s({"status":"ok"})
     end
 
-    test "rejects values outside the artifact persistence contract" do
+    test "rejects filenames longer than the database column allows" do
       changeset =
-        artifact()
-        |> Artifact.create_changeset(
+        Artifact.create_changeset(
+          artifact(),
+          valid_attrs(%{filename: String.duplicate("a", 256)})
+        )
+
+      assert %{filename: ["should be at most 255 character(s)"]} = errors_on(changeset)
+    end
+
+    test "does not cast ownership or removed lifecycle fields" do
+      replacement_project_id = Ecto.UUID.generate()
+      replacement_user_id = Ecto.UUID.generate()
+
+      changeset =
+        Artifact.create_changeset(
+          artifact(),
           valid_attrs(%{
-            artifact_state: "published",
-            visibility: "private",
-            redaction_state: "unsafe"
+            project_id: replacement_project_id,
+            user_id: replacement_user_id,
+            artifact_state: "approved",
+            visibility: "public",
+            redaction_state: "not_needed",
+            data: %{"ignored" => true}
           })
         )
 
-      assert %{
-               artifact_state: ["is invalid"],
-               visibility: ["is invalid"],
-               redaction_state: ["is invalid"]
-             } = errors_on(changeset)
+      refute Map.has_key?(changeset.changes, :project_id)
+      refute Map.has_key?(changeset.changes, :user_id)
+      refute Map.has_key?(changeset.changes, :artifact_state)
+      refute Map.has_key?(changeset.changes, :visibility)
+      refute Map.has_key?(changeset.changes, :redaction_state)
+      refute Map.has_key?(changeset.changes, :data)
+    end
+  end
+
+  describe "update_changeset/2" do
+    test "rejects filenames longer than the database column allows" do
+      changeset =
+        Artifact.update_changeset(artifact(), %{filename: String.duplicate("a", 256)})
+
+      assert %{filename: ["should be at most 255 character(s)"]} = errors_on(changeset)
     end
   end
 end
