@@ -18,6 +18,8 @@ Sacrum is an API-only workflow engine and task management system built with Phoe
 
 **Execution tracking** — Durable `TaskRun` records track automation lifecycle for a task run. `StepExecution` records track individual step attempts inside a run, including the step name, attempt status, and optional LLM metadata (model, provider, token counts, cost, duration). Session logs attach free-text content to executions.
 
+**Artifact files** — Projects contain named text files whose contents are stored in `Artifact.body`. `ArtifactLink` records attach those files to projects, tasks, task sections, workflows, task runs, and step executions.
+
 **Real-time updates** — State changes broadcast to a Phoenix channel (`ProjectChannel`) keyed by project ID (`project:<project_id>`), so connected clients receive live events for task, workflow, and step mutations.
 
 ## Domain Model
@@ -28,9 +30,9 @@ User
       ├── Workflow
       │    ├── WorkflowStep ──→ StepTransition (step-to-step edges)
       │    └── WorkflowTransition (workflow-to-workflow edges)
-      ├── Artifact (planned, generic)
-      │    ├── ArtifactLink ──→ Task / TaskRun / StepExecution / Workflow
-      │    └── ArtifactDecision
+      ├── Artifact (filename + body)
+      │    └── ArtifactLink ──→ Project / Task / TaskSection / Workflow /
+      │                         TaskRun / StepExecution
       └── Task
            ├── TaskSection ──→ CodeRef
            ├── CodeRef (direct)
@@ -43,11 +45,24 @@ User
 
 All entities use UUID primary keys and `utc_datetime_usec` timestamps.
 
+### Artifacts
+
+An artifact is a project-scoped text file with two content fields:
+
+- `filename` — the file name, including the extension used by clients to interpret the contents
+- `body` — the complete file contents stored as a string
+
+For example, Markdown is stored as a `.md` filename and Markdown body, while JSON is stored as a `.json` filename and JSON text body. Sacrum preserves the string exactly; it does not parse the body or maintain a separate structured-data payload. File interpretation is extension-based and belongs to the client.
+
+Every artifact row has `user_id` and `project_id` ownership scope. Attachments are represented separately by `ArtifactLink`. A project attachment uses `subject_type: "project"`, the owning project ID as `subject_id`, and normally `relationship_kind: "attached_to"`. The project scope on the artifact row does not by itself make the file appear in `Project.artifacts`; that GraphQL field returns files with a matching project subject link.
+
+The Accounts subject-listing and link-creation paths include both the caller's user ID and project ID. Subject reads additionally match `subject_type` and `subject_id`, so those application paths do not return links or files across user or project boundaries. Artifact creation plus its initial link is transactional through `Accounts.Artifacts.create_and_link/4`.
+
 ## API Surface
 
 The API is exposed via **GraphQL** at `/graphql` (GraphiQL playground available at `/graphiql` in development). All requests require bearer token auth (`Authorization: Bearer sac_...`).
 
-**13 queries** across 5 type files, **36 mutations** across 7 type files.
+Queries and mutations are grouped by resource in `lib/sacrum_web/graphql/types/`.
 
 ### Queries
 
@@ -56,6 +71,8 @@ The API is exposed via **GraphQL** at `/graphql` (GraphiQL playground available 
 |-------|-----------|-------------|
 | `projects` | — | List all user's projects |
 | `project` | `id!` | Single project by ID |
+
+The `Project.artifacts(limit: 50, offset: 0)` field returns the caller's project-linked artifacts newest first. `limit` is clamped to `1..50`, and `offset` is clamped to zero or greater for offset-based pagination. Each artifact exposes `id`, `filename`, `body`, `insertedAt`, and `updatedAt`. Linked files are also exposed on `Task.artifacts`, `TaskSection.artifacts`, and `TaskSection.evidence`.
 
 **`workflow_type.ex`** — Workflow queries
 | Query | Arguments | Description |
@@ -97,6 +114,13 @@ The API is exposed via **GraphQL** at `/graphql` (GraphiQL playground available 
 | `createProject` | `name!`, `description`, `slug` | `:project` |
 | `updateProject` | `id!`, `name`, `description`, `slug` | `:project` |
 | `deleteProject` | `id!` | `:project` |
+
+**`artifact_types.ex`** — 1 mutation (via `Accounts.Artifacts`)
+| Mutation | Arguments | Returns |
+|----------|-----------|---------|
+| `createArtifact` | `project_id!`, `filename!`, `body!` | `:artifact` |
+
+`createArtifact` creates the file in the authenticated user's project and atomically adds the project `attached_to` link used by `Project.artifacts`. Requests for a project outside the caller's scope fail without persisting either row.
 
 **`workflow_type.ex`** — 4 mutations (all via `Accounts.Workflows`)
 | Mutation | Arguments | Returns |
@@ -218,6 +242,8 @@ The codebase uses a **three-layer architecture** (Accounts → Repo → Ecto) in
 | StepExecution | `Schemas.StepExecution` | `Repo.StepExecutions` | `Accounts.StepExecutions` | `execution_types.ex` |
 | TaskRun | `Schemas.TaskRun` | `Repo.TaskRuns` | `Accounts.TaskRuns` | `execution_types.ex` |
 | Project | `Schemas.Project` | `Repo.Projects` | `Accounts.Projects` | `project_type.ex` |
+| Artifact | `Schemas.Artifact` | `Repo.Artifacts` | `Accounts.Artifacts` | `artifact_types.ex` |
+| ArtifactLink | `Schemas.ArtifactLink` | `Repo.ArtifactLinks` | `Accounts.Artifacts` | No standalone type; exposed through artifact fields on Project, Task, and TaskSection |
 
 Complex operations (transition syncing, workflow assignment, step movement) use `Ecto.Multi` for transactional safety. Dependency management includes BFS shortest-path and DFS cycle-detection algorithms.
 

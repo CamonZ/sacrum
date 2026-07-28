@@ -268,7 +268,7 @@ defmodule Sacrum.Accounts.ArtifactsTest do
       refute unlinked_artifact.id in listed_ids
     end
 
-    test "does not leak visible artifacts to another caller", %{
+    test "does not leak artifacts to another caller", %{
       user: user,
       project: project,
       task: task

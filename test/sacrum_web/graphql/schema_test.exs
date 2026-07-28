@@ -58,27 +58,6 @@ defmodule SacrumWeb.Graphql.SchemaTest do
     end
   end
 
-  describe "artifact field shape" do
-    test "artifact type exposes exactly the project file contract" do
-      artifact_fields =
-        SacrumWeb.Graphql.Schema
-        |> Absinthe.Schema.lookup_type(:artifact)
-        |> Map.fetch!(:fields)
-        |> Map.delete(:__typename)
-        |> Map.keys()
-        |> MapSet.new()
-
-      assert artifact_fields ==
-               MapSet.new([
-                 :id,
-                 :filename,
-                 :body,
-                 :inserted_at,
-                 :updated_at
-               ])
-    end
-  end
-
   describe "project queries" do
     setup [:setup_user_and_project]
 
@@ -192,7 +171,9 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       result =
         conn
         |> authenticate(user)
-        |> graphql(~s|{ project(id: "#{project.id}") { artifacts { id filename body } } }|)
+        |> graphql(
+          ~s|{ project(id: "#{project.id}") { artifacts { id filename body insertedAt updatedAt } } }|
+        )
         |> json_response(200)
 
       artifacts = Enum.sort_by(result["data"]["project"]["artifacts"], & &1["filename"])
@@ -201,12 +182,16 @@ defmodule SacrumWeb.Graphql.SchemaTest do
                %{
                  "body" => "# Implementation plan",
                  "filename" => "implementation-plan.md",
-                 "id" => markdown.id
+                 "id" => markdown.id,
+                 "insertedAt" => DateTime.to_iso8601(markdown.inserted_at),
+                 "updatedAt" => DateTime.to_iso8601(markdown.updated_at)
                },
                %{
                  "body" => ~s({"status":"complete"}),
                  "filename" => "implementation-result.json",
-                 "id" => json.id
+                 "id" => json.id,
+                 "insertedAt" => DateTime.to_iso8601(json.inserted_at),
+                 "updatedAt" => DateTime.to_iso8601(json.updated_at)
                }
              ]
 

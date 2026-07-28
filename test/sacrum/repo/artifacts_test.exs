@@ -83,6 +83,31 @@ defmodule Sacrum.Repo.ArtifactsTest do
     end
   end
 
+  describe "update/2" do
+    setup [:setup_artifact_project]
+
+    test "persists filename and body changes", %{user: user, project: project} do
+      {:ok, artifact} = Artifacts.insert(user.id, project.id, valid_attrs())
+      json_body = ~s({"steps":["migration","schema","repo"],"complete":true})
+
+      assert {:ok, updated_artifact} =
+               Artifacts.update(artifact, %{
+                 filename: "implementation-result.json",
+                 body: json_body
+               })
+
+      assert updated_artifact.id == artifact.id
+      assert updated_artifact.user_id == user.id
+      assert updated_artifact.project_id == project.id
+      assert updated_artifact.filename == "implementation-result.json"
+      assert updated_artifact.body == json_body
+
+      assert {:ok, persisted_artifact} = Artifacts.get(artifact.id)
+      assert persisted_artifact.filename == "implementation-result.json"
+      assert persisted_artifact.body == json_body
+    end
+  end
+
   describe "list_for_project/3" do
     setup [:setup_artifact_project]
 

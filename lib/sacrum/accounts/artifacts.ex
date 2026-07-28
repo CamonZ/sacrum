@@ -2,7 +2,7 @@ defmodule Sacrum.Accounts.Artifacts do
   @moduledoc """
   User-scoped artifact operations.
 
-  Artifacts are generic records that can be attached to supported subjects
+  Artifacts are project-scoped files that can be attached to supported subjects
   without depending on API resolver modules.
   """
 
