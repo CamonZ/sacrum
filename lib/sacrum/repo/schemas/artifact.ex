@@ -24,7 +24,6 @@ defmodule Sacrum.Repo.Schemas.Artifact do
     artifact
     |> cast(attrs, @artifact_fields)
     |> validate_required(@required_fields)
-    |> validate_length(:filename, max: 255)
     |> foreign_key_constraint(:project_id)
     |> foreign_key_constraint(:user_id)
   end
@@ -34,6 +33,5 @@ defmodule Sacrum.Repo.Schemas.Artifact do
     artifact
     |> cast(attrs, @artifact_fields)
     |> validate_required(@artifact_fields)
-    |> validate_length(:filename, max: 255)
   end
 end

@@ -2,43 +2,14 @@ defmodule Sacrum.Repo.Migrations.SimplifyArtifactStorageSchema do
   use Ecto.Migration
 
   def up do
-    alter table(:artifacts) do
-      add :filename, :string
-      add :body, :text
-    end
-
-    flush()
-
-    execute("""
-    UPDATE artifacts
-    SET
-      filename =
-        CASE
-          WHEN title ~* '\\.(md|json)$' THEN title
-          ELSE LEFT(COALESCE(NULLIF(title, ''), NULLIF(artifact_type, ''), 'artifact-' || id::text), 250) ||
-            CASE
-              WHEN content IS NULL AND data <> '{}'::jsonb THEN '.json'
-              ELSE '.md'
-            END
-        END,
-      body =
-        CASE
-          WHEN NULLIF(content, '') IS NOT NULL THEN content
-          WHEN data <> '{}'::jsonb THEN data::text
-          WHEN NULLIF(storage_ref, '') IS NOT NULL THEN storage_ref
-          WHEN NULLIF(title, '') IS NOT NULL THEN title
-          ELSE 'artifact-' || id::text
-        END
-    """)
-
     drop index(:artifacts, [:project_id, :visibility, :redaction_state, :inserted_at])
     drop constraint(:artifacts, :artifacts_artifact_state_check)
     drop constraint(:artifacts, :artifacts_visibility_check)
     drop constraint(:artifacts, :artifacts_redaction_state_check)
 
     alter table(:artifacts) do
-      modify :filename, :string, null: false
-      modify :body, :text, null: false
+      add :filename, :text, null: false
+      add :body, :text, null: false
       remove :artifact_type
       remove :artifact_state
       remove :visibility
@@ -58,6 +29,39 @@ defmodule Sacrum.Repo.Migrations.SimplifyArtifactStorageSchema do
   end
 
   def down do
-    raise "cannot safely restore removed artifact lifecycle, visibility, redaction, or structured data"
+    drop constraint(:artifact_links, :artifact_links_subject_type_check)
+
+    create constraint(:artifact_links, :artifact_links_subject_type_check,
+             check:
+               "subject_type IN ('task', 'task_section', 'workflow', 'task_run', 'step_execution')"
+           )
+
+    alter table(:artifacts) do
+      add :artifact_type, :string, null: false
+      add :artifact_state, :string, null: false
+      add :visibility, :string, null: false
+      add :redaction_state, :string, null: false
+      add :title, :string
+      add :content, :text
+      add :data, :map, null: false, default: %{}
+      add :storage_ref, :string
+      remove :filename
+      remove :body
+    end
+
+    create index(:artifacts, [:project_id, :visibility, :redaction_state, :inserted_at])
+
+    create constraint(:artifacts, :artifacts_artifact_state_check,
+             check:
+               "artifact_state IN ('draft', 'pending_approval', 'approved', 'applied', 'rejected')"
+           )
+
+    create constraint(:artifacts, :artifacts_visibility_check,
+             check: "visibility IN ('public', 'internal')"
+           )
+
+    create constraint(:artifacts, :artifacts_redaction_state_check,
+             check: "redaction_state IN ('not_needed', 'redacted', 'blocked')"
+           )
   end
 end

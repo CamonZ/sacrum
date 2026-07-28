@@ -47,17 +47,7 @@ defmodule Sacrum.Repo.Schemas.ArtifactTest do
       assert get_change(json_changeset, :body) == ~s({"status":"ok"})
     end
 
-    test "rejects filenames longer than the database column allows" do
-      changeset =
-        Artifact.create_changeset(
-          artifact(),
-          valid_attrs(%{filename: String.duplicate("a", 256)})
-        )
-
-      assert %{filename: ["should be at most 255 character(s)"]} = errors_on(changeset)
-    end
-
-    test "does not cast ownership or removed lifecycle fields" do
+    test "keeps ownership scoped to the artifact" do
       replacement_project_id = Ecto.UUID.generate()
       replacement_user_id = Ecto.UUID.generate()
 
@@ -66,29 +56,14 @@ defmodule Sacrum.Repo.Schemas.ArtifactTest do
           artifact(),
           valid_attrs(%{
             project_id: replacement_project_id,
-            user_id: replacement_user_id,
-            artifact_state: "approved",
-            visibility: "public",
-            redaction_state: "not_needed",
-            data: %{"ignored" => true}
+            user_id: replacement_user_id
           })
         )
 
-      refute Map.has_key?(changeset.changes, :project_id)
-      refute Map.has_key?(changeset.changes, :user_id)
-      refute Map.has_key?(changeset.changes, :artifact_state)
-      refute Map.has_key?(changeset.changes, :visibility)
-      refute Map.has_key?(changeset.changes, :redaction_state)
-      refute Map.has_key?(changeset.changes, :data)
-    end
-  end
-
-  describe "update_changeset/2" do
-    test "rejects filenames longer than the database column allows" do
-      changeset =
-        Artifact.update_changeset(artifact(), %{filename: String.duplicate("a", 256)})
-
-      assert %{filename: ["should be at most 255 character(s)"]} = errors_on(changeset)
+      assert changeset.changes == %{
+               filename: "draft-task.md",
+               body: "# Draft task\n\nTask body"
+             }
     end
   end
 end
