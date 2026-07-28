@@ -13,7 +13,6 @@ defmodule Sacrum.Repo.Artifacts do
   alias Sacrum.Repo.Schemas.Project
 
   @default_limit 50
-  @public_redaction_states ~w(not_needed redacted)
 
   defguardp is_user_project_scope(user_id, project_id)
             when is_binary(user_id) and is_binary(project_id)
@@ -41,37 +40,36 @@ defmodule Sacrum.Repo.Artifacts do
     |> Repo.update()
   end
 
-  @spec list_public_for_project(String.t(), String.t(), keyword()) :: [Artifact.t()]
-  def list_public_for_project(user_id, project_id, opts \\ [])
+  @spec list_for_project(String.t(), String.t(), keyword()) :: [Artifact.t()]
+  def list_for_project(user_id, project_id, opts \\ [])
       when is_user_project_scope(user_id, project_id) and is_options(opts) do
     Artifact
-    |> where_public_in_scope(user_id, project_id)
-    |> apply_public_artifact_order()
+    |> where_in_scope(user_id, project_id)
+    |> apply_artifact_order()
     |> apply_limit(opts)
     |> Repo.all()
   end
 
-  @spec list_public_for_subject(String.t(), String.t(), String.t(), String.t(), keyword()) :: [
+  @spec list_for_subject(String.t(), String.t(), String.t(), String.t(), keyword()) :: [
           Artifact.t()
         ]
-  def list_public_for_subject(user_id, project_id, subject_type, subject_id, opts \\ [])
+  def list_for_subject(user_id, project_id, subject_type, subject_id, opts \\ [])
       when is_user_project_scope(user_id, project_id) and is_binary(subject_type) and
              is_binary(subject_id) and is_options(opts) do
     Artifact
     |> join(:inner, [artifact], link in ArtifactLink, on: link.artifact_id == artifact.id)
-    |> where_public_in_scope(user_id, project_id)
+    |> where_in_scope(user_id, project_id)
     |> where_subject_link_in_scope(user_id, project_id, subject_type, subject_id)
-    |> apply_public_artifact_order()
+    |> apply_artifact_order()
     |> apply_limit(opts)
     |> Repo.all()
   end
 
-  defp where_public_in_scope(query, user_id, project_id) do
+  defp where_in_scope(query, user_id, project_id) do
     where(
       query,
       [artifact],
-      artifact.user_id == ^user_id and artifact.project_id == ^project_id and
-        artifact.visibility == "public" and artifact.redaction_state in ^@public_redaction_states
+      artifact.user_id == ^user_id and artifact.project_id == ^project_id
     )
   end
 
@@ -84,7 +82,7 @@ defmodule Sacrum.Repo.Artifacts do
     )
   end
 
-  defp apply_public_artifact_order(query) do
+  defp apply_artifact_order(query) do
     order_by(query, [artifact], desc: artifact.inserted_at, desc: artifact.id)
   end
 

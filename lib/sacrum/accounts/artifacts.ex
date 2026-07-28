@@ -32,12 +32,12 @@ defmodule Sacrum.Accounts.Artifacts do
   end
 
   @doc """
-  List public, redaction-safe artifacts attached to a subject.
+  List artifacts attached to a subject within the caller's user and project scope.
   """
   @spec list_for_subject(String.t(), String.t(), String.t(), String.t()) :: [Artifact.t()]
   def list_for_subject(user_id, project_id, subject_type, subject_id)
       when is_binary(user_id) and is_binary(project_id) and is_binary(subject_type) and
              is_binary(subject_id) do
-    ArtifactsRepo.list_public_for_subject(user_id, project_id, subject_type, subject_id)
+    ArtifactsRepo.list_for_subject(user_id, project_id, subject_type, subject_id)
   end
 end

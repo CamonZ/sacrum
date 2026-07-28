@@ -292,7 +292,9 @@ defmodule Sacrum.Repo.ArtifactLinksTest do
     } do
       other_project = create_project(user, "Other Link Project")
       other_project_task = create_task(other_project, "Other linked task")
-      other_project_artifact = create_artifact(user, other_project, %{title: "Other plan"})
+
+      other_project_artifact =
+        create_artifact(user, other_project, %{filename: "other-project-plan.md"})
 
       other_user = create_user("other-subject-link")
       other_user_project = create_project(other_user, "Other User Project")
@@ -361,7 +363,10 @@ defmodule Sacrum.Repo.ArtifactLinksTest do
       step_execution: step_execution
     } do
       other_project = create_project(user, "Other Artifact Link Project")
-      other_project_artifact = create_artifact(user, other_project, %{title: "Other artifact"})
+
+      other_project_artifact =
+        create_artifact(user, other_project, %{filename: "other-project-artifact.md"})
+
       other_project_task = create_task(other_project, "Other artifact task")
 
       {:ok, task_link} =

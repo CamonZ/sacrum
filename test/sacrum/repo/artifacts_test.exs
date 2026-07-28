@@ -1,9 +1,11 @@
 defmodule Sacrum.Repo.ArtifactsTest do
   use Sacrum.DataCase, async: true
 
+  alias Sacrum.Repo.ArtifactLinks
   alias Sacrum.Repo.Artifacts
   alias Sacrum.Repo.Projects
   alias Sacrum.Repo.Schemas.Artifact
+  alias Sacrum.Repo.Tasks
   alias Sacrum.Repo.Users
 
   defp create_user(prefix \\ "artifact") do
@@ -34,16 +36,27 @@ defmodule Sacrum.Repo.ArtifactsTest do
   defp valid_attrs(attrs \\ %{}) do
     Map.merge(
       %{
-        artifact_type: "plan",
-        artifact_state: "draft",
-        visibility: "public",
-        redaction_state: "not_needed",
-        title: "Implementation plan",
-        content: "Create the persistence boundary through the repo layer.",
-        data: %{"steps" => ["migration", "schema", "repo"]}
+        filename: "implementation-plan.md",
+        body: "# Implementation plan\n\nCreate the persistence boundary through the repo layer."
       },
       attrs
     )
+  end
+
+  defp create_task(project, title \\ "Artifact subject") do
+    {:ok, task} = Tasks.insert(project, %{title: title})
+    task
+  end
+
+  defp link_artifact(user, project, artifact, subject_type, subject_id) do
+    {:ok, link} =
+      ArtifactLinks.insert(user.id, project.id, artifact.id, %{
+        subject_type: subject_type,
+        subject_id: subject_id,
+        relationship_kind: "attached_to"
+      })
+
+    link
   end
 
   describe "insert/3" do
@@ -51,17 +64,15 @@ defmodule Sacrum.Repo.ArtifactsTest do
 
     test "creates an artifact scoped to the user and project", %{user: user, project: project} do
       assert {:ok, artifact} =
-               Artifacts.insert(user.id, project.id, valid_attrs(%{storage_ref: "blob://plan-1"}))
+               Artifacts.insert(user.id, project.id, valid_attrs())
 
       assert Artifact == artifact.__struct__
       assert artifact.user_id == user.id
       assert artifact.project_id == project.id
-      assert artifact.artifact_type == "plan"
-      assert artifact.artifact_state == "draft"
-      assert artifact.visibility == "public"
-      assert artifact.redaction_state == "not_needed"
-      assert artifact.storage_ref == "blob://plan-1"
-      assert artifact.data == %{"steps" => ["migration", "schema", "repo"]}
+      assert artifact.filename == "implementation-plan.md"
+
+      assert artifact.body ==
+               "# Implementation plan\n\nCreate the persistence boundary through the repo layer."
     end
 
     test "rejects creating an artifact in another user's project", %{project: project} do
@@ -72,49 +83,87 @@ defmodule Sacrum.Repo.ArtifactsTest do
     end
   end
 
-  describe "list_public_for_project/3" do
+  describe "list_for_project/3" do
     setup [:setup_artifact_project]
 
-    test "lists only public artifacts that are not blocked", %{user: user, project: project} do
-      {:ok, public_artifact} =
-        Artifacts.insert(user.id, project.id, valid_attrs(%{title: "Visible plan"}))
+    test "lists Markdown and JSON files only within the user and project scope", %{
+      user: user,
+      project: project
+    } do
+      {:ok, markdown_artifact} =
+        Artifacts.insert(user.id, project.id, valid_attrs())
 
-      {:ok, redacted_artifact} =
+      json_body = ~s({"steps":["migration","schema","repo"]})
+
+      {:ok, json_artifact} =
         Artifacts.insert(
           user.id,
           project.id,
-          valid_attrs(%{title: "Redacted summary", redaction_state: "redacted"})
-        )
-
-      {:ok, internal_artifact} =
-        Artifacts.insert(
-          user.id,
-          project.id,
-          valid_attrs(%{title: "Operator trace", visibility: "internal"})
-        )
-
-      {:ok, blocked_artifact} =
-        Artifacts.insert(
-          user.id,
-          project.id,
-          valid_attrs(%{title: "Blocked draft", redaction_state: "blocked"})
+          valid_attrs(%{filename: "implementation-plan.json", body: json_body})
         )
 
       other_project = create_project(user, "Other Artifact Project")
 
       {:ok, other_project_artifact} =
-        Artifacts.insert(user.id, other_project.id, valid_attrs(%{title: "Other project"}))
+        Artifacts.insert(
+          user.id,
+          other_project.id,
+          valid_attrs(%{filename: "other-project.md"})
+        )
 
-      listed_ids =
-        user.id
-        |> Artifacts.list_public_for_project(project.id)
-        |> Enum.map(& &1.id)
+      artifacts = Artifacts.list_for_project(user.id, project.id)
+      listed_ids = Enum.map(artifacts, & &1.id)
 
-      assert public_artifact.id in listed_ids
-      assert redacted_artifact.id in listed_ids
-      refute internal_artifact.id in listed_ids
-      refute blocked_artifact.id in listed_ids
+      assert markdown_artifact.id in listed_ids
+      assert json_artifact.id in listed_ids
       refute other_project_artifact.id in listed_ids
+      assert Enum.find(artifacts, &(&1.id == json_artifact.id)).body == json_body
+
+      other_user = create_user("other_artifact_reader")
+      assert [] = Artifacts.list_for_project(other_user.id, project.id)
+    end
+  end
+
+  describe "list_for_subject/5" do
+    setup [:setup_artifact_project]
+
+    test "returns only files linked to the scoped subject", %{user: user, project: project} do
+      task = create_task(project)
+      other_task = create_task(project, "Other artifact subject")
+
+      {:ok, linked_markdown} =
+        Artifacts.insert(user.id, project.id, valid_attrs(%{filename: "task.md"}))
+
+      json_body = ~s({"status":"ready"})
+
+      {:ok, linked_json} =
+        Artifacts.insert(
+          user.id,
+          project.id,
+          valid_attrs(%{filename: "task.json", body: json_body})
+        )
+
+      {:ok, unlinked} =
+        Artifacts.insert(user.id, project.id, valid_attrs(%{filename: "unlinked.md"}))
+
+      {:ok, other_subject_artifact} =
+        Artifacts.insert(user.id, project.id, valid_attrs(%{filename: "other-task.md"}))
+
+      link_artifact(user, project, linked_markdown, "task", task.id)
+      link_artifact(user, project, linked_json, "task", task.id)
+      link_artifact(user, project, other_subject_artifact, "task", other_task.id)
+
+      artifacts = Artifacts.list_for_subject(user.id, project.id, "task", task.id)
+      listed_ids = Enum.map(artifacts, & &1.id)
+
+      assert linked_markdown.id in listed_ids
+      assert linked_json.id in listed_ids
+      refute unlinked.id in listed_ids
+      refute other_subject_artifact.id in listed_ids
+      assert Enum.find(artifacts, &(&1.id == linked_json.id)).body == json_body
+
+      other_user = create_user("other_subject_reader")
+      assert [] = Artifacts.list_for_subject(other_user.id, project.id, "task", task.id)
     end
   end
 end
