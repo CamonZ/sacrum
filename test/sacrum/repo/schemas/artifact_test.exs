@@ -13,67 +13,57 @@ defmodule Sacrum.Repo.Schemas.ArtifactTest do
   defp valid_attrs(attrs) do
     Map.merge(
       %{
-        artifact_type: "task_draft",
-        artifact_state: "draft",
-        visibility: "public",
-        redaction_state: "not_needed",
-        title: "Draft task",
-        content: "Task body",
-        data: %{"title" => "Draft task"}
+        filename: "draft-task.md",
+        body: "# Draft task\n\nTask body"
       },
       attrs
     )
   end
 
   describe "create_changeset/2" do
-    test "requires ownership and artifact contract fields" do
+    test "requires ownership, filename, and body" do
       changeset = Artifact.create_changeset(struct(Artifact), %{})
 
       assert %{
                project_id: ["can't be blank"],
                user_id: ["can't be blank"],
-               artifact_type: ["can't be blank"],
-               artifact_state: ["can't be blank"],
-               visibility: ["can't be blank"],
-               redaction_state: ["can't be blank"]
+               filename: ["can't be blank"],
+               body: ["can't be blank"]
              } = errors_on(changeset)
     end
 
-    test "accepts documented lifecycle, visibility, and redaction values" do
-      for artifact_state <- ["draft", "pending_approval", "approved", "applied", "rejected"],
-          visibility <- ["public", "internal"],
-          redaction_state <- ["not_needed", "redacted", "blocked"] do
-        changeset =
-          artifact()
-          |> Artifact.create_changeset(
-            valid_attrs(%{
-              artifact_state: artifact_state,
-              visibility: visibility,
-              redaction_state: redaction_state
-            })
-          )
+    test "accepts Markdown and JSON filename/body artifacts" do
+      markdown_changeset = Artifact.create_changeset(artifact(), valid_attrs(%{}))
 
-        assert changeset.valid?,
-               "expected #{inspect({artifact_state, visibility, redaction_state})} to be valid"
-      end
+      json_changeset =
+        Artifact.create_changeset(
+          artifact(),
+          valid_attrs(%{filename: "result.json", body: ~s({"status":"ok"})})
+        )
+
+      assert markdown_changeset.valid?
+      assert json_changeset.valid?
+      assert get_change(markdown_changeset, :filename) == "draft-task.md"
+      assert get_change(json_changeset, :body) == ~s({"status":"ok"})
     end
 
-    test "rejects values outside the artifact persistence contract" do
+    test "keeps ownership scoped to the artifact" do
+      replacement_project_id = Ecto.UUID.generate()
+      replacement_user_id = Ecto.UUID.generate()
+
       changeset =
-        artifact()
-        |> Artifact.create_changeset(
+        Artifact.create_changeset(
+          artifact(),
           valid_attrs(%{
-            artifact_state: "published",
-            visibility: "private",
-            redaction_state: "unsafe"
+            project_id: replacement_project_id,
+            user_id: replacement_user_id
           })
         )
 
-      assert %{
-               artifact_state: ["is invalid"],
-               visibility: ["is invalid"],
-               redaction_state: ["is invalid"]
-             } = errors_on(changeset)
+      assert changeset.changes == %{
+               filename: "draft-task.md",
+               body: "# Draft task\n\nTask body"
+             }
     end
   end
 end

@@ -38,12 +38,8 @@ defmodule Sacrum.Repo.ArtifactLinksTest do
     attrs =
       Map.merge(
         %{
-          artifact_type: "task_draft",
-          artifact_state: "draft",
-          visibility: "public",
-          redaction_state: "not_needed",
-          title: "Draft task",
-          content: "Task body"
+          filename: "draft-task.md",
+          body: "# Draft task\n\nTask body"
         },
         attrs
       )
@@ -131,6 +127,7 @@ defmodule Sacrum.Repo.ArtifactLinksTest do
       step_execution: step_execution
     } do
       subjects = [
+        {"project", project.id, "attached_to"},
         {"task", task.id, "attached_to"},
         {"task_section", section.id, "evidence_for"},
         {"workflow", workflow.id, "attached_to"},
@@ -153,6 +150,31 @@ defmodule Sacrum.Repo.ArtifactLinksTest do
         assert link.project_id == project.id
         assert link.user_id == user.id
       end
+    end
+
+    test "rejects project subjects outside the link scope", %{
+      user: user,
+      project: project,
+      artifact: artifact
+    } do
+      other_project = create_project(user, "Other Project Subject")
+
+      assert {:error, :subject_scope_mismatch} =
+               ArtifactLinks.insert(user.id, project.id, artifact.id, %{
+                 subject_type: "project",
+                 subject_id: other_project.id,
+                 relationship_kind: "attached_to"
+               })
+
+      other_user = create_user("other-project-subject-link")
+      other_user_project = create_project(other_user, "Other User Project Subject")
+
+      assert {:error, :subject_scope_mismatch} =
+               ArtifactLinks.insert(user.id, project.id, artifact.id, %{
+                 subject_type: "project",
+                 subject_id: other_user_project.id,
+                 relationship_kind: "attached_to"
+               })
     end
 
     test "rejects artifact links whose subject project scope does not match", %{
@@ -270,7 +292,9 @@ defmodule Sacrum.Repo.ArtifactLinksTest do
     } do
       other_project = create_project(user, "Other Link Project")
       other_project_task = create_task(other_project, "Other linked task")
-      other_project_artifact = create_artifact(user, other_project, %{title: "Other plan"})
+
+      other_project_artifact =
+        create_artifact(user, other_project, %{filename: "other-project-plan.md"})
 
       other_user = create_user("other-subject-link")
       other_user_project = create_project(other_user, "Other User Project")
@@ -339,7 +363,10 @@ defmodule Sacrum.Repo.ArtifactLinksTest do
       step_execution: step_execution
     } do
       other_project = create_project(user, "Other Artifact Link Project")
-      other_project_artifact = create_artifact(user, other_project, %{title: "Other artifact"})
+
+      other_project_artifact =
+        create_artifact(user, other_project, %{filename: "other-project-artifact.md"})
+
       other_project_task = create_task(other_project, "Other artifact task")
 
       {:ok, task_link} =
