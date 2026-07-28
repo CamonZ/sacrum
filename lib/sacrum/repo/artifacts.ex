@@ -21,6 +21,24 @@ defmodule Sacrum.Repo.Artifacts do
   defguardp is_attrs(attrs) when is_map(attrs)
   defguardp is_options(opts) when is_list(opts)
 
+  @spec get_in_scope(String.t(), String.t()) :: {:ok, Artifact.t()} | {:error, :not_found}
+  def get_in_scope(user_id, artifact_id)
+      when is_binary(user_id) and is_binary(artifact_id) do
+    user_id
+    |> artifact_in_scope_query(artifact_id)
+    |> fetch_one()
+  end
+
+  @spec get_in_scope_for_update(String.t(), String.t()) ::
+          {:ok, Artifact.t()} | {:error, :not_found}
+  def get_in_scope_for_update(user_id, artifact_id)
+      when is_binary(user_id) and is_binary(artifact_id) do
+    user_id
+    |> artifact_in_scope_query(artifact_id)
+    |> lock("FOR UPDATE")
+    |> fetch_one()
+  end
+
   @spec insert(String.t(), String.t(), map()) ::
           {:ok, Artifact.t()} | {:error, Ecto.Changeset.t()} | {:error, :not_found}
   def insert(user_id, project_id, attrs \\ %{})
@@ -75,6 +93,17 @@ defmodule Sacrum.Repo.Artifacts do
       [artifact],
       artifact.user_id == ^user_id and artifact.project_id == ^project_id
     )
+  end
+
+  defp artifact_in_scope_query(user_id, artifact_id) do
+    where(Artifact, [artifact], artifact.id == ^artifact_id and artifact.user_id == ^user_id)
+  end
+
+  defp fetch_one(query) do
+    case Repo.one(query) do
+      nil -> {:error, :not_found}
+      artifact -> {:ok, artifact}
+    end
   end
 
   defp where_subject_link_in_scope(query, user_id, project_id, subject_type, subject_id) do

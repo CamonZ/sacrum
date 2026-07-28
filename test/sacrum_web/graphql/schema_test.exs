@@ -344,6 +344,172 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert ArtifactsRepo.count() == 0
       assert ArtifactLinks.count() == 0
     end
+
+    test "updates an artifact and replaces its attachment within the owning project", %{
+      conn: conn
+    } do
+      user = create_user()
+      {:ok, project} = Accounts.Projects.insert(user.id, %{name: "Artifact Update Project"})
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Artifact target"})
+
+      artifact = create_artifact(user, project, %{})
+      link_artifact(user, project, artifact, "project", project.id, "attached_to")
+
+      update_result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            updateArtifact(
+              id: "#{artifact.id}"
+              filename: "updated.json"
+              body: "{\\\"status\\\":\\\"updated\\\"}"
+              subjectType: "task"
+              subjectId: "#{task.id}"
+            ) { id filename body }
+          }
+        """)
+        |> json_response(200)
+
+      assert update_result["data"]["updateArtifact"] == %{
+               "body" => ~s({"status":"updated"}),
+               "filename" => "updated.json",
+               "id" => artifact.id
+             }
+
+      project_result =
+        conn
+        |> recycle()
+        |> authenticate(user)
+        |> graphql(~s|{ project(id: "#{project.id}") { artifacts { id } } }|)
+        |> json_response(200)
+
+      task_result =
+        conn
+        |> recycle()
+        |> authenticate(user)
+        |> graphql(~s|{ task(id: "#{task.id}") { artifacts { id filename body } } }|)
+        |> json_response(200)
+
+      assert project_result["data"]["project"]["artifacts"] == []
+
+      assert task_result["data"]["task"]["artifacts"] == [
+               %{
+                 "body" => ~s({"status":"updated"}),
+                 "filename" => "updated.json",
+                 "id" => artifact.id
+               }
+             ]
+
+      {:ok, other_project} =
+        Accounts.Projects.insert(user.id, %{name: "Other Artifact Update Project"})
+
+      {:ok, other_task} =
+        Accounts.Tasks.insert(user.id, other_project.id, %{title: "Forbidden artifact target"})
+
+      rejected_result =
+        conn
+        |> recycle()
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            updateArtifact(
+              id: "#{artifact.id}"
+              filename: "forbidden.md"
+              subjectType: "task"
+              subjectId: "#{other_task.id}"
+            ) { id filename }
+          }
+        """)
+        |> json_response(200)
+
+      assert rejected_result["data"]["updateArtifact"] == nil
+      assert [%{"message" => _}] = rejected_result["errors"]
+
+      assert {:ok, persisted_artifact} = ArtifactsRepo.get_in_scope(user.id, artifact.id)
+      assert persisted_artifact.filename == "updated.json"
+      assert [persisted_link] = ArtifactLinks.list_by_artifact(user.id, project.id, artifact.id)
+      assert persisted_link.subject_type == "task"
+      assert persisted_link.subject_id == task.id
+    end
+
+    test "does not update or delete another user's artifact", %{conn: conn} do
+      owner = create_user(%{email: "mutation-owner@example.com", username: "mutation_owner"})
+      caller = create_user(%{email: "mutation-caller@example.com", username: "mutation_caller"})
+      {:ok, project} = Accounts.Projects.insert(owner.id, %{name: "Mutation Owner Project"})
+
+      assert {:ok, %{artifact: artifact}} =
+               Accounts.Artifacts.create_and_link(
+                 owner.id,
+                 project.id,
+                 %{filename: "owned.md", body: "# Owned"},
+                 %{
+                   subject_type: "project",
+                   subject_id: project.id,
+                   relationship_kind: "attached_to"
+                 }
+               )
+
+      update_result =
+        conn
+        |> authenticate(caller)
+        |> graphql("""
+          mutation {
+            updateArtifact(id: "#{artifact.id}", filename: "forbidden.md") { id }
+          }
+        """)
+        |> json_response(200)
+
+      delete_result =
+        conn
+        |> recycle()
+        |> authenticate(caller)
+        |> graphql("""
+          mutation { deleteArtifact(id: "#{artifact.id}") { id } }
+        """)
+        |> json_response(200)
+
+      assert update_result["data"]["updateArtifact"] == nil
+      assert [%{"message" => _}] = update_result["errors"]
+      assert delete_result["data"]["deleteArtifact"] == nil
+      assert [%{"message" => _}] = delete_result["errors"]
+      assert {:ok, persisted_artifact} = ArtifactsRepo.get_in_scope(owner.id, artifact.id)
+      assert persisted_artifact.filename == "owned.md"
+    end
+
+    test "deletes an artifact and its attachments", %{conn: conn} do
+      user = create_user()
+      {:ok, project} = Accounts.Projects.insert(user.id, %{name: "Artifact Delete Project"})
+
+      assert {:ok, %{artifact: artifact}} =
+               Accounts.Artifacts.create_and_link(
+                 user.id,
+                 project.id,
+                 %{filename: "delete-me.md", body: "# Delete me"},
+                 %{
+                   subject_type: "project",
+                   subject_id: project.id,
+                   relationship_kind: "attached_to"
+                 }
+               )
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation { deleteArtifact(id: "#{artifact.id}") { id filename body } }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["deleteArtifact"] == %{
+               "body" => "# Delete me",
+               "filename" => "delete-me.md",
+               "id" => artifact.id
+             }
+
+      assert {:error, :not_found} = ArtifactsRepo.get_in_scope(user.id, artifact.id)
+      assert ArtifactLinks.list_by_artifact(user.id, project.id, artifact.id) == []
+    end
   end
 
   describe "task queries" do

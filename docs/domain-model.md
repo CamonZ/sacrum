@@ -56,7 +56,7 @@ For example, Markdown is stored as a `.md` filename and Markdown body, while JSO
 
 Every artifact row has `user_id` and `project_id` ownership scope. Attachments are represented separately by `ArtifactLink`. A project attachment uses `subject_type: "project"`, the owning project ID as `subject_id`, and normally `relationship_kind: "attached_to"`. The project scope on the artifact row does not by itself make the file appear in `Project.artifacts`; that GraphQL field returns files with a matching project subject link.
 
-The Accounts subject-listing and link-creation paths include both the caller's user ID and project ID. Subject reads additionally match `subject_type` and `subject_id`, so those application paths do not return links or files across user or project boundaries. Artifact creation plus its initial link is transactional through `Accounts.Artifacts.create_and_link/4`.
+The Accounts subject-listing and link-creation paths include both the caller's user ID and project ID. Subject reads additionally match `subject_type` and `subject_id`, so those application paths do not return links or files across user or project boundaries. Artifact creation plus its initial link is transactional through `Accounts.Artifacts.create_and_link/4`. Updating an artifact can replace its sole attachment within the same ownership scope; file and link changes commit or roll back together. Deleting an artifact cascades to its links.
 
 ## API Surface
 
@@ -115,12 +115,18 @@ The `Project.artifacts(limit: 50, offset: 0)` field returns the caller's project
 | `updateProject` | `id!`, `name`, `description`, `slug` | `:project` |
 | `deleteProject` | `id!` | `:project` |
 
-**`artifact_types.ex`** — 1 mutation (via `Accounts.Artifacts`)
+**`artifact_types.ex`** — 3 mutations (via `Accounts.Artifacts`)
 | Mutation | Arguments | Returns |
 |----------|-----------|---------|
 | `createArtifact` | `project_id!`, `filename!`, `body!` | `:artifact` |
+| `updateArtifact` | `id!`, `filename`, `body`, `subject_type`, `subject_id` | `:artifact` |
+| `deleteArtifact` | `id!` | `:artifact` |
 
 `createArtifact` creates the file in the authenticated user's project and atomically adds the project `attached_to` link used by `Project.artifacts`. Requests for a project outside the caller's scope fail without persisting either row.
+
+`updateArtifact` changes `filename`, `body`, or both. Supplying `subject_type` and `subject_id` together replaces the artifact's sole link while preserving its relationship kind and metadata. The target must belong to the artifact's existing user and project; ownership and project scope never move. Invalid targets roll back file edits and leave the original link intact. Artifacts with multiple links can still update file fields, but attachment replacement is rejected as ambiguous.
+
+`deleteArtifact` deletes an artifact owned by the authenticated user and returns the deleted file. Its `ArtifactLink` rows are removed by the database cascade. Update and delete requests for another user's artifact return not found.
 
 **`workflow_type.ex`** — 4 mutations (all via `Accounts.Workflows`)
 | Mutation | Arguments | Returns |

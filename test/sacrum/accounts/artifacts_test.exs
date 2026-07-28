@@ -220,6 +220,170 @@ defmodule Sacrum.Accounts.ArtifactsTest do
     end
   end
 
+  describe "update/4" do
+    setup [:setup_artifact_scope]
+
+    test "updates filename and body independently", %{user: user, project: project} do
+      artifact = create_artifact(user, project, %{})
+
+      assert {:ok, renamed_artifact} =
+               Artifacts.update(user.id, artifact.id, %{filename: "renamed.md"})
+
+      assert renamed_artifact.filename == "renamed.md"
+      assert renamed_artifact.body == artifact.body
+
+      assert {:ok, edited_artifact} =
+               Artifacts.update(user.id, artifact.id, %{body: "# Edited body"})
+
+      assert edited_artifact.filename == "renamed.md"
+      assert edited_artifact.body == "# Edited body"
+    end
+
+    test "updates file fields and replaces its sole attachment within the project", %{
+      user: user,
+      project: project,
+      task: task
+    } do
+      assert {:ok, %{artifact: artifact}} =
+               Artifacts.create_and_link(
+                 user.id,
+                 project.id,
+                 artifact_attrs(),
+                 link_attrs("project", project.id, %{
+                   relationship_kind: "evidence_for",
+                   metadata: %{"source" => "test"}
+                 })
+               )
+
+      assert {:ok, updated_artifact} =
+               Artifacts.update(
+                 user.id,
+                 artifact.id,
+                 %{filename: "task-result.json", body: ~s({"status":"complete"})},
+                 %{subject_type: "task", subject_id: task.id}
+               )
+
+      assert updated_artifact.filename == "task-result.json"
+      assert updated_artifact.body == ~s({"status":"complete"})
+      assert [] = Artifacts.list_for_subject(user.id, project.id, "project", project.id)
+      assert [listed_artifact] = Artifacts.list_for_subject(user.id, project.id, "task", task.id)
+      assert listed_artifact.id == artifact.id
+
+      assert [link] = ArtifactLinks.list_by_artifact(user.id, project.id, artifact.id)
+      assert link.subject_type == "task"
+      assert link.subject_id == task.id
+      assert link.relationship_kind == "evidence_for"
+      assert link.metadata == %{"source" => "test"}
+    end
+
+    test "rolls back file and attachment changes outside the artifact scope", %{
+      user: user,
+      project: project
+    } do
+      assert {:ok, %{artifact: artifact, link: original_link}} =
+               Artifacts.create_and_link(
+                 user.id,
+                 project.id,
+                 artifact_attrs(),
+                 link_attrs("project", project.id)
+               )
+
+      other_project = create_project(user, "Other Update Project")
+      other_project_task = create_task(user, other_project, "Other project update target")
+
+      other_user = create_user("other-update-owner")
+      other_user_project = create_project(other_user, "Other User Update Project")
+
+      other_user_task =
+        create_task(other_user, other_user_project, "Other user update target")
+
+      for subject_id <- [other_project_task.id, other_user_task.id] do
+        assert {:error, :subject_scope_mismatch} =
+                 Artifacts.update(
+                   user.id,
+                   artifact.id,
+                   %{filename: "forbidden.md", body: "Forbidden"},
+                   %{subject_type: "task", subject_id: subject_id}
+                 )
+
+        assert {:ok, persisted_artifact} = ArtifactsRepo.get_in_scope(user.id, artifact.id)
+        assert persisted_artifact.filename == artifact.filename
+        assert persisted_artifact.body == artifact.body
+
+        assert [persisted_link] =
+                 ArtifactLinks.list_by_artifact(user.id, project.id, artifact.id)
+
+        assert persisted_link.id == original_link.id
+      end
+    end
+
+    test "rejects ambiguous attachment replacement without rolling back field-only updates", %{
+      user: user,
+      project: project,
+      task: task
+    } do
+      artifact = create_artifact(user, project, %{})
+      link_artifact(user, project, artifact, "project", project.id)
+      link_artifact(user, project, artifact, "task", task.id)
+
+      assert {:error, :ambiguous_attachment} =
+               Artifacts.update(
+                 user.id,
+                 artifact.id,
+                 %{filename: "ambiguous.md"},
+                 %{subject_type: "project", subject_id: project.id}
+               )
+
+      assert {:ok, persisted_artifact} = ArtifactsRepo.get_in_scope(user.id, artifact.id)
+      assert persisted_artifact.filename == artifact.filename
+
+      assert {:ok, updated_artifact} =
+               Artifacts.update(user.id, artifact.id, %{filename: "field-only.md"})
+
+      assert updated_artifact.filename == "field-only.md"
+      assert length(ArtifactLinks.list_by_artifact(user.id, project.id, artifact.id)) == 2
+    end
+
+    test "does not update another user's artifact", %{user: user, project: project} do
+      artifact = create_artifact(user, project, %{})
+      other_user = create_user("other-artifact-updater")
+
+      assert {:error, :not_found} =
+               Artifacts.update(other_user.id, artifact.id, %{filename: "forbidden.md"})
+
+      assert {:ok, persisted_artifact} = ArtifactsRepo.get_in_scope(user.id, artifact.id)
+      assert persisted_artifact.filename == artifact.filename
+    end
+  end
+
+  describe "delete/2" do
+    setup [:setup_artifact_scope]
+
+    test "deletes an owned artifact and cascades its links", %{
+      user: user,
+      project: project,
+      task: task
+    } do
+      artifact = create_artifact(user, project, %{})
+      link_artifact(user, project, artifact, "project", project.id)
+      link_artifact(user, project, artifact, "task", task.id)
+
+      assert {:ok, deleted_artifact} = Artifacts.delete(user.id, artifact.id)
+      assert deleted_artifact.id == artifact.id
+      assert {:error, :not_found} = ArtifactsRepo.get_in_scope(user.id, artifact.id)
+      assert ArtifactLinks.list_by_artifact(user.id, project.id, artifact.id) == []
+    end
+
+    test "does not delete another user's artifact", %{user: user, project: project} do
+      artifact = create_artifact(user, project, %{})
+      other_user = create_user("other-artifact-deleter")
+
+      assert {:error, :not_found} = Artifacts.delete(other_user.id, artifact.id)
+      assert {:ok, persisted_artifact} = ArtifactsRepo.get_in_scope(user.id, artifact.id)
+      assert persisted_artifact.id == artifact.id
+    end
+  end
+
   describe "list_for_subject/4" do
     setup [:setup_artifact_scope]
 

@@ -41,5 +41,42 @@ defmodule SacrumWeb.Graphql.Types.ArtifactTypes do
         end
       end)
     end
+
+    field :update_artifact, :artifact do
+      arg(:id, non_null(:uuid4))
+      arg(:filename, :string)
+      arg(:body, :string)
+      arg(:subject_type, :string)
+      arg(:subject_id, :uuid4)
+
+      resolve(fn %{id: id} = args, %{context: %{current_user: user}} ->
+        artifact_attrs = Map.take(args, [:filename, :body])
+
+        with {:ok, attachment_attrs} <- attachment_attrs(args) do
+          Accounts.Artifacts.update(user.id, id, artifact_attrs, attachment_attrs)
+        end
+      end)
+    end
+
+    field :delete_artifact, :artifact do
+      arg(:id, non_null(:uuid4))
+
+      resolve(fn %{id: id}, %{context: %{current_user: user}} ->
+        Accounts.Artifacts.delete(user.id, id)
+      end)
+    end
+  end
+
+  defp attachment_attrs(args) do
+    case Map.take(args, [:subject_type, :subject_id]) do
+      %{subject_type: subject_type, subject_id: subject_id} ->
+        {:ok, %{subject_type: subject_type, subject_id: subject_id}}
+
+      attrs when map_size(attrs) == 0 ->
+        {:ok, nil}
+
+      _attrs ->
+        {:error, "subjectType and subjectId must be provided together"}
+    end
   end
 end
