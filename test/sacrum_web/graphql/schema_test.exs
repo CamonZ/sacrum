@@ -21,14 +21,8 @@ defmodule SacrumWeb.Graphql.SchemaTest do
     attrs =
       Map.merge(
         %{
-          artifact_type: "plan",
-          artifact_state: "draft",
-          visibility: "public",
-          redaction_state: "not_needed",
-          title: "GraphQL artifact",
-          content: "Public artifact content",
-          data: %{"internal" => "resolver must not expose this payload"},
-          storage_ref: "blob://graphql-artifact"
+          filename: "graphql-artifact.md",
+          body: "# GraphQL artifact\n\nArtifact body"
         },
         attrs
       )
@@ -65,7 +59,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
   end
 
   describe "artifact field shape" do
-    test "artifact type exposes only the public redaction-safe contract fields" do
+    test "artifact type exposes exactly the project file contract" do
       artifact_fields =
         SacrumWeb.Graphql.Schema
         |> Absinthe.Schema.lookup_type(:artifact)
@@ -77,18 +71,11 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert artifact_fields ==
                MapSet.new([
                  :id,
-                 :artifact_type,
-                 :artifact_state,
-                 :redaction_state,
-                 :title,
-                 :content,
+                 :filename,
+                 :body,
                  :inserted_at,
                  :updated_at
                ])
-
-      refute MapSet.member?(artifact_fields, :project_id)
-      refute MapSet.member?(artifact_fields, :data)
-      refute MapSet.member?(artifact_fields, :storage_ref)
     end
   end
 
@@ -141,6 +128,107 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         |> json_response(200)
 
       refute Enum.any?(result["data"]["projects"], &(&1["id"] == project.id))
+    end
+
+    test "resolves Markdown and JSON files attached to a project", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      markdown =
+        create_artifact(user, project, %{
+          filename: "implementation-plan.md",
+          body: "# Implementation plan"
+        })
+
+      json =
+        create_artifact(user, project, %{
+          filename: "implementation-result.json",
+          body: ~s({"status":"complete"})
+        })
+
+      task_only = create_artifact(user, project, %{filename: "task-only.md"})
+
+      link_artifact(user, project, markdown, "project", project.id, "attached_to")
+      link_artifact(user, project, markdown, "project", project.id, "evidence_for")
+      link_artifact(user, project, json, "project", project.id, "attached_to")
+
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Artifact owner"})
+      link_artifact(user, project, task_only, "task", task.id, "attached_to")
+
+      {:ok, other_project} = Accounts.Projects.insert(user.id, %{name: "Other Artifact Project"})
+      other_project_artifact = create_artifact(user, other_project, %{filename: "other.md"})
+
+      link_artifact(
+        user,
+        other_project,
+        other_project_artifact,
+        "project",
+        other_project.id,
+        "attached_to"
+      )
+
+      other_user =
+        create_user(%{
+          email: "other-artifact-owner@example.com",
+          username: "other_artifact_owner"
+        })
+
+      {:ok, other_user_project} =
+        Accounts.Projects.insert(other_user.id, %{name: "Other User Artifact Project"})
+
+      other_user_artifact =
+        create_artifact(other_user, other_user_project, %{filename: "other-user.md"})
+
+      link_artifact(
+        other_user,
+        other_user_project,
+        other_user_artifact,
+        "project",
+        other_user_project.id,
+        "attached_to"
+      )
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql(~s|{ project(id: "#{project.id}") { artifacts { id filename body } } }|)
+        |> json_response(200)
+
+      artifacts = Enum.sort_by(result["data"]["project"]["artifacts"], & &1["filename"])
+
+      assert artifacts == [
+               %{
+                 "body" => "# Implementation plan",
+                 "filename" => "implementation-plan.md",
+                 "id" => markdown.id
+               },
+               %{
+                 "body" => ~s({"status":"complete"}),
+                 "filename" => "implementation-result.json",
+                 "id" => json.id
+               }
+             ]
+
+      first_page =
+        conn
+        |> recycle()
+        |> authenticate(user)
+        |> graphql(~s|{ project(id: "#{project.id}") { artifacts(limit: 1) { id } } }|)
+        |> json_response(200)
+
+      second_page =
+        conn
+        |> recycle()
+        |> authenticate(user)
+        |> graphql(~s|{ project(id: "#{project.id}") { artifacts(limit: 1, offset: 1) { id } } }|)
+        |> json_response(200)
+
+      paged_ids =
+        first_page["data"]["project"]["artifacts"] ++
+          second_page["data"]["project"]["artifacts"]
+
+      assert MapSet.new(paged_ids, & &1["id"]) == MapSet.new([markdown.id, json.id])
     end
   end
 
@@ -204,6 +292,72 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       # Verify it's actually gone
       assert {:error, :not_found} =
                Accounts.Projects.get_by(user.id, conditions: [id: project.id])
+    end
+
+    test "creates and attaches an artifact to the caller's project", %{conn: conn} do
+      user = create_user()
+      {:ok, project} = Accounts.Projects.insert(user.id, %{name: "Artifact Project"})
+      body = ~s({"result":{"status":"ready"}})
+
+      mutation_result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createArtifact(
+              projectId: "#{project.id}"
+              filename: "result.json"
+              body: #{Jason.encode!(body)}
+            ) {
+              id
+              filename
+              body
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert %{
+               "body" => ^body,
+               "filename" => "result.json",
+               "id" => artifact_id
+             } = mutation_result["data"]["createArtifact"]
+
+      query_result =
+        conn
+        |> recycle()
+        |> authenticate(user)
+        |> graphql(~s|{ project(id: "#{project.id}") { artifacts { id filename body } } }|)
+        |> json_response(200)
+
+      assert query_result["data"]["project"]["artifacts"] == [
+               %{"body" => body, "filename" => "result.json", "id" => artifact_id}
+             ]
+    end
+
+    test "does not create an artifact in another user's project", %{conn: conn} do
+      owner = create_user(%{email: "artifact-owner@example.com", username: "artifact_owner"})
+      caller = create_user(%{email: "artifact-caller@example.com", username: "artifact_caller"})
+      {:ok, project} = Accounts.Projects.insert(owner.id, %{name: "Private Artifact Project"})
+
+      result =
+        conn
+        |> authenticate(caller)
+        |> graphql("""
+          mutation {
+            createArtifact(
+              projectId: "#{project.id}"
+              filename: "forbidden.md"
+              body: "# Forbidden"
+            ) { id filename body }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["createArtifact"] == nil
+      assert [%{"message" => _}] = result["errors"]
+      assert ArtifactsRepo.count() == 0
+      assert ArtifactLinks.count() == 0
     end
   end
 
@@ -5655,53 +5809,45 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert s["content"] == "Hello"
     end
 
-    test "resolves task -> artifacts through the public artifact service", %{
+    test "resolves task -> artifacts through the scoped artifact service", %{
       conn: conn,
       user: user,
       project: project
     } do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task with artifacts"})
 
-      public_artifact =
+      markdown_artifact =
         create_artifact(user, project, %{
-          artifact_type: "task_summary",
-          artifact_state: "approved",
-          title: "Visible task artifact",
-          content: "Safe task-level artifact",
-          data: %{"internal_prompt" => "do not expose"},
-          storage_ref: "artifact://internal/task-summary"
+          filename: "task-summary.md",
+          body: "# Task summary\n\nReady for review."
         })
 
-      redacted_artifact =
+      json_artifact =
         create_artifact(user, project, %{
-          artifact_type: "task_summary",
-          artifact_state: "approved",
-          redaction_state: "redacted",
-          title: "Redacted task artifact",
-          content: "Redacted but public"
+          filename: "task-result.json",
+          body: ~s({"status":"ready"})
         })
 
-      internal_artifact =
+      other_task_artifact =
         create_artifact(user, project, %{
-          artifact_type: "internal_trace",
-          artifact_state: "draft",
-          visibility: "internal",
-          title: "Internal task artifact",
-          content: "Must stay hidden"
+          filename: "other-task.md",
+          body: "# Other task"
         })
 
-      blocked_artifact =
-        create_artifact(user, project, %{
-          artifact_type: "raw_tool_result",
-          artifact_state: "draft",
-          redaction_state: "blocked",
-          title: "Blocked task artifact",
-          content: "Must stay hidden"
-        })
-
-      for artifact <- [public_artifact, redacted_artifact, internal_artifact, blocked_artifact] do
+      for artifact <- [markdown_artifact, json_artifact] do
         link_artifact(user, project, artifact, "task", task.id, "attached_to")
       end
+
+      {:ok, other_task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Other task"})
+
+      link_artifact(
+        user,
+        project,
+        other_task_artifact,
+        "task",
+        other_task.id,
+        "attached_to"
+      )
 
       result =
         conn
@@ -5711,35 +5857,28 @@ defmodule SacrumWeb.Graphql.SchemaTest do
             task(id: "#{task.id}") {
               artifacts {
                 id
-                artifactType
-                artifactState
-                redactionState
-                title
-                content
+                filename
+                body
               }
             }
           }
         """)
         |> json_response(200)
 
-      artifact_ids = Enum.map(result["data"]["task"]["artifacts"], & &1["id"])
+      artifacts = Enum.sort_by(result["data"]["task"]["artifacts"], & &1["filename"])
 
-      assert public_artifact.id in artifact_ids
-      assert redacted_artifact.id in artifact_ids
-      refute internal_artifact.id in artifact_ids
-      refute blocked_artifact.id in artifact_ids
-
-      assert Enum.all?(result["data"]["task"]["artifacts"], fn artifact ->
-               MapSet.new(Map.keys(artifact)) ==
-                 MapSet.new([
-                   "artifactState",
-                   "artifactType",
-                   "content",
-                   "id",
-                   "redactionState",
-                   "title"
-                 ])
-             end)
+      assert artifacts == [
+               %{
+                 "body" => ~s({"status":"ready"}),
+                 "filename" => "task-result.json",
+                 "id" => json_artifact.id
+               },
+               %{
+                 "body" => "# Task summary\n\nReady for review.",
+                 "filename" => "task-summary.md",
+                 "id" => markdown_artifact.id
+               }
+             ]
     end
 
     test "resolves task -> codeRefs", %{conn: conn, user: user, project: project} do
@@ -5965,52 +6104,20 @@ defmodule SacrumWeb.Graphql.SchemaTest do
           content: "Unit test proves artifact evidence is exposed."
         })
 
-      attached_artifact =
+      attached_markdown =
         create_artifact(user, project, %{
-          artifact_type: "test_output",
-          artifact_state: "approved",
-          title: "Attached section artifact"
+          filename: "attached-evidence.md",
+          body: "# Attached evidence"
         })
 
-      evidence_artifact =
+      evidence_json =
         create_artifact(user, project, %{
-          artifact_type: "test_output",
-          artifact_state: "approved",
-          title: "Evidence section artifact",
-          data: %{"raw_tool_result" => "do not expose"},
-          storage_ref: "artifact://internal/section-evidence"
+          filename: "criterion-result.json",
+          body: ~s({"passed":true})
         })
 
-      redacted_artifact =
-        create_artifact(user, project, %{
-          artifact_type: "test_output",
-          artifact_state: "approved",
-          redaction_state: "redacted",
-          title: "Redacted section artifact",
-          content: "Public evidence with sensitive details removed"
-        })
-
-      internal_artifact =
-        create_artifact(user, project, %{
-          artifact_type: "test_output",
-          artifact_state: "draft",
-          visibility: "internal",
-          title: "Internal section artifact"
-        })
-
-      blocked_artifact =
-        create_artifact(user, project, %{
-          artifact_type: "test_output",
-          artifact_state: "draft",
-          redaction_state: "blocked",
-          title: "Blocked section artifact"
-        })
-
-      link_artifact(user, project, attached_artifact, "task_section", section.id, "attached_to")
-      link_artifact(user, project, evidence_artifact, "task_section", section.id, "evidence_for")
-      link_artifact(user, project, redacted_artifact, "task_section", section.id, "evidence_for")
-      link_artifact(user, project, internal_artifact, "task_section", section.id, "evidence_for")
-      link_artifact(user, project, blocked_artifact, "task_section", section.id, "evidence_for")
+      link_artifact(user, project, attached_markdown, "task_section", section.id, "attached_to")
+      link_artifact(user, project, evidence_json, "task_section", section.id, "evidence_for")
 
       result =
         conn
@@ -6021,8 +6128,8 @@ defmodule SacrumWeb.Graphql.SchemaTest do
               sections {
                 id
                 sectionType
-                artifacts { id artifactType artifactState redactionState title content }
-                evidence { id artifactType artifactState redactionState title content }
+                artifacts { id filename body }
+                evidence { id filename body }
               }
             }
           }
@@ -6033,32 +6140,23 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert found_section["id"] == section.id
       assert found_section["sectionType"] == "testing_criterion"
 
-      artifact_ids = Enum.map(found_section["artifacts"], & &1["id"])
-      evidence_ids = Enum.map(found_section["evidence"], & &1["id"])
+      expected_artifacts =
+        [
+          %{
+            "body" => "# Attached evidence",
+            "filename" => "attached-evidence.md",
+            "id" => attached_markdown.id
+          },
+          %{
+            "body" => ~s({"passed":true}),
+            "filename" => "criterion-result.json",
+            "id" => evidence_json.id
+          }
+        ]
+        |> Enum.sort_by(& &1["filename"])
 
-      assert attached_artifact.id in artifact_ids
-      assert evidence_artifact.id in artifact_ids
-      assert redacted_artifact.id in artifact_ids
-      refute internal_artifact.id in artifact_ids
-      refute blocked_artifact.id in artifact_ids
-
-      assert attached_artifact.id in evidence_ids
-      assert evidence_artifact.id in evidence_ids
-      assert redacted_artifact.id in evidence_ids
-      refute internal_artifact.id in evidence_ids
-      refute blocked_artifact.id in evidence_ids
-
-      assert Enum.all?(found_section["artifacts"] ++ found_section["evidence"], fn artifact ->
-               MapSet.new(Map.keys(artifact)) ==
-                 MapSet.new([
-                   "artifactState",
-                   "artifactType",
-                   "content",
-                   "id",
-                   "redactionState",
-                   "title"
-                 ])
-             end)
+      assert Enum.sort_by(found_section["artifacts"], & &1["filename"]) == expected_artifacts
+      assert Enum.sort_by(found_section["evidence"], & &1["filename"]) == expected_artifacts
     end
 
     test "resolves code_ref -> task, section, project", %{

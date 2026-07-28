@@ -26,6 +26,7 @@ defmodule SacrumWeb.Graphql.Schema do
 
   mutation do
     import_fields(:project_mutations)
+    import_fields(:artifact_mutations)
     import_fields(:workflow_mutations)
     import_fields(:workflow_step_mutations)
     import_fields(:task_mutations)

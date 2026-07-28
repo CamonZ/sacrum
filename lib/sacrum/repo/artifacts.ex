@@ -13,6 +13,7 @@ defmodule Sacrum.Repo.Artifacts do
   alias Sacrum.Repo.Schemas.Project
 
   @default_limit 50
+  @default_offset 0
 
   defguardp is_user_project_scope(user_id, project_id)
             when is_binary(user_id) and is_binary(project_id)
@@ -46,6 +47,7 @@ defmodule Sacrum.Repo.Artifacts do
     Artifact
     |> where_in_scope(user_id, project_id)
     |> apply_artifact_order()
+    |> apply_offset(opts)
     |> apply_limit(opts)
     |> Repo.all()
   end
@@ -60,7 +62,9 @@ defmodule Sacrum.Repo.Artifacts do
     |> join(:inner, [artifact], link in ArtifactLink, on: link.artifact_id == artifact.id)
     |> where_in_scope(user_id, project_id)
     |> where_subject_link_in_scope(user_id, project_id, subject_type, subject_id)
+    |> distinct(true)
     |> apply_artifact_order()
+    |> apply_offset(opts)
     |> apply_limit(opts)
     |> Repo.all()
   end
@@ -90,6 +94,10 @@ defmodule Sacrum.Repo.Artifacts do
     limit(query, ^limit_option(opts))
   end
 
+  defp apply_offset(query, opts) do
+    offset(query, ^offset_option(opts))
+  end
+
   defp project_exists?(user_id, project_id) do
     Project
     |> where([project], project.id == ^project_id and project.user_id == ^user_id)
@@ -101,5 +109,11 @@ defmodule Sacrum.Repo.Artifacts do
     |> Keyword.get(:limit, @default_limit)
     |> min(@default_limit)
     |> max(1)
+  end
+
+  defp offset_option(opts) do
+    opts
+    |> Keyword.get(:offset, @default_offset)
+    |> max(0)
   end
 end
