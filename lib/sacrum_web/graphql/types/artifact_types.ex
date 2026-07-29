@@ -15,6 +15,16 @@ defmodule SacrumWeb.Graphql.Types.ArtifactTypes do
     field :updated_at, :datetime
   end
 
+  object :artifact_queries do
+    field :artifact, :artifact do
+      arg(:id, non_null(:uuid4))
+
+      resolve(fn %{id: id}, %{context: %{current_user: user}} ->
+        Accounts.Artifacts.get(user.id, id)
+      end)
+    end
+  end
+
   object :artifact_mutations do
     field :create_artifact, :artifact do
       arg(:project_id, non_null(:uuid4))
