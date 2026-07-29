@@ -21,6 +21,7 @@ defmodule SacrumWeb.Graphql.Schema do
     import_fields(:workflow_queries)
     import_fields(:workflow_step_queries)
     import_fields(:task_queries)
+    import_fields(:artifact_queries)
     import_fields(:execution_queries)
   end
 

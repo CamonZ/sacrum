@@ -133,6 +133,32 @@ defmodule Sacrum.Accounts.ArtifactsTest do
     }
   end
 
+  describe "get/2" do
+    setup [:setup_artifact_scope]
+
+    test "returns an artifact in the caller's ownership scope", %{user: user, project: project} do
+      artifact = create_artifact(user, project, %{filename: "readme.md", body: "Artifact body"})
+
+      assert {:ok, found_artifact} = Artifacts.get(user.id, artifact.id)
+      assert found_artifact.id == artifact.id
+      assert found_artifact.user_id == user.id
+      assert found_artifact.project_id == project.id
+      assert found_artifact.filename == "readme.md"
+      assert found_artifact.body == "Artifact body"
+    end
+
+    test "returns not found for a missing artifact", %{user: user} do
+      assert {:error, :not_found} = Artifacts.get(user.id, Ecto.UUID.generate())
+    end
+
+    test "does not return another user's artifact", %{user: user, project: project} do
+      artifact = create_artifact(user, project, %{})
+      other_user = create_user("other-artifact-reader")
+
+      assert {:error, :not_found} = Artifacts.get(other_user.id, artifact.id)
+    end
+  end
+
   describe "create_and_link/4" do
     setup [:setup_artifact_scope]
 

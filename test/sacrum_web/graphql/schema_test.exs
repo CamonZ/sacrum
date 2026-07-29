@@ -217,6 +217,73 @@ defmodule SacrumWeb.Graphql.SchemaTest do
     end
   end
 
+  describe "artifact queries" do
+    setup [:setup_user_and_project]
+
+    test "gets a single artifact by id", %{conn: conn, user: user, project: project} do
+      artifact =
+        create_artifact(user, project, %{
+          filename: "readme.md",
+          body: "# Artifact read API"
+        })
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql(
+          ~s|{ artifact(id: "#{artifact.id}") { id filename body insertedAt updatedAt } }|
+        )
+        |> json_response(200)
+
+      assert result["data"]["artifact"] == %{
+               "body" => "# Artifact read API",
+               "filename" => "readme.md",
+               "id" => artifact.id,
+               "insertedAt" => DateTime.to_iso8601(artifact.inserted_at),
+               "updatedAt" => DateTime.to_iso8601(artifact.updated_at)
+             }
+    end
+
+    test "returns an error for an unknown artifact id", %{conn: conn, user: user} do
+      fake_id = Ecto.UUID.generate()
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql(~s|{ artifact(id: "#{fake_id}") { id } }|)
+        |> json_response(200)
+
+      assert result["data"]["artifact"] == nil
+      assert [%{"message" => _}] = result["errors"]
+    end
+
+    test "does not return another user's artifact", %{conn: conn, user: user} do
+      other_user = create_user(%{email: "other-artifact@example.com", username: "other_artifact"})
+      {:ok, other_project} = Accounts.Projects.insert(other_user.id, %{name: "Other Project"})
+      artifact = create_artifact(other_user, other_project, %{filename: "private.md"})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql(~s|{ artifact(id: "#{artifact.id}") { id filename body } }|)
+        |> json_response(200)
+
+      assert result["data"]["artifact"] == nil
+      assert [%{"message" => _}] = result["errors"]
+    end
+
+    test "returns a validation error for a malformed artifact id", %{conn: conn, user: user} do
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql(~s|{ artifact(id: "not-an-artifact-uuid") { id } }|)
+        |> json_response(200)
+
+      assert [%{"message" => message}] = result["errors"]
+      assert message =~ "Argument \"id\" has invalid value \"not-an-artifact-uuid\""
+    end
+  end
+
   describe "project mutations" do
     test "creates a project", %{conn: conn} do
       user = create_user()
