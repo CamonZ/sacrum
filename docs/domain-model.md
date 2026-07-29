@@ -95,6 +95,13 @@ The `Project.artifacts(limit: 50, offset: 0)` field returns the caller's project
 | `listReady` | `project_id!` | Tasks with no incomplete blockers |
 | `findPath` | `from_id!`, `to_id!` | Shortest dependency path between tasks |
 
+**`artifact_types.ex`** — Artifact queries
+| Query | Arguments | Description |
+|-------|-----------|-------------|
+| `artifact` | `id!` | Read one artifact by UUID in the authenticated user's ownership scope |
+
+`artifact(id: UUID4!)` returns `id`, `filename`, `body`, `insertedAt`, and `updatedAt`. The resolver uses `Accounts.Artifacts.get/2`, so missing or unauthorized artifacts return the same GraphQL not-found error as artifact mutations; malformed IDs are rejected by the `UUID4` scalar before the resolver runs.
+
 **`execution_types.ex`** — Execution queries
 | Query | Arguments | Description |
 |-------|-----------|-------------|
