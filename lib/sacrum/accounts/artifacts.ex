@@ -12,6 +12,14 @@ defmodule Sacrum.Accounts.Artifacts do
   alias Sacrum.Repo.Schemas.{Artifact, ArtifactLink}
 
   @doc """
+  Retrieve an artifact in the caller's ownership scope.
+  """
+  @spec get(String.t(), String.t()) :: {:ok, Artifact.t()} | {:error, :not_found}
+  def get(user_id, artifact_id) when is_binary(user_id) and is_binary(artifact_id) do
+    ArtifactsRepo.get_in_scope(user_id, artifact_id)
+  end
+
+  @doc """
   Create an artifact and attach it to a supported subject.
   """
   @spec create_and_link(String.t(), String.t(), map(), map()) ::

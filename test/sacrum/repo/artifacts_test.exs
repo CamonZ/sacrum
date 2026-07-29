@@ -59,6 +59,32 @@ defmodule Sacrum.Repo.ArtifactsTest do
     link
   end
 
+  describe "get_in_scope/2" do
+    setup [:setup_artifact_project]
+
+    test "returns an artifact in the requested user's scope", %{user: user, project: project} do
+      {:ok, artifact} = Artifacts.insert(user.id, project.id, valid_attrs())
+
+      assert {:ok, found_artifact} = Artifacts.get_in_scope(user.id, artifact.id)
+      assert found_artifact.id == artifact.id
+      assert found_artifact.user_id == user.id
+      assert found_artifact.project_id == project.id
+      assert found_artifact.filename == artifact.filename
+      assert found_artifact.body == artifact.body
+    end
+
+    test "returns not found for a missing artifact", %{user: user} do
+      assert {:error, :not_found} = Artifacts.get_in_scope(user.id, Ecto.UUID.generate())
+    end
+
+    test "returns not found for another user's artifact", %{user: user, project: project} do
+      {:ok, artifact} = Artifacts.insert(user.id, project.id, valid_attrs())
+      other_user = create_user("other_artifact_reader")
+
+      assert {:error, :not_found} = Artifacts.get_in_scope(other_user.id, artifact.id)
+    end
+  end
+
   describe "insert/3" do
     setup [:setup_artifact_project]
 
