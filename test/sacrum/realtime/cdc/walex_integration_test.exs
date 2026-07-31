@@ -10,6 +10,8 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
 
   alias Sacrum.Repo.{
     CodeRefs,
+    ArtifactLinks,
+    Artifacts,
     Projects,
     SessionLogs,
     StepTransitions,
@@ -134,6 +136,137 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
         "task_deleted",
         %{
           id: task.id
+        },
+        1_000
+      )
+    end)
+  end
+
+  test "committed artifact and attachment changes project complete payloads and cascade tombstones" do
+    with_project(fn user, project ->
+      :ok = subscribe_project(project.id)
+
+      {:ok, artifact} =
+        Artifacts.insert(user.id, project.id, %{
+          filename: "conversation.jsonl",
+          body: "{\"type\":\"message\",\"text\":\"first\"}"
+        })
+
+      assert_project_broadcast(
+        "artifact_created",
+        %{
+          id: artifact.id,
+          project_id: project.id,
+          filename: "conversation.jsonl",
+          body: "{\"type\":\"message\",\"text\":\"first\"}"
+        },
+        1_000
+      )
+
+      original_metadata = artifact_metadata("raw")
+
+      {:ok, link} =
+        ArtifactLinks.insert(user.id, project.id, artifact.id, %{
+          subject_type: "project",
+          subject_id: project.id,
+          logical_name: "conversation",
+          metadata: original_metadata
+        })
+
+      created_link_payload =
+        assert_project_broadcast(
+          "artifact_link_created",
+          %{
+            id: link.id,
+            artifact_id: artifact.id,
+            project_id: project.id,
+            subject_type: "project",
+            subject_id: project.id,
+            logical_name: "conversation",
+            metadata: original_metadata
+          },
+          1_000
+        )
+
+      assert Map.keys(created_link_payload) |> Enum.sort() == [
+               :artifact_id,
+               :id,
+               :inserted_at,
+               :logical_name,
+               :metadata,
+               :project_id,
+               :schema_version,
+               :subject_id,
+               :subject_type,
+               :updated_at
+             ]
+
+      {:ok, updated_artifact} =
+        Artifacts.update(artifact, %{
+          filename: "conversation-updated.jsonl",
+          body: "{\"type\":\"message\",\"text\":\"updated\"}"
+        })
+
+      assert_project_broadcast(
+        "artifact_updated",
+        %{
+          id: artifact.id,
+          project_id: project.id,
+          filename: "conversation-updated.jsonl",
+          body: "{\"type\":\"message\",\"text\":\"updated\"}"
+        },
+        1_000
+      )
+
+      updated_metadata = artifact_metadata("transcript")
+
+      {:ok, updated_link} =
+        ArtifactLinks.update(link, %{
+          logical_name: "rendered-conversation",
+          metadata: updated_metadata
+        })
+
+      assert_project_broadcast(
+        "artifact_link_updated",
+        %{
+          id: link.id,
+          artifact_id: artifact.id,
+          project_id: project.id,
+          subject_type: "project",
+          subject_id: project.id,
+          logical_name: "rendered-conversation",
+          metadata: updated_metadata
+        },
+        1_000
+      )
+
+      {:ok, _deleted_artifact} = Repo.delete(updated_artifact)
+
+      deleted_link_payload =
+        assert_project_broadcast(
+          "artifact_link_deleted",
+          %{
+            id: updated_link.id,
+            artifact_id: artifact.id,
+            project_id: project.id,
+            subject_type: "project",
+            subject_id: project.id,
+            logical_name: "rendered-conversation",
+            metadata: updated_metadata
+          },
+          1_000
+        )
+
+      assert DateTime.compare(deleted_link_payload.inserted_at, updated_link.inserted_at) == :eq
+      assert DateTime.compare(deleted_link_payload.updated_at, updated_link.updated_at) == :eq
+
+      assert_project_broadcast(
+        "artifact_deleted",
+        %{
+          id: artifact.id,
+          project_id: project.id,
+          filename: "conversation-updated.jsonl",
+          body: "{\"type\":\"message\",\"text\":\"updated\"}"
         },
         1_000
       )
@@ -996,6 +1129,17 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
       |> Tasks.insert(Map.put(attrs, :title, title))
 
     task
+  end
+
+  defp artifact_metadata(presentation) do
+    %{
+      "version" => 1,
+      "content_kind" => "conversation",
+      "format" => "jsonl",
+      "origin" => "codex",
+      "presentation" => presentation,
+      "extensions" => %{"provider" => "openai"}
+    }
   end
 
   defp create_project do

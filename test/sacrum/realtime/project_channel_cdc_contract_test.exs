@@ -106,6 +106,12 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContractTest do
     assert code_ref_contract.classification == :relation_change
     assert source_tables(code_ref_contract) == MapSet.new(["code_refs"])
     assert code_ref_contract.completeness =~ "without refetching"
+
+    for event <- ["artifact_link_created", "artifact_link_updated", "artifact_link_deleted"] do
+      assert {:ok, artifact_link_contract} = ProjectChannelCdcContract.contract_for(event)
+      assert artifact_link_contract.classification == :relation_change
+      assert source_tables(artifact_link_contract) == MapSet.new(["artifact_links"])
+    end
   end
 
   test "representative payload contracts are complete for GUI store updates" do
@@ -344,6 +350,45 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContractTest do
       :workflow_id,
       :level
     ])
+
+    artifact_payload_keys = [
+      :schema_version,
+      :id,
+      :project_id,
+      :filename,
+      :body,
+      :inserted_at,
+      :updated_at
+    ]
+
+    for event <- ["artifact_created", "artifact_updated", "artifact_deleted"] do
+      assert_payload_includes(event, artifact_payload_keys)
+    end
+
+    artifact_link_payload_keys = [
+      :schema_version,
+      :id,
+      :artifact_id,
+      :project_id,
+      :subject_type,
+      :subject_id,
+      :logical_name,
+      :metadata,
+      :inserted_at,
+      :updated_at
+    ]
+
+    for event <- ["artifact_link_created", "artifact_link_updated", "artifact_link_deleted"] do
+      assert_payload_includes(event, artifact_link_payload_keys)
+    end
+
+    assert {:ok, artifact_link_deleted} =
+             ProjectChannelCdcContract.contract_for("artifact_link_deleted")
+
+    artifact_link_deleted_source = source_change(artifact_link_deleted, "artifact_links")
+
+    assert artifact_link_deleted_source.before_image_fields ==
+             Enum.drop(artifact_link_payload_keys, 1)
   end
 
   test "snapshot and gap recovery are separate from healthy live CDC" do
@@ -356,6 +401,8 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContractTest do
     assert "task_runs" in snapshot.source_tables
     assert "task_dependencies" in snapshot.source_tables
     assert "code_refs" in snapshot.source_tables
+    assert "artifacts" in snapshot.source_tables
+    assert "artifact_links" in snapshot.source_tables
 
     assert recovery.healthy_reconnect =~ "replay changes"
     assert recovery.gap_detected =~ "rerun the initial snapshot"

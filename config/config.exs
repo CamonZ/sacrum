@@ -31,7 +31,9 @@ config :sacrum, :cdc,
     "session_logs",
     "task_sections",
     "task_dependencies",
-    "code_refs"
+    "code_refs",
+    "artifacts",
+    "artifact_links"
   ],
   modules: [Sacrum.Realtime.Cdc.WalExConsumer]
 

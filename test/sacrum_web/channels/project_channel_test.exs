@@ -219,6 +219,57 @@ defmodule SacrumWeb.ProjectChannelTest do
       assert payload.project_id == project.id
     end
 
+    test "artifact and artifact-link broadcasts expose complete versioned payloads" do
+      {_user, project, socket} = setup_socket()
+      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}")
+
+      artifact = build_artifact(project)
+      artifact_link = build_artifact_link(project, artifact)
+
+      for {event, broadcast} <- [
+            {"artifact_created",
+             fn ->
+               SacrumWeb.ProjectChannel.broadcast_artifact_created(project.id, artifact)
+             end},
+            {"artifact_updated",
+             fn ->
+               SacrumWeb.ProjectChannel.broadcast_artifact_updated(project.id, artifact)
+             end},
+            {"artifact_deleted",
+             fn ->
+               SacrumWeb.ProjectChannel.broadcast_artifact_deleted(project.id, artifact)
+             end},
+            {"artifact_link_created",
+             fn ->
+               SacrumWeb.ProjectChannel.broadcast_artifact_link_created(project.id, artifact_link)
+             end},
+            {"artifact_link_updated",
+             fn ->
+               SacrumWeb.ProjectChannel.broadcast_artifact_link_updated(project.id, artifact_link)
+             end},
+            {"artifact_link_deleted",
+             fn ->
+               SacrumWeb.ProjectChannel.broadcast_artifact_link_deleted(project.id, artifact_link)
+             end}
+          ] do
+        broadcast.()
+        assert_broadcast ^event, payload
+        assert_contract_payload_keys(event, payload)
+        assert payload.schema_version == 1
+
+        if event == "artifact_link_deleted" do
+          assert payload.metadata == %{
+                   "version" => 1,
+                   "content_kind" => "conversation",
+                   "format" => "jsonl",
+                   "origin" => "codex",
+                   "presentation" => "transcript",
+                   "extensions" => %{"provider" => "openai"}
+                 }
+        end
+      end
+    end
+
     test "broadcast_task_run_step_changed pushes payload with wire status to default client" do
       {_user, project, socket} = setup_socket()
       {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}", %{})
@@ -456,6 +507,8 @@ defmodule SacrumWeb.ProjectChannelTest do
       execution = build_step_execution(project)
       session_log = build_session_log(project)
       section = build_section(project)
+      artifact = build_artifact(project)
+      artifact_link = build_artifact_link(project, artifact)
 
       assert_broadcast_payload_keys("task_created", fn ->
         SacrumWeb.ProjectChannel.broadcast_task_created(project.id, task)
@@ -565,6 +618,30 @@ defmodule SacrumWeb.ProjectChannelTest do
 
       assert_broadcast_payload_keys("section_deleted", fn ->
         SacrumWeb.ProjectChannel.broadcast_section_deleted(project.id, section)
+      end)
+
+      assert_broadcast_payload_keys("artifact_created", fn ->
+        SacrumWeb.ProjectChannel.broadcast_artifact_created(project.id, artifact)
+      end)
+
+      assert_broadcast_payload_keys("artifact_updated", fn ->
+        SacrumWeb.ProjectChannel.broadcast_artifact_updated(project.id, artifact)
+      end)
+
+      assert_broadcast_payload_keys("artifact_deleted", fn ->
+        SacrumWeb.ProjectChannel.broadcast_artifact_deleted(project.id, artifact)
+      end)
+
+      assert_broadcast_payload_keys("artifact_link_created", fn ->
+        SacrumWeb.ProjectChannel.broadcast_artifact_link_created(project.id, artifact_link)
+      end)
+
+      assert_broadcast_payload_keys("artifact_link_updated", fn ->
+        SacrumWeb.ProjectChannel.broadcast_artifact_link_updated(project.id, artifact_link)
+      end)
+
+      assert_broadcast_payload_keys("artifact_link_deleted", fn ->
+        SacrumWeb.ProjectChannel.broadcast_artifact_link_deleted(project.id, artifact_link)
       end)
     end
 
@@ -1149,6 +1226,42 @@ defmodule SacrumWeb.ProjectChannelTest do
       section_order: 1,
       done: false,
       done_at: nil,
+      inserted_at: now,
+      updated_at: now
+    }
+  end
+
+  defp build_artifact(project) do
+    now = DateTime.utc_now()
+
+    %{
+      id: Ecto.UUID.generate(),
+      project_id: project.id,
+      filename: "conversation.jsonl",
+      body: "{\"type\":\"message\"}",
+      inserted_at: now,
+      updated_at: now
+    }
+  end
+
+  defp build_artifact_link(project, artifact) do
+    now = DateTime.utc_now()
+
+    %{
+      id: Ecto.UUID.generate(),
+      artifact_id: artifact.id,
+      project_id: project.id,
+      subject_type: "project",
+      subject_id: project.id,
+      logical_name: "conversation",
+      metadata: %{
+        version: 1,
+        content_kind: "conversation",
+        format: "jsonl",
+        origin: "codex",
+        presentation: "transcript",
+        extensions: %{"provider" => "openai"}
+      },
       inserted_at: now,
       updated_at: now
     }

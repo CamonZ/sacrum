@@ -13,6 +13,8 @@ defmodule Sacrum.Realtime.Cdc.Config do
     task_sections
     task_dependencies
     code_refs
+    artifacts
+    artifact_links
   )
 
   @spec start_consumer?() :: boolean()

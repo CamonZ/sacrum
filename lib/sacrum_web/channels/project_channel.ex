@@ -3,7 +3,7 @@ defmodule SacrumWeb.ProjectChannel do
 
   alias Sacrum.Accounts.Projects
   alias Sacrum.Realtime.ProjectChannelCdcContract
-  alias Sacrum.Repo.Schemas.{Task, WorkflowStep}
+  alias Sacrum.Repo.Schemas.{ArtifactLinkMetadata, Task, WorkflowStep}
   alias Sacrum.TaskRuns.RunControls
   alias Sacrum.TaskRuns.Status, as: TaskRunStatus
 
@@ -383,6 +383,62 @@ defmodule SacrumWeb.ProjectChannel do
     )
   end
 
+  # Artifact broadcasts
+
+  @spec broadcast_artifact_created(String.t(), map()) :: :ok | {:error, term()}
+  def broadcast_artifact_created(project_id, artifact) do
+    SacrumWeb.Endpoint.broadcast(
+      "project:#{project_id}",
+      "artifact_created",
+      artifact_payload(artifact)
+    )
+  end
+
+  @spec broadcast_artifact_updated(String.t(), map()) :: :ok | {:error, term()}
+  def broadcast_artifact_updated(project_id, artifact) do
+    SacrumWeb.Endpoint.broadcast(
+      "project:#{project_id}",
+      "artifact_updated",
+      artifact_payload(artifact)
+    )
+  end
+
+  @spec broadcast_artifact_deleted(String.t(), map()) :: :ok | {:error, term()}
+  def broadcast_artifact_deleted(project_id, artifact) do
+    SacrumWeb.Endpoint.broadcast(
+      "project:#{project_id}",
+      "artifact_deleted",
+      artifact_payload(artifact)
+    )
+  end
+
+  @spec broadcast_artifact_link_created(String.t(), map()) :: :ok | {:error, term()}
+  def broadcast_artifact_link_created(project_id, artifact_link) do
+    SacrumWeb.Endpoint.broadcast(
+      "project:#{project_id}",
+      "artifact_link_created",
+      artifact_link_payload(artifact_link)
+    )
+  end
+
+  @spec broadcast_artifact_link_updated(String.t(), map()) :: :ok | {:error, term()}
+  def broadcast_artifact_link_updated(project_id, artifact_link) do
+    SacrumWeb.Endpoint.broadcast(
+      "project:#{project_id}",
+      "artifact_link_updated",
+      artifact_link_payload(artifact_link)
+    )
+  end
+
+  @spec broadcast_artifact_link_deleted(String.t(), map()) :: :ok | {:error, term()}
+  def broadcast_artifact_link_deleted(project_id, artifact_link) do
+    SacrumWeb.Endpoint.broadcast(
+      "project:#{project_id}",
+      "artifact_link_deleted",
+      artifact_link_payload(artifact_link)
+    )
+  end
+
   # Payload helpers
 
   defp version_payload(payload), do: Map.put(payload, :schema_version, @schema_version)
@@ -695,6 +751,52 @@ defmodule SacrumWeb.ProjectChannel do
       inserted_at: code_ref.inserted_at,
       updated_at: code_ref.updated_at
     })
+  end
+
+  defp artifact_payload(artifact) do
+    version_payload(%{
+      id: artifact.id,
+      project_id: artifact.project_id,
+      filename: artifact.filename,
+      body: artifact.body,
+      inserted_at: artifact.inserted_at,
+      updated_at: artifact.updated_at
+    })
+  end
+
+  defp artifact_link_payload(artifact_link) do
+    version_payload(%{
+      id: artifact_link.id,
+      artifact_id: artifact_link.artifact_id,
+      project_id: artifact_link.project_id,
+      subject_type: artifact_link.subject_type,
+      subject_id: artifact_link.subject_id,
+      logical_name: artifact_link.logical_name,
+      metadata: metadata_payload(artifact_link.metadata),
+      inserted_at: artifact_link.inserted_at,
+      updated_at: artifact_link.updated_at
+    })
+  end
+
+  defp metadata_payload(nil), do: nil
+
+  defp metadata_payload(%ArtifactLinkMetadata{} = metadata) do
+    metadata_payload(Map.from_struct(metadata))
+  end
+
+  defp metadata_payload(metadata) when is_map(metadata) do
+    %{
+      "version" => metadata_value(metadata, :version),
+      "content_kind" => metadata_value(metadata, :content_kind),
+      "format" => metadata_value(metadata, :format),
+      "origin" => metadata_value(metadata, :origin),
+      "presentation" => metadata_value(metadata, :presentation),
+      "extensions" => metadata_value(metadata, :extensions)
+    }
+  end
+
+  defp metadata_value(metadata, key) do
+    Map.get(metadata, key, Map.get(metadata, Atom.to_string(key)))
   end
 
   defp run_step_payload(data) do
