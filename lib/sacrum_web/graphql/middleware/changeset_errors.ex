@@ -21,12 +21,23 @@ defmodule SacrumWeb.Graphql.Middleware.ChangesetErrors do
   defp transform(%Ecto.Changeset{} = changeset) do
     changeset
     |> Ecto.Changeset.traverse_errors(&ChangesetErrors.format_message/1)
-    |> Enum.flat_map(fn {field, messages} ->
-      Enum.map(messages, fn message ->
-        %{message: "#{field}: #{message}", field: to_string(field)}
-      end)
-    end)
+    |> flatten_errors()
   end
 
   defp transform(other), do: [other]
+
+  defp flatten_errors(errors, path \\ []) do
+    Enum.flat_map(errors, fn {field, messages} ->
+      flatten_messages(messages, [field | path])
+    end)
+  end
+
+  defp flatten_messages(messages, path) when is_map(messages), do: flatten_errors(messages, path)
+
+  defp flatten_messages(messages, path) do
+    Enum.map(messages, fn message ->
+      field = path |> Enum.reverse() |> Enum.map_join(".", &to_string/1)
+      %{message: "#{field}: #{message}", field: field}
+    end)
+  end
 end

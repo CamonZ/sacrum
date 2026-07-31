@@ -12,6 +12,7 @@ defmodule SacrumWeb.Graphql.Types.ArtifactTypes do
     field :filename, :string
     field :body, :string
     field :logical_name, :string
+    field :metadata, :json
     field :inserted_at, :datetime
     field :updated_at, :datetime
   end
@@ -51,6 +52,7 @@ defmodule SacrumWeb.Graphql.Types.ArtifactTypes do
       arg(:subject_type, :string)
       arg(:subject_id, :uuid4)
       arg(:logical_name, :string)
+      arg(:metadata, :json)
 
       resolve(fn %{project_id: project_id} = args, %{context: %{current_user: user}} ->
         artifact_attrs = Map.take(args, [:filename, :body])
@@ -75,6 +77,7 @@ defmodule SacrumWeb.Graphql.Types.ArtifactTypes do
       arg(:subject_type, :string)
       arg(:subject_id, :uuid4)
       arg(:logical_name, :string)
+      arg(:metadata, :json)
 
       resolve(fn %{id: id} = args, %{context: %{current_user: user}} ->
         artifact_attrs = Map.take(args, [:filename, :body])
@@ -95,16 +98,18 @@ defmodule SacrumWeb.Graphql.Types.ArtifactTypes do
   end
 
   defp attachment_attrs(args) do
-    case {Map.get(args, :subject_type), Map.get(args, :subject_id),
-          Map.has_key?(args, :logical_name)} do
+    attachment_keys = [:logical_name, :metadata]
+    has_attachment_attrs? = Enum.any?(attachment_keys, &Map.has_key?(args, &1))
+
+    case {Map.get(args, :subject_type), Map.get(args, :subject_id), has_attachment_attrs?} do
       {nil, nil, false} ->
         {:ok, nil}
 
       {nil, nil, true} ->
-        {:ok, Map.take(args, [:logical_name])}
+        {:ok, Map.take(args, attachment_keys)}
 
       {subject_type, subject_id, _} when is_binary(subject_type) and is_binary(subject_id) ->
-        {:ok, Map.take(args, [:subject_type, :subject_id, :logical_name])}
+        {:ok, Map.take(args, [:subject_type, :subject_id | attachment_keys])}
 
       _ ->
         {:error, "subjectType and subjectId must be provided together"}

@@ -546,6 +546,149 @@ defmodule SacrumWeb.Graphql.SchemaTest do
              ]
     end
 
+    test "creates and reads a harness conversation attachment with provenance metadata", %{
+      conn: conn
+    } do
+      user = create_user()
+      {:ok, project} = Accounts.Projects.insert(user.id, %{name: "Conversation Artifact Project"})
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Conversation target"})
+
+      body = ~s({"type":"message","text":"hello"}\n{"type":"message","text":"goodbye"}\n)
+
+      metadata = %{
+        "version" => 1,
+        "content_kind" => "conversation",
+        "format" => "jsonl",
+        "origin" => "harness",
+        "presentation" => "raw",
+        "extensions" => %{
+          "harness" => %{"conversation_id" => "conv-123", "exported_at" => "2026-07-31T20:00:00Z"}
+        }
+      }
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createArtifact(
+              projectId: "#{project.id}"
+              filename: "conversation.jsonl"
+              body: #{Jason.encode!(body)}
+              subjectType: "task"
+              subjectId: "#{task.id}"
+              metadata: #{Jason.encode!(Jason.encode!(metadata))}
+            ) { id filename body metadata }
+          }
+        """)
+        |> json_response(200)
+
+      assert %{
+               "id" => artifact_id,
+               "filename" => "conversation.jsonl",
+               "body" => ^body,
+               "metadata" => ^metadata
+             } = result["data"]["createArtifact"]
+
+      assert [link] = ArtifactLinks.list_by_subject(user.id, project.id, "task", task.id)
+      assert link.artifact_id == artifact_id
+      assert link.metadata.version == metadata["version"]
+      assert link.metadata.content_kind == metadata["content_kind"]
+      assert link.metadata.format == metadata["format"]
+      assert link.metadata.origin == metadata["origin"]
+      assert link.metadata.presentation == metadata["presentation"]
+      assert link.metadata.extensions == metadata["extensions"]
+
+      read_result =
+        conn
+        |> recycle()
+        |> authenticate(user)
+        |> graphql("""
+          { task(id: "#{task.id}") {
+            artifacts { id filename body metadata }
+          } }
+        """)
+        |> json_response(200)
+
+      assert read_result["data"]["task"]["artifacts"] == [
+               %{
+                 "id" => artifact_id,
+                 "filename" => "conversation.jsonl",
+                 "body" => body,
+                 "metadata" => metadata
+               }
+             ]
+    end
+
+    test "rejects malformed conversation metadata and out-of-scope conversation targets atomically",
+         %{
+           conn: conn
+         } do
+      user = create_user()
+      {:ok, project} = Accounts.Projects.insert(user.id, %{name: "Invalid Conversation Project"})
+
+      {:ok, other_project} =
+        Accounts.Projects.insert(user.id, %{name: "Other Conversation Project"})
+
+      {:ok, other_task} =
+        Accounts.Tasks.insert(user.id, other_project.id, %{title: "Other target"})
+
+      valid_metadata = %{
+        "version" => 1,
+        "content_kind" => "conversation",
+        "format" => "jsonl",
+        "origin" => "harness",
+        "presentation" => "raw",
+        "extensions" => %{"harness" => %{}}
+      }
+
+      malformed_result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createArtifact(
+              projectId: "#{project.id}"
+              filename: "invalid.jsonl"
+              body: "{}"
+              subjectType: "project"
+              subjectId: "#{project.id}"
+              metadata: #{Jason.encode!(Jason.encode!(Map.delete(valid_metadata, "format")))}
+            ) { id }
+          }
+        """)
+        |> json_response(200)
+
+      assert malformed_result["data"]["createArtifact"] == nil
+      assert [%{"message" => message}] = malformed_result["errors"]
+      assert message =~ "metadata"
+      assert ArtifactsRepo.count() == 0
+      assert ArtifactLinks.count() == 0
+
+      forbidden_result =
+        conn
+        |> recycle()
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createArtifact(
+              projectId: "#{project.id}"
+              filename: "forbidden.jsonl"
+              body: "{}"
+              subjectType: "task"
+              subjectId: "#{other_task.id}"
+              metadata: #{Jason.encode!(Jason.encode!(valid_metadata))}
+            ) { id }
+          }
+        """)
+        |> json_response(200)
+
+      assert forbidden_result["data"]["createArtifact"] == nil
+      assert [%{"message" => _}] = forbidden_result["errors"]
+      assert ArtifactsRepo.count() == 0
+      assert ArtifactLinks.count() == 0
+    end
+
     test "rejects incomplete, unsupported, and missing destinations atomically", %{
       conn: conn
     } do
