@@ -16,7 +16,6 @@ defmodule Sacrum.Repo.Schemas.ArtifactLinkTest do
     Map.merge(
       %{
         subject_type: "task",
-        relationship_kind: "attached_to",
         metadata: %{"label" => "implementation evidence"}
       },
       attrs
@@ -31,13 +30,12 @@ defmodule Sacrum.Repo.Schemas.ArtifactLinkTest do
                artifact_id: ["can't be blank"],
                subject_type: ["can't be blank"],
                subject_id: ["can't be blank"],
-               relationship_kind: ["can't be blank"],
                project_id: ["can't be blank"],
                user_id: ["can't be blank"]
              } = errors_on(changeset)
     end
 
-    test "accepts supported subject and relationship values" do
+    test "accepts supported subject values" do
       for subject_type <- [
             "project",
             "task",
@@ -45,20 +43,31 @@ defmodule Sacrum.Repo.Schemas.ArtifactLinkTest do
             "workflow",
             "task_run",
             "step_execution"
-          ],
-          relationship_kind <- ["evidence_for", "attached_to"] do
+          ] do
         changeset =
           artifact_link()
           |> ArtifactLink.create_changeset(
             valid_attrs(%{
-              subject_type: subject_type,
-              relationship_kind: relationship_kind
+              subject_type: subject_type
             })
           )
 
-        assert changeset.valid?,
-               "expected #{inspect({subject_type, relationship_kind})} to be valid"
+        assert changeset.valid?, "expected #{inspect(subject_type)} to be valid"
       end
+    end
+
+    test "accepts an optional logical name and rejects blank names" do
+      valid_changeset =
+        artifact_link()
+        |> ArtifactLink.create_changeset(valid_attrs(%{logical_name: "implementation_plan"}))
+
+      assert valid_changeset.valid?
+
+      blank_changeset =
+        artifact_link()
+        |> ArtifactLink.create_changeset(valid_attrs(%{logical_name: "   "}))
+
+      assert %{logical_name: ["can't be blank"]} = errors_on(blank_changeset)
     end
 
     test "rejects values outside the artifact link persistence contract" do
@@ -66,15 +75,11 @@ defmodule Sacrum.Repo.Schemas.ArtifactLinkTest do
         artifact_link()
         |> ArtifactLink.create_changeset(
           valid_attrs(%{
-            subject_type: "workflow_step",
-            relationship_kind: "mentions"
+            subject_type: "workflow_step"
           })
         )
 
-      assert %{
-               subject_type: ["is invalid"],
-               relationship_kind: ["is invalid"]
-             } = errors_on(changeset)
+      assert %{subject_type: ["is invalid"]} = errors_on(changeset)
     end
   end
 end

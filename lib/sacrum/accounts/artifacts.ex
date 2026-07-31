@@ -32,7 +32,7 @@ defmodule Sacrum.Accounts.Artifacts do
     Repo.transaction(fn ->
       with {:ok, artifact} <- ArtifactsRepo.insert(user_id, project_id, artifact_attrs),
            {:ok, link} <- ArtifactLinks.insert(user_id, project_id, artifact.id, link_attrs) do
-        %{artifact: artifact, link: link}
+        %{artifact: %{artifact | logical_name: link.logical_name}, link: link}
       else
         {:error, reason} -> Repo.rollback(reason)
       end
@@ -60,8 +60,8 @@ defmodule Sacrum.Accounts.Artifacts do
     Repo.transaction(fn ->
       with {:ok, artifact} <- ArtifactsRepo.get_in_scope_for_update(user_id, artifact_id),
            {:ok, updated_artifact} <- ArtifactsRepo.update(artifact, artifact_attrs),
-           {:ok, _link} <- maybe_replace_attachment(updated_artifact, attachment_attrs) do
-        updated_artifact
+           {:ok, link} <- maybe_update_attachment(updated_artifact, attachment_attrs) do
+        %{updated_artifact | logical_name: link && link.logical_name}
       else
         {:error, reason} -> Repo.rollback(reason)
       end
@@ -91,11 +91,56 @@ defmodule Sacrum.Accounts.Artifacts do
     ArtifactsRepo.list_for_subject(user_id, project_id, subject_type, subject_id, opts)
   end
 
-  defp maybe_replace_attachment(_artifact, nil), do: {:ok, nil}
+  @doc """
+  Retrieve an artifact attached to a subject by its stable per-link logical name.
+  """
+  @spec get_for_subject_by_logical_name(
+          String.t(),
+          String.t(),
+          String.t(),
+          String.t(),
+          String.t()
+        ) ::
+          {:ok, Artifact.t()} | {:error, :not_found}
+  def get_for_subject_by_logical_name(user_id, project_id, subject_type, subject_id, logical_name)
+      when is_binary(user_id) and is_binary(project_id) and is_binary(subject_type) and
+             is_binary(subject_id) and is_binary(logical_name) do
+    ArtifactsRepo.get_for_subject_by_logical_name(
+      user_id,
+      project_id,
+      subject_type,
+      subject_id,
+      logical_name
+    )
+  end
+
+  defp maybe_update_attachment(_artifact, nil), do: {:ok, nil}
+
+  defp maybe_update_attachment(%Artifact{} = artifact, %{subject_type: _, subject_id: _} = attrs) do
+    maybe_replace_attachment(artifact, attrs)
+  end
+
+  defp maybe_update_attachment(
+         %Artifact{} = artifact,
+         %{
+           "subject_type" => _,
+           "subject_id" => _
+         } = attrs
+       ) do
+    maybe_replace_attachment(artifact, attrs)
+  end
+
+  defp maybe_update_attachment(%Artifact{} = artifact, attrs) do
+    case ArtifactLinks.list_by_artifact(artifact.user_id, artifact.project_id, artifact.id) do
+      [link] -> ArtifactLinks.update(link, attrs)
+      [] -> {:error, :not_found}
+      [_first, _second | _rest] -> {:error, :ambiguous_attachment}
+    end
+  end
 
   defp maybe_replace_attachment(%Artifact{} = artifact, attachment_attrs) do
     case ArtifactLinks.list_by_artifact(artifact.user_id, artifact.project_id, artifact.id) do
-      [] -> insert_replacement_link(artifact, attachment_attrs, "attached_to", %{})
+      [] -> insert_replacement_link(artifact, attachment_attrs, %{})
       [link] -> replace_link(artifact, link, attachment_attrs)
       [_first, _second | _rest] -> {:error, :ambiguous_attachment}
     end
@@ -106,20 +151,36 @@ defmodule Sacrum.Accounts.Artifacts do
            insert_replacement_link(
              artifact,
              attachment_attrs,
-             link.relationship_kind,
-             link.metadata
+             link.metadata,
+             link.logical_name
            ),
          {:ok, _deleted_link} <- ArtifactLinks.delete(link) do
       {:ok, replacement}
     end
   end
 
-  defp insert_replacement_link(artifact, attachment_attrs, relationship_kind, metadata) do
+  defp insert_replacement_link(
+         artifact,
+         attachment_attrs,
+         metadata,
+         logical_name \\ nil
+       ) do
+    logical_name = attachment_logical_name(attachment_attrs, logical_name)
+
     attrs =
       attachment_attrs
-      |> Map.put(:relationship_kind, relationship_kind)
+      |> Map.delete("logical_name")
       |> Map.put(:metadata, metadata)
+      |> Map.put(:logical_name, logical_name)
 
     ArtifactLinks.insert(artifact.user_id, artifact.project_id, artifact.id, attrs)
+  end
+
+  defp attachment_logical_name(attrs, default) do
+    cond do
+      Map.has_key?(attrs, :logical_name) -> Map.fetch!(attrs, :logical_name)
+      Map.has_key?(attrs, "logical_name") -> Map.fetch!(attrs, "logical_name")
+      true -> default
+    end
   end
 end

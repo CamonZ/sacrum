@@ -52,8 +52,7 @@ defmodule Sacrum.Repo.ArtifactsTest do
     {:ok, link} =
       ArtifactLinks.insert(user.id, project.id, artifact.id, %{
         subject_type: subject_type,
-        subject_id: subject_id,
-        relationship_kind: "attached_to"
+        subject_id: subject_id
       })
 
     link
@@ -201,7 +200,14 @@ defmodule Sacrum.Repo.ArtifactsTest do
         Artifacts.insert(user.id, project.id, valid_attrs(%{filename: "other-task.md"}))
 
       link_artifact(user, project, linked_markdown, "task", task.id)
-      link_artifact(user, project, linked_json, "task", task.id)
+
+      {:ok, _link} =
+        ArtifactLinks.insert(user.id, project.id, linked_json.id, %{
+          subject_type: "task",
+          subject_id: task.id,
+          logical_name: "task_result"
+        })
+
       link_artifact(user, project, other_subject_artifact, "task", other_task.id)
 
       artifacts = Artifacts.list_for_subject(user.id, project.id, "task", task.id)
@@ -212,9 +218,64 @@ defmodule Sacrum.Repo.ArtifactsTest do
       refute unlinked.id in listed_ids
       refute other_subject_artifact.id in listed_ids
       assert Enum.find(artifacts, &(&1.id == linked_json.id)).body == json_body
+      assert Enum.find(artifacts, &(&1.id == linked_json.id)).logical_name == "task_result"
+      assert Enum.find(artifacts, &(&1.id == linked_markdown.id)).logical_name == nil
 
       other_user = create_user("other_subject_reader")
       assert [] = Artifacts.list_for_subject(other_user.id, project.id, "task", task.id)
+    end
+  end
+
+  describe "get_for_subject_by_logical_name/5" do
+    setup [:setup_artifact_project]
+
+    test "returns the named attachment only inside its user, project, and subject scope", %{
+      user: user,
+      project: project
+    } do
+      task = create_task(project)
+
+      {:ok, artifact} =
+        Artifacts.insert(user.id, project.id, valid_attrs(%{filename: "task-result.json"}))
+
+      {:ok, _link} =
+        ArtifactLinks.insert(user.id, project.id, artifact.id, %{
+          subject_type: "task",
+          subject_id: task.id,
+          logical_name: "result"
+        })
+
+      assert {:ok, found} =
+               Artifacts.get_for_subject_by_logical_name(
+                 user.id,
+                 project.id,
+                 "task",
+                 task.id,
+                 "result"
+               )
+
+      assert found.id == artifact.id
+      assert found.logical_name == "result"
+
+      assert {:error, :not_found} =
+               Artifacts.get_for_subject_by_logical_name(
+                 user.id,
+                 project.id,
+                 "task",
+                 task.id,
+                 "missing"
+               )
+
+      other_user = create_user("other_named_reader")
+
+      assert {:error, :not_found} =
+               Artifacts.get_for_subject_by_logical_name(
+                 other_user.id,
+                 project.id,
+                 "task",
+                 task.id,
+                 "result"
+               )
     end
   end
 end

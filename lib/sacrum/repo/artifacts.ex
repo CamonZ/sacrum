@@ -80,11 +80,31 @@ defmodule Sacrum.Repo.Artifacts do
     |> join(:inner, [artifact], link in ArtifactLink, on: link.artifact_id == artifact.id)
     |> where_in_scope(user_id, project_id)
     |> where_subject_link_in_scope(user_id, project_id, subject_type, subject_id)
+    |> select_merge([_artifact, link], %{logical_name: link.logical_name})
     |> distinct(true)
     |> apply_artifact_order()
     |> apply_offset(opts)
     |> apply_limit(opts)
     |> Repo.all()
+  end
+
+  @spec get_for_subject_by_logical_name(
+          String.t(),
+          String.t(),
+          String.t(),
+          String.t(),
+          String.t()
+        ) :: {:ok, Artifact.t()} | {:error, :not_found}
+  def get_for_subject_by_logical_name(user_id, project_id, subject_type, subject_id, logical_name)
+      when is_user_project_scope(user_id, project_id) and is_binary(subject_type) and
+             is_binary(subject_id) and is_binary(logical_name) do
+    Artifact
+    |> join(:inner, [artifact], link in ArtifactLink, on: link.artifact_id == artifact.id)
+    |> where_in_scope(user_id, project_id)
+    |> where_subject_link_in_scope(user_id, project_id, subject_type, subject_id)
+    |> where([_artifact, link], link.logical_name == ^logical_name)
+    |> select_merge([_artifact, link], %{logical_name: link.logical_name})
+    |> fetch_one()
   end
 
   defp where_in_scope(query, user_id, project_id) do

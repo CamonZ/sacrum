@@ -7,17 +7,15 @@ defmodule Sacrum.Repo.Schemas.ArtifactLink do
   @foreign_key_type :binary_id
 
   @subject_types ~w(project task task_section workflow task_run step_execution)
-  @relationship_kinds ~w(attached_to evidence_for produced_by source_for result_of supersedes)
-
-  @create_fields ~w(subject_type subject_id relationship_kind metadata)a
-  @update_fields ~w(metadata)a
-  @required_fields ~w(artifact_id project_id user_id subject_type subject_id relationship_kind)a
+  @create_fields ~w(subject_type subject_id metadata logical_name)a
+  @update_fields ~w(metadata logical_name)a
+  @required_fields ~w(artifact_id project_id user_id subject_type subject_id)a
 
   schema "artifact_links" do
     field :subject_type, :string
     field :subject_id, :binary_id
-    field :relationship_kind, :string
     field :metadata, :map, default: %{}
+    field :logical_name, :string
 
     belongs_to :artifact, Sacrum.Repo.Schemas.Artifact
     belongs_to :project, Sacrum.Repo.Schemas.Project
@@ -29,19 +27,34 @@ defmodule Sacrum.Repo.Schemas.ArtifactLink do
   @spec create_changeset(t(), map()) :: Ecto.Changeset.t()
   def create_changeset(artifact_link, attrs) do
     artifact_link
-    |> cast(attrs, @create_fields)
+    |> cast(attrs, @create_fields, empty_values: [])
     |> validate_required(@required_fields)
     |> validate_inclusion(:subject_type, @subject_types)
-    |> validate_inclusion(:relationship_kind, @relationship_kinds)
+    |> validate_logical_name()
     |> foreign_key_constraint(:artifact_id)
     |> foreign_key_constraint(:project_id)
     |> foreign_key_constraint(:user_id)
     |> check_constraint(:subject_type, name: :artifact_links_subject_type_check)
-    |> check_constraint(:relationship_kind, name: :artifact_links_relationship_kind_check)
+    |> unique_constraint(:logical_name, name: :artifact_links_subject_logical_name_index)
   end
 
   @spec update_changeset(t(), map()) :: Ecto.Changeset.t()
   def update_changeset(artifact_link, attrs) do
-    cast(artifact_link, attrs, @update_fields)
+    artifact_link
+    |> cast(attrs, @update_fields, empty_values: [])
+    |> validate_logical_name()
+    |> unique_constraint(:logical_name, name: :artifact_links_subject_logical_name_index)
+  end
+
+  defp validate_logical_name(changeset) do
+    changeset
+    |> validate_length(:logical_name, min: 1, max: 255)
+    |> validate_change(:logical_name, fn :logical_name, logical_name ->
+      if String.trim(logical_name) == "" do
+        [logical_name: "can't be blank"]
+      else
+        []
+      end
+    end)
   end
 end

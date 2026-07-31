@@ -127,26 +127,24 @@ defmodule Sacrum.Repo.ArtifactLinksTest do
       step_execution: step_execution
     } do
       subjects = [
-        {"project", project.id, "attached_to"},
-        {"task", task.id, "attached_to"},
-        {"task_section", section.id, "evidence_for"},
-        {"workflow", workflow.id, "attached_to"},
-        {"task_run", task_run.id, "produced_by"},
-        {"step_execution", step_execution.id, "evidence_for"}
+        {"project", project.id},
+        {"task", task.id},
+        {"task_section", section.id},
+        {"workflow", workflow.id},
+        {"task_run", task_run.id},
+        {"step_execution", step_execution.id}
       ]
 
-      for {subject_type, subject_id, relationship_kind} <- subjects do
+      for {subject_type, subject_id} <- subjects do
         assert {:ok, link} =
                  ArtifactLinks.insert(user.id, project.id, artifact.id, %{
                    subject_type: subject_type,
-                   subject_id: subject_id,
-                   relationship_kind: relationship_kind
+                   subject_id: subject_id
                  })
 
         assert link.artifact_id == artifact.id
         assert link.subject_type == subject_type
         assert link.subject_id == subject_id
-        assert link.relationship_kind == relationship_kind
         assert link.project_id == project.id
         assert link.user_id == user.id
       end
@@ -162,8 +160,7 @@ defmodule Sacrum.Repo.ArtifactLinksTest do
       assert {:error, :subject_scope_mismatch} =
                ArtifactLinks.insert(user.id, project.id, artifact.id, %{
                  subject_type: "project",
-                 subject_id: other_project.id,
-                 relationship_kind: "attached_to"
+                 subject_id: other_project.id
                })
 
       other_user = create_user("other-project-subject-link")
@@ -172,8 +169,7 @@ defmodule Sacrum.Repo.ArtifactLinksTest do
       assert {:error, :subject_scope_mismatch} =
                ArtifactLinks.insert(user.id, project.id, artifact.id, %{
                  subject_type: "project",
-                 subject_id: other_user_project.id,
-                 relationship_kind: "attached_to"
+                 subject_id: other_user_project.id
                })
     end
 
@@ -188,8 +184,7 @@ defmodule Sacrum.Repo.ArtifactLinksTest do
       assert {:error, :subject_scope_mismatch} =
                ArtifactLinks.insert(user.id, project.id, artifact.id, %{
                  subject_type: "task",
-                 subject_id: other_project_task.id,
-                 relationship_kind: "attached_to"
+                 subject_id: other_project_task.id
                })
     end
 
@@ -217,8 +212,7 @@ defmodule Sacrum.Repo.ArtifactLinksTest do
         assert {:error, :subject_scope_mismatch} =
                  ArtifactLinks.insert(user.id, project.id, artifact.id, %{
                    subject_type: subject_type,
-                   subject_id: subject_id,
-                   relationship_kind: "attached_to"
+                   subject_id: subject_id
                  })
       end
     end
@@ -254,8 +248,7 @@ defmodule Sacrum.Repo.ArtifactLinksTest do
         assert {:error, :subject_scope_mismatch} =
                  ArtifactLinks.insert(user.id, project.id, artifact.id, %{
                    subject_type: subject_type,
-                   subject_id: subject_id,
-                   relationship_kind: "attached_to"
+                   subject_id: subject_id
                  })
       end
     end
@@ -272,9 +265,63 @@ defmodule Sacrum.Repo.ArtifactLinksTest do
       assert {:error, :artifact_scope_mismatch} =
                ArtifactLinks.insert(user.id, project.id, other_user_artifact.id, %{
                  subject_type: "task",
-                 subject_id: task.id,
-                 relationship_kind: "attached_to"
+                 subject_id: task.id
                })
+    end
+
+    test "enforces logical name uniqueness within a subject without changing the existing link",
+         %{
+           user: user,
+           project: project,
+           task: task,
+           artifact: artifact
+         } do
+      {:ok, existing_link} =
+        ArtifactLinks.insert(user.id, project.id, artifact.id, %{
+          subject_type: "task",
+          subject_id: task.id,
+          logical_name: "implementation_plan"
+        })
+
+      competing_artifact = create_artifact(user, project, %{filename: "competing-plan.md"})
+
+      assert {:error, changeset} =
+               ArtifactLinks.insert(user.id, project.id, competing_artifact.id, %{
+                 subject_type: "task",
+                 subject_id: task.id,
+                 logical_name: "implementation_plan"
+               })
+
+      assert %{logical_name: ["has already been taken"]} = errors_on(changeset)
+
+      assert [persisted_link] =
+               ArtifactLinks.list_by_subject(user.id, project.id, "task", task.id)
+
+      assert persisted_link.id == existing_link.id
+      assert persisted_link.artifact_id == artifact.id
+      assert persisted_link.logical_name == "implementation_plan"
+      assert {:ok, persisted_artifact} = Artifacts.get(competing_artifact.id)
+      assert persisted_artifact.filename == "competing-plan.md"
+    end
+
+    test "allows a logical name to be reused on different subjects", %{
+      user: user,
+      project: project,
+      task: task,
+      artifact: artifact
+    } do
+      other_task = create_task(project, "Other linked task")
+
+      for subject_id <- [task.id, other_task.id] do
+        assert {:ok, link} =
+                 ArtifactLinks.insert(user.id, project.id, artifact.id, %{
+                   subject_type: "task",
+                   subject_id: subject_id,
+                   logical_name: "implementation_plan"
+                 })
+
+        assert link.logical_name == "implementation_plan"
+      end
     end
   end
 
@@ -304,22 +351,19 @@ defmodule Sacrum.Repo.ArtifactLinksTest do
       {:ok, link} =
         ArtifactLinks.insert(user.id, project.id, artifact.id, %{
           subject_type: "task",
-          subject_id: task.id,
-          relationship_kind: "attached_to"
+          subject_id: task.id
         })
 
       {:ok, other_project_link} =
         ArtifactLinks.insert(user.id, other_project.id, other_project_artifact.id, %{
           subject_type: "task",
-          subject_id: other_project_task.id,
-          relationship_kind: "attached_to"
+          subject_id: other_project_task.id
         })
 
       {:ok, other_user_link} =
         ArtifactLinks.insert(other_user.id, other_user_project.id, other_user_artifact.id, %{
           subject_type: "task",
-          subject_id: other_user_task.id,
-          relationship_kind: "attached_to"
+          subject_id: other_user_task.id
         })
 
       listed_ids =
@@ -339,8 +383,7 @@ defmodule Sacrum.Repo.ArtifactLinksTest do
         {:ok, scoped_link} =
           ArtifactLinks.insert(user.id, project.id, artifact.id, %{
             subject_type: subject_type,
-            subject_id: subject_id,
-            relationship_kind: "attached_to"
+            subject_id: subject_id
           })
 
         listed_ids =
@@ -372,43 +415,37 @@ defmodule Sacrum.Repo.ArtifactLinksTest do
       {:ok, task_link} =
         ArtifactLinks.insert(user.id, project.id, artifact.id, %{
           subject_type: "task",
-          subject_id: task.id,
-          relationship_kind: "attached_to"
+          subject_id: task.id
         })
 
       {:ok, section_link} =
         ArtifactLinks.insert(user.id, project.id, artifact.id, %{
           subject_type: "task_section",
-          subject_id: section.id,
-          relationship_kind: "evidence_for"
+          subject_id: section.id
         })
 
       {:ok, workflow_link} =
         ArtifactLinks.insert(user.id, project.id, artifact.id, %{
           subject_type: "workflow",
-          subject_id: workflow.id,
-          relationship_kind: "attached_to"
+          subject_id: workflow.id
         })
 
       {:ok, task_run_link} =
         ArtifactLinks.insert(user.id, project.id, artifact.id, %{
           subject_type: "task_run",
-          subject_id: task_run.id,
-          relationship_kind: "produced_by"
+          subject_id: task_run.id
         })
 
       {:ok, step_execution_link} =
         ArtifactLinks.insert(user.id, project.id, artifact.id, %{
           subject_type: "step_execution",
-          subject_id: step_execution.id,
-          relationship_kind: "evidence_for"
+          subject_id: step_execution.id
         })
 
       {:ok, other_project_link} =
         ArtifactLinks.insert(user.id, other_project.id, other_project_artifact.id, %{
           subject_type: "task",
-          subject_id: other_project_task.id,
-          relationship_kind: "attached_to"
+          subject_id: other_project_task.id
         })
 
       listed_ids =

@@ -49,12 +49,12 @@ All entities use UUID primary keys and `utc_datetime_usec` timestamps.
 
 An artifact is a project-scoped text file with two content fields:
 
-- `filename` — the file name, including the extension used by clients to interpret the contents
+- `filename` — the physical/client-facing file name, including the extension used by clients to interpret the contents
 - `body` — the complete file contents stored as a string
 
 For example, Markdown is stored as a `.md` filename and Markdown body, while JSON is stored as a `.json` filename and JSON text body. Sacrum preserves the string exactly; it does not parse the body or maintain a separate structured-data payload. File interpretation is extension-based and belongs to the client.
 
-Every artifact row has `user_id` and `project_id` ownership scope. Attachments are represented separately by `ArtifactLink`. A project attachment uses `subject_type: "project"`, the owning project ID as `subject_id`, and normally `relationship_kind: "attached_to"`. The project scope on the artifact row does not by itself make the file appear in `Project.artifacts`; that GraphQL field returns files with a matching project subject link.
+Every artifact row has `user_id` and `project_id` ownership scope. Attachments are represented separately by `ArtifactLink`. Each link may carry a nullable `logical_name`: a stable role/tag for that subject attachment. Logical names are unique within a user, project, subject type, and subject ID, but can be reused on other subjects; existing unnamed links remain valid. A project attachment uses `subject_type: "project"` and the owning project ID as `subject_id`. The project scope on the artifact row does not by itself make the file appear in `Project.artifacts`; that GraphQL field returns files with a matching project subject link.
 
 The Accounts subject-listing and link-creation paths include both the caller's user ID and project ID. Subject reads additionally match `subject_type` and `subject_id`, so those application paths do not return links or files across user or project boundaries. Artifact creation plus its initial link is transactional through `Accounts.Artifacts.create_and_link/4`. Updating an artifact can replace its sole attachment within the same ownership scope; file and link changes commit or roll back together. Deleting an artifact cascades to its links.
 
@@ -100,7 +100,7 @@ The `Project.artifacts(limit: 50, offset: 0)` field returns the caller's project
 |-------|-----------|-------------|
 | `artifact` | `id!` | Read one artifact by UUID in the authenticated user's ownership scope |
 
-`artifact(id: UUID4!)` returns `id`, `filename`, `body`, `insertedAt`, and `updatedAt`. The resolver uses `Accounts.Artifacts.get/2`, so missing or unauthorized artifacts return the same GraphQL not-found error as artifact mutations; malformed IDs are rejected by the `UUID4` scalar before the resolver runs.
+`artifact(id: UUID4!)` returns `id`, `filename`, `body`, `logicalName`, `insertedAt`, and `updatedAt`. Subject attachment reads also populate `logicalName`. `artifactByLogicalName(projectId:, subjectType:, subjectId:, logicalName:)` resolves one artifact inside the authenticated user's user/project/subject scope, making it suitable for CLI and orchestrator clients. The resolver uses `Accounts.Artifacts.get/2`, so missing or unauthorized artifacts return the same GraphQL not-found error as artifact mutations; malformed IDs are rejected by the `UUID4` scalar before the resolver runs.
 
 **`execution_types.ex`** — Execution queries
 | Query | Arguments | Description |
@@ -125,13 +125,13 @@ The `Project.artifacts(limit: 50, offset: 0)` field returns the caller's project
 **`artifact_types.ex`** — 3 mutations (via `Accounts.Artifacts`)
 | Mutation | Arguments | Returns |
 |----------|-----------|---------|
-| `createArtifact` | `project_id!`, `filename!`, `body!`, `subject_type`, `subject_id` | `:artifact` |
-| `updateArtifact` | `id!`, `filename`, `body`, `subject_type`, `subject_id` | `:artifact` |
+| `createArtifact` | `project_id!`, `filename!`, `body!`, `subject_type`, `subject_id`, `logical_name` | `:artifact` |
+| `updateArtifact` | `id!`, `filename`, `body`, `subject_type`, `subject_id`, `logical_name` | `:artifact` |
 | `deleteArtifact` | `id!` | `:artifact` |
 
-`createArtifact` creates the file in the authenticated user's project and atomically adds an `attached_to` link. When `subject_type` and `subject_id` are omitted, the link targets the project for backward compatibility; when supplied together, the destination may be a project, task, task section, workflow, task run, or step execution in the same user and project scope. Requests for a project or destination outside the caller's scope fail without persisting either row.
+`createArtifact` creates the file in the authenticated user's project and atomically attaches it to a subject. `logicalName` is optional and belongs to that link, not the artifact file. When `subject_type` and `subject_id` are omitted, the link targets the project for backward compatibility; when supplied together, the destination may be a project, task, task section, workflow, task run, or step execution in the same user and project scope. Requests for a project or destination outside the caller's scope fail without persisting either row.
 
-`updateArtifact` changes `filename`, `body`, or both. Supplying `subject_type` and `subject_id` together replaces the artifact's sole link while preserving its relationship kind and metadata. The target must belong to the artifact's existing user and project; ownership and project scope never move. Invalid targets roll back file edits and leave the original link intact. Artifacts with multiple links can still update file fields, but attachment replacement is rejected as ambiguous.
+`updateArtifact` changes `filename`, `body`, or both. Supplying `subject_type` and `subject_id` together replaces the artifact's sole link while preserving its metadata and logical name unless a new `logicalName` is supplied. Supplying only `logicalName` updates the sole link's name. The target must belong to the artifact's existing user and project; ownership and project scope never move. Invalid targets or duplicate names roll back file edits and leave the original link intact. Artifacts with multiple links can still update file fields, but attachment replacement or logical-name updates are rejected as ambiguous.
 
 `deleteArtifact` deletes an artifact owned by the authenticated user and returns the deleted file. Its `ArtifactLink` rows are removed by the database cascade. Update and delete requests for another user's artifact return not found.
 

@@ -11,6 +11,7 @@ defmodule SacrumWeb.Graphql.Types.ArtifactTypes do
     field :id, :id
     field :filename, :string
     field :body, :string
+    field :logical_name, :string
     field :inserted_at, :datetime
     field :updated_at, :datetime
   end
@@ -23,6 +24,23 @@ defmodule SacrumWeb.Graphql.Types.ArtifactTypes do
         Accounts.Artifacts.get(user.id, id)
       end)
     end
+
+    field :artifact_by_logical_name, :artifact do
+      arg(:project_id, non_null(:uuid4))
+      arg(:subject_type, non_null(:string))
+      arg(:subject_id, non_null(:uuid4))
+      arg(:logical_name, non_null(:string))
+
+      resolve(fn args, %{context: %{current_user: user}} ->
+        Accounts.Artifacts.get_for_subject_by_logical_name(
+          user.id,
+          args.project_id,
+          args.subject_type,
+          args.subject_id,
+          args.logical_name
+        )
+      end)
+    end
   end
 
   object :artifact_mutations do
@@ -32,6 +50,7 @@ defmodule SacrumWeb.Graphql.Types.ArtifactTypes do
       arg(:body, non_null(:string))
       arg(:subject_type, :string)
       arg(:subject_id, :uuid4)
+      arg(:logical_name, :string)
 
       resolve(fn %{project_id: project_id} = args, %{context: %{current_user: user}} ->
         artifact_attrs = Map.take(args, [:filename, :body])
@@ -55,6 +74,7 @@ defmodule SacrumWeb.Graphql.Types.ArtifactTypes do
       arg(:body, :string)
       arg(:subject_type, :string)
       arg(:subject_id, :uuid4)
+      arg(:logical_name, :string)
 
       resolve(fn %{id: id} = args, %{context: %{current_user: user}} ->
         artifact_attrs = Map.take(args, [:filename, :body])
@@ -75,12 +95,16 @@ defmodule SacrumWeb.Graphql.Types.ArtifactTypes do
   end
 
   defp attachment_attrs(args) do
-    case {Map.get(args, :subject_type), Map.get(args, :subject_id)} do
-      {nil, nil} ->
+    case {Map.get(args, :subject_type), Map.get(args, :subject_id),
+          Map.has_key?(args, :logical_name)} do
+      {nil, nil, false} ->
         {:ok, nil}
 
-      {subject_type, subject_id} when is_binary(subject_type) and is_binary(subject_id) ->
-        {:ok, %{subject_type: subject_type, subject_id: subject_id}}
+      {nil, nil, true} ->
+        {:ok, Map.take(args, [:logical_name])}
+
+      {subject_type, subject_id, _} when is_binary(subject_type) and is_binary(subject_id) ->
+        {:ok, Map.take(args, [:subject_type, :subject_id, :logical_name])}
 
       _ ->
         {:error, "subjectType and subjectId must be provided together"}
@@ -90,11 +114,17 @@ defmodule SacrumWeb.Graphql.Types.ArtifactTypes do
   defp create_link_attrs(args, project_id) do
     case attachment_attrs(args) do
       {:ok, nil} ->
-        {:ok,
-         %{subject_type: "project", subject_id: project_id, relationship_kind: "attached_to"}}
+        {:ok, %{subject_type: "project", subject_id: project_id}}
+
+      {:ok, %{subject_type: _, subject_id: _} = attachment_attrs} ->
+        {:ok, attachment_attrs}
 
       {:ok, attachment_attrs} ->
-        {:ok, Map.put(attachment_attrs, :relationship_kind, "attached_to")}
+        {:ok,
+         Map.merge(
+           %{subject_type: "project", subject_id: project_id},
+           attachment_attrs
+         )}
 
       error ->
         error
