@@ -9,7 +9,7 @@ defmodule Sacrum.Accounts.Artifacts do
   alias Sacrum.Repo
   alias Sacrum.Repo.ArtifactLinks
   alias Sacrum.Repo.Artifacts, as: ArtifactsRepo
-  alias Sacrum.Repo.Schemas.{Artifact, ArtifactLink}
+  alias Sacrum.Repo.Schemas.{Artifact, ArtifactLink, ArtifactLinkMetadata}
 
   @doc """
   Retrieve an artifact in the caller's ownership scope.
@@ -32,7 +32,7 @@ defmodule Sacrum.Accounts.Artifacts do
     Repo.transaction(fn ->
       with {:ok, artifact} <- ArtifactsRepo.insert(user_id, project_id, artifact_attrs),
            {:ok, link} <- ArtifactLinks.insert(user_id, project_id, artifact.id, link_attrs) do
-        %{artifact: %{artifact | logical_name: link.logical_name}, link: link}
+        %{artifact: artifact_with_link(artifact, link), link: link}
       else
         {:error, reason} -> Repo.rollback(reason)
       end
@@ -42,7 +42,8 @@ defmodule Sacrum.Accounts.Artifacts do
   @doc """
   Update an artifact and optionally replace its sole attachment.
 
-  Attachment replacement preserves the existing relationship kind and metadata.
+  Attachment replacement preserves the existing metadata unless the caller
+  supplies a replacement value.
   Artifacts with multiple links require callers to update file fields without
   changing attachments.
   """
@@ -61,7 +62,7 @@ defmodule Sacrum.Accounts.Artifacts do
       with {:ok, artifact} <- ArtifactsRepo.get_in_scope_for_update(user_id, artifact_id),
            {:ok, updated_artifact} <- ArtifactsRepo.update(artifact, artifact_attrs),
            {:ok, link} <- maybe_update_attachment(updated_artifact, attachment_attrs) do
-        %{updated_artifact | logical_name: link && link.logical_name}
+        artifact_with_optional_link(updated_artifact, link)
       else
         {:error, reason} -> Repo.rollback(reason)
       end
@@ -170,7 +171,7 @@ defmodule Sacrum.Accounts.Artifacts do
     attrs =
       attachment_attrs
       |> Map.delete("logical_name")
-      |> Map.put(:metadata, metadata)
+      |> Map.put(:metadata, metadata_params(metadata))
       |> Map.put(:logical_name, logical_name)
 
     ArtifactLinks.insert(artifact.user_id, artifact.project_id, artifact.id, attrs)
@@ -183,4 +184,38 @@ defmodule Sacrum.Accounts.Artifacts do
       true -> default
     end
   end
+
+  defp artifact_with_link(artifact, link) do
+    %{
+      artifact
+      | logical_name: link.logical_name,
+        metadata: metadata_params(link.metadata)
+    }
+  end
+
+  defp artifact_with_optional_link(artifact, nil), do: artifact
+  defp artifact_with_optional_link(artifact, link), do: artifact_with_link(artifact, link)
+
+  defp metadata_params(%ArtifactLinkMetadata{
+         version: nil,
+         content_kind: nil,
+         format: nil,
+         origin: nil,
+         presentation: nil,
+         extensions: nil
+       }),
+       do: nil
+
+  defp metadata_params(%ArtifactLinkMetadata{} = metadata) do
+    %{
+      "version" => metadata.version,
+      "content_kind" => metadata.content_kind,
+      "format" => metadata.format,
+      "origin" => metadata.origin,
+      "presentation" => metadata.presentation,
+      "extensions" => metadata.extensions
+    }
+  end
+
+  defp metadata_params(metadata), do: metadata
 end

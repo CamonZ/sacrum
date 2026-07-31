@@ -117,6 +117,20 @@ defmodule Sacrum.Accounts.ArtifactsTest do
     )
   end
 
+  defp conversation_metadata(overrides \\ %{}) do
+    Map.merge(
+      %{
+        "version" => 1,
+        "content_kind" => "conversation",
+        "format" => "jsonl",
+        "origin" => "harness",
+        "presentation" => "raw",
+        "extensions" => %{"harness" => %{"conversation_id" => "conv-123"}}
+      },
+      overrides
+    )
+  end
+
   defp setup_artifact_scope(_context) do
     user = create_user()
     project = create_project(user)
@@ -358,6 +372,46 @@ defmodule Sacrum.Accounts.ArtifactsTest do
       assert edited_artifact.body == "# Edited body"
     end
 
+    test "validates metadata updates and preserves the prior attachment on failure", %{
+      user: user,
+      project: project
+    } do
+      assert {:ok, %{artifact: artifact}} =
+               Artifacts.create_and_link(
+                 user.id,
+                 project.id,
+                 artifact_attrs(),
+                 link_attrs("project", project.id)
+               )
+
+      metadata = conversation_metadata()
+
+      assert {:ok, updated_artifact} =
+               Artifacts.update(user.id, artifact.id, %{}, %{
+                 metadata: metadata
+               })
+
+      assert updated_artifact.metadata == metadata
+
+      assert {:error, changeset} =
+               Artifacts.update(user.id, artifact.id, %{filename: "not-persisted.jsonl"}, %{
+                 metadata: Map.delete(metadata, "format")
+               })
+
+      assert %{metadata: metadata_errors} = errors_on(changeset)
+      assert is_map(metadata_errors)
+      assert {:ok, persisted_artifact} = ArtifactsRepo.get_in_scope(user.id, artifact.id)
+      assert persisted_artifact.filename == artifact.filename
+
+      assert [link] = ArtifactLinks.list_by_artifact(user.id, project.id, artifact.id)
+      assert link.metadata.version == metadata["version"]
+      assert link.metadata.content_kind == metadata["content_kind"]
+      assert link.metadata.format == metadata["format"]
+      assert link.metadata.origin == metadata["origin"]
+      assert link.metadata.presentation == metadata["presentation"]
+      assert link.metadata.extensions == metadata["extensions"]
+    end
+
     test "updates a sole attachment's logical name and preserves it when moving the attachment",
          %{
            user: user,
@@ -403,7 +457,7 @@ defmodule Sacrum.Accounts.ArtifactsTest do
                  project.id,
                  artifact_attrs(),
                  link_attrs("project", project.id, %{
-                   metadata: %{"source" => "test"}
+                   metadata: conversation_metadata(%{"content_kind" => "result"})
                  })
                )
 
@@ -424,7 +478,7 @@ defmodule Sacrum.Accounts.ArtifactsTest do
       assert [link] = ArtifactLinks.list_by_artifact(user.id, project.id, artifact.id)
       assert link.subject_type == "task"
       assert link.subject_id == task.id
-      assert link.metadata == %{"source" => "test"}
+      assert link.metadata.content_kind == "result"
     end
 
     test "rolls back file and attachment changes outside the artifact scope", %{

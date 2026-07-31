@@ -80,7 +80,10 @@ defmodule Sacrum.Repo.Artifacts do
     |> join(:inner, [artifact], link in ArtifactLink, on: link.artifact_id == artifact.id)
     |> where_in_scope(user_id, project_id)
     |> where_subject_link_in_scope(user_id, project_id, subject_type, subject_id)
-    |> select_merge([_artifact, link], %{logical_name: link.logical_name})
+    |> select_merge([_artifact, link], %{
+      logical_name: link.logical_name,
+      metadata: link.metadata
+    })
     |> distinct(true)
     |> apply_artifact_order()
     |> apply_offset(opts)
@@ -103,7 +106,10 @@ defmodule Sacrum.Repo.Artifacts do
     |> where_in_scope(user_id, project_id)
     |> where_subject_link_in_scope(user_id, project_id, subject_type, subject_id)
     |> where([_artifact, link], link.logical_name == ^logical_name)
-    |> select_merge([_artifact, link], %{logical_name: link.logical_name})
+    |> select_merge([_artifact, link], %{
+      logical_name: link.logical_name,
+      metadata: link.metadata
+    })
     |> fetch_one()
   end
 
