@@ -31,12 +31,11 @@ defmodule SacrumWeb.Graphql.SchemaTest do
     artifact
   end
 
-  defp link_artifact(user, project, artifact, subject_type, subject_id, relationship_kind) do
+  defp link_artifact(user, project, artifact, subject_type, subject_id) do
     {:ok, link} =
       ArtifactLinks.insert(user.id, project.id, artifact.id, %{
         subject_type: subject_type,
-        subject_id: subject_id,
-        relationship_kind: relationship_kind
+        subject_id: subject_id
       })
 
     link
@@ -128,12 +127,11 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
       task_only = create_artifact(user, project, %{filename: "task-only.md"})
 
-      link_artifact(user, project, markdown, "project", project.id, "attached_to")
-      link_artifact(user, project, markdown, "project", project.id, "evidence_for")
-      link_artifact(user, project, json, "project", project.id, "attached_to")
+      link_artifact(user, project, markdown, "project", project.id)
+      link_artifact(user, project, json, "project", project.id)
 
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Artifact owner"})
-      link_artifact(user, project, task_only, "task", task.id, "attached_to")
+      link_artifact(user, project, task_only, "task", task.id)
 
       {:ok, other_project} = Accounts.Projects.insert(user.id, %{name: "Other Artifact Project"})
       other_project_artifact = create_artifact(user, other_project, %{filename: "other.md"})
@@ -143,8 +141,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         other_project,
         other_project_artifact,
         "project",
-        other_project.id,
-        "attached_to"
+        other_project.id
       )
 
       other_user =
@@ -164,8 +161,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         other_user_project,
         other_user_artifact,
         "project",
-        other_user_project.id,
-        "attached_to"
+        other_user_project.id
       )
 
       result =
@@ -242,6 +238,109 @@ defmodule SacrumWeb.Graphql.SchemaTest do
                "insertedAt" => DateTime.to_iso8601(artifact.inserted_at),
                "updatedAt" => DateTime.to_iso8601(artifact.updated_at)
              }
+    end
+
+    test "gets an attachment by logical name without crossing user or project scope", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Named artifact target"})
+
+      assert {:ok, %{artifact: artifact}} =
+               Accounts.Artifacts.create_and_link(
+                 user.id,
+                 project.id,
+                 %{filename: "result.json", body: ~s({"state":"complete"})},
+                 %{
+                   subject_type: "task",
+                   subject_id: task.id,
+                   logical_name: "result"
+                 }
+               )
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          {
+            artifactByLogicalName(
+              projectId: "#{project.id}"
+              subjectType: "task"
+              subjectId: "#{task.id}"
+              logicalName: "result"
+            ) { id filename body logicalName }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["artifactByLogicalName"] == %{
+               "body" => ~s({"state":"complete"}),
+               "filename" => "result.json",
+               "id" => artifact.id,
+               "logicalName" => "result"
+             }
+
+      {:ok, other_project} =
+        Accounts.Projects.insert(user.id, %{name: "Other named artifact project"})
+
+      {:ok, other_task} =
+        Accounts.Tasks.insert(user.id, other_project.id, %{title: "Other named artifact target"})
+
+      other_user =
+        create_user(%{
+          email: "other-named-artifact@example.com",
+          username: "other_named_artifact"
+        })
+
+      {:ok, other_user_project} =
+        Accounts.Projects.insert(other_user.id, %{name: "Other user named artifact project"})
+
+      {:ok, other_user_task} =
+        Accounts.Tasks.insert(other_user.id, other_user_project.id, %{
+          title: "Private named artifact target"
+        })
+
+      for {owner, scoped_project, scoped_task} <- [
+            {user, other_project, other_task},
+            {other_user, other_user_project, other_user_task}
+          ] do
+        assert {:ok, _} =
+                 Accounts.Artifacts.create_and_link(
+                   owner.id,
+                   scoped_project.id,
+                   %{filename: "other-result.json", body: "private"},
+                   %{
+                     subject_type: "task",
+                     subject_id: scoped_task.id,
+                     logical_name: "result"
+                   }
+                 )
+      end
+
+      for {scoped_project, scoped_task} <- [
+            {other_project, task},
+            {other_user_project, other_user_task}
+          ] do
+        forbidden_result =
+          conn
+          |> recycle()
+          |> authenticate(user)
+          |> graphql("""
+            {
+              artifactByLogicalName(
+                projectId: "#{scoped_project.id}"
+                subjectType: "task"
+                subjectId: "#{scoped_task.id}"
+                logicalName: "result"
+              ) { id }
+            }
+          """)
+          |> json_response(200)
+
+        assert forbidden_result["data"]["artifactByLogicalName"] == nil
+        assert [%{"message" => _}] = forbidden_result["errors"]
+      end
     end
 
     test "returns an error for an unknown artifact id", %{conn: conn, user: user} do
@@ -360,10 +459,12 @@ defmodule SacrumWeb.Graphql.SchemaTest do
               projectId: "#{project.id}"
               filename: "result.json"
               body: #{Jason.encode!(body)}
+              logicalName: "latest_result"
             ) {
               id
               filename
               body
+              logicalName
             }
           }
         """)
@@ -372,18 +473,26 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert %{
                "body" => ^body,
                "filename" => "result.json",
-               "id" => artifact_id
+               "id" => artifact_id,
+               "logicalName" => "latest_result"
              } = mutation_result["data"]["createArtifact"]
 
       query_result =
         conn
         |> recycle()
         |> authenticate(user)
-        |> graphql(~s|{ project(id: "#{project.id}") { artifacts { id filename body } } }|)
+        |> graphql(
+          ~s|{ project(id: "#{project.id}") { artifacts { id filename body logicalName } } }|
+        )
         |> json_response(200)
 
       assert query_result["data"]["project"]["artifacts"] == [
-               %{"body" => body, "filename" => "result.json", "id" => artifact_id}
+               %{
+                 "body" => body,
+                 "filename" => "result.json",
+                 "id" => artifact_id,
+                 "logicalName" => "latest_result"
+               }
              ]
     end
 
@@ -403,30 +512,36 @@ defmodule SacrumWeb.Graphql.SchemaTest do
               body: "{\\"status\\":\\"ready\\"}"
               subjectType: "task"
               subjectId: "#{task.id}"
-            ) { id filename body }
+              logicalName: "result"
+            ) { id filename body logicalName }
           }
         """)
         |> json_response(200)
 
-      assert %{"id" => artifact_id, "filename" => "task-result.json"} =
+      assert %{
+               "id" => artifact_id,
+               "filename" => "task-result.json",
+               "logicalName" => "result"
+             } =
                result["data"]["createArtifact"]
 
       assert [link] = ArtifactLinks.list_by_subject(user.id, project.id, "task", task.id)
       assert link.artifact_id == artifact_id
-      assert link.relationship_kind == "attached_to"
+      assert link.logical_name == "result"
 
       task_result =
         conn
         |> recycle()
         |> authenticate(user)
-        |> graphql(~s|{ task(id: "#{task.id}") { artifacts { id filename body } } }|)
+        |> graphql(~s|{ task(id: "#{task.id}") { artifacts { id filename body logicalName } } }|)
         |> json_response(200)
 
       assert task_result["data"]["task"]["artifacts"] == [
                %{
                  "body" => ~s({"status":"ready"}),
                  "filename" => "task-result.json",
-                 "id" => artifact_id
+                 "id" => artifact_id,
+                 "logicalName" => "result"
                }
              ]
     end
@@ -587,7 +702,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Artifact target"})
 
       artifact = create_artifact(user, project, %{})
-      link_artifact(user, project, artifact, "project", project.id, "attached_to")
+      link_artifact(user, project, artifact, "project", project.id)
 
       update_result =
         conn
@@ -679,8 +794,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
                  %{filename: "owned.md", body: "# Owned"},
                  %{
                    subject_type: "project",
-                   subject_id: project.id,
-                   relationship_kind: "attached_to"
+                   subject_id: project.id
                  }
                )
 
@@ -722,8 +836,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
                  %{filename: "delete-me.md", body: "# Delete me"},
                  %{
                    subject_type: "project",
-                   subject_id: project.id,
-                   relationship_kind: "attached_to"
+                   subject_id: project.id
                  }
                )
 
@@ -6220,7 +6333,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         })
 
       for artifact <- [markdown_artifact, json_artifact] do
-        link_artifact(user, project, artifact, "task", task.id, "attached_to")
+        link_artifact(user, project, artifact, "task", task.id)
       end
 
       {:ok, other_task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Other task"})
@@ -6230,8 +6343,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         project,
         other_task_artifact,
         "task",
-        other_task.id,
-        "attached_to"
+        other_task.id
       )
 
       result =
@@ -6501,8 +6613,8 @@ defmodule SacrumWeb.Graphql.SchemaTest do
           body: ~s({"passed":true})
         })
 
-      link_artifact(user, project, attached_markdown, "task_section", section.id, "attached_to")
-      link_artifact(user, project, evidence_json, "task_section", section.id, "evidence_for")
+      link_artifact(user, project, attached_markdown, "task_section", section.id)
+      link_artifact(user, project, evidence_json, "task_section", section.id)
 
       result =
         conn

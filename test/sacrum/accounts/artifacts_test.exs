@@ -91,8 +91,7 @@ defmodule Sacrum.Accounts.ArtifactsTest do
     {:ok, link} =
       ArtifactLinks.insert(user.id, project.id, artifact.id, %{
         subject_type: subject_type,
-        subject_id: subject_id,
-        relationship_kind: "attached_to"
+        subject_id: subject_id
       })
 
     link
@@ -112,8 +111,7 @@ defmodule Sacrum.Accounts.ArtifactsTest do
     Map.merge(
       %{
         subject_type: subject_type,
-        subject_id: subject_id,
-        relationship_kind: "attached_to"
+        subject_id: subject_id
       },
       attrs
     )
@@ -175,7 +173,7 @@ defmodule Sacrum.Accounts.ArtifactsTest do
                  user.id,
                  project.id,
                  artifact_attrs(%{filename: "task-plan.json", body: ~s({"status":"ready"})}),
-                 link_attrs("task", task.id, %{relationship_kind: "evidence_for"})
+                 link_attrs("task", task.id)
                )
 
       assert artifact.user_id == user.id
@@ -188,13 +186,12 @@ defmodule Sacrum.Accounts.ArtifactsTest do
       assert link.artifact_id == artifact.id
       assert link.subject_type == "task"
       assert link.subject_id == task.id
-      assert link.relationship_kind == "evidence_for"
 
       assert Repo.aggregate(Artifact, :count) == 1
       assert Repo.aggregate(ArtifactLink, :count) == 1
     end
 
-    test "creates one artifact and attached_to link for every supported subject", %{
+    test "creates one artifact link for every supported subject", %{
       user: user,
       project: project,
       task: task,
@@ -227,7 +224,6 @@ defmodule Sacrum.Accounts.ArtifactsTest do
         assert link.artifact_id == artifact.id
         assert link.subject_type == subject_type
         assert link.subject_id == subject_id
-        assert link.relationship_kind == "attached_to"
       end
 
       assert Repo.aggregate(Artifact, :count) == length(subjects)
@@ -283,7 +279,7 @@ defmodule Sacrum.Accounts.ArtifactsTest do
                  user.id,
                  project.id,
                  artifact_attrs(),
-                 %{subject_type: "task", relationship_kind: "attached_to"}
+                 %{subject_type: "task"}
                )
 
       assert %{subject_id: ["can't be blank"]} = errors_on(changeset)
@@ -362,6 +358,40 @@ defmodule Sacrum.Accounts.ArtifactsTest do
       assert edited_artifact.body == "# Edited body"
     end
 
+    test "updates a sole attachment's logical name and preserves it when moving the attachment",
+         %{
+           user: user,
+           project: project,
+           task: task
+         } do
+      assert {:ok, %{artifact: artifact}} =
+               Artifacts.create_and_link(
+                 user.id,
+                 project.id,
+                 artifact_attrs(),
+                 link_attrs("project", project.id, %{logical_name: "implementation_plan"})
+               )
+
+      assert {:ok, renamed_artifact} =
+               Artifacts.update(user.id, artifact.id, %{}, %{logical_name: "result"})
+
+      assert renamed_artifact.logical_name == "result"
+
+      assert {:ok, moved_artifact} =
+               Artifacts.update(
+                 user.id,
+                 artifact.id,
+                 %{},
+                 %{subject_type: "task", subject_id: task.id}
+               )
+
+      assert moved_artifact.logical_name == "result"
+      assert [link] = ArtifactLinks.list_by_artifact(user.id, project.id, artifact.id)
+      assert link.subject_type == "task"
+      assert link.subject_id == task.id
+      assert link.logical_name == "result"
+    end
+
     test "updates file fields and replaces its sole attachment within the project", %{
       user: user,
       project: project,
@@ -373,7 +403,6 @@ defmodule Sacrum.Accounts.ArtifactsTest do
                  project.id,
                  artifact_attrs(),
                  link_attrs("project", project.id, %{
-                   relationship_kind: "evidence_for",
                    metadata: %{"source" => "test"}
                  })
                )
@@ -395,7 +424,6 @@ defmodule Sacrum.Accounts.ArtifactsTest do
       assert [link] = ArtifactLinks.list_by_artifact(user.id, project.id, artifact.id)
       assert link.subject_type == "task"
       assert link.subject_id == task.id
-      assert link.relationship_kind == "evidence_for"
       assert link.metadata == %{"source" => "test"}
     end
 
@@ -565,6 +593,60 @@ defmodule Sacrum.Accounts.ArtifactsTest do
       link_artifact(user, project, artifact, "task", task.id)
 
       assert [] = Artifacts.list_for_subject(other_user.id, project.id, "task", task.id)
+    end
+  end
+
+  describe "get_for_subject_by_logical_name/5" do
+    setup [:setup_artifact_scope]
+
+    test "provides a scoped lookup contract for CLI and orchestrator callers", %{
+      user: user,
+      project: project,
+      task: task
+    } do
+      assert {:ok, %{artifact: artifact}} =
+               Artifacts.create_and_link(
+                 user.id,
+                 project.id,
+                 artifact_attrs(%{filename: "orchestrator-result.json"}),
+                 link_attrs("task", task.id, %{logical_name: "result"})
+               )
+
+      assert {:ok, found} =
+               Artifacts.get_for_subject_by_logical_name(
+                 user.id,
+                 project.id,
+                 "task",
+                 task.id,
+                 "result"
+               )
+
+      assert found.id == artifact.id
+      assert found.filename == "orchestrator-result.json"
+      assert found.logical_name == "result"
+
+      other_project = create_project(user, "Other named artifact project")
+      other_task = create_task(user, other_project, "Other named artifact task")
+
+      assert {:error, :not_found} =
+               Artifacts.get_for_subject_by_logical_name(
+                 user.id,
+                 other_project.id,
+                 "task",
+                 other_task.id,
+                 "result"
+               )
+
+      other_user = create_user("other_named_owner")
+
+      assert {:error, :not_found} =
+               Artifacts.get_for_subject_by_logical_name(
+                 other_user.id,
+                 project.id,
+                 "task",
+                 task.id,
+                 "result"
+               )
     end
   end
 

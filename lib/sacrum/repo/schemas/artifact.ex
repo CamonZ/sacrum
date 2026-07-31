@@ -12,6 +12,7 @@ defmodule Sacrum.Repo.Schemas.Artifact do
   schema "artifacts" do
     field :filename, :string
     field :body, :string
+    field :logical_name, :string, virtual: true
 
     belongs_to :project, Sacrum.Repo.Schemas.Project
     belongs_to :user, Sacrum.Repo.Schemas.User
