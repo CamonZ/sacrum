@@ -389,6 +389,8 @@ Handle these events for run-aware GUI/CLI state:
 | `session_log_created` | Append log to the matching step execution. Payload includes `logical_key` when the daemon supplied an opaque logical key. |
 | `session_log_updated` | Replace the existing log row by `id` for logical-key upserts; do not append a second transcript line. |
 | `code_ref_created` / `code_ref_updated` / `code_ref_deleted` | Upsert/remove task or section code references in detail/evidence stores by id. |
+| `artifact_created` / `artifact_updated` / `artifact_deleted` | Upsert/remove project-scoped file rows by id, including full file bodies. |
+| `artifact_link_created` / `artifact_link_updated` / `artifact_link_deleted` | Upsert/remove subject attachments by id using `artifact_id`, subject identity, nullable `logical_name`, and the versioned JSON `metadata` envelope. |
 
 Channel payloads are snake_case. GraphQL fields are camelCase.
 Default-client channel payloads include `schema_version: 1`; clients should

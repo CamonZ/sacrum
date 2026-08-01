@@ -73,6 +73,12 @@ instead of silently applying a payload with an unsupported shape.
 | `code_ref_created` | Relation change | `code_refs` insert after image. | Full code reference row: `id`, `task_id`, `section_id`, `project_id`, file path, line range, name, description, timestamps. |
 | `code_ref_updated` | Relation change | `code_refs` update after image. | Same full code reference row for detail/evidence replacement. |
 | `code_ref_deleted` | Relation change | `code_refs` delete before image. | Full code reference tombstone so clients can remove by id without refetching. |
+| `artifact_created` | Entity projection | `artifacts` insert after image. | Full artifact file row: `id`, `project_id`, `filename`, `body`, timestamps. |
+| `artifact_updated` | Entity projection | `artifacts` update after image. | Same full artifact file row for content or filename replacement. |
+| `artifact_deleted` | Entity projection | `artifacts` delete before image. | Full artifact tombstone so clients can remove the file without refetching. |
+| `artifact_link_created` | Relation change | `artifact_links` insert after image. | Full attachment row: `id`, `artifact_id`, `project_id`, `subject_type`, `subject_id`, nullable `logical_name`, nullable JSON metadata envelope, timestamps. |
+| `artifact_link_updated` | Relation change | `artifact_links` update after image. | Same full attachment row for logical-name or metadata replacement. |
+| `artifact_link_deleted` | Relation change | `artifact_links` delete before image, including cascades from artifact deletion. | Full attachment tombstone with subject identity, logical name, and JSON metadata envelope so clients can remove it without refetching. |
 
 ## Derived Step Movement Events
 
@@ -173,6 +179,8 @@ Snapshot source tables are:
 - `task_sections`
 - `task_dependencies`
 - `code_refs`
+- `artifacts`
+- `artifact_links`
 
 ## Reconnect And Gap Recovery
 

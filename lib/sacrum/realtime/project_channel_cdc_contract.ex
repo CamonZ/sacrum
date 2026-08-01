@@ -180,6 +180,18 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
 
   @code_ref_event_payload_keys [:schema_version | @code_ref_payload_keys]
 
+  @artifact_payload_keys ~w(
+    id project_id filename body inserted_at updated_at
+  )a
+
+  @artifact_event_payload_keys [:schema_version | @artifact_payload_keys]
+
+  @artifact_link_payload_keys ~w(
+    id artifact_id project_id subject_type subject_id logical_name metadata inserted_at updated_at
+  )a
+
+  @artifact_link_event_payload_keys [:schema_version | @artifact_link_payload_keys]
+
   @contracts [
     %{
       event: "task_created",
@@ -684,6 +696,88 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
       schema_version: @schema_version,
       completeness:
         "Complete code reference tombstone from the before image so clients can remove by id without refetching."
+    },
+    %{
+      event: "artifact_created",
+      classification: @entity_projection,
+      source_changes: [
+        %{table: "artifacts", operation: :insert, after_image_fields: @artifact_payload_keys}
+      ],
+      payload_keys: @artifact_event_payload_keys,
+      schema_version: @schema_version,
+      completeness: "Complete artifact file projection for incremental file-content updates."
+    },
+    %{
+      event: "artifact_updated",
+      classification: @entity_projection,
+      source_changes: [
+        %{
+          table: "artifacts",
+          operation: :update,
+          before_image_fields: [:id, :project_id],
+          after_image_fields: @artifact_payload_keys
+        }
+      ],
+      payload_keys: @artifact_event_payload_keys,
+      schema_version: @schema_version,
+      completeness: "Complete artifact file replacement for incremental filename or body updates."
+    },
+    %{
+      event: "artifact_deleted",
+      classification: @entity_projection,
+      source_changes: [
+        %{table: "artifacts", operation: :delete, before_image_fields: @artifact_payload_keys}
+      ],
+      payload_keys: @artifact_event_payload_keys,
+      schema_version: @schema_version,
+      completeness:
+        "Complete artifact tombstone from the before image so clients can remove the file without refetching."
+    },
+    %{
+      event: "artifact_link_created",
+      classification: @relation_change,
+      source_changes: [
+        %{
+          table: "artifact_links",
+          operation: :insert,
+          after_image_fields: @artifact_link_payload_keys
+        }
+      ],
+      payload_keys: @artifact_link_event_payload_keys,
+      schema_version: @schema_version,
+      completeness:
+        "Complete attachment projection with subject identity, logical name, and JSON metadata envelope."
+    },
+    %{
+      event: "artifact_link_updated",
+      classification: @relation_change,
+      source_changes: [
+        %{
+          table: "artifact_links",
+          operation: :update,
+          before_image_fields: [:id, :project_id],
+          after_image_fields: @artifact_link_payload_keys
+        }
+      ],
+      payload_keys: @artifact_link_event_payload_keys,
+      schema_version: @schema_version,
+      completeness:
+        "Complete attachment replacement for incremental logical-name or metadata updates."
+    },
+    %{
+      event: "artifact_link_deleted",
+      classification: @relation_change,
+      source_changes: [
+        %{
+          table: "artifact_links",
+          operation: :delete,
+          before_image_fields: @artifact_link_payload_keys
+        }
+      ],
+      payload_keys: @artifact_link_event_payload_keys,
+      schema_version: @schema_version,
+      completeness:
+        "Complete attachment tombstone from the before image, including cascade deletes, so clients can remove stale attachments."
     }
   ]
 
@@ -695,7 +789,7 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
       "Capture a CDC cursor/LSN for the snapshot boundary, read all project rows at or before that boundary, then apply committed WalEx changes after that cursor in commit order.",
     source_tables: ~w(
       projects workflows workflow_steps step_transitions workflow_transitions tasks task_runs
-      step_executions session_logs task_sections task_dependencies code_refs
+      step_executions session_logs task_sections task_dependencies code_refs artifacts artifact_links
     ),
     gui_projection:
       "Equivalent to the GraphQL task list/detail, pipeline summary, run trace, and section queries for the project. Include archived tasks when building a full local store."

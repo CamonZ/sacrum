@@ -13,6 +13,8 @@ defmodule Sacrum.Realtime.Cdc.Projector do
   alias Sacrum.Repo
 
   alias Sacrum.Repo.Schemas.{
+    Artifact,
+    ArtifactLink,
     CodeRef,
     SessionLog,
     StepExecution,
@@ -46,7 +48,9 @@ defmodule Sacrum.Realtime.Cdc.Projector do
     "session_logs" => SessionLog,
     "task_sections" => TaskSection,
     "task_dependencies" => TaskDependency,
-    "code_refs" => CodeRef
+    "code_refs" => CodeRef,
+    "artifacts" => Artifact,
+    "artifact_links" => ArtifactLink
   }
 
   @channel_broadcasts %{
@@ -79,7 +83,13 @@ defmodule Sacrum.Realtime.Cdc.Projector do
     "section_deleted" => :broadcast_section_deleted,
     "code_ref_created" => :broadcast_code_ref_created,
     "code_ref_updated" => :broadcast_code_ref_updated,
-    "code_ref_deleted" => :broadcast_code_ref_deleted
+    "code_ref_deleted" => :broadcast_code_ref_deleted,
+    "artifact_created" => :broadcast_artifact_created,
+    "artifact_updated" => :broadcast_artifact_updated,
+    "artifact_deleted" => :broadcast_artifact_deleted,
+    "artifact_link_created" => :broadcast_artifact_link_created,
+    "artifact_link_updated" => :broadcast_artifact_link_updated,
+    "artifact_link_deleted" => :broadcast_artifact_link_deleted
   }
 
   @type dispatch_result :: %{
@@ -355,6 +365,48 @@ defmodule Sacrum.Realtime.Cdc.Projector do
        }) do
     code_ref = record_to_struct!("code_refs", record)
     [projection("code_ref_deleted", code_ref.project_id, code_ref)]
+  end
+
+  defp projections(%WalEx.Event{source: %{table: "artifacts"}, type: :insert, new_record: record}) do
+    artifact = record_to_struct!("artifacts", record)
+    [projection("artifact_created", artifact.project_id, artifact)]
+  end
+
+  defp projections(%WalEx.Event{source: %{table: "artifacts"}, type: :update, new_record: record}) do
+    artifact = record_to_struct!("artifacts", record)
+    [projection("artifact_updated", artifact.project_id, artifact)]
+  end
+
+  defp projections(%WalEx.Event{source: %{table: "artifacts"}, type: :delete, old_record: record}) do
+    artifact = record_to_struct!("artifacts", record)
+    [projection("artifact_deleted", artifact.project_id, artifact)]
+  end
+
+  defp projections(%WalEx.Event{
+         source: %{table: "artifact_links"},
+         type: :insert,
+         new_record: record
+       }) do
+    artifact_link = record_to_struct!("artifact_links", record)
+    [projection("artifact_link_created", artifact_link.project_id, artifact_link)]
+  end
+
+  defp projections(%WalEx.Event{
+         source: %{table: "artifact_links"},
+         type: :update,
+         new_record: record
+       }) do
+    artifact_link = record_to_struct!("artifact_links", record)
+    [projection("artifact_link_updated", artifact_link.project_id, artifact_link)]
+  end
+
+  defp projections(%WalEx.Event{
+         source: %{table: "artifact_links"},
+         type: :delete,
+         old_record: record
+       }) do
+    artifact_link = record_to_struct!("artifact_links", record)
+    [projection("artifact_link_deleted", artifact_link.project_id, artifact_link)]
   end
 
   defp projections(%WalEx.Event{}), do: []
