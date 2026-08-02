@@ -154,15 +154,24 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       assert prompt == "Working on: Test Task"
     end
 
-    test "renders task artifact IDs and persists/broadcasts the same identity-only prompt", ctx do
+    test "renders project and task artifact IDs and persists/broadcasts the same prompt", ctx do
       step =
         create_step(ctx.user, ctx.workflow, %{
-          "prompt" => ~s|Result artifact: {{ artifacts["task"]["result"].id }}|
+          "prompt" =>
+            ~s|Project: {{ artifacts["project"]["result"].id }} Task: {{ artifacts["task"]["result"].id }}|
         })
 
       task = create_task(ctx.user, ctx.project) |> assign_workflow(ctx.workflow)
 
-      {:ok, %{artifact: artifact}} =
+      {:ok, %{artifact: project_artifact}} =
+        Accounts.Artifacts.create_and_link(
+          ctx.user.id,
+          ctx.project.id,
+          %{filename: "project-result.json", body: "private project body"},
+          %{subject_type: "project", subject_id: ctx.project.id, logical_name: "result"}
+        )
+
+      {:ok, %{artifact: task_artifact}} =
         Accounts.Artifacts.create_and_link(
           ctx.user.id,
           ctx.project.id,
@@ -180,12 +189,12 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
                  task.id
                )
 
-      assert artifact_id == artifact.id
+      assert artifact_id == task_artifact.id
       subscribe_to_project(ctx.project)
 
       {:ok, dispatched} = create_and_dispatch(ctx, task, step)
 
-      expected = "Result artifact: #{artifact.id}"
+      expected = "Project: #{project_artifact.id} Task: #{task_artifact.id}"
       assert dispatched.prompt == expected
       assert Sacrum.Repo.get!(Sacrum.Repo.Schemas.StepExecution, dispatched.id).prompt == expected
 

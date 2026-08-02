@@ -41,27 +41,62 @@ defmodule Sacrum.Orchestrator.PromptContext do
       "task" => build_task_context(task),
       "execution" => build_execution_context(execution_data),
       "workflow" => build_workflow_context(workflow_step, task),
-      "artifacts" => %{"task" => build_artifacts_context(task)}
+      "artifacts" => build_artifact_namespaces(task)
     }
+  end
+
+  @doc """
+  Builds an identity-only artifact namespace for an explicit subject.
+
+  Subject type and ID are required so callers choose an explicit namespace
+  rather than accidentally combining artifacts from different subjects.
+
+  Each logical name maps to an identity-only value such as
+  `%{"id" => artifact_id}`. Artifact bodies are neither selected nor included.
+  """
+  @spec build_artifacts_context(String.t(), String.t(), String.t(), String.t()) :: map()
+  def build_artifacts_context(user_id, project_id, subject_type, subject_id)
+      when is_binary(user_id) and is_binary(project_id) and is_binary(subject_type) and
+             is_binary(subject_id) do
+    user_id
+    |> Artifacts.list_identities_for_subject(project_id, subject_type, subject_id)
+    |> identities_to_context()
   end
 
   @doc """
   Builds the task-scoped artifact namespace used by prompt interpolation.
 
-  Each logical name maps to an identity-only value such as
-  `%{"id" => artifact_id}`. Artifact bodies are neither selected nor included.
+  This remains a task-only helper for callers that already have a task. Full
+  rendering contexts expose it under `artifacts["task"]` alongside the
+  explicit project namespace.
   """
   @spec build_artifacts_context(Sacrum.Repo.Schemas.Task.t()) :: map()
   def build_artifacts_context(%{user_id: user_id, project_id: project_id, id: task_id})
       when is_binary(user_id) and is_binary(project_id) and is_binary(task_id) do
-    user_id
-    |> Artifacts.list_identities_for_subject(project_id, "task", task_id)
-    |> Map.new(fn %{id: artifact_id, logical_name: logical_name} ->
-      {logical_name, %{"id" => artifact_id}}
-    end)
+    build_artifacts_context(user_id, project_id, "task", task_id)
   end
 
   def build_artifacts_context(_task), do: %{}
+
+  defp build_artifact_namespaces(%{
+         user_id: user_id,
+         project_id: project_id,
+         id: task_id
+       })
+       when is_binary(user_id) and is_binary(project_id) and is_binary(task_id) do
+    %{
+      "project" => build_artifacts_context(user_id, project_id, "project", project_id),
+      "task" => build_artifacts_context(user_id, project_id, "task", task_id)
+    }
+  end
+
+  defp build_artifact_namespaces(_task), do: %{"project" => %{}, "task" => %{}}
+
+  defp identities_to_context(identities) do
+    Map.new(identities, fn %{id: artifact_id, logical_name: logical_name} ->
+      {logical_name, %{"id" => artifact_id}}
+    end)
+  end
 
   @doc """
   Builds the task context: id, title, description, level, tags, worktree, code_refs,
