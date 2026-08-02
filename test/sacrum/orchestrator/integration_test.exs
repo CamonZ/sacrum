@@ -93,6 +93,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
   defp setup_linear_workflow(opts) do
     step_count = Keyword.get(opts, :step_count, 3)
     finish_last_step = Keyword.get(opts, :finish_last_step, true)
+    first_prompt = Keyword.get(opts, :first_prompt, "Run step for task {task_id}")
     user = create_user()
     project = create_project(user)
     workflow = create_workflow(user, project)
@@ -103,8 +104,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
           name: "step_#{i}",
           step_order: i,
           step_type: if(i == step_count and finish_last_step, do: "finish", else: "execute"),
-          prompt:
-            if(i == step_count and finish_last_step, do: nil, else: "Run step for task {task_id}")
+          prompt: if(i == step_count and finish_last_step, do: nil, else: first_prompt)
         })
       end
 
@@ -124,6 +124,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
   defp setup_human_input_workflow(opts) do
     next_final? = Keyword.get(opts, :next_final?, false)
     next_prompt = Keyword.get(opts, :next_prompt, "After human input")
+    human_prompt = Keyword.get(opts, :human_prompt, "Approve {{ task.title }}")
 
     user = create_user()
     project = create_project(user)
@@ -144,7 +145,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
         step_order: 1,
         step_type: "human_input",
         output_schema: schema,
-        prompt: "Approve {{ task.title }}"
+        prompt: human_prompt
       })
 
     next_step =
@@ -402,6 +403,37 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
   end
 
   describe "human_input orchestration" do
+    test "renders task artifact IDs in the persisted human_input prompt" do
+      %{user: user, human_step: human_step, task: task} =
+        setup_human_input_workflow(
+          next_final?: true,
+          human_prompt: ~s|Approve artifact {{ artifacts["task"]["result"].id }}|
+        )
+
+      {:ok, %{artifact: artifact}} =
+        Accounts.Artifacts.create_and_link(
+          user.id,
+          task.project_id,
+          %{filename: "human-result.json", body: "private human result body"},
+          %{subject_type: "task", subject_id: task.id, logical_name: "result"}
+        )
+
+      pid = start_orchestrator(task, user)
+      wait_for_exit(pid)
+
+      assert [
+               %StepExecution{
+                 step_id: step_id,
+                 status: "waiting",
+                 prompt: prompt
+               } = execution
+             ] = executions_for_task(task.id)
+
+      assert step_id == human_step.id
+      assert prompt == "Approve artifact #{artifact.id}"
+      assert execution.prompt == prompt
+    end
+
     test "entering a human_input step parks the run without daemon dispatch" do
       %{user: user, project: project, human_step: human_step, task: task} =
         setup_human_input_workflow(next_final?: true)
@@ -655,6 +687,53 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
   end
 
   describe "execution failure retry" do
+    test "retries render and persist the same task artifact ID" do
+      %{user: user, project: project, task: task} =
+        setup_linear_workflow(
+          step_count: 1,
+          finish_last_step: false,
+          first_prompt: ~s|Retry artifact {{ artifacts["task"]["result"].id }}|
+        )
+
+      {:ok, %{artifact: artifact}} =
+        Accounts.Artifacts.create_and_link(
+          user.id,
+          project.id,
+          %{filename: "retry-result.json", body: "private retry result body"},
+          %{subject_type: "task", subject_id: task.id, logical_name: "result"}
+        )
+
+      expected = "Retry artifact #{artifact.id}"
+      subscribe_project(project.id)
+
+      pid = start_orchestrator(task, user)
+      wait_for_state(pid, :executing)
+      first_exec = latest_started_execution(task.id)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "run_step",
+                       payload: %{id: first_id, prompt: ^expected}
+                     },
+                     1500
+
+      assert first_id == first_exec.id
+      assert first_exec.prompt == expected
+
+      simulate_daemon_failure(task.id, project.id)
+      wait_for_execution_count(task.id, 2)
+
+      [_failed, retry] = executions_for_task(task.id)
+      assert retry.prompt == expected
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "run_step",
+                       payload: %{id: retry_id, prompt: ^expected}
+                     },
+                     1500
+
+      assert retry_id == retry.id
+    end
+
     test "single failure inserts a fresh started execution and re-broadcasts run_step for the same step" do
       %{user: user, project: project, steps: [s1 | _], task: task} =
         setup_linear_workflow(step_count: 1, finish_last_step: false)

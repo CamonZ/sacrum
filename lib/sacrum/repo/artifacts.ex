@@ -76,10 +76,9 @@ defmodule Sacrum.Repo.Artifacts do
   def list_for_subject(user_id, project_id, subject_type, subject_id, opts \\ [])
       when is_user_project_scope(user_id, project_id) and is_binary(subject_type) and
              is_binary(subject_id) and is_options(opts) do
-    Artifact
-    |> join(:inner, [artifact], link in ArtifactLink, on: link.artifact_id == artifact.id)
-    |> where_in_scope(user_id, project_id)
-    |> where_subject_link_in_scope(user_id, project_id, subject_type, subject_id)
+    query = subject_artifacts_query(user_id, project_id, subject_type, subject_id)
+
+    query
     |> select_merge([_artifact, link], %{
       logical_name: link.logical_name,
       metadata: link.metadata
@@ -88,6 +87,22 @@ defmodule Sacrum.Repo.Artifacts do
     |> apply_artifact_order()
     |> apply_offset(opts)
     |> apply_limit(opts)
+    |> Repo.all()
+  end
+
+  @spec list_identities_for_subject(String.t(), String.t(), String.t(), String.t()) :: [map()]
+  def list_identities_for_subject(user_id, project_id, subject_type, subject_id)
+      when is_user_project_scope(user_id, project_id) and is_binary(subject_type) and
+             is_binary(subject_id) do
+    query = subject_artifacts_query(user_id, project_id, subject_type, subject_id)
+
+    query
+    |> where([_artifact, link], not is_nil(link.logical_name))
+    |> select([artifact, link], %{
+      id: artifact.id,
+      logical_name: link.logical_name
+    })
+    |> apply_artifact_order()
     |> Repo.all()
   end
 
@@ -101,16 +116,22 @@ defmodule Sacrum.Repo.Artifacts do
   def get_for_subject_by_logical_name(user_id, project_id, subject_type, subject_id, logical_name)
       when is_user_project_scope(user_id, project_id) and is_binary(subject_type) and
              is_binary(subject_id) and is_binary(logical_name) do
-    Artifact
-    |> join(:inner, [artifact], link in ArtifactLink, on: link.artifact_id == artifact.id)
-    |> where_in_scope(user_id, project_id)
-    |> where_subject_link_in_scope(user_id, project_id, subject_type, subject_id)
+    query = subject_artifacts_query(user_id, project_id, subject_type, subject_id)
+
+    query
     |> where([_artifact, link], link.logical_name == ^logical_name)
     |> select_merge([_artifact, link], %{
       logical_name: link.logical_name,
       metadata: link.metadata
     })
     |> fetch_one()
+  end
+
+  defp subject_artifacts_query(user_id, project_id, subject_type, subject_id) do
+    Artifact
+    |> join(:inner, [artifact], link in ArtifactLink, on: link.artifact_id == artifact.id)
+    |> where_in_scope(user_id, project_id)
+    |> where_subject_link_in_scope(user_id, project_id, subject_type, subject_id)
   end
 
   defp where_in_scope(query, user_id, project_id) do
