@@ -28,7 +28,7 @@ defmodule Sacrum.Orchestrator.PromptContext do
   context for Solid rendering.
 
   `task` should have associations preloaded (see `PromptRenderer.preload_for_rendering/1`).
-  `execution_data` is the map returned by `ExecutionHistory.build_execution_data/2`.
+  `execution_data` is the map returned by `ExecutionHistory.build_execution_data/3`.
   `workflow_step` may be `nil` to omit the workflow section.
   """
   @spec build_context(

@@ -92,7 +92,7 @@ defmodule Sacrum.Orchestrator.ExecutionHistoryTest do
 
   # ===== Tests =====
 
-  describe "build_execution_data/2" do
+  describe "build_execution_data/3 core context" do
     test "builds execution data with previous output and handoff" do
       user = create_user()
       project = create_project(user)
@@ -243,44 +243,6 @@ defmodule Sacrum.Orchestrator.ExecutionHistoryTest do
 
       assert [%{id: id}] = data[:history]
       assert id == prior.id
-    end
-  end
-
-  describe "put_previous_output/2" do
-    test "adds previous output from most recent completed execution" do
-      user = create_user()
-      project = create_project(user)
-      workflow = create_workflow(user, project)
-      step = create_step(user, workflow, %{})
-      task = create_task(user, project, workflow)
-
-      _older =
-        create_step_execution(user, task, workflow, step, %{
-          "status" => "completed",
-          "output" => "old output"
-        })
-
-      _newer =
-        create_step_execution(user, task, workflow, step, %{
-          "status" => "completed",
-          "output" => "new output"
-        })
-
-      data = ExecutionHistory.put_previous_output(%{}, task.id)
-
-      assert data[:previous][:output] == "new output"
-    end
-
-    test "returns data unchanged if no previous execution" do
-      user = create_user()
-      project = create_project(user)
-      workflow = create_workflow(user, project)
-      _step = create_step(user, workflow, %{})
-      task = create_task(user, project, workflow)
-
-      data = ExecutionHistory.put_previous_output(%{}, task.id)
-
-      assert data == %{}
     end
   end
 

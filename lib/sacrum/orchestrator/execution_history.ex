@@ -37,37 +37,6 @@ defmodule Sacrum.Orchestrator.ExecutionHistory do
     |> put_run_counts(task, task_run, dispatched_execution.step_id)
   end
 
-  @deprecated "Pass the task and validated TaskRun to build_execution_data/3"
-  @spec build_execution_data(String.t(), struct()) :: map()
-  def build_execution_data(task_id, dispatched_execution) do
-    %{}
-    |> put_previous_output(task_id)
-    |> put_handoff(dispatched_execution.handoff)
-    |> put_run_counts(task_id, dispatched_execution.step_id)
-  end
-
-  @doc """
-  Queries the most recent completed StepExecution and stores its (decoded)
-  output under the `:previous` key.
-  """
-  @spec put_previous_output(map(), String.t()) :: map()
-  def put_previous_output(data, task_id) do
-    query =
-      from(e in StepExecution,
-        left_join: ws in WorkflowStep,
-        on: ws.id == e.step_id or (is_nil(e.step_id) and ws.name == e.step_name),
-        where: e.task_id == ^task_id and e.status == "completed",
-        order_by: [desc: e.inserted_at],
-        limit: 1,
-        select: {e.output, ws.output_schema}
-      )
-
-    case Repo.one(query) do
-      nil -> data
-      {output, schema} -> Map.put(data, :previous, %{output: decode_prior_output(output, schema)})
-    end
-  end
-
   @doc """
   Adds the most recent completed output from the current TaskRun.
   """
