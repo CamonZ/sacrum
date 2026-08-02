@@ -5,6 +5,7 @@ defmodule Sacrum.Repo.ArtifactsTest do
   alias Sacrum.Repo.Artifacts
   alias Sacrum.Repo.Projects
   alias Sacrum.Repo.Schemas.Artifact
+  alias Sacrum.Repo.TaskRuns
   alias Sacrum.Repo.Tasks
   alias Sacrum.Repo.Users
 
@@ -362,6 +363,32 @@ defmodule Sacrum.Repo.ArtifactsTest do
                  "task",
                  other_task.id
                )
+    end
+
+    test "returns identity-only attachments for a TaskRun subject", %{
+      user: user,
+      project: project
+    } do
+      task = create_task(project)
+      {:ok, task_run} = TaskRuns.insert(user.id, project.id, task.id, %{status: :queued})
+      {:ok, artifact} = Artifacts.insert(user.id, project.id, valid_attrs(%{body: "secret body"}))
+
+      {:ok, _link} =
+        ArtifactLinks.insert(user.id, project.id, artifact.id, %{
+          subject_type: "task_run",
+          subject_id: task_run.id,
+          logical_name: "result"
+        })
+
+      assert [%{id: artifact_id, logical_name: "result"}] =
+               Artifacts.list_identities_for_subject(
+                 user.id,
+                 project.id,
+                 "task_run",
+                 task_run.id
+               )
+
+      assert artifact_id == artifact.id
     end
   end
 end

@@ -179,8 +179,8 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
     :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project_id}")
   end
 
-  defp start_orchestrator(task, user) do
-    child_spec = {TaskOrchestrator, task_id: task.id, user_id: user.id}
+  defp start_orchestrator(task, user, opts \\ []) do
+    child_spec = {TaskOrchestrator, [task_id: task.id, user_id: user.id] ++ opts}
     {:ok, pid} = TaskFSMSupervisor.start_child(child_spec)
     ExUnit.Callbacks.on_exit(fn -> ensure_terminated(pid) end)
     pid
@@ -407,18 +407,21 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
       %{user: user, human_step: human_step, task: task} =
         setup_human_input_workflow(
           next_final?: true,
-          human_prompt: ~s|Approve artifact {{ artifacts["task"]["result"].id }}|
+          human_prompt: ~s|Approve artifact {{ artifacts["task_run"]["result"].id }}|
         )
+
+      {:ok, task_run} =
+        Accounts.TaskRuns.insert(user.id, task.project_id, task.id, %{status: :queued})
 
       {:ok, %{artifact: artifact}} =
         Accounts.Artifacts.create_and_link(
           user.id,
           task.project_id,
-          %{filename: "human-result.json", body: "private human result body"},
-          %{subject_type: "task", subject_id: task.id, logical_name: "result"}
+          %{filename: "human-task-run-result.json", body: "private human task-run body"},
+          %{subject_type: "task_run", subject_id: task_run.id, logical_name: "result"}
         )
 
-      pid = start_orchestrator(task, user)
+      pid = start_orchestrator(task, user, task_run_id: task_run.id)
       wait_for_exit(pid)
 
       assert [
@@ -432,6 +435,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
       assert step_id == human_step.id
       assert prompt == "Approve artifact #{artifact.id}"
       assert execution.prompt == prompt
+      refute prompt =~ "private human task-run body"
     end
 
     test "entering a human_input step parks the run without daemon dispatch" do
@@ -692,21 +696,23 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
         setup_linear_workflow(
           step_count: 1,
           finish_last_step: false,
-          first_prompt: ~s|Retry artifact {{ artifacts["task"]["result"].id }}|
+          first_prompt: ~s|Retry artifact {{ artifacts["task_run"]["result"].id }}|
         )
+
+      {:ok, task_run} = Accounts.TaskRuns.insert(user.id, project.id, task.id, %{status: :queued})
 
       {:ok, %{artifact: artifact}} =
         Accounts.Artifacts.create_and_link(
           user.id,
           project.id,
-          %{filename: "retry-result.json", body: "private retry result body"},
-          %{subject_type: "task", subject_id: task.id, logical_name: "result"}
+          %{filename: "retry-task-run-result.json", body: "private retry task-run body"},
+          %{subject_type: "task_run", subject_id: task_run.id, logical_name: "result"}
         )
 
       expected = "Retry artifact #{artifact.id}"
       subscribe_project(project.id)
 
-      pid = start_orchestrator(task, user)
+      pid = start_orchestrator(task, user, task_run_id: task_run.id)
       wait_for_state(pid, :executing)
       first_exec = latest_started_execution(task.id)
 
