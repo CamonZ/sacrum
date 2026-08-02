@@ -62,6 +62,18 @@ defmodule Sacrum.Orchestrator.ExecutionHistoryTest do
     task
   end
 
+  defp create_task_run(user, task, attrs \\ %{}) do
+    {:ok, task_run} =
+      Accounts.TaskRuns.insert(
+        user.id,
+        task.project_id,
+        task.id,
+        Map.merge(%{status: :executing}, attrs)
+      )
+
+    task_run
+  end
+
   defp create_step_execution(user, task, workflow, step, attrs) do
     default_attrs = %{
       "task_id" => task.id,
@@ -87,20 +99,23 @@ defmodule Sacrum.Orchestrator.ExecutionHistoryTest do
       workflow = create_workflow(user, project)
       step = create_step(user, workflow, %{})
       task = create_task(user, project, workflow)
+      task_run = create_task_run(user, task)
 
       entered =
         create_step_execution(user, task, workflow, step, %{
+          "task_run_id" => task_run.id,
           "status" => "started",
           "handoff" => %{"key" => "value"}
         })
 
       _previous =
         create_step_execution(user, task, workflow, step, %{
+          "task_run_id" => task_run.id,
           "status" => "completed",
           "output" => "previous result"
         })
 
-      data = ExecutionHistory.build_execution_data(task.id, entered)
+      data = ExecutionHistory.build_execution_data(task, entered, task_run)
 
       assert is_map(data)
       assert data[:previous][:output] == "previous result"
@@ -116,30 +131,118 @@ defmodule Sacrum.Orchestrator.ExecutionHistoryTest do
       workflow = create_workflow(user, project)
       step = create_step(user, workflow, %{})
       task = create_task(user, project, workflow)
+      task_run = create_task_run(user, task)
 
       entered =
-        create_step_execution(user, task, workflow, step, %{"status" => "started"})
+        create_step_execution(user, task, workflow, step, %{
+          "task_run_id" => task_run.id,
+          "status" => "started"
+        })
 
       _completed1 =
         create_step_execution(user, task, workflow, step, %{
+          "task_run_id" => task_run.id,
           "status" => "completed"
         })
 
       _completed2 =
         create_step_execution(user, task, workflow, step, %{
+          "task_run_id" => task_run.id,
           "status" => "completed"
         })
 
       _failed =
         create_step_execution(user, task, workflow, step, %{
+          "task_run_id" => task_run.id,
           "status" => "failed"
         })
 
-      data = ExecutionHistory.build_execution_data(task.id, entered)
+      data = ExecutionHistory.build_execution_data(task, entered, task_run)
 
       assert data[:completed_count] == 2
       assert data[:failed_count] == 1
       assert data[:run_count] == 3
+    end
+  end
+
+  describe "build_execution_data/3" do
+    test "builds nearest-first history scoped to the current TaskRun" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project)
+      step = create_step(user, workflow, %{})
+      task = create_task(user, project, workflow)
+      task_run = create_task_run(user, task)
+      other_run = create_task_run(user, task, %{status: :completed})
+
+      older =
+        create_step_execution(user, task, workflow, step, %{
+          "task_run_id" => task_run.id,
+          "status" => "completed",
+          "output" => "older"
+        })
+
+      newer =
+        create_step_execution(user, task, workflow, step, %{
+          "task_run_id" => task_run.id,
+          "status" => "failed",
+          "output" => "newer"
+        })
+
+      _other_run_execution =
+        create_step_execution(user, task, workflow, step, %{
+          "task_run_id" => other_run.id,
+          "status" => "completed",
+          "output" => "other run"
+        })
+
+      current =
+        create_step_execution(user, task, workflow, step, %{
+          "task_run_id" => task_run.id,
+          "status" => "started"
+        })
+
+      data = ExecutionHistory.build_execution_data(task, current, task_run)
+
+      assert Enum.map(data[:history], & &1.id) == [newer.id, older.id]
+      assert Enum.map(data[:history], & &1.output) == ["newer", "older"]
+      assert data[:run_count] == 2
+      assert data[:completed_count] == 1
+      assert data[:failed_count] == 1
+      refute Enum.any?(data[:history], &(&1.id == current.id))
+      refute Enum.any?(data[:history], &(&1.output == "other run"))
+    end
+
+    test "does not include executions after a persisted current execution" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project)
+      step = create_step(user, workflow, %{})
+      task = create_task(user, project, workflow)
+      task_run = create_task_run(user, task)
+
+      prior =
+        create_step_execution(user, task, workflow, step, %{
+          "task_run_id" => task_run.id,
+          "status" => "completed"
+        })
+
+      current =
+        create_step_execution(user, task, workflow, step, %{
+          "task_run_id" => task_run.id,
+          "status" => "started"
+        })
+
+      _later =
+        create_step_execution(user, task, workflow, step, %{
+          "task_run_id" => task_run.id,
+          "status" => "completed"
+        })
+
+      data = ExecutionHistory.build_execution_data(task, current, task_run)
+
+      assert [%{id: id}] = data[:history]
+      assert id == prior.id
     end
   end
 

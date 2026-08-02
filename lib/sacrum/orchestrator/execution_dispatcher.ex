@@ -83,7 +83,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
           {:ok, String.t()} | {:error, term()}
   defp render_dispatch_prompt(task, step, task_run, handoff) do
     execution = execution_struct(task, step, task_run, handoff, %{})
-    execution_data = ExecutionHistory.build_execution_data(task.id, execution)
+    execution_data = ExecutionHistory.build_execution_data(task, execution, task_run)
     context = PromptContext.build_context(task, execution_data, step, task_run)
 
     PromptRenderer.render(step.prompt, context)
