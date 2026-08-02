@@ -3353,8 +3353,25 @@ defmodule SacrumWeb.Graphql.SchemaTest do
     } do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-      {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "step_1", goal: "Do something"})
+
+      {:ok, step} =
+        Accounts.WorkflowSteps.insert(wf, %{
+          name: "step_1",
+          goal: "Do something",
+          prompt: ~s|Use artifact {{ artifacts["task"]["result"].id }}|
+        })
+
       {:ok, _task} = Sacrum.Repo.TaskWorkflows.assign_workflow(task, wf)
+
+      {:ok, %{artifact: artifact}} =
+        Accounts.Artifacts.create_and_link(
+          user.id,
+          project.id,
+          %{filename: "graphql-result.json", body: "private graphql result body"},
+          %{subject_type: "task", subject_id: task.id, logical_name: "result"}
+        )
+
+      Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
 
       result =
         conn
@@ -3377,6 +3394,17 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["taskId"] == task.id
       assert data["id"] != nil
       assert data["taskRunId"] != nil
+
+      expected_prompt = "Use artifact #{artifact.id}"
+      execution = Sacrum.Repo.get!(Sacrum.Repo.Schemas.StepExecution, data["id"])
+      assert execution.prompt == expected_prompt
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "run_step",
+        payload: %{id: execution_id, prompt: ^expected_prompt}
+      }
+
+      assert execution_id == execution.id
 
       task_run = Sacrum.Repo.get!(Sacrum.Repo.Schemas.TaskRun, data["taskRunId"])
       assert task_run.task_id == task.id

@@ -2,7 +2,7 @@ defmodule Sacrum.Orchestrator.PromptContextTest do
   use Sacrum.DataCase
 
   alias Sacrum.Accounts
-  alias Sacrum.Orchestrator.PromptContext
+  alias Sacrum.Orchestrator.{PromptContext, PromptRenderer}
   alias Sacrum.Repo
 
   # ===== Setup helpers =====
@@ -134,6 +134,7 @@ defmodule Sacrum.Orchestrator.PromptContextTest do
       assert Map.has_key?(context, "task")
       assert Map.has_key?(context, "execution")
       assert Map.has_key?(context, "workflow")
+      assert context["artifacts"] == %{"task" => %{}}
 
       assert context["task"]["id"] == to_string(task.id)
       assert context["task"]["title"] == "Test Task"
@@ -262,6 +263,87 @@ defmodule Sacrum.Orchestrator.PromptContextTest do
       assert Map.has_key?(context, "goals")
       assert context["constraints"] == ["Must be fast"]
       assert context["goals"] == ["Complete the feature"]
+    end
+  end
+
+  describe "build_artifacts_context/1" do
+    test "maps task logical names to identity-only values with bracket-compatible keys" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project)
+      task = create_task(user, project, workflow)
+
+      {:ok, %{artifact: result}} =
+        Accounts.Artifacts.create_and_link(
+          user.id,
+          project.id,
+          %{filename: "result.json", body: "private result body"},
+          %{subject_type: "task", subject_id: task.id, logical_name: "result"}
+        )
+
+      {:ok, %{artifact: hyphenated}} =
+        Accounts.Artifacts.create_and_link(
+          user.id,
+          project.id,
+          %{filename: "build-output.json", body: "private build body"},
+          %{subject_type: "task", subject_id: task.id, logical_name: "build-output"}
+        )
+
+      context = PromptContext.build_artifacts_context(task)
+
+      assert context == %{
+               "result" => %{"id" => result.id},
+               "build-output" => %{"id" => hyphenated.id}
+             }
+
+      refute inspect(context) =~ "private result body"
+      refute inspect(context) =~ "private build body"
+
+      assert {:ok, rendered} =
+               PromptRenderer.render(
+                 ~s|result={{ artifacts["task"]["result"].id }} build={{ artifacts["task"]["build-output"].id }}|,
+                 %{"artifacts" => %{"task" => context}}
+               )
+
+      assert rendered == "result=#{result.id} build=#{hyphenated.id}"
+    end
+
+    test "returns an empty task namespace when no named artifacts are attached" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project)
+      task = create_task(user, project, workflow)
+
+      assert PromptContext.build_artifacts_context(task) == %{}
+
+      assert {:ok, rendered} =
+               PromptRenderer.render(
+                 ~s|missing={{ artifacts["task"]["missing"].id }}|,
+                 %{"artifacts" => %{"task" => %{}}}
+               )
+
+      assert rendered == "missing="
+    end
+
+    test "does not expose artifacts attached to another task" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project)
+      task = create_task(user, project, workflow)
+      other_task = create_task(user, project, workflow)
+
+      {:ok, %{artifact: _unrelated}} =
+        Accounts.Artifacts.create_and_link(
+          user.id,
+          project.id,
+          %{filename: "unrelated.txt", body: "unrelated body"},
+          %{subject_type: "task", subject_id: other_task.id, logical_name: "result"}
+        )
+
+      context = PromptContext.build_artifacts_context(task)
+
+      assert context == %{}
+      refute Map.has_key?(context, "result")
     end
   end
 

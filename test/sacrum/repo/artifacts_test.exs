@@ -278,4 +278,90 @@ defmodule Sacrum.Repo.ArtifactsTest do
                )
     end
   end
+
+  describe "list_identities_for_subject/4" do
+    setup [:setup_artifact_project]
+
+    test "returns only named identities in the exact user, project, and subject scope", %{
+      user: user,
+      project: project
+    } do
+      task = create_task(project)
+      other_task = create_task(project, "Other task")
+
+      {:ok, result} =
+        Artifacts.insert(user.id, project.id, valid_attrs(%{body: "private result"}))
+
+      {:ok, unnamed} = Artifacts.insert(user.id, project.id, valid_attrs(%{filename: "unnamed"}))
+      {:ok, other_subject} = Artifacts.insert(user.id, project.id, valid_attrs())
+
+      {:ok, _link} =
+        ArtifactLinks.insert(user.id, project.id, result.id, %{
+          subject_type: "task",
+          subject_id: task.id,
+          logical_name: "result"
+        })
+
+      {:ok, _link} =
+        ArtifactLinks.insert(user.id, project.id, unnamed.id, %{
+          subject_type: "task",
+          subject_id: task.id
+        })
+
+      {:ok, _link} =
+        ArtifactLinks.insert(user.id, project.id, other_subject.id, %{
+          subject_type: "task",
+          subject_id: other_task.id,
+          logical_name: "result"
+        })
+
+      assert [%{id: result_id, logical_name: "result"}] =
+               Artifacts.list_identities_for_subject(user.id, project.id, "task", task.id)
+
+      assert result_id == result.id
+    end
+
+    test "does not return artifacts linked as another subject type", %{
+      user: user,
+      project: project
+    } do
+      task = create_task(project)
+
+      {:ok, artifact} = Artifacts.insert(user.id, project.id, valid_attrs())
+
+      {:ok, _link} =
+        ArtifactLinks.insert(user.id, project.id, artifact.id, %{
+          subject_type: "project",
+          subject_id: project.id,
+          logical_name: "result"
+        })
+
+      assert [] = Artifacts.list_identities_for_subject(user.id, project.id, "task", task.id)
+
+      other_user = create_user("identity_reader")
+
+      assert [] =
+               Artifacts.list_identities_for_subject(other_user.id, project.id, "task", task.id)
+
+      other_project = create_project(user, "Other Project")
+      other_task = create_task(other_project, "Other Task")
+
+      {:ok, other_artifact} = Artifacts.insert(user.id, other_project.id, valid_attrs())
+
+      {:ok, _link} =
+        ArtifactLinks.insert(user.id, other_project.id, other_artifact.id, %{
+          subject_type: "task",
+          subject_id: other_task.id,
+          logical_name: "result"
+        })
+
+      assert [] =
+               Artifacts.list_identities_for_subject(
+                 user.id,
+                 project.id,
+                 "task",
+                 other_task.id
+               )
+    end
+  end
 end

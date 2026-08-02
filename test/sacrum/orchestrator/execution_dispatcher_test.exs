@@ -154,6 +154,47 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       assert prompt == "Working on: Test Task"
     end
 
+    test "renders task artifact IDs and persists/broadcasts the same identity-only prompt", ctx do
+      step =
+        create_step(ctx.user, ctx.workflow, %{
+          "prompt" => ~s|Result artifact: {{ artifacts["task"]["result"].id }}|
+        })
+
+      task = create_task(ctx.user, ctx.project) |> assign_workflow(ctx.workflow)
+
+      {:ok, %{artifact: artifact}} =
+        Accounts.Artifacts.create_and_link(
+          ctx.user.id,
+          ctx.project.id,
+          %{filename: "result.json", body: "private result body"},
+          %{subject_type: "task", subject_id: task.id, logical_name: "result"}
+        )
+
+      task = PromptRenderer.preload_for_rendering(task)
+
+      assert [%{id: artifact_id, logical_name: "result"}] =
+               Accounts.Artifacts.list_identities_for_subject(
+                 task.user_id,
+                 task.project_id,
+                 "task",
+                 task.id
+               )
+
+      assert artifact_id == artifact.id
+      subscribe_to_project(ctx.project)
+
+      {:ok, dispatched} = create_and_dispatch(ctx, task, step)
+
+      expected = "Result artifact: #{artifact.id}"
+      assert dispatched.prompt == expected
+      assert Sacrum.Repo.get!(Sacrum.Repo.Schemas.StepExecution, dispatched.id).prompt == expected
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "run_step",
+        payload: %{prompt: ^expected}
+      }
+    end
+
     test "renders {{ task.description }} and {{ task.level }}", ctx do
       step =
         create_step(ctx.user, ctx.workflow, %{

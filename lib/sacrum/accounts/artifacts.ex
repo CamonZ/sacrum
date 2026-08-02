@@ -93,6 +93,19 @@ defmodule Sacrum.Accounts.Artifacts do
   end
 
   @doc """
+  List identity-only artifact attachments for a subject.
+
+  The returned maps contain only the artifact UUID and logical name; the
+  artifact body is never selected.
+  """
+  @spec list_identities_for_subject(String.t(), String.t(), String.t(), String.t()) :: [map()]
+  def list_identities_for_subject(user_id, project_id, subject_type, subject_id)
+      when is_binary(user_id) and is_binary(project_id) and is_binary(subject_type) and
+             is_binary(subject_id) do
+    ArtifactsRepo.list_identities_for_subject(user_id, project_id, subject_type, subject_id)
+  end
+
+  @doc """
   Retrieve an artifact attached to a subject by its stable per-link logical name.
   """
   @spec get_for_subject_by_logical_name(
