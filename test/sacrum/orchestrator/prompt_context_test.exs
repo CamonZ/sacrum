@@ -134,7 +134,7 @@ defmodule Sacrum.Orchestrator.PromptContextTest do
       assert Map.has_key?(context, "task")
       assert Map.has_key?(context, "execution")
       assert Map.has_key?(context, "workflow")
-      assert context["artifacts"] == %{"task" => %{}}
+      assert context["artifacts"] == %{"project" => %{}, "task" => %{}}
 
       assert context["task"]["id"] == to_string(task.id)
       assert context["task"]["title"] == "Test Task"
@@ -344,6 +344,69 @@ defmodule Sacrum.Orchestrator.PromptContextTest do
 
       assert context == %{}
       refute Map.has_key?(context, "result")
+    end
+
+    test "resolves project and task artifacts in explicit namespaces" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project)
+      task = create_task(user, project, workflow)
+
+      {:ok, %{artifact: project_result}} =
+        Accounts.Artifacts.create_and_link(
+          user.id,
+          project.id,
+          %{filename: "project-result.json", body: "private project body"},
+          %{subject_type: "project", subject_id: project.id, logical_name: "result"}
+        )
+
+      {:ok, %{artifact: task_result}} =
+        Accounts.Artifacts.create_and_link(
+          user.id,
+          project.id,
+          %{filename: "task-result.json", body: "private task body"},
+          %{subject_type: "task", subject_id: task.id, logical_name: "result"}
+        )
+
+      context = PromptContext.build_context(task, %{}, nil)
+
+      assert context["artifacts"] == %{
+               "project" => %{"result" => %{"id" => project_result.id}},
+               "task" => %{"result" => %{"id" => task_result.id}}
+             }
+
+      refute inspect(context["artifacts"]) =~ "private project body"
+      refute inspect(context["artifacts"]) =~ "private task body"
+
+      assert {:ok, rendered} =
+               PromptRenderer.render(
+                 ~s|project={{ artifacts["project"]["result"].id }} task={{ artifacts["task"]["result"].id }}|,
+                 context
+               )
+
+      assert rendered == "project=#{project_result.id} task=#{task_result.id}"
+    end
+
+    test "requires an explicit subject for the reusable resolver" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project)
+      task = create_task(user, project, workflow)
+
+      {:ok, %{artifact: artifact}} =
+        Accounts.Artifacts.create_and_link(
+          user.id,
+          project.id,
+          %{filename: "result.json", body: "private result body"},
+          %{subject_type: "task", subject_id: task.id, logical_name: "result"}
+        )
+
+      assert PromptContext.build_artifacts_context(
+               user.id,
+               project.id,
+               "task",
+               task.id
+             ) == %{"result" => %{"id" => artifact.id}}
     end
   end
 
