@@ -75,6 +75,8 @@ All six keys are required and `version` must be `1`; `extensions` must be an obj
 
 The Accounts subject-listing and link-creation paths include both the caller's user ID and project ID. Subject reads additionally match `subject_type` and `subject_id`, so those application paths do not return links or files across user or project boundaries. Artifact creation plus its initial link is transactional through `Accounts.Artifacts.create_and_link/4`. Updating an artifact can replace its sole attachment within the same ownership scope; file and link changes commit or roll back together. Deleting an artifact cascades to its links.
 
+Orchestration prompt rendering exposes artifact identities without artifact bodies. `artifacts["project"]`, `artifacts["task"]`, and `artifacts["task_run"]` map logical names to `%{"id" => artifact_id}` values. For preceding persisted executions in the current TaskRun, `artifacts["step_execution"]["history"]` is a zero-based array aligned with `execution.history`: index `0` is the immediately preceding execution, and farther indexes move backward through deterministic `inserted_at`/`id` order. Entries without named links are empty maps, retries remain separate entries, and the current execution being rendered is not included.
+
 ## API Surface
 
 The API is exposed via **GraphQL** at `/graphql` (GraphiQL playground available at `/graphiql` in development). All requests require bearer token auth (`Authorization: Bearer sac_...`).
