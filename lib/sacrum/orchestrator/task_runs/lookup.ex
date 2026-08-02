@@ -22,6 +22,17 @@ defmodule Sacrum.Orchestrator.TaskRuns.Lookup do
     end
   end
 
+  @spec fetch_for_task(binary(), binary(), binary(), binary()) ::
+          {:ok, TaskRun.t()} | {:error, :task_run_not_found}
+  def fetch_for_task(user_id, project_id, task_id, task_run_id)
+      when is_binary(user_id) and is_binary(project_id) and is_binary(task_id) and
+             is_binary(task_run_id) do
+    case TaskRunsRepo.fetch_in_scope(user_id, project_id, task_id, task_run_id) do
+      {:ok, task_run} -> {:ok, task_run}
+      {:error, :not_found} -> {:error, :task_run_not_found}
+    end
+  end
+
   @doc """
   Return the post-commit `%TaskRun{}` for a transaction's `changes` map.
 

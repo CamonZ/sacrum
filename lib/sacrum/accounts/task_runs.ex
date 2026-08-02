@@ -28,6 +28,12 @@ defmodule Sacrum.Accounts.TaskRuns do
     TaskRunsRepo.fetch_active(conditions: [user_id: user_id, task_id: task_id])
   end
 
+  @spec get_in_scope(String.t(), String.t(), String.t(), String.t()) ::
+          {:ok, TaskRun.t()} | {:error, :not_found}
+  defdelegate get_in_scope(user_id, project_id, task_id, task_run_id),
+    to: TaskRunsRepo,
+    as: :fetch_in_scope
+
   @spec list_active_for_tasks(String.t(), [String.t()]) :: [TaskRun.t()]
   defdelegate list_active_for_tasks(user_id, task_ids), to: TaskRunsRepo
 

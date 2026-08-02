@@ -142,6 +142,33 @@ defmodule Sacrum.Orchestrator.PromptContextTest do
       assert context["workflow"]["name"] == "Test Workflow"
     end
 
+    test "build_context/4 adds a scoped identity-only TaskRun namespace" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project)
+      task = create_task(user, project, workflow)
+      {:ok, task_run} = Accounts.TaskRuns.insert(user.id, project.id, task.id, %{status: :queued})
+
+      {:ok, %{artifact: artifact}} =
+        Accounts.Artifacts.create_and_link(
+          user.id,
+          project.id,
+          %{filename: "task-run-result.json", body: "private task-run body"},
+          %{subject_type: "task_run", subject_id: task_run.id, logical_name: "result"}
+        )
+
+      context = PromptContext.build_context(task, %{}, nil, task_run)
+
+      assert context["artifacts"]["task_run"] == %{"result" => %{"id" => artifact.id}}
+      refute inspect(context) =~ "private task-run body"
+
+      {:ok, other_task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Other Task"})
+      {:ok, other_run} = Accounts.TaskRuns.insert(user.id, project.id, other_task.id)
+
+      assert PromptContext.build_context(task, %{}, nil, other_run)["artifacts"]["task_run"] ==
+               %{}
+    end
+
     test "handles nil workflow_step gracefully" do
       user = create_user()
       project = create_project(user)

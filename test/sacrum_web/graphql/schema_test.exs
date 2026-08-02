@@ -3358,17 +3358,19 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         Accounts.WorkflowSteps.insert(wf, %{
           name: "step_1",
           goal: "Do something",
-          prompt: ~s|Use artifact {{ artifacts["task"]["result"].id }}|
+          prompt: ~s|Use artifact {{ artifacts["task_run"]["result"].id }}|
         })
 
       {:ok, _task} = Sacrum.Repo.TaskWorkflows.assign_workflow(task, wf)
+
+      {:ok, task_run} = Accounts.TaskRuns.insert(user.id, project.id, task.id, %{status: :queued})
 
       {:ok, %{artifact: artifact}} =
         Accounts.Artifacts.create_and_link(
           user.id,
           project.id,
-          %{filename: "graphql-result.json", body: "private graphql result body"},
-          %{subject_type: "task", subject_id: task.id, logical_name: "result"}
+          %{filename: "graphql-task-run-result.json", body: "private graphql task-run body"},
+          %{subject_type: "task_run", subject_id: task_run.id, logical_name: "result"}
         )
 
       Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
@@ -3406,10 +3408,11 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
       assert execution_id == execution.id
 
-      task_run = Sacrum.Repo.get!(Sacrum.Repo.Schemas.TaskRun, data["taskRunId"])
-      assert task_run.task_id == task.id
-      assert task_run.status == :executing
-      assert task_run.latest_step_execution_id == data["id"]
+      reloaded_task_run = Sacrum.Repo.get!(Sacrum.Repo.Schemas.TaskRun, data["taskRunId"])
+      assert reloaded_task_run.task_id == task.id
+      assert reloaded_task_run.id == task_run.id
+      assert reloaded_task_run.status == :executing
+      assert reloaded_task_run.latest_step_execution_id == data["id"]
     end
 
     test "runStep persists and exposes a non-default workflow step type", %{

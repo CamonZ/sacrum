@@ -204,6 +204,39 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       }
     end
 
+    test "renders the current TaskRun artifact ID without exposing its body", ctx do
+      step =
+        create_step(ctx.user, ctx.workflow, %{
+          "prompt" => ~s|Run artifact: {{ artifacts["task_run"]["result"].id }}|
+        })
+
+      task = create_task(ctx.user, ctx.project) |> assign_workflow(ctx.workflow)
+      task_run = create_task_run(ctx, task)
+
+      {:ok, %{artifact: artifact}} =
+        Accounts.Artifacts.create_and_link(
+          ctx.user.id,
+          ctx.project.id,
+          %{filename: "task-run-result.json", body: "private task-run body"},
+          %{subject_type: "task_run", subject_id: task_run.id, logical_name: "result"}
+        )
+
+      task = PromptRenderer.preload_for_rendering(task)
+      subscribe_to_project(ctx.project)
+
+      {:ok, dispatched} =
+        ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, step.id, task_run)
+
+      expected = "Run artifact: #{artifact.id}"
+      assert dispatched.prompt == expected
+      refute inspect(dispatched.prompt) =~ "private task-run body"
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "run_step",
+        payload: %{prompt: ^expected}
+      }
+    end
+
     test "renders {{ task.description }} and {{ task.level }}", ctx do
       step =
         create_step(ctx.user, ctx.workflow, %{

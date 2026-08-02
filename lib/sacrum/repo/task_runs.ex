@@ -43,6 +43,25 @@ defmodule Sacrum.Repo.TaskRuns do
     end
   end
 
+  @spec fetch_in_scope(String.t(), String.t(), String.t(), String.t()) ::
+          {:ok, TaskRun.t()} | {:error, :not_found}
+  def fetch_in_scope(user_id, project_id, task_id, task_run_id)
+      when is_binary(user_id) and is_binary(project_id) and is_binary(task_id) and
+             is_binary(task_run_id) do
+    query =
+      from(tr in TaskRun,
+        where:
+          tr.id == ^task_run_id and tr.user_id == ^user_id and tr.project_id == ^project_id and
+            tr.task_id == ^task_id,
+        limit: 1
+      )
+
+    case Repo.one(query) do
+      nil -> {:error, :not_found}
+      task_run -> {:ok, task_run}
+    end
+  end
+
   @spec list_active_for_tasks(String.t(), [String.t()]) :: [TaskRun.t()]
   def list_active_for_tasks(_user_id, []), do: []
 

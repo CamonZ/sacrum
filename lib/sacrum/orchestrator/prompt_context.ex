@@ -46,6 +46,32 @@ defmodule Sacrum.Orchestrator.PromptContext do
   end
 
   @doc """
+  Builds a prompt context with the validated active TaskRun available as the
+  explicit `artifacts["task_run"]` namespace.
+
+  The three-argument form remains available for callers that do not have a
+  TaskRun and preserves the existing project/task artifact contract.
+  """
+  @spec build_context(
+          Sacrum.Repo.Schemas.Task.t(),
+          map(),
+          Sacrum.Repo.Schemas.WorkflowStep.t() | nil,
+          Sacrum.Repo.Schemas.TaskRun.t() | nil
+        ) :: map()
+  def build_context(task, execution_data, workflow_step, task_run) do
+    context = build_context(task, execution_data, workflow_step)
+
+    artifacts =
+      Map.put(
+        context["artifacts"],
+        "task_run",
+        build_task_run_artifacts_context(task, task_run)
+      )
+
+    Map.put(context, "artifacts", artifacts)
+  end
+
+  @doc """
   Builds an identity-only artifact namespace for an explicit subject.
 
   Subject type and ID are required so callers choose an explicit namespace
@@ -77,6 +103,20 @@ defmodule Sacrum.Orchestrator.PromptContext do
   end
 
   def build_artifacts_context(_task), do: %{}
+
+  defp build_task_run_artifacts_context(
+         %{user_id: user_id, project_id: project_id, id: task_id},
+         %Sacrum.Repo.Schemas.TaskRun{
+           id: task_run_id,
+           user_id: user_id,
+           project_id: project_id,
+           task_id: task_id
+         }
+       ) do
+    build_artifacts_context(user_id, project_id, "task_run", task_run_id)
+  end
+
+  defp build_task_run_artifacts_context(_task, _task_run), do: %{}
 
   defp build_artifact_namespaces(%{
          user_id: user_id,
