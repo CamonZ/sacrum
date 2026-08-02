@@ -35,7 +35,8 @@ defmodule Sacrum.Orchestrator.Routing.HumanInput do
     task_id = task.id
     step = Repo.preload(step, :workflow)
 
-    with {:ok, task_run} <- Lookup.fetch(data.task_run_id),
+    with {:ok, task_run} <-
+           Lookup.fetch_for_task(data.user_id, data.project_id, task.id, data.task_run_id),
          {:ok, rendered_prompt} <-
            render_human_prompt(task, step, task_run, data.pending_handoff),
          {:ok, %{execution: execution}} <-
@@ -211,7 +212,7 @@ defmodule Sacrum.Orchestrator.Routing.HumanInput do
       }
 
     execution_data = ExecutionHistory.build_execution_data(task.id, execution)
-    context = PromptContext.build_context(task, execution_data, step)
+    context = PromptContext.build_context(task, execution_data, step, task_run)
 
     PromptRenderer.render(step.prompt, context)
   end

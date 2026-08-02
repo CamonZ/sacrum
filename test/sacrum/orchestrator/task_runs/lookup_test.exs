@@ -28,6 +28,23 @@ defmodule Sacrum.Orchestrator.TaskRuns.LookupTest do
     assert found.id == active.id
   end
 
+  test "fetch_for_task enforces user, project, and task ownership" do
+    user = create_user()
+    {project, task} = create_task(user)
+    {:ok, task_run} = TaskRuns.insert(user.id, project.id, task.id)
+    {:ok, other_task} = Tasks.insert(user.id, project.id, %{title: "Other Task"})
+    {other_user, _other_task} = create_user_and_project_and_task()
+
+    assert {:ok, found} = Lookup.fetch_for_task(user.id, project.id, task.id, task_run.id)
+    assert found.id == task_run.id
+
+    assert {:error, :task_run_not_found} =
+             Lookup.fetch_for_task(user.id, project.id, other_task.id, task_run.id)
+
+    assert {:error, :task_run_not_found} =
+             Lookup.fetch_for_task(other_user.id, project.id, task.id, task_run.id)
+  end
+
   defp create_user do
     suffix = System.unique_integer([:positive])
 
@@ -46,5 +63,11 @@ defmodule Sacrum.Orchestrator.TaskRuns.LookupTest do
     {:ok, task} = Tasks.insert(user.id, project.id, %{title: "Lookup Task"})
 
     {project, task}
+  end
+
+  defp create_user_and_project_and_task do
+    user = create_user()
+    {_project, task} = create_task(user)
+    {user, task}
   end
 end
