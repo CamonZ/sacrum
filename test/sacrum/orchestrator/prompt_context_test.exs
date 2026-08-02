@@ -408,6 +408,94 @@ defmodule Sacrum.Orchestrator.PromptContextTest do
                task.id
              ) == %{"result" => %{"id" => artifact.id}}
     end
+
+    test "does not resolve project or task artifacts from another project or user" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project)
+      task = create_task(user, project, workflow)
+      other_project = create_project(user)
+      other_workflow = create_workflow(user, other_project)
+      other_task = create_task(user, other_project, other_workflow)
+      other_user = create_user()
+      other_user_project = create_project(other_user)
+
+      {:ok, _} =
+        Accounts.Artifacts.create_and_link(
+          user.id,
+          other_project.id,
+          %{filename: "other-project.json", body: "other project body"},
+          %{subject_type: "project", subject_id: other_project.id, logical_name: "result"}
+        )
+
+      {:ok, _} =
+        Accounts.Artifacts.create_and_link(
+          user.id,
+          other_project.id,
+          %{filename: "other-task.json", body: "other task body"},
+          %{subject_type: "task", subject_id: other_task.id, logical_name: "result"}
+        )
+
+      {:ok, _} =
+        Accounts.Artifacts.create_and_link(
+          other_user.id,
+          other_user_project.id,
+          %{filename: "other-user.json", body: "other user body"},
+          %{subject_type: "project", subject_id: other_user_project.id, logical_name: "result"}
+        )
+
+      context = PromptContext.build_context(task, %{}, nil)
+
+      assert context["artifacts"] == %{"project" => %{}, "task" => %{}}
+
+      assert {:ok, rendered} =
+               PromptRenderer.render(
+                 ~s|project={{ artifacts["project"]["result"].id }} task={{ artifacts["task"]["result"].id }}|,
+                 context
+               )
+
+      assert rendered == "project= task="
+      refute inspect(context) =~ "other project body"
+      refute inspect(context) =~ "other task body"
+      refute inspect(context) =~ "other user body"
+    end
+
+    test "keeps hyphenated logical names isolated within each namespace" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project)
+      task = create_task(user, project, workflow)
+
+      {:ok, %{artifact: project_artifact}} =
+        Accounts.Artifacts.create_and_link(
+          user.id,
+          project.id,
+          %{filename: "project-build.json", body: "project build body"},
+          %{
+            subject_type: "project",
+            subject_id: project.id,
+            logical_name: "build-output"
+          }
+        )
+
+      {:ok, %{artifact: task_artifact}} =
+        Accounts.Artifacts.create_and_link(
+          user.id,
+          project.id,
+          %{filename: "task-build.json", body: "task build body"},
+          %{subject_type: "task", subject_id: task.id, logical_name: "build-output"}
+        )
+
+      context = PromptContext.build_context(task, %{}, nil)
+
+      assert {:ok, rendered} =
+               PromptRenderer.render(
+                 ~s|project={{ artifacts["project"]["build-output"].id }} task={{ artifacts["task"]["build-output"].id }}|,
+                 context
+               )
+
+      assert rendered == "project=#{project_artifact.id} task=#{task_artifact.id}"
+    end
   end
 
   describe "build_execution_context/1" do
