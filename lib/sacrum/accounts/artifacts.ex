@@ -106,6 +106,35 @@ defmodule Sacrum.Accounts.Artifacts do
   end
 
   @doc """
+  List identity-only artifact attachments for StepExecutions in one TaskRun.
+
+  The query is bulk and returns only StepExecution ids, artifact ids, and
+  logical names. Artifact bodies are never selected.
+  """
+  @spec list_step_execution_identities(String.t(), String.t(), String.t(), String.t(), [
+          String.t()
+        ]) :: [
+          map()
+        ]
+  def list_step_execution_identities(
+        user_id,
+        project_id,
+        task_id,
+        task_run_id,
+        step_execution_ids
+      )
+      when is_binary(user_id) and is_binary(project_id) and is_binary(task_id) and
+             is_binary(task_run_id) and is_list(step_execution_ids) do
+    ArtifactLinks.list_step_execution_identities(
+      user_id,
+      project_id,
+      task_id,
+      task_run_id,
+      step_execution_ids
+    )
+  end
+
+  @doc """
   Retrieve an artifact attached to a subject by its stable per-link logical name.
   """
   @spec get_for_subject_by_logical_name(

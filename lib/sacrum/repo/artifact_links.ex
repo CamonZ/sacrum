@@ -72,6 +72,49 @@ defmodule Sacrum.Repo.ArtifactLinks do
     |> Repo.all()
   end
 
+  @spec list_step_execution_identities(String.t(), String.t(), String.t(), String.t(), [
+          String.t()
+        ]) :: [
+          map()
+        ]
+  def list_step_execution_identities(
+        user_id,
+        project_id,
+        task_id,
+        task_run_id,
+        step_execution_ids
+      )
+      when is_user_project_scope(user_id, project_id) and is_binary(task_id) and
+             is_binary(task_run_id) and is_list(step_execution_ids) do
+    ArtifactLink
+    |> join(:inner, [link], artifact in Artifact, on: artifact.id == link.artifact_id)
+    |> join(:inner, [link, _artifact], execution in StepExecution,
+      on: link.subject_type == "step_execution" and link.subject_id == execution.id
+    )
+    |> where([link, artifact, execution], link.user_id == ^user_id)
+    |> where([link, artifact, execution], link.project_id == ^project_id)
+    |> where([link, artifact, execution], artifact.user_id == ^user_id)
+    |> where([link, artifact, execution], artifact.project_id == ^project_id)
+    |> where([link, artifact, execution], execution.user_id == ^user_id)
+    |> where([link, artifact, execution], execution.project_id == ^project_id)
+    |> where([link, artifact, execution], execution.task_id == ^task_id)
+    |> where([link, artifact, execution], execution.task_run_id == ^task_run_id)
+    |> where([link, artifact, execution], execution.id in ^step_execution_ids)
+    |> where([link, artifact, execution], not is_nil(link.logical_name))
+    |> order_by([link, artifact, execution],
+      asc: execution.inserted_at,
+      asc: execution.id,
+      asc: link.inserted_at,
+      asc: link.id
+    )
+    |> select([link, artifact, execution], %{
+      step_execution_id: execution.id,
+      artifact_id: artifact.id,
+      logical_name: link.logical_name
+    })
+    |> Repo.all()
+  end
+
   defp artifact_in_scope?(user_id, project_id, artifact_id) do
     exists? =
       Artifact

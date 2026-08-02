@@ -328,6 +328,74 @@ defmodule Sacrum.Repo.ArtifactLinksTest do
   describe "scoped reads" do
     setup [:setup_link_scope]
 
+    test "lists named StepExecution identities in bulk and keeps them TaskRun-scoped", %{
+      user: user,
+      project: project,
+      task: task,
+      workflow: workflow,
+      task_run: task_run,
+      step_execution: first_execution,
+      artifact: first_artifact
+    } do
+      second_execution = create_step_execution(user, project, task, workflow, task_run)
+      other_task_run = create_task_run(user, project, task)
+      other_execution = create_step_execution(user, project, task, workflow, other_task_run)
+      second_artifact = create_artifact(user, project, %{filename: "second.md"})
+      other_artifact = create_artifact(user, project, %{filename: "other.md"})
+
+      {:ok, _first_link} =
+        ArtifactLinks.insert(user.id, project.id, first_artifact.id, %{
+          subject_type: "step_execution",
+          subject_id: first_execution.id,
+          logical_name: "older"
+        })
+
+      {:ok, _second_link} =
+        ArtifactLinks.insert(user.id, project.id, second_artifact.id, %{
+          subject_type: "step_execution",
+          subject_id: second_execution.id,
+          logical_name: "newer"
+        })
+
+      {:ok, _unnamed_link} =
+        ArtifactLinks.insert(user.id, project.id, first_artifact.id, %{
+          subject_type: "step_execution",
+          subject_id: second_execution.id
+        })
+
+      {:ok, _other_link} =
+        ArtifactLinks.insert(user.id, project.id, other_artifact.id, %{
+          subject_type: "step_execution",
+          subject_id: other_execution.id,
+          logical_name: "other_run"
+        })
+
+      identities =
+        ArtifactLinks.list_step_execution_identities(
+          user.id,
+          project.id,
+          task.id,
+          task_run.id,
+          [first_execution.id, second_execution.id, other_execution.id]
+        )
+
+      assert identities == [
+               %{
+                 step_execution_id: first_execution.id,
+                 artifact_id: first_artifact.id,
+                 logical_name: "older"
+               },
+               %{
+                 step_execution_id: second_execution.id,
+                 artifact_id: second_artifact.id,
+                 logical_name: "newer"
+               }
+             ]
+
+      refute Enum.any?(identities, &(&1.logical_name == "other_run"))
+      refute Enum.any?(identities, &Map.has_key?(&1, :body))
+    end
+
     test "lists links by subject without leaking links outside project or user scope", %{
       user: user,
       project: project,
