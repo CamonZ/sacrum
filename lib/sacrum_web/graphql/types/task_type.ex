@@ -94,6 +94,9 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
     end
 
     field :artifacts, list_of(:artifact) do
+      arg(:limit, :integer, default_value: 50)
+      arg(:offset, :integer, default_value: 0)
+
       resolve(&resolve_task_artifacts/3)
     end
 
@@ -372,8 +375,15 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
     field :done_at, :datetime
   end
 
-  defp resolve_task_artifacts(task, _args, %{context: %{current_user: user}}) do
-    artifacts = Accounts.Artifacts.list_for_subject(user.id, task.project_id, "task", task.id)
+  defp resolve_task_artifacts(task, %{limit: limit, offset: offset}, %{
+         context: %{current_user: user}
+       }) do
+    artifacts =
+      Accounts.Artifacts.list_for_subject(user.id, task.project_id, "task", task.id,
+        limit: limit,
+        offset: offset
+      )
+
     {:ok, artifacts}
   end
 
