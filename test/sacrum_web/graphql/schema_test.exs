@@ -544,6 +544,31 @@ defmodule SacrumWeb.Graphql.SchemaTest do
                  "logicalName" => "result"
                }
              ]
+
+      all_ids =
+        conn
+        |> recycle()
+        |> authenticate(user)
+        |> graphql(~s|{ task(id: "#{task.id}") { artifacts { id } } }|)
+        |> json_response(200)
+        |> get_in(["data", "task", "artifacts"])
+        |> Enum.map(& &1["id"])
+
+      paged_ids =
+        for offset <- 0..1 do
+          conn
+          |> recycle()
+          |> authenticate(user)
+          |> graphql(
+            ~s|{ task(id: "#{task.id}") { artifacts(limit: 1, offset: #{offset}) { id } } }|
+          )
+          |> json_response(200)
+          |> get_in(["data", "task", "artifacts"])
+          |> Enum.map(& &1["id"])
+        end
+        |> List.flatten()
+
+      assert paged_ids == Enum.take(all_ids, 2)
     end
 
     test "creates and reads a harness conversation attachment with provenance metadata", %{

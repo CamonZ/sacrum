@@ -49,12 +49,18 @@ defmodule Sacrum.Repo.ArtifactsTest do
     task
   end
 
-  defp link_artifact(user, project, artifact, subject_type, subject_id) do
+  defp link_artifact(user, project, artifact, subject_type, subject_id, attrs \\ %{}) do
+    attrs =
+      Map.merge(
+        %{
+          subject_type: subject_type,
+          subject_id: subject_id
+        },
+        attrs
+      )
+
     {:ok, link} =
-      ArtifactLinks.insert(user.id, project.id, artifact.id, %{
-        subject_type: subject_type,
-        subject_id: subject_id
-      })
+      ArtifactLinks.insert(user.id, project.id, artifact.id, attrs)
 
     link
   end
@@ -224,6 +230,69 @@ defmodule Sacrum.Repo.ArtifactsTest do
 
       other_user = create_user("other_subject_reader")
       assert [] = Artifacts.list_for_subject(other_user.id, project.id, "task", task.id)
+    end
+
+    test "applies pagination after task scope and preserves attachment metadata", %{
+      user: user,
+      project: project
+    } do
+      task = create_task(project)
+      other_task = create_task(project, "Other paginated subject")
+
+      direct_artifacts =
+        for index <- 1..3 do
+          {:ok, artifact} =
+            Artifacts.insert(
+              user.id,
+              project.id,
+              valid_attrs(%{filename: "task-#{index}.json"})
+            )
+
+          attrs =
+            if index == 2 do
+              %{
+                logical_name: "result",
+                metadata: %{
+                  "version" => 1,
+                  "content_kind" => "result",
+                  "format" => "json",
+                  "origin" => "test",
+                  "presentation" => "raw",
+                  "extensions" => %{}
+                }
+              }
+            else
+              %{}
+            end
+
+          link_artifact(user, project, artifact, "task", task.id, attrs)
+          artifact
+        end
+
+      {:ok, unrelated} =
+        Artifacts.insert(user.id, project.id, valid_attrs(%{filename: "other-task.json"}))
+
+      link_artifact(user, project, unrelated, "task", other_task.id)
+
+      all_direct = Artifacts.list_for_subject(user.id, project.id, "task", task.id)
+
+      page =
+        Artifacts.list_for_subject(user.id, project.id, "task", task.id,
+          limit: 2,
+          offset: 1
+        )
+
+      assert Enum.map(page, & &1.id) ==
+               all_direct |> Enum.map(& &1.id) |> Enum.slice(1, 2)
+
+      assert Enum.all?(
+               page,
+               &(&1.id in Enum.map(direct_artifacts, fn artifact -> artifact.id end))
+             )
+
+      metadata_artifact = Enum.find(all_direct, &(&1.id == Enum.at(direct_artifacts, 1).id))
+      assert metadata_artifact.logical_name == "result"
+      assert metadata_artifact.metadata.content_kind == "result"
     end
   end
 
