@@ -525,6 +525,114 @@ defmodule Sacrum.Orchestrator.PromptContextTest do
     end
   end
 
+  describe "historical StepExecution artifact context" do
+    test "aligns identity-only artifacts to nearest-first history indexes" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project)
+      task = create_task(user, project, workflow)
+      {:ok, task_run} = Accounts.TaskRuns.insert(user.id, project.id, task.id, %{status: :queued})
+
+      {:ok, older_execution} =
+        Accounts.StepExecutions.insert(user.id, %{
+          task_id: task.id,
+          project_id: project.id,
+          task_run_id: task_run.id,
+          workflow_id: workflow.id,
+          step_name: "older",
+          status: "completed"
+        })
+
+      {:ok, newer_execution} =
+        Accounts.StepExecutions.insert(user.id, %{
+          task_id: task.id,
+          project_id: project.id,
+          task_run_id: task_run.id,
+          workflow_id: workflow.id,
+          step_name: "newer",
+          status: "completed"
+        })
+
+      {:ok, %{artifact: older_artifact}} =
+        Accounts.Artifacts.create_and_link(
+          user.id,
+          project.id,
+          %{filename: "older.json", body: "private older body"},
+          %{
+            subject_type: "step_execution",
+            subject_id: older_execution.id,
+            logical_name: "result"
+          }
+        )
+
+      {:ok, %{artifact: newer_artifact}} =
+        Accounts.Artifacts.create_and_link(
+          user.id,
+          project.id,
+          %{filename: "newer.json", body: "private newer body"},
+          %{
+            subject_type: "step_execution",
+            subject_id: newer_execution.id,
+            logical_name: "result"
+          }
+        )
+
+      {:ok, other_task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Other Task"})
+      {:ok, other_run} = Accounts.TaskRuns.insert(user.id, project.id, other_task.id)
+
+      {:ok, other_execution} =
+        Accounts.StepExecutions.insert(user.id, %{
+          task_id: other_task.id,
+          project_id: project.id,
+          task_run_id: other_run.id,
+          workflow_id: workflow.id,
+          step_name: "other",
+          status: "completed"
+        })
+
+      {:ok, _} =
+        Accounts.Artifacts.create_and_link(
+          user.id,
+          project.id,
+          %{filename: "other.json", body: "private other body"},
+          %{
+            subject_type: "step_execution",
+            subject_id: other_execution.id,
+            logical_name: "result"
+          }
+        )
+
+      execution_data = %{
+        history: [
+          %{id: newer_execution.id},
+          %{id: older_execution.id},
+          %{id: Ecto.UUID.generate()}
+        ]
+      }
+
+      context = PromptContext.build_context(task, execution_data, nil, task_run)
+
+      assert context["artifacts"]["step_execution"]["history"] == [
+               %{"result" => %{"id" => newer_artifact.id}},
+               %{"result" => %{"id" => older_artifact.id}},
+               %{}
+             ]
+
+      refute inspect(context) =~ "private older body"
+      refute inspect(context) =~ "private newer body"
+      refute inspect(context) =~ "private other body"
+
+      assert {:ok, rendered} =
+               PromptRenderer.render(
+                 ~s|newer={{ artifacts["step_execution"]["history"][0]["result"].id }} older={{ artifacts["step_execution"]["history"][1]["result"].id }} missing={{ artifacts["step_execution"]["history"][2]["result"].id }}|,
+                 context
+               )
+
+      assert rendered ==
+               "newer=#{newer_artifact.id} older=#{older_artifact.id} missing="
+    end
+  end
+
   describe "build_execution_context/1" do
     test "extracts previous output and run counts" do
       execution_data = %{

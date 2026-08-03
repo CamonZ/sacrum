@@ -49,6 +49,12 @@ defmodule Sacrum.Accounts.TaskRuns do
   @spec list_step_executions_for_run(String.t(), String.t()) :: [StepExecution.t()]
   defdelegate list_step_executions_for_run(user_id, task_run_id), to: TaskRunsRepo
 
+  @spec list_step_executions_for_run(String.t(), String.t(), String.t(), String.t()) :: [
+          StepExecution.t()
+        ]
+  defdelegate list_step_executions_for_run(user_id, project_id, task_id, task_run_id),
+    to: TaskRunsRepo
+
   @spec list_session_logs_for_run(String.t(), String.t()) :: [SessionLog.t()]
   defdelegate list_session_logs_for_run(user_id, task_run_id), to: TaskRunsRepo
 end

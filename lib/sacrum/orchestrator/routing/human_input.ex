@@ -211,7 +211,7 @@ defmodule Sacrum.Orchestrator.Routing.HumanInput do
         handoff: handoff
       }
 
-    execution_data = ExecutionHistory.build_execution_data(task.id, execution)
+    execution_data = ExecutionHistory.build_execution_data(task, execution, task_run)
     context = PromptContext.build_context(task, execution_data, step, task_run)
 
     PromptRenderer.render(step.prompt, context)

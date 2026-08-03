@@ -407,11 +407,34 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
       %{user: user, human_step: human_step, task: task} =
         setup_human_input_workflow(
           next_final?: true,
-          human_prompt: ~s|Approve artifact {{ artifacts["task_run"]["result"].id }}|
+          human_prompt:
+            ~s|Approve artifact {{ artifacts["task_run"]["result"].id }} prior={{ artifacts["step_execution"]["history"][0]["prior"].id }}|
         )
 
       {:ok, task_run} =
         Accounts.TaskRuns.insert(user.id, task.project_id, task.id, %{status: :queued})
+
+      {:ok, prior_execution} =
+        Accounts.StepExecutions.insert(user.id, %{
+          task_id: task.id,
+          project_id: task.project_id,
+          task_run_id: task_run.id,
+          workflow_id: human_step.workflow_id,
+          step_name: "prior",
+          status: "completed"
+        })
+
+      {:ok, %{artifact: prior_artifact}} =
+        Accounts.Artifacts.create_and_link(
+          user.id,
+          task.project_id,
+          %{filename: "human-prior-result.json", body: "private human prior body"},
+          %{
+            subject_type: "step_execution",
+            subject_id: prior_execution.id,
+            logical_name: "prior"
+          }
+        )
 
       {:ok, %{artifact: artifact}} =
         Accounts.Artifacts.create_and_link(
@@ -424,18 +447,20 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
       pid = start_orchestrator(task, user, task_run_id: task_run.id)
       wait_for_exit(pid)
 
-      assert [
-               %StepExecution{
-                 step_id: step_id,
-                 status: "waiting",
-                 prompt: prompt
-               } = execution
-             ] = executions_for_task(task.id)
+      [prior, execution] = executions_for_task(task.id)
+
+      assert %StepExecution{
+               step_id: step_id,
+               status: "waiting",
+               prompt: prompt
+             } = execution
 
       assert step_id == human_step.id
-      assert prompt == "Approve artifact #{artifact.id}"
+      assert prompt == "Approve artifact #{artifact.id} prior=#{prior_artifact.id}"
       assert execution.prompt == prompt
+      assert prior.id == prior_execution.id
       refute prompt =~ "private human task-run body"
+      refute prompt =~ "private human prior body"
     end
 
     test "entering a human_input step parks the run without daemon dispatch" do
@@ -696,7 +721,8 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
         setup_linear_workflow(
           step_count: 1,
           finish_last_step: false,
-          first_prompt: ~s|Retry artifact {{ artifacts["task_run"]["result"].id }}|
+          first_prompt:
+            ~s|Retry task={{ artifacts["task_run"]["result"].id }} previous={{ artifacts["step_execution"]["history"][0]["result"].id }} older={{ artifacts["step_execution"]["history"][1]["result"].id }}|
         )
 
       {:ok, task_run} = Accounts.TaskRuns.insert(user.id, project.id, task.id, %{status: :queued})
@@ -709,7 +735,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
           %{subject_type: "task_run", subject_id: task_run.id, logical_name: "result"}
         )
 
-      expected = "Retry artifact #{artifact.id}"
+      first_expected = "Retry task=#{artifact.id} previous= older="
       subscribe_project(project.id)
 
       pid = start_orchestrator(task, user, task_run_id: task_run.id)
@@ -718,26 +744,71 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
 
       assert_receive %Phoenix.Socket.Broadcast{
                        event: "run_step",
-                       payload: %{id: first_id, prompt: ^expected}
+                       payload: %{id: first_id, prompt: ^first_expected}
                      },
                      1500
 
       assert first_id == first_exec.id
-      assert first_exec.prompt == expected
+      assert first_exec.prompt == first_expected
+
+      {:ok, %{artifact: first_artifact}} =
+        Accounts.Artifacts.create_and_link(
+          user.id,
+          project.id,
+          %{filename: "first-step-result.json", body: "private first execution body"},
+          %{
+            subject_type: "step_execution",
+            subject_id: first_exec.id,
+            logical_name: "result"
+          }
+        )
 
       simulate_daemon_failure(task.id, project.id)
       wait_for_execution_count(task.id, 2)
 
       [_failed, retry] = executions_for_task(task.id)
-      assert retry.prompt == expected
+      retry_expected = "Retry task=#{artifact.id} previous=#{first_artifact.id} older="
+      assert retry.prompt == retry_expected
 
       assert_receive %Phoenix.Socket.Broadcast{
                        event: "run_step",
-                       payload: %{id: retry_id, prompt: ^expected}
+                       payload: %{id: retry_id, prompt: ^retry_expected}
                      },
                      1500
 
       assert retry_id == retry.id
+
+      {:ok, %{artifact: retry_artifact}} =
+        Accounts.Artifacts.create_and_link(
+          user.id,
+          project.id,
+          %{filename: "retry-step-result.json", body: "private retry execution body"},
+          %{
+            subject_type: "step_execution",
+            subject_id: retry.id,
+            logical_name: "result"
+          }
+        )
+
+      simulate_daemon_failure(task.id, project.id)
+      wait_for_execution_count(task.id, 3)
+
+      [_first_failed, _second_failed, second_retry] = executions_for_task(task.id)
+
+      second_retry_expected =
+        "Retry task=#{artifact.id} previous=#{retry_artifact.id} older=#{first_artifact.id}"
+
+      assert second_retry.prompt == second_retry_expected
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "run_step",
+                       payload: %{id: second_retry_id, prompt: ^second_retry_expected}
+                     },
+                     1500
+
+      assert second_retry_id == second_retry.id
+      refute second_retry.prompt =~ "private first execution body"
+      refute second_retry.prompt =~ "private retry execution body"
     end
 
     test "single failure inserts a fresh started execution and re-broadcasts run_step for the same step" do

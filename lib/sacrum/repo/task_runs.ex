@@ -100,6 +100,21 @@ defmodule Sacrum.Repo.TaskRuns do
     |> Repo.all()
   end
 
+  @spec list_step_executions_for_run(String.t(), String.t(), String.t(), String.t()) :: [
+          StepExecution.t()
+        ]
+  def list_step_executions_for_run(user_id, project_id, task_id, task_run_id)
+      when is_binary(user_id) and is_binary(project_id) and is_binary(task_id) and
+             is_binary(task_run_id) do
+    StepExecution
+    |> where([e], e.user_id == ^user_id)
+    |> where([e], e.project_id == ^project_id)
+    |> where([e], e.task_id == ^task_id)
+    |> where([e], e.task_run_id == ^task_run_id)
+    |> order_by([e], asc: e.inserted_at, asc: e.id)
+    |> Repo.all()
+  end
+
   @spec list_session_logs_for_run(String.t(), String.t()) :: [SessionLog.t()]
   def list_session_logs_for_run(user_id, task_run_id)
       when is_binary(user_id) and is_binary(task_run_id) do

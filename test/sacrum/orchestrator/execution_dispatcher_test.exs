@@ -62,7 +62,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
     task
   end
 
-  defp create_previous_execution(user, task, step) do
+  defp create_previous_execution(user, task, step, task_run \\ nil) do
     import Ecto.Query
 
     query =
@@ -71,17 +71,27 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
         limit: 1
       )
 
+    query =
+      if task_run do
+        where(query, [e], e.task_run_id == ^task_run.id)
+      else
+        query
+      end
+
     case Sacrum.Repo.one(query) do
       nil ->
-        {:ok, execution} =
-          Accounts.StepExecutions.insert(user.id, %{
-            "task_id" => task.id,
-            "project_id" => task.project_id,
-            "workflow_id" => step.workflow_id,
-            "step_id" => step.id,
-            "step_name" => step.name,
-            "status" => "invalidated"
-          })
+        attrs = %{
+          "task_id" => task.id,
+          "project_id" => task.project_id,
+          "workflow_id" => step.workflow_id,
+          "step_id" => step.id,
+          "step_name" => step.name,
+          "status" => "invalidated"
+        }
+
+        attrs = if task_run, do: Map.put(attrs, "task_run_id", task_run.id), else: attrs
+
+        {:ok, execution} = Accounts.StepExecutions.insert(user.id, attrs)
 
         execution
 
@@ -103,6 +113,10 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
   defp create_and_dispatch(ctx, task, step, handoff \\ nil) do
     task_run = create_task_run(ctx, task)
+    ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, step.id, task_run, handoff)
+  end
+
+  defp create_and_dispatch_with_run(ctx, task, step, task_run, handoff \\ nil) do
     ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, step.id, task_run, handoff)
   end
 
@@ -361,11 +375,13 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
       task = create_task(ctx.user, ctx.project)
       task = assign_workflow(task, ctx.workflow)
+      task_run = create_task_run(ctx, task)
 
       # Create a prior completed execution
       {:ok, _prior_exec} =
         Accounts.StepExecutions.insert(ctx.user.id, %{
           "task_id" => task.id,
+          "task_run_id" => task_run.id,
           "project_id" => task.project_id,
           "workflow_id" => ctx.workflow.id,
           "step_name" => "previous_step",
@@ -373,13 +389,13 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
           "output" => "Analysis complete"
         })
 
-      _current_exec = create_previous_execution(ctx.user, task, step)
+      _current_exec = create_previous_execution(ctx.user, task, step, task_run)
 
       task = PromptRenderer.preload_for_rendering(task)
 
       subscribe_to_project(ctx.project)
 
-      {:ok, _exec} = create_and_dispatch(ctx, task, step)
+      {:ok, _exec} = create_and_dispatch_with_run(ctx, task, step, task_run)
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "run_step",
@@ -398,13 +414,14 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
       task = create_task(ctx.user, ctx.project)
       task = assign_workflow(task, ctx.workflow)
+      task_run = create_task_run(ctx, task)
       task = PromptRenderer.preload_for_rendering(task)
 
-      _execution = create_previous_execution(ctx.user, task, step)
+      _execution = create_previous_execution(ctx.user, task, step, task_run)
 
       subscribe_to_project(ctx.project)
 
-      {:ok, _exec} = create_and_dispatch(ctx, task, step)
+      {:ok, _exec} = create_and_dispatch_with_run(ctx, task, step, task_run)
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "run_step",
@@ -423,11 +440,13 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
       task = create_task(ctx.user, ctx.project)
       task = assign_workflow(task, ctx.workflow)
+      task_run = create_task_run(ctx, task)
 
       # Create multiple prior completed executions
       {:ok, _older} =
         Accounts.StepExecutions.insert(ctx.user.id, %{
           "task_id" => task.id,
+          "task_run_id" => task_run.id,
           "project_id" => task.project_id,
           "workflow_id" => ctx.workflow.id,
           "step_name" => "eval_step_1",
@@ -438,6 +457,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       {:ok, _newer} =
         Accounts.StepExecutions.insert(ctx.user.id, %{
           "task_id" => task.id,
+          "task_run_id" => task_run.id,
           "project_id" => task.project_id,
           "workflow_id" => ctx.workflow.id,
           "step_name" => "eval_step_2",
@@ -445,13 +465,13 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
           "output" => "Second analysis"
         })
 
-      _current = create_previous_execution(ctx.user, task, step)
+      _current = create_previous_execution(ctx.user, task, step, task_run)
 
       task = PromptRenderer.preload_for_rendering(task)
 
       subscribe_to_project(ctx.project)
 
-      {:ok, _exec} = create_and_dispatch(ctx, task, step)
+      {:ok, _exec} = create_and_dispatch_with_run(ctx, task, step, task_run)
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "run_step",
@@ -516,10 +536,12 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
       task = create_task(ctx.user, ctx.project)
       task = assign_workflow(task, ctx.workflow)
+      task_run = create_task_run(ctx, task)
 
       {:ok, _prior_exec} =
         Accounts.StepExecutions.insert(ctx.user.id, %{
           "task_id" => task.id,
+          "task_run_id" => task_run.id,
           "project_id" => task.project_id,
           "workflow_id" => ctx.workflow.id,
           "step_name" => prior_step.name,
@@ -527,13 +549,13 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
           "output" => "{\"verdict\": \"approved\", \"should_retry\": false}"
         })
 
-      _current_exec = create_previous_execution(ctx.user, task, current_step)
+      _current_exec = create_previous_execution(ctx.user, task, current_step, task_run)
 
       task = PromptRenderer.preload_for_rendering(task)
 
       subscribe_to_project(ctx.project)
 
-      {:ok, _exec} = create_and_dispatch(ctx, task, current_step)
+      {:ok, _exec} = create_and_dispatch_with_run(ctx, task, current_step, task_run)
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "run_step",
@@ -556,10 +578,12 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
       task = create_task(ctx.user, ctx.project)
       task = assign_workflow(task, ctx.workflow)
+      task_run = create_task_run(ctx, task)
 
       {:ok, _prior_exec} =
         Accounts.StepExecutions.insert(ctx.user.id, %{
           "task_id" => task.id,
+          "task_run_id" => task_run.id,
           "project_id" => task.project_id,
           "workflow_id" => ctx.workflow.id,
           "step_name" => prior_step.name,
@@ -567,13 +591,13 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
           "output" => "Just a plain string output"
         })
 
-      _current_exec = create_previous_execution(ctx.user, task, current_step)
+      _current_exec = create_previous_execution(ctx.user, task, current_step, task_run)
 
       task = PromptRenderer.preload_for_rendering(task)
 
       subscribe_to_project(ctx.project)
 
-      {:ok, _exec} = create_and_dispatch(ctx, task, current_step)
+      {:ok, _exec} = create_and_dispatch_with_run(ctx, task, current_step, task_run)
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "run_step",
@@ -606,10 +630,12 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
       task = create_task(ctx.user, ctx.project)
       task = assign_workflow(task, ctx.workflow)
+      task_run = create_task_run(ctx, task)
 
       {:ok, _prior_exec} =
         Accounts.StepExecutions.insert(ctx.user.id, %{
           "task_id" => task.id,
+          "task_run_id" => task_run.id,
           "project_id" => task.project_id,
           "workflow_id" => ctx.workflow.id,
           "step_name" => prior_step.name,
@@ -617,13 +643,13 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
           "output" => "{ broken json"
         })
 
-      _current_exec = create_previous_execution(ctx.user, task, current_step)
+      _current_exec = create_previous_execution(ctx.user, task, current_step, task_run)
 
       task = PromptRenderer.preload_for_rendering(task)
 
       subscribe_to_project(ctx.project)
 
-      {:ok, _exec} = create_and_dispatch(ctx, task, current_step)
+      {:ok, _exec} = create_and_dispatch_with_run(ctx, task, current_step, task_run)
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "run_step",
@@ -660,6 +686,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
       task = create_task(ctx.user, ctx.project)
       task = assign_workflow(task, ctx.workflow)
+      task_run = create_task_run(ctx, task)
 
       # Simulate CLI wrapping output in markdown code fences
       fenced_output = "```json\n{\"verdict\": \"approved\", \"confidence\": 0.95}\n```"
@@ -667,6 +694,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       {:ok, _prior_exec} =
         Accounts.StepExecutions.insert(ctx.user.id, %{
           "task_id" => task.id,
+          "task_run_id" => task_run.id,
           "project_id" => task.project_id,
           "workflow_id" => ctx.workflow.id,
           "step_name" => prior_step.name,
@@ -674,13 +702,13 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
           "output" => fenced_output
         })
 
-      _current_exec = create_previous_execution(ctx.user, task, current_step)
+      _current_exec = create_previous_execution(ctx.user, task, current_step, task_run)
 
       task = PromptRenderer.preload_for_rendering(task)
 
       subscribe_to_project(ctx.project)
 
-      {:ok, _exec} = create_and_dispatch(ctx, task, current_step)
+      {:ok, _exec} = create_and_dispatch_with_run(ctx, task, current_step, task_run)
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "run_step",
@@ -735,10 +763,12 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
       task = create_task(ctx.user, ctx.project)
       task = assign_workflow(task, ctx.workflow)
+      task_run = create_task_run(ctx, task)
 
       {:ok, _prior_exec} =
         Accounts.StepExecutions.insert(ctx.user.id, %{
           "task_id" => task.id,
+          "task_run_id" => task_run.id,
           "project_id" => task.project_id,
           "workflow_id" => ctx.workflow.id,
           "step_name" => prior_step.name,
@@ -746,13 +776,13 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
           "output" => "{\"result\": \"success\"}"
         })
 
-      _current_exec = create_previous_execution(ctx.user, task, current_step)
+      _current_exec = create_previous_execution(ctx.user, task, current_step, task_run)
 
       task = PromptRenderer.preload_for_rendering(task)
 
       subscribe_to_project(ctx.project)
 
-      {:ok, _exec} = create_and_dispatch(ctx, task, current_step)
+      {:ok, _exec} = create_and_dispatch_with_run(ctx, task, current_step, task_run)
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "run_step",
@@ -775,10 +805,12 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
       task = create_task(ctx.user, ctx.project)
       task = assign_workflow(task, ctx.workflow)
+      task_run = create_task_run(ctx, task)
 
       {:ok, _prior_exec} =
         Accounts.StepExecutions.insert(ctx.user.id, %{
           "task_id" => task.id,
+          "task_run_id" => task_run.id,
           "project_id" => task.project_id,
           "workflow_id" => ctx.workflow.id,
           "step_name" => prior_step.name,
@@ -786,13 +818,13 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
           "output" => "plain string output"
         })
 
-      _current_exec = create_previous_execution(ctx.user, task, current_step)
+      _current_exec = create_previous_execution(ctx.user, task, current_step, task_run)
 
       task = PromptRenderer.preload_for_rendering(task)
 
       subscribe_to_project(ctx.project)
 
-      {:ok, _exec} = create_and_dispatch(ctx, task, current_step)
+      {:ok, _exec} = create_and_dispatch_with_run(ctx, task, current_step, task_run)
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "run_step",
@@ -814,13 +846,14 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
         })
 
       task = create_task(ctx.user, ctx.project) |> assign_workflow(ctx.workflow)
+      task_run = create_task_run(ctx, task)
 
-      insert_execution(ctx, task, step.name, "completed")
-      insert_execution(ctx, task, step.name, "completed")
-      insert_execution(ctx, task, step.name, "failed")
-      create_previous_execution(ctx.user, task, step)
+      insert_execution(ctx, task, step.name, "completed", task_run)
+      insert_execution(ctx, task, step.name, "completed", task_run)
+      insert_execution(ctx, task, step.name, "failed", task_run)
+      create_previous_execution(ctx.user, task, step, task_run)
 
-      assert dispatch_prompt(ctx, task, step) == "This is run number 3"
+      assert dispatch_prompt(ctx, task, step, task_run) == "This is run number 3"
     end
 
     test "run_count is 0 when no prior executions exist for the step", ctx do
@@ -830,10 +863,11 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
         })
 
       task = create_task(ctx.user, ctx.project) |> assign_workflow(ctx.workflow)
+      task_run = create_task_run(ctx, task)
 
-      create_previous_execution(ctx.user, task, step)
+      create_previous_execution(ctx.user, task, step, task_run)
 
-      assert dispatch_prompt(ctx, task, step) == "Run count: 0"
+      assert dispatch_prompt(ctx, task, step, task_run) == "Run count: 0"
     end
 
     test "run_count excludes 'invalidated' status executions", ctx do
@@ -843,12 +877,13 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
         })
 
       task = create_task(ctx.user, ctx.project) |> assign_workflow(ctx.workflow)
+      task_run = create_task_run(ctx, task)
 
-      insert_execution(ctx, task, step.name, "completed")
-      insert_execution(ctx, task, step.name, "invalidated")
-      create_previous_execution(ctx.user, task, step)
+      insert_execution(ctx, task, step.name, "completed", task_run)
+      insert_execution(ctx, task, step.name, "invalidated", task_run)
+      create_previous_execution(ctx.user, task, step, task_run)
 
-      assert dispatch_prompt(ctx, task, step) == "Run count is 1"
+      assert dispatch_prompt(ctx, task, step, task_run) == "Run count is 1"
     end
 
     test "splits run count into completed_count and failed_count", ctx do
@@ -859,13 +894,14 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
         })
 
       task = create_task(ctx.user, ctx.project) |> assign_workflow(ctx.workflow)
+      task_run = create_task_run(ctx, task)
 
-      insert_execution(ctx, task, step.name, "completed")
-      insert_execution(ctx, task, step.name, "completed")
-      insert_execution(ctx, task, step.name, "failed")
-      create_previous_execution(ctx.user, task, step)
+      insert_execution(ctx, task, step.name, "completed", task_run)
+      insert_execution(ctx, task, step.name, "completed", task_run)
+      insert_execution(ctx, task, step.name, "failed", task_run)
+      create_previous_execution(ctx.user, task, step, task_run)
 
-      assert dispatch_prompt(ctx, task, step) == "total=3 ok=2 ko=1"
+      assert dispatch_prompt(ctx, task, step, task_run) == "total=3 ok=2 ko=1"
     end
 
     test "run_count is specific to the current step", ctx do
@@ -879,34 +915,38 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
         })
 
       task = create_task(ctx.user, ctx.project) |> assign_workflow(ctx.workflow)
+      task_run = create_task_run(ctx, task)
 
-      insert_execution(ctx, task, step_a.name, "completed")
-      insert_execution(ctx, task, step_a.name, "completed")
-      insert_execution(ctx, task, step_b.name, "completed")
-      create_previous_execution(ctx.user, task, step_b)
+      insert_execution(ctx, task, step_a.name, "completed", task_run)
+      insert_execution(ctx, task, step_a.name, "completed", task_run)
+      insert_execution(ctx, task, step_b.name, "completed", task_run)
+      create_previous_execution(ctx.user, task, step_b, task_run)
 
-      assert dispatch_prompt(ctx, task, step_b) == "Step B run count: 1"
+      assert dispatch_prompt(ctx, task, step_b, task_run) == "Step B run count: 1"
     end
   end
 
-  defp insert_execution(ctx, task, step_name, status) do
-    {:ok, exec} =
-      Accounts.StepExecutions.insert(ctx.user.id, %{
-        "task_id" => task.id,
-        "project_id" => task.project_id,
-        "workflow_id" => ctx.workflow.id,
-        "step_name" => step_name,
-        "status" => status
-      })
+  defp insert_execution(ctx, task, step_name, status, task_run) do
+    attrs = %{
+      "task_id" => task.id,
+      "project_id" => task.project_id,
+      "workflow_id" => ctx.workflow.id,
+      "step_name" => step_name,
+      "status" => status
+    }
+
+    attrs = if task_run, do: Map.put(attrs, "task_run_id", task_run.id), else: attrs
+
+    {:ok, exec} = Accounts.StepExecutions.insert(ctx.user.id, attrs)
 
     exec
   end
 
-  defp dispatch_prompt(ctx, task, step) do
+  defp dispatch_prompt(ctx, task, step, task_run) do
     task = PromptRenderer.preload_for_rendering(task)
     subscribe_to_project(ctx.project)
 
-    {:ok, _exec} = create_and_dispatch(ctx, task, step)
+    {:ok, _exec} = create_and_dispatch_with_run(ctx, task, step, task_run)
 
     assert_receive %Phoenix.Socket.Broadcast{
       event: "run_step",

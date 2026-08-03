@@ -28,7 +28,7 @@ defmodule Sacrum.Orchestrator.PromptContext do
   context for Solid rendering.
 
   `task` should have associations preloaded (see `PromptRenderer.preload_for_rendering/1`).
-  `execution_data` is the map returned by `ExecutionHistory.build_execution_data/2`.
+  `execution_data` is the map returned by `ExecutionHistory.build_execution_data/3`.
   `workflow_step` may be `nil` to omit the workflow section.
   """
   @spec build_context(
@@ -66,6 +66,13 @@ defmodule Sacrum.Orchestrator.PromptContext do
         context["artifacts"],
         "task_run",
         build_task_run_artifacts_context(task, task_run)
+      )
+
+    artifacts =
+      Map.put(
+        artifacts,
+        "step_execution",
+        build_step_execution_artifacts_context(task, task_run, execution_data[:history] || [])
       )
 
     Map.put(context, "artifacts", artifacts)
@@ -117,6 +124,50 @@ defmodule Sacrum.Orchestrator.PromptContext do
   end
 
   defp build_task_run_artifacts_context(_task, _task_run), do: %{}
+
+  defp build_step_execution_artifacts_context(
+         %{user_id: user_id, project_id: project_id, id: task_id},
+         %Sacrum.Repo.Schemas.TaskRun{
+           id: task_run_id,
+           user_id: user_id,
+           project_id: project_id,
+           task_id: task_id
+         },
+         history
+       )
+       when is_list(history) do
+    execution_ids =
+      history
+      |> Enum.map(& &1[:id])
+      |> Enum.filter(&is_binary/1)
+
+    identities =
+      Artifacts.list_step_execution_identities(
+        user_id,
+        project_id,
+        task_id,
+        task_run_id,
+        execution_ids
+      )
+
+    identities_by_execution = Enum.group_by(identities, & &1.step_execution_id)
+
+    %{
+      "history" =>
+        Enum.map(history, fn execution ->
+          execution
+          |> Map.get(:id)
+          |> then(&Map.get(identities_by_execution, &1, []))
+          |> Enum.map(fn %{artifact_id: id, logical_name: logical_name} ->
+            %{id: id, logical_name: logical_name}
+          end)
+          |> identities_to_context()
+        end)
+    }
+  end
+
+  defp build_step_execution_artifacts_context(_task, _task_run, _history),
+    do: %{"history" => []}
 
   defp build_artifact_namespaces(%{
          user_id: user_id,
