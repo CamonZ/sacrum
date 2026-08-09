@@ -66,6 +66,7 @@ project ID, such as `project:<project_id>`.
 | [Repository Pattern](docs/patterns.md) | Accounts -> Repo -> Ecto architecture |
 | [Testing Guide](docs/testing.md) | Test infrastructure and patterns |
 | [Phoenix Guidelines](docs/phoenix-guidelines.md) | Elixir, Ecto, Mix, test, and router conventions |
+| [Backend image releases](docs/backend-releases.md) | Master/release channels and digest-pinned image metadata |
 | [Vertebrae Guide](docs/vertebrae-guide.md) | `vtb` CLI setup and task-management workflows |
 
 ## License

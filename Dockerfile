@@ -29,6 +29,11 @@ RUN mix local.hex --force && \
 # set build ENV
 ENV MIX_ENV="prod"
 
+# Release builds may override the application version from a Git tag. Keep a
+# stable default for local and manually built images.
+ARG SACRUM_VERSION=0.1.0
+ENV SACRUM_VERSION="${SACRUM_VERSION}"
+
 # install mix dependencies
 COPY mix.exs mix.lock ./
 RUN mix deps.get --only $MIX_ENV

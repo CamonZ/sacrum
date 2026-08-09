@@ -3,6 +3,15 @@ name: Build
 on:
   push:
     branches: [master]
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: sacrum-backend-${{ github.ref_type == 'tag' && 'release' || github.ref_name }}
+  cancel-in-progress: false
 
 env:
   REGISTRY: ghcr.io
@@ -12,12 +21,51 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
-    permissions:
-      contents: read
-      packages: write
-
     steps:
       - uses: actions/checkout@v4
+
+      - name: Select update channel and version
+        id: channel
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          case "$GITHUB_REF_TYPE" in
+            branch)
+              if [ "$GITHUB_REF_NAME" != "master" ]; then
+                echo "Unsupported update branch: $GITHUB_REF_NAME" >&2
+                exit 1
+              fi
+
+              channel="master"
+              version="$(sed -n 's/.*System.get_env("SACRUM_VERSION", "\([^"]*\)").*/\1/p' mix.exs)"
+              has_release_version=false
+              ;;
+            tag)
+              if [[ ! "$GITHUB_REF_NAME" =~ ^v([0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?)$ ]]; then
+                echo "Release tags must use semantic versioning, for example v1.2.3" >&2
+                exit 1
+              fi
+
+              channel="release"
+              version="${BASH_REMATCH[1]}"
+              has_release_version=true
+              ;;
+            *)
+              echo "Unsupported GitHub ref type: $GITHUB_REF_TYPE" >&2
+              exit 1
+              ;;
+          esac
+
+          if [ -z "$version" ]; then
+            echo "Could not determine the application version" >&2
+            exit 1
+          fi
+
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "has_release_version=$has_release_version" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Log in to Container Registry
         uses: docker/login-action@v4
@@ -38,17 +86,24 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=sha
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ steps.channel.outputs.channel }}
+            type=sha,prefix=${{ steps.channel.outputs.channel }}-
+            type=raw,value=${{ steps.channel.outputs.version }},enable=${{ steps.channel.outputs.has_release_version }}
 
       - name: Build and push Docker image
+        id: image
         uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64,linux/arm64/v8
           push: true
+          build-args: |
+            SACRUM_VERSION=${{ steps.channel.outputs.version }}
           tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          labels: |
+            ${{ steps.meta.outputs.labels }}
+            org.opencontainers.image.revision=${{ steps.channel.outputs.commit }}
+            org.opencontainers.image.version=${{ steps.channel.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
@@ -82,3 +137,80 @@ jobs:
               -f "$tmpdir/amd64.json" \
               -f "$tmpdir/arm64v8.json"
           done <<< "$TAGS"
+
+      - name: Resolve immutable image digest
+        id: digest
+        env:
+          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.channel.outputs.channel }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          digest="$(docker buildx imagetools inspect "$IMAGE_REF" | awk '$1 == "Digest:" { print $2; exit }')"
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Could not resolve an image manifest digest for $IMAGE_REF" >&2
+            exit 1
+          fi
+
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "Published $IMAGE_REF@$digest"
+
+      - name: Create channel metadata
+        env:
+          CHANNEL: ${{ steps.channel.outputs.channel }}
+          VERSION: ${{ steps.channel.outputs.version }}
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          DIGEST: ${{ steps.digest.outputs.digest }}
+          COMMIT: ${{ steps.channel.outputs.commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          build="${COMMIT:0:8}"
+          generated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          jq -n \
+            --arg channel "$CHANNEL" \
+            --arg version "$VERSION" \
+            --arg build "$build" \
+            --arg commit "$COMMIT" \
+            --arg image "$IMAGE" \
+            --arg digest "$DIGEST" \
+            --arg generated_at "$generated_at" \
+            '{
+              schema: 1,
+              channel: $channel,
+              version: $version,
+              build: $build,
+              commit: $commit,
+              image: $image,
+              digest: $digest,
+              image_ref: ($image + "@" + $digest),
+              platforms: ["linux/amd64", "linux/arm64/v8"],
+              generated_at: $generated_at
+            }' > latest.json
+
+          cat latest.json
+
+      - name: Publish channel metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANNEL: ${{ steps.channel.outputs.channel }}
+          COMMIT: ${{ steps.channel.outputs.commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          release_tag="backend-$CHANNEL"
+          if ! gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$release_tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$COMMIT" \
+              --title "Sacrum backend $CHANNEL channel" \
+              --notes "Mutable channel metadata for the Sacrum $CHANNEL backend image. The image referenced by latest.json is immutable." \
+              --latest=false
+          fi
+
+          gh release upload "$release_tag" latest.json \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
