@@ -15,7 +15,6 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   build:
@@ -23,6 +22,20 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Normalize image name
+        id: image_name
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          image_name="$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          if [[ "$image_name" =~ [A-Z] ]]; then
+            echo "Image name must be lowercase: $image_name" >&2
+            exit 1
+          fi
+
+          echo "image_name=$image_name" >> "$GITHUB_OUTPUT"
 
       - name: Select update channel and version
         id: channel
@@ -84,11 +97,31 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ steps.image_name.outputs.image_name }}
           tags: |
             type=raw,value=${{ steps.channel.outputs.channel }}
             type=sha,prefix=${{ steps.channel.outputs.channel }}-
             type=raw,value=${{ steps.channel.outputs.version }},enable=${{ steps.channel.outputs.has_release_version }}
+
+      - name: Validate image references
+        env:
+          IMAGE_PREFIX: "${{ env.REGISTRY }}/${{ steps.image_name.outputs.image_name }}:"
+          TAGS: ${{ steps.meta.outputs.tags }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          while IFS= read -r tag; do
+            if [ -z "$tag" ]; then
+              continue
+            fi
+
+            lowercase_tag="$(printf '%s' "$tag" | tr '[:upper:]' '[:lower:]')"
+            if [[ "$tag" != "$lowercase_tag" || "$tag" != "$IMAGE_PREFIX"* ]]; then
+              echo "Invalid Docker image reference: $tag" >&2
+              exit 1
+            fi
+          done <<< "$TAGS"
 
       - name: Build and push Docker image
         id: image
@@ -141,7 +174,7 @@ jobs:
       - name: Resolve immutable image digest
         id: digest
         env:
-          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.channel.outputs.channel }}
+          IMAGE_REF: ${{ env.REGISTRY }}/${{ steps.image_name.outputs.image_name }}:${{ steps.channel.outputs.channel }}
         shell: bash
         run: |
           set -euo pipefail
@@ -159,7 +192,7 @@ jobs:
         env:
           CHANNEL: ${{ steps.channel.outputs.channel }}
           VERSION: ${{ steps.channel.outputs.version }}
-          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          IMAGE: ${{ env.REGISTRY }}/${{ steps.image_name.outputs.image_name }}
           DIGEST: ${{ steps.digest.outputs.digest }}
           COMMIT: ${{ steps.channel.outputs.commit }}
         shell: bash
