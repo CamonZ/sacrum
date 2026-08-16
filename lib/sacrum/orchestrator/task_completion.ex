@@ -50,8 +50,9 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
   Determine the next FSM state based on the destination step configuration.
 
   Returns gen_statem tuples:
-  - `{:next_state, :awaiting_execution, data}` if the next step has a prompt
-  - `{:stop, :normal, data}` if the next step has no prompt
+  - `{:next_state, :awaiting_execution, data}` for orchestrator-owned control
+    steps or when the next step has a prompt
+  - `{:stop, :normal, data}` if a generic destination has no prompt
   - `{:next_state, :failed, data}` on error (nil step_id / not found)
 
   A finish destination is promptless and stops normally. The task has already
@@ -108,6 +109,9 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
     cond do
       step.step_type == :finish ->
         {:stop, :normal, finish_step_completed_attrs(next_step_id)}
+
+      step.step_type in [:wait_children, :human_input] ->
+        {:next_state, :awaiting_execution}
 
       prompted_step?(step) ->
         {:next_state, :awaiting_execution}

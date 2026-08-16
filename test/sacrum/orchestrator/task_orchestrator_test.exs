@@ -274,6 +274,43 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     )
   end
 
+  defp latest_waiting_execution(task_id) do
+    Repo.one!(
+      from(e in StepExecution,
+        where: e.task_id == ^task_id and e.status == "waiting",
+        order_by: [desc: e.inserted_at, desc: e.id],
+        limit: 1
+      )
+    )
+  end
+
+  defp create_prompted_child(user, project, parent, title) do
+    workflow = create_workflow(user, project, name: "#{title} Workflow")
+
+    step =
+      create_step(user, workflow, %{
+        name: "#{title} Execute",
+        step_type: "execute",
+        prompt: "Run #{title}"
+      })
+
+    {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: step.id})
+
+    child = create_task(user, project, %{title: title})
+    {:ok, child} = Repo.TaskHierarchy.set_parent(child, parent)
+    assign_workflow_to_task(child, workflow)
+  end
+
+  defp assert_child_run_lineage(child, parent_run, waiting_execution) do
+    child_run = latest_task_run(child.id)
+
+    assert child_run.parent_task_run_id == parent_run.id
+    assert child_run.root_task_run_id == parent_run.id
+    assert child_run.triggered_by_step_execution_id == waiting_execution.id
+
+    child_run
+  end
+
   # ===== Tests =====
 
   describe "single-step workflow" do
@@ -885,6 +922,149 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       task = reload_task(task)
       assert task.workflow_id == workflow1.id
       assert task.current_step_id == route_step.id
+    end
+  end
+
+  describe "route transitions into wait_children" do
+    test "intra-workflow route parks an epic run and fans out only unblocked children with lineage" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project, name: "Epic Coordinator")
+
+      route_step =
+        create_step(user, workflow, %{
+          name: "route_to_coordination",
+          step_order: 1,
+          step_type: "route"
+        })
+
+      wait_step =
+        create_step(user, workflow, %{
+          name: "wait_for_children",
+          step_order: 2,
+          step_type: "wait_children",
+          prompt: nil
+        })
+
+      create_transition(user, route_step, wait_step)
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: route_step.id})
+
+      parent =
+        user
+        |> create_task(project, %{title: "Epic Parent", level: "epic"})
+        |> assign_workflow_to_task(workflow)
+
+      unblocked_child = create_prompted_child(user, project, parent, "Unblocked Child")
+      blocked_child = create_prompted_child(user, project, parent, "Blocked Child")
+      {:ok, _} = TaskDependencies.add_dependency(blocked_child, unblocked_child)
+
+      on_exit(fn ->
+        cleanup_spawned_orchestrators([unblocked_child.id, blocked_child.id])
+      end)
+
+      pid = start_orchestrator(parent, user)
+      wait_for_state(pid, :executing)
+
+      route_output =
+        Jason.encode!(%{
+          "transition_to" => wait_step.id,
+          "transition_type" => "intra_workflow"
+        })
+
+      simulate_daemon_completion(parent.id, project.id, route_output)
+      wait_for_exit(pid)
+
+      assert reload_task(parent).current_step_id == wait_step.id
+
+      waiting_execution = latest_waiting_execution(parent.id)
+      parent_run = latest_task_run(parent.id)
+
+      assert waiting_execution.step_id == wait_step.id
+
+      assert Enum.sort(waiting_execution.handoff["child_ids"]) ==
+               Enum.sort([unblocked_child.id, blocked_child.id])
+
+      assert parent_run.status == :waiting
+      assert parent_run.latest_step_execution_id == waiting_execution.id
+      assert parent_run.outcome_kind == nil
+      assert parent_run.outcome_context == %{}
+
+      unblocked_run = assert_child_run_lineage(unblocked_child, parent_run, waiting_execution)
+      blocked_run = assert_child_run_lineage(blocked_child, parent_run, waiting_execution)
+
+      assert unblocked_run.status in [:queued, :executing]
+      assert Registry.lookup(Sacrum.Orchestrator.TaskRegistry, unblocked_child.id) != []
+      assert blocked_run.status == :queued
+      assert Registry.lookup(Sacrum.Orchestrator.TaskRegistry, blocked_child.id) == []
+    end
+
+    test "inter-workflow route parks a ticket run and fans out a lineage-aware child run" do
+      user = create_user()
+      project = create_project(user)
+      source_workflow = create_workflow(user, project, name: "Ticket Backlog")
+      coordinator_workflow = create_workflow(user, project, name: "Ticket Coordinator")
+
+      route_step =
+        create_step(user, source_workflow, %{
+          name: "route_to_coordinator",
+          step_type: "route"
+        })
+
+      wait_step =
+        create_step(user, coordinator_workflow, %{
+          name: "wait_for_children",
+          step_type: "wait_children",
+          prompt: nil
+        })
+
+      {:ok, _} = Accounts.Workflows.update(source_workflow, %{initial_step_id: route_step.id})
+      {:ok, _} = Accounts.Workflows.update(coordinator_workflow, %{initial_step_id: wait_step.id})
+
+      {:ok, _} =
+        Accounts.WorkflowTransitions.insert(user.id, %{
+          "from_workflow_id" => source_workflow.id,
+          "to_workflow_id" => coordinator_workflow.id,
+          "target_step_id" => wait_step.id,
+          "project_id" => project.id
+        })
+
+      parent =
+        user
+        |> create_task(project, %{title: "Ticket Parent", level: "ticket"})
+        |> assign_workflow_to_task(source_workflow)
+
+      child = create_prompted_child(user, project, parent, "Ticket Child")
+
+      on_exit(fn -> cleanup_spawned_orchestrators([child.id]) end)
+
+      pid = start_orchestrator(parent, user)
+      wait_for_state(pid, :executing)
+
+      route_output =
+        Jason.encode!(%{
+          "transition_to" => coordinator_workflow.id,
+          "transition_type" => "inter_workflow"
+        })
+
+      simulate_daemon_completion(parent.id, project.id, route_output)
+      wait_for_exit(pid)
+
+      routed_parent = reload_task(parent)
+      assert routed_parent.workflow_id == coordinator_workflow.id
+      assert routed_parent.current_step_id == wait_step.id
+
+      waiting_execution = latest_waiting_execution(parent.id)
+      parent_run = latest_task_run(parent.id)
+      child_run = assert_child_run_lineage(child, parent_run, waiting_execution)
+
+      assert waiting_execution.step_id == wait_step.id
+      assert waiting_execution.handoff["child_ids"] == [child.id]
+      assert parent_run.status == :waiting
+      assert parent_run.latest_step_execution_id == waiting_execution.id
+      assert parent_run.outcome_kind == nil
+      assert parent_run.outcome_context == %{}
+      assert child_run.status in [:queued, :executing]
+      assert Registry.lookup(Sacrum.Orchestrator.TaskRegistry, child.id) != []
     end
   end
 
