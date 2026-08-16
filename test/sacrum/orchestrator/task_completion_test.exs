@@ -207,7 +207,36 @@ defmodule Sacrum.Orchestrator.TaskCompletionTest do
       assert result == {:next_state, :awaiting_execution, data}
     end
 
-    test "stops when next step has a blank prompt" do
+    test "transitions to awaiting_execution for promptless orchestrator control steps" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project)
+
+      for step_type <- ~w(wait_children human_input) do
+        next_step =
+          create_step(user, workflow, %{
+            "name" => "#{step_type} destination",
+            "step_type" => step_type,
+            "prompt" => nil
+          })
+
+        task = create_task(user, project, workflow)
+
+        data = %{
+          task: task,
+          steps: %{next_step.id => next_step},
+          workflow: workflow
+        }
+
+        assert TaskCompletion.next_state_decision(next_step.id, data) ==
+                 {:next_state, :awaiting_execution}
+
+        assert TaskCompletion.determine_next_state(next_step.id, data) ==
+                 {:next_state, :awaiting_execution, data}
+      end
+    end
+
+    test "stops when a generic execution destination has a blank prompt" do
       user = create_user()
       project = create_project(user)
       workflow = create_workflow(user, project)
