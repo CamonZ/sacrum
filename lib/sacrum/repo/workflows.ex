@@ -28,6 +28,7 @@ defmodule Sacrum.Repo.Workflows do
   alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.Schemas.TaskRun
   alias Sacrum.Repo.Schemas.Workflow
+  alias Sacrum.Repo.Schemas.WorkflowStep
   alias Sacrum.Repo.Schemas.WorkflowTransition
   alias Sacrum.Repo.SyncHelper
   alias Sacrum.Repo.UuidPrefixResolver
@@ -69,9 +70,69 @@ defmodule Sacrum.Repo.Workflows do
 
   @spec update(Workflow.t(), map()) :: {:ok, Workflow.t()} | {:error, Ecto.Changeset.t()}
   def update(%Workflow{} = workflow, attrs) do
-    workflow
-    |> Workflow.update_changeset(attrs)
-    |> Repo.update()
+    if initial_step_supplied?(attrs) do
+      Repo.transaction(fn ->
+        workflow = lock_workflow(workflow.id) || workflow
+        changeset = Workflow.update_changeset(workflow, attrs)
+
+        with :ok <- validate_changeset(changeset),
+             :ok <- validate_initial_step(workflow, changeset) do
+          case Repo.update(changeset) do
+            {:ok, updated_workflow} -> updated_workflow
+            {:error, changeset} -> Repo.rollback(changeset)
+          end
+        else
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+    else
+      workflow
+      |> Workflow.update_changeset(attrs)
+      |> Repo.update()
+    end
+  end
+
+  defp initial_step_supplied?(attrs),
+    do: Map.has_key?(attrs, :initial_step_id) or Map.has_key?(attrs, "initial_step_id")
+
+  defp validate_changeset(%Ecto.Changeset{valid?: true}), do: :ok
+  defp validate_changeset(%Ecto.Changeset{} = changeset), do: {:error, changeset}
+
+  defp validate_initial_step(workflow, changeset) do
+    initial_step_id = Ecto.Changeset.get_field(changeset, :initial_step_id)
+
+    if is_nil(initial_step_id) do
+      :ok
+    else
+      validate_initial_step(workflow, changeset, initial_step_id)
+    end
+  end
+
+  defp validate_initial_step(workflow, changeset, initial_step_id) do
+    query =
+      from(s in WorkflowStep,
+        where:
+          s.id == ^initial_step_id and
+            s.workflow_id == ^workflow.id and
+            s.project_id == ^workflow.project_id and
+            s.user_id == ^workflow.user_id,
+        select: s.id
+      )
+
+    if Repo.exists?(query) do
+      :ok
+    else
+      {:error,
+       Ecto.Changeset.add_error(
+         changeset,
+         :initial_step_id,
+         "must reference a step owned by this workflow"
+       )}
+    end
+  end
+
+  defp lock_workflow(workflow_id) do
+    Repo.one(from(w in Workflow, where: w.id == ^workflow_id, lock: "FOR UPDATE"))
   end
 
   @doc """
