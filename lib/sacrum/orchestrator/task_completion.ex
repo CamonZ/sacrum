@@ -8,6 +8,7 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
 
   alias Sacrum.Orchestrator.FSMData
   alias Sacrum.Orchestrator.TaskRuns.{Completion, Lookup}
+  alias Sacrum.Orchestrator.TaskRuns.StateTransitions
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{TaskRun, WorkflowStep}
   alias Sacrum.Tasks.Status
@@ -110,6 +111,9 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
       step.step_type == :finish ->
         {:stop, :normal, finish_step_completed_attrs(next_step_id)}
 
+      step.step_type == :stop ->
+        {:stop, :normal, run_boundary_attrs(next_step_id)}
+
       step.step_type in [:wait_children, :human_input] ->
         {:next_state, :awaiting_execution}
 
@@ -131,6 +135,26 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
     {:ok, changes}
   end
 
+  def maybe_mark_task_run_completed_for_decision(
+        data,
+        {:stop, _reason, %{outcome_kind: "run_boundary"} = attrs},
+        changes
+      ) do
+    case Map.get(data, :task_run_id) do
+      nil ->
+        {:ok, changes}
+
+      task_run_id ->
+        with {:ok, task_run} <- Lookup.fetch(task_run_id),
+             {:ok, task_run} <-
+               task_run
+               |> StateTransitions.run_boundary_changeset(attrs)
+               |> Repo.update() do
+          {:ok, Map.put(changes, :task_run, task_run)}
+        end
+    end
+  end
+
   def maybe_mark_task_run_completed_for_decision(data, {:stop, _reason, attrs}, changes) do
     case Map.get(data, :task_run_id) do
       nil ->
@@ -141,6 +165,17 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
           maybe_mark_task_run_completed(task_run, attrs, changes)
         end
     end
+  end
+
+  @spec run_boundary_attrs(binary()) :: map()
+  def run_boundary_attrs(step_id) do
+    %{
+      outcome_kind: "run_boundary",
+      outcome_context: %{
+        "reason" => "stop_step",
+        "step_id" => step_id
+      }
+    }
   end
 
   @spec finish_step_completed_attrs(binary()) :: map()

@@ -189,6 +189,33 @@ defmodule Sacrum.Orchestrator.TaskCompletionTest do
       assert attrs.outcome_context["reason"] == "finish_step"
     end
 
+    test "stops at a stop step with a run-boundary outcome" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project)
+
+      stop_step =
+        create_step(user, workflow, %{
+          "step_type" => "stop",
+          "prompt" => nil
+        })
+
+      task = create_task(user, project, workflow)
+      task_run = create_task_run(user, project, task)
+
+      data = %{
+        task: task,
+        task_run_id: task_run.id,
+        steps: %{stop_step.id => stop_step},
+        workflow: workflow
+      }
+
+      assert {:stop, :normal, attrs} = TaskCompletion.next_state_decision(stop_step.id, data)
+      assert attrs.outcome_kind == "run_boundary"
+      assert attrs.outcome_context["reason"] == "stop_step"
+      assert attrs.outcome_context["step_id"] == stop_step.id
+    end
+
     test "transitions to awaiting_execution when destination step has a prompt" do
       user = create_user()
       project = create_project(user)

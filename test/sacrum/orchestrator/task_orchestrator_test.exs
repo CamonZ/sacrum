@@ -485,6 +485,72 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     end
   end
 
+  describe "stop step routing" do
+    defp setup_stop_boundary_workflow do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project)
+
+      work_step =
+        create_step(user, workflow, %{
+          name: "work_step",
+          step_order: 1,
+          step_type: "execute",
+          prompt: "Do the work"
+        })
+
+      stop_step =
+        create_step(user, workflow, %{
+          name: "stop_boundary",
+          step_order: 2,
+          step_type: "stop",
+          prompt: nil
+        })
+
+      loop_start =
+        create_step(user, workflow, %{
+          name: "loop_start",
+          step_order: 3,
+          step_type: "execute",
+          prompt: "Start the next iteration"
+        })
+
+      create_transition(user, work_step, stop_step)
+      create_transition(user, stop_step, loop_start)
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: work_step.id})
+
+      task = create_task(user, project)
+      task = assign_workflow_to_task(task, workflow)
+
+      %{user: user, project: project, task: task, work_step: work_step, stop_step: stop_step}
+    end
+
+    test "ends the current run at stop without dispatching or completing the task" do
+      %{user: user, project: project, task: task, stop_step: stop_step} =
+        setup_stop_boundary_workflow()
+
+      pid = start_orchestrator(task, user)
+      wait_for_state(pid, :executing)
+      simulate_daemon_completion(task.id, project.id, "work complete")
+      wait_for_exit(pid)
+
+      task = reload_task(task)
+      task_run = latest_task_run(task.id)
+
+      assert task.current_step_id == stop_step.id
+      assert task.completed_at == nil
+      assert task_run.status == :stopped
+      assert task_run.outcome_kind == "run_boundary"
+      assert task_run.outcome_context["reason"] == "stop_step"
+      assert task_run.outcome_context["step_id"] == stop_step.id
+      assert %DateTime{} = task_run.ended_at
+      assert {:error, :not_found} = Accounts.TaskRuns.get_active_for_task(user.id, task.id)
+
+      assert [%StepExecution{step_name: "work_step", status: "completed"}] =
+               get_all_executions(task.id)
+    end
+  end
+
   describe "non-prompted continuation workflow" do
     test "stops after completing and transitioning to next step" do
       %{user: user, project: project, steps: [_s1, s2, _s3], task: task} =
