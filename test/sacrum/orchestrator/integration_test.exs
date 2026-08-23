@@ -173,6 +173,54 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
     }
   end
 
+  defp setup_stop_boundary_workflow do
+    user = create_user()
+    project = create_project(user)
+    workflow = create_workflow(user, project)
+
+    work_step =
+      create_step(user, workflow, %{
+        name: "work",
+        step_order: 1,
+        step_type: "execute",
+        prompt: "Do one iteration"
+      })
+
+    stop_step =
+      create_step(user, workflow, %{
+        name: "run_boundary",
+        step_order: 2,
+        step_type: "stop",
+        prompt: nil
+      })
+
+    loop_step =
+      create_step(user, workflow, %{
+        name: "loop_start",
+        step_order: 3,
+        step_type: "execute",
+        prompt: "Continue the next iteration"
+      })
+
+    create_transition(user, work_step, stop_step)
+    create_transition(user, stop_step, loop_step)
+    create_transition(user, loop_step, stop_step)
+    {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: work_step.id})
+
+    task = create_task(user, project)
+    {:ok, task} = Sacrum.Repo.TaskWorkflows.assign_workflow(task, workflow)
+
+    %{
+      user: user,
+      project: project,
+      workflow: workflow,
+      work_step: work_step,
+      stop_step: stop_step,
+      loop_step: loop_step,
+      task: task
+    }
+  end
+
   # ===== Orchestration helpers =====
 
   defp subscribe_project(project_id) do
@@ -655,6 +703,73 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
       assert second.id != first_exec.id
 
       assert_run_step_for(second.id, "step_2")
+    end
+  end
+
+  describe "stop boundary orchestration" do
+    test "ends one TaskRun at the boundary and starts a distinct run past it" do
+      %{
+        user: user,
+        project: project,
+        work_step: work_step,
+        stop_step: stop_step,
+        loop_step: loop_step,
+        task: task
+      } = setup_stop_boundary_workflow()
+
+      subscribe_project(project.id)
+
+      first_pid = start_orchestrator(task, user)
+      wait_for_state(first_pid, :executing)
+      first_execution = latest_started_execution(task.id)
+      assert first_execution.step_id == work_step.id
+      assert first_execution.step_type == :execute
+      assert_run_step_for(first_execution.id, "work")
+
+      simulate_daemon_completion(task.id, project.id, "iteration complete")
+      wait_for_exit(first_pid)
+      wait_for_registry_clear(task.id)
+
+      first_run = Repo.get!(TaskRun, first_execution.task_run_id)
+      task_at_boundary = Repo.get!(Sacrum.Repo.Schemas.Task, task.id)
+
+      assert first_run.status == :stopped
+      assert first_run.outcome_kind == "run_boundary"
+      assert first_run.outcome_context["reason"] == "stop_step"
+      assert first_run.outcome_context["step_id"] == stop_step.id
+      assert task_at_boundary.current_step_id == stop_step.id
+      assert is_nil(task_at_boundary.completed_at)
+
+      work_step_id = work_step.id
+
+      assert [%StepExecution{step_id: ^work_step_id, status: "completed"}] =
+               executions_for_task(task.id)
+
+      drain_run_step_broadcasts()
+
+      second_pid = start_orchestrator(task_at_boundary, user)
+      wait_for_state(second_pid, :executing)
+      second_execution = latest_started_execution(task.id)
+      assert second_execution.step_id == loop_step.id
+      assert second_execution.step_type == :execute
+      assert second_execution.task_run_id != first_run.id
+      assert_run_step_for(second_execution.id, "loop_start")
+
+      simulate_daemon_completion(task.id, project.id, "second iteration complete")
+      wait_for_exit(second_pid)
+      wait_for_registry_clear(task.id)
+
+      second_run = Repo.get!(TaskRun, second_execution.task_run_id)
+      assert second_run.status == :stopped
+      assert second_run.outcome_kind == "run_boundary"
+      assert second_run.outcome_context["step_id"] == stop_step.id
+      assert Repo.get!(Sacrum.Repo.Schemas.Task, task.id).current_step_id == stop_step.id
+
+      assert [first, second] = executions_for_task(task.id)
+      assert first.task_run_id == first_run.id
+      assert second.task_run_id == second_run.id
+      assert first.status == "completed"
+      assert second.status == "completed"
     end
   end
 

@@ -19,6 +19,7 @@ defmodule Sacrum.Repo.WorkflowSteps do
   - `:duplicate_to_step_ids` - when transition list has duplicate target steps
   - `:different_workflows` - when target steps belong to different workflows
   - `:finish_step_cannot_have_outgoing_transition` - when the step is a finish step and transitions are supplied
+  - `:stop_step_requires_exactly_one_outgoing_transition` - when a stop step does not have exactly one transition
 
   ## Preload Strategy
 
@@ -113,6 +114,7 @@ defmodule Sacrum.Repo.WorkflowSteps do
     step = Repo.preload(step, :workflow)
 
     with :ok <- validate_finish_step(step, transitions),
+         :ok <- validate_stop_step(step, transitions),
          :ok <- validate_no_duplicate_targets(transitions),
          :ok <- validate_same_workflow(step, transitions) do
       existing =
@@ -170,6 +172,13 @@ defmodule Sacrum.Repo.WorkflowSteps do
     do: {:error, :finish_step_cannot_have_outgoing_transition}
 
   defp validate_finish_step(_step, _transitions), do: :ok
+
+  defp validate_stop_step(%WorkflowStep{step_type: :stop}, [_]), do: :ok
+
+  defp validate_stop_step(%WorkflowStep{step_type: :stop}, _transitions),
+    do: {:error, :stop_step_requires_exactly_one_outgoing_transition}
+
+  defp validate_stop_step(_step, _transitions), do: :ok
 
   defp to_step_id(%{"to_step_id" => id}), do: id
   defp to_step_id(%{to_step_id: id}), do: id

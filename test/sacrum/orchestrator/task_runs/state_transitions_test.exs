@@ -29,6 +29,22 @@ defmodule Sacrum.Orchestrator.TaskRuns.StateTransitionsTest do
     assert changed.ended_at
   end
 
+  test "run_boundary_changeset marks a run terminal without successful completion" do
+    changed =
+      task_run_struct()
+      |> StateTransitions.run_boundary_changeset(%{
+        outcome_context: %{"step_id" => Ecto.UUID.generate()}
+      })
+      |> Ecto.Changeset.apply_changes()
+
+    assert changed.status == :stopped
+    assert changed.ended_at
+    assert changed.outcome_kind == "run_boundary"
+    assert changed.outcome_context["step_id"]
+    refute Sacrum.TaskRuns.Status.active?(changed.status)
+    refute Sacrum.TaskRuns.Status.successful?(changed.status)
+  end
+
   defp task_run_struct do
     %TaskRun{
       id: Ecto.UUID.generate(),

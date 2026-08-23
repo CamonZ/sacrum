@@ -485,6 +485,106 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     end
   end
 
+  describe "stop step routing" do
+    defp setup_stop_boundary_workflow do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project)
+
+      work_step =
+        create_step(user, workflow, %{
+          name: "work_step",
+          step_order: 1,
+          step_type: "execute",
+          prompt: "Do the work"
+        })
+
+      stop_step =
+        create_step(user, workflow, %{
+          name: "stop_boundary",
+          step_order: 2,
+          step_type: "stop",
+          prompt: nil
+        })
+
+      loop_start =
+        create_step(user, workflow, %{
+          name: "loop_start",
+          step_order: 3,
+          step_type: "execute",
+          prompt: "Start the next iteration"
+        })
+
+      create_transition(user, work_step, stop_step)
+      create_transition(user, stop_step, loop_start)
+      create_transition(user, loop_start, stop_step)
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: work_step.id})
+
+      task = create_task(user, project)
+      task = assign_workflow_to_task(task, workflow)
+
+      %{user: user, project: project, task: task, work_step: work_step, stop_step: stop_step}
+    end
+
+    test "ends the current run at stop without dispatching or completing the task" do
+      %{user: user, project: project, task: task, stop_step: stop_step} =
+        setup_stop_boundary_workflow()
+
+      pid = start_orchestrator(task, user)
+      wait_for_state(pid, :executing)
+      simulate_daemon_completion(task.id, project.id, "work complete")
+      wait_for_exit(pid)
+
+      task = reload_task(task)
+      task_run = latest_task_run(task.id)
+
+      assert task.current_step_id == stop_step.id
+      assert task.completed_at == nil
+      assert task_run.status == :stopped
+      assert task_run.outcome_kind == "run_boundary"
+      assert task_run.outcome_context["reason"] == "stop_step"
+      assert task_run.outcome_context["step_id"] == stop_step.id
+      assert %DateTime{} = task_run.ended_at
+      assert {:error, :not_found} = Accounts.TaskRuns.get_active_for_task(user.id, task.id)
+
+      assert [%StepExecution{step_name: "work_step", status: "completed"}] =
+               get_all_executions(task.id)
+    end
+
+    test "a new TaskRun bypasses stop and executes the destination in that run" do
+      %{user: user, project: project, task: task, stop_step: stop_step} =
+        setup_stop_boundary_workflow()
+
+      first_pid = start_orchestrator(task, user)
+      wait_for_state(first_pid, :executing)
+      simulate_daemon_completion(task.id, project.id, "first iteration")
+      wait_for_exit(first_pid)
+
+      first_run = latest_task_run(task.id)
+      assert first_run.status == :stopped
+
+      second_pid = start_orchestrator(task, user)
+      wait_for_state(second_pid, :executing)
+
+      second_run = latest_task_run(task.id)
+      assert second_run.id != first_run.id
+      assert reload_task(task).current_step_id != stop_step.id
+
+      second_execution = get_latest_started_execution(task.id)
+      assert second_execution.task_run_id == second_run.id
+      assert second_execution.step_name == "loop_start"
+
+      simulate_daemon_completion(task.id, project.id, "second iteration")
+      wait_for_exit(second_pid)
+
+      final_run = latest_task_run(task.id)
+      assert final_run.id == second_run.id
+      assert final_run.status == :stopped
+      assert final_run.outcome_kind == "run_boundary"
+      refute reload_task(task).completed_at
+    end
+  end
+
   describe "non-prompted continuation workflow" do
     test "stops after completing and transitioning to next step" do
       %{user: user, project: project, steps: [_s1, s2, _s3], task: task} =

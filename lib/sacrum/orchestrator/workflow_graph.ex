@@ -65,4 +65,28 @@ defmodule Sacrum.Orchestrator.WorkflowGraph do
   def select_single_transition([next_step_id]), do: {:ok, next_step_id}
   def select_single_transition([]), do: {:error, :no_outgoing_transitions}
   def select_single_transition(_multiple), do: {:error, :multiple_outgoing_transitions}
+
+  @doc """
+  Validate the destination of a transition when it is a stop step.
+
+  Stop steps are run boundaries and therefore must have exactly one outgoing
+  transition so that the next TaskRun has an unambiguous continuation.
+  """
+  @spec validate_stop_destination(FSMData.t(), binary()) ::
+          :ok | {:error, :no_outgoing_transitions | :multiple_outgoing_transitions}
+  def validate_stop_destination(data, step_id) do
+    case Map.get(data.steps, step_id) do
+      %WorkflowStep{step_type: :stop} ->
+        data
+        |> get_outgoing_transitions(step_id)
+        |> select_single_transition()
+        |> case do
+          {:ok, _next_step_id} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
+
+      _step ->
+        :ok
+    end
+  end
 end

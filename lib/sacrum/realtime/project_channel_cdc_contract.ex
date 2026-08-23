@@ -8,6 +8,12 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
   `run_step` and `cancel_step` are worker instructions, not GUI state
   projections, and must not be implemented by the WalEx CDC projector.
 
+  A stop boundary is represented by `TaskRun.status == :stopped`,
+  `outcome_kind == "run_boundary"`, and the boundary step details in
+  `outcome_context`. A later workflow invocation creates a new TaskRun and
+  advances past that step before dispatching work; it does not resume the
+  historical run.
+
   The contract is written in terms of logical change images:
 
   * `after_image_fields` are read from the committed row after insert/update.
@@ -560,7 +566,9 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
         status: "task_runs.status after image encoded with Sacrum.TaskRuns.Status.wire_value/1",
         level: "tasks.level after image",
         run_start_rule:
-          "emit task_run_step_changed once immediately after task_run_created for each newly created root or child TaskRun, with from_step_id nil and to_step_id set to the task's current_step_id, before the first task_run_updated/dispatch event"
+          "emit task_run_step_changed once immediately after task_run_created for each newly created root or child TaskRun, with from_step_id nil and to_step_id set to the task's current_step_id, before the first task_run_updated/dispatch event",
+        run_boundary_rule:
+          "a stop boundary emits the terminal stopped TaskRun projection with outcome_kind run_boundary; a later TaskRun emits its own creation and step-change projections after bypassing the boundary"
       },
       completeness:
         "Semantic movement delta for active pipeline buckets. It is derived from persisted task/task_run rows and carries all values needed to move counts."

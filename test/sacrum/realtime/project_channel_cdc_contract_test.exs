@@ -74,6 +74,8 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContractTest do
     assert task_run_contract.derivation.from_step_id =~ "before image"
     assert task_run_contract.derivation.to_step_id =~ "nil when task_runs.status leaves active"
     assert task_run_contract.derivation.status =~ "task_runs.status after image"
+    assert task_run_contract.derivation.run_boundary_rule =~ "outcome_kind run_boundary"
+    assert task_run_contract.derivation.run_boundary_rule =~ "later TaskRun"
 
     assert {:ok, task_contract} = ProjectChannelCdcContract.contract_for("task_step_changed")
     assert task_contract.classification == :semantic_delta

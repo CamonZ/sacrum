@@ -46,7 +46,7 @@ type TaskRunSummary = {
   endedAt: string | null;
   stopRequestedAt: string | null;
   latestStepExecutionId: string | null;
-  outcomeKind: string | null;
+  outcomeKind: "run_boundary" | string | null;
   outcomeContext: Record<string, unknown> | null;
   parentTaskRunId: string | null;
   rootTaskRunId: string | null;
@@ -93,6 +93,13 @@ The GUI can store this as `TaskRowState`; the CLI can compute the same shape tra
 | `failed` | no | yes | Failed | Historical |
 
 Display `waiting` as active work, not as a completed or idle state. A waiting run may be blocked on child runs, a `human_input` step, or another orchestrated wait.
+
+When `status == "stopped"` and `outcomeKind == "run_boundary"`, label the run
+as a run boundary in history. The task is still incomplete. `outcomeContext`
+contains `reason: "stop_step"` and the stop step ID; the next Run action
+creates a new TaskRun and moves past the stop step before dispatching work.
+This is a new run, not a resume action. Stop steps are not sent through the
+daemon `run_step` command.
 
 See [Domain Model: TaskRun.status](domain-model.md#taskrunstatus) for canonical lifecycle values and predicate semantics.
 
@@ -261,6 +268,10 @@ mutation RunWorkflow($taskId: Uuid4!) {
 ```
 
 After this mutation, refresh the task row or rely on `task_run_created` / `task_run_updated` WebSocket events.
+
+If the task is currently positioned on a stop step after a prior run boundary,
+`runWorkflow` creates a new TaskRun, bypasses the stop step, and continues from
+its single outgoing transition. The historical stopped run remains unchanged.
 
 ### Stop Run
 
@@ -437,6 +448,11 @@ type TaskRunChannelPayload = TaskRunChannelBase & {
 };
 ```
 
+For a stop boundary, the `task_run_updated` payload has `status: "stopped"`,
+`outcome_kind: "run_boundary"`, and an `outcome_context` with the stop-step
+reason and ID. Since the run is terminal, `run_controls.active_run` is null;
+the later TaskRun creation supplies the new active run controls.
+
 Task events carry the same control shape alongside the task row:
 
 ```ts
@@ -536,10 +552,13 @@ Update CLI commands as follows:
 
 - `list`: show a run state column from `runControls.activeRun.status`, not `Task.status`.
 - `status` / `show`: show both workflow position and active run state.
-- `run`: call `runWorkflow(taskId)`.
-- `stop`: call `stopRun(taskRunId)` when an active run is known; otherwise call `stopRun(taskId)`.
+- `run`: execute the current step only through the single-step `runStep` operation.
+- `start-taskrun`: call `runWorkflow(taskId)` to create/start a durable TaskRun.
+- `stop-taskrun`: call `stopRun(taskRunId)` when an active run is known; otherwise call `stopRun(taskId)`.
 - `trace`: use `taskRunTrace(rootTaskRunId)` for the selected `TaskRun` only.
 - `logs`: prefer `StepExecution` and `SessionLog` data scoped by `TaskRun` when available.
+- When `start-taskrun` reaches a stop boundary, report the new TaskRun ID and
+  first dispatched step; do not present it as resuming the prior run.
 
 Suggested CLI language:
 
@@ -582,5 +601,7 @@ Clients should pass these behavioral checks:
 - A `stopping` run disables Run and Stop.
 - Terminal `stopped`, `completed`, and `failed` runs appear only in history unless they are the selected trace.
 - A latest failed StepExecution does not make the task failed if the TaskRun is still active.
+- A stopped run with `outcomeKind == "run_boundary"` remains visible in run
+  history while Run stays enabled when the task is otherwise runnable.
 - A waiting `human_input` run renders as a blocking gate with no submit action yet.
 - WebSocket `task_run_updated` updates the row without requiring a full task refetch.

@@ -15,6 +15,8 @@ Sacrum is an API-only workflow engine and task management system built with Phoe
 - Code references (file paths with line ranges)
 - Tagging, priority, and level classification
 - Workflow-step based human review via `current_step_id` and `WorkflowStep.step_type == "human_input"`
+- Repeatable workflow runs via `WorkflowStep.step_type == "stop"`, which ends
+  the current TaskRun at a run boundary without completing the task
 
 **Execution tracking** — Durable `TaskRun` records track automation lifecycle for a task run. `StepExecution` records track individual step attempts inside a run, including the step name, attempt status, and optional LLM metadata (model, provider, token counts, cost, duration). Session logs attach free-text content to executions.
 
@@ -331,6 +333,15 @@ Predicate semantics:
 
 `StepExecution.status == "failed"` does not by itself mean the `TaskRun` failed. A failed step attempt can be retried while the enclosing `TaskRun.status` remains `:queued`, `:executing`, or `:waiting`. Set `TaskRun.status` to `:failed` only when retry/recovery is exhausted or the run has a permanent failure.
 
+A stop step is an orchestrator-owned run boundary. When a workflow reaches it,
+the current TaskRun becomes `:stopped` with `outcome_kind == "run_boundary"`
+and an `outcome_context` containing `reason: "stop_step"` and the boundary
+step ID. The task remains incomplete and its `current_step_id` remains on the
+stop step. The next `runWorkflow` invocation creates a distinct TaskRun,
+advances past the stop step, and dispatches the next executable step. It does
+not resume or mutate the historical stopped run. Stop steps are never sent to
+the daemon as `run_step` commands.
+
 Pipeline summaries follow the same boundary. `pipelineSummary.workflowSteps.activeCount`
 and `pipelineSummary.workflowSteps.pipelineCounts.active` count active
 `TaskRun.status` values (`queued`, `executing`, `waiting`, `stopping`) for
@@ -368,6 +379,11 @@ Not every step transition dispatches a new `step_execution_created`, so
 `step_execution_created` is **not** a reliable from/to signal for pipeline
 counts. Use `task_run_step_changed` (orchestrator path) and
 `task_step_changed` (manual path) instead.
+
+At a run boundary, clients should use the terminal `task_run_updated` payload
+and its `outcome_kind`/`outcome_context` to distinguish a deliberate boundary
+from an operator stop. The following TaskRun has its own lifecycle and is the
+source of active controls after it is created.
 
 ### Waiting on Children
 

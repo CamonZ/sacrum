@@ -94,6 +94,29 @@ defmodule Sacrum.Repo.StepTransitionsTest do
                  to_step_id: target_step.id
                })
     end
+
+    test "rejects a second outgoing transition from a stop step" do
+      {:ok, user} = Users.insert(@valid_user_attrs)
+      {:ok, project} = Projects.insert(user, %{name: "My Project"})
+      {:ok, workflow} = Workflows.insert(project, %{name: "Default"})
+
+      {:ok, stop_step} =
+        WorkflowSteps.insert(workflow, %{name: "Boundary", step_order: 1, step_type: "stop"})
+
+      {:ok, first_target} = WorkflowSteps.insert(workflow, %{name: "First", step_order: 2})
+      {:ok, second_target} = WorkflowSteps.insert(workflow, %{name: "Second", step_order: 3})
+
+      attrs = %{
+        project_id: project.id,
+        from_step_id: stop_step.id,
+        to_step_id: first_target.id
+      }
+
+      assert {:ok, %StepTransition{}} = StepTransitions.insert(user.id, attrs)
+
+      assert {:error, :stop_step_requires_exactly_one_outgoing_transition} =
+               StepTransitions.insert(user.id, %{attrs | to_step_id: second_target.id})
+    end
   end
 
   describe "all/1" do
