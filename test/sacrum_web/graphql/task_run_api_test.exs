@@ -783,6 +783,7 @@ defmodule SacrumWeb.Graphql.TaskRunApiTest do
             id
             taskId
             status
+            maxConcurrency
           }
         }
         """)
@@ -791,8 +792,87 @@ defmodule SacrumWeb.Graphql.TaskRunApiTest do
       run = run_result["data"]["runWorkflow"]
       assert run["taskId"] == task.id
       assert run["status"] in ["queued", "executing", "waiting", "stopping"]
+      assert run["maxConcurrency"] == nil
 
       stop_if_running(task.id)
+    end
+
+    test "runWorkflow persists and returns maxConcurrency", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {task, _workflow} = create_workflow_task(user, project)
+
+      run_result =
+        graphql_result(conn, user, """
+        mutation {
+          runWorkflow(taskId: "#{task.id}", maxConcurrency: 2) {
+            id
+            maxConcurrency
+          }
+        }
+        """)
+
+      assert run_result["errors"] == nil
+      assert run_result["data"]["runWorkflow"]["maxConcurrency"] == 2
+
+      stop_if_running(task.id)
+    end
+
+    test "runWorkflow rejects non-positive maxConcurrency", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {task, _workflow} = create_workflow_task(user, project)
+
+      run_result =
+        graphql_result(conn, user, """
+        mutation {
+          runWorkflow(taskId: "#{task.id}", maxConcurrency: 0) {
+            id
+          }
+        }
+        """)
+
+      assert run_result["data"]["runWorkflow"] == nil
+      assert [%{"message" => message}] = run_result["errors"]
+      assert message =~ "max_concurrency"
+      assert {:error, :not_found} = Accounts.TaskRuns.get_active_for_task(user.id, task.id)
+    end
+
+    test "TaskRun reads expose the inherited root maxConcurrency", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      parent_task = create_task(user, project, "Parent task")
+      child_task = create_task(user, project, "Child task")
+
+      {:ok, parent_run} =
+        Accounts.TaskRuns.insert(user.id, project.id, parent_task.id, %{max_concurrency: 3})
+
+      {:ok, child_run} =
+        Accounts.TaskRuns.insert(user.id, project.id, child_task.id, %{
+          parent_task_run_id: parent_run.id,
+          root_task_run_id: parent_run.id
+        })
+
+      result =
+        graphql_result(conn, user, """
+        {
+          taskRun(id: "#{child_run.id}") { id maxConcurrency rootTaskRunId }
+        }
+        """)
+
+      assert result["errors"] == nil
+
+      assert result["data"]["taskRun"] == %{
+               "id" => child_run.id,
+               "maxConcurrency" => 3,
+               "rootTaskRunId" => parent_run.id
+             }
     end
 
     test "stopRun stops a supplied run id", %{

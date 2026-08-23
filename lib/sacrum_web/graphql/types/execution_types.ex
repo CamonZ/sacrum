@@ -24,6 +24,15 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
     field :project_id, :id
     field :user_id, :id
 
+    field :max_concurrency, :integer do
+      resolve(fn task_run, _args, _resolution ->
+        case Accounts.TaskRuns.get_concurrency_scope(task_run) do
+          {:ok, %{max_concurrency: max_concurrency}} -> {:ok, max_concurrency}
+          {:error, :not_found} -> {:ok, nil}
+        end
+      end)
+    end
+
     field :status, :string do
       resolve(fn task_run, _args, _resolution ->
         {:ok, TaskRunStatus.wire_value(task_run.status)}
@@ -258,9 +267,16 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
   object :execution_mutations do
     field :run_workflow, :task_run do
       arg(:task_id, non_null(:uuid4))
+      arg(:max_concurrency, :integer)
 
-      resolve(fn %{task_id: task_id}, %{context: %{current_user: user}} ->
-        with {:ok, _task} <- schedule_task_for_mutation(:run_workflow, task_id, user) do
+      resolve(fn %{task_id: task_id} = args, %{context: %{current_user: user}} ->
+        with {:ok, _task} <-
+               schedule_task_for_mutation(
+                 :run_workflow,
+                 task_id,
+                 user,
+                 Map.take(args, [:max_concurrency])
+               ) do
           Accounts.TaskRuns.get_active_for_task(user.id, task_id)
         end
       end)
@@ -447,7 +463,7 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
       end)
     end
 
-    defp schedule_task_for_mutation(operation, task_id, user) do
+    defp schedule_task_for_mutation(operation, task_id, user, opts \\ %{}) do
       operation_name = operation_name(operation)
       Logger.info("[#{operation_name}] Mutation called for task_id=#{task_id} user=#{user.id}")
 
@@ -456,7 +472,7 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
              Logger.info(
                "[#{operation_name}] Task found, workflow_id=#{task.workflow_id}, current_step_id=#{task.current_step_id}"
              ),
-           :ok <- Scheduler.schedule_task(%{id: task_id}) do
+           :ok <- Scheduler.schedule_task(Map.put(opts, :id, task_id)) do
         Logger.info("[#{operation_name}] Scheduler accepted task #{task_id}")
         {:ok, task}
       else

@@ -82,7 +82,8 @@ defmodule Sacrum.Orchestrator.Scheduler do
          :ok <- validate_workflow(task_record),
          :ok <- validate_not_completed(task_record),
          :ok <- validate_no_active_fsm(task_id),
-         {:ok, task_run} <- Root.get_or_create(task_record) do
+         {:ok, task_run} <-
+           Root.get_or_create(task_record, max_concurrency: Map.get(task, :max_concurrency)) do
       Logger.info(
         "[Scheduler] All validations passed for task_id=#{task_id}, task_run_id=#{task_run.id}, starting orchestrator"
       )
