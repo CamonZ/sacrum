@@ -19,4 +19,14 @@ defmodule Sacrum.Orchestrator.TaskRuns.StateTransitions do
     |> Map.merge(%{status: :stopped, ended_at: DateTime.utc_now()})
     |> then(&TaskRun.update_changeset(task_run, &1))
   end
+
+  @spec run_boundary_changeset(TaskRun.t(), map()) :: Ecto.Changeset.t()
+  def run_boundary_changeset(%TaskRun{} = task_run, attrs \\ %{}) when is_map(attrs) do
+    attrs
+    |> Map.put(:status, :stopped)
+    |> Map.put(:ended_at, DateTime.utc_now())
+    |> Map.put(:outcome_kind, "run_boundary")
+    |> Map.put_new(:outcome_context, %{})
+    |> then(&TaskRun.update_changeset(task_run, &1))
+  end
 end

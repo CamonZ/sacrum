@@ -40,6 +40,23 @@ defmodule Sacrum.Orchestrator.TaskRuns.RootTest do
              Root.validate_dispatchable(completed_run)
   end
 
+  test "get_or_create creates a new root run after a run boundary" do
+    user = create_user()
+    {_project, task} = create_task(user)
+
+    {:ok, stopped_run} =
+      TaskRuns.insert(user.id, task.project_id, task.id, %{
+        status: :stopped,
+        ended_at: DateTime.utc_now(),
+        outcome_kind: "run_boundary",
+        outcome_context: %{"step_id" => task.current_step_id}
+      })
+
+    assert {:ok, new_run} = Root.get_or_create(task)
+    assert new_run.id != stopped_run.id
+    assert new_run.status == :queued
+  end
+
   defp create_user do
     suffix = System.unique_integer([:positive])
 

@@ -6,7 +6,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
   @type t :: %__MODULE__{}
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
-  @step_types [:execute, :evaluate, :route, :wait_children, :human_input, :finish]
+  @step_types [:execute, :evaluate, :route, :wait_children, :human_input, :stop, :finish]
 
   schema "workflow_steps" do
     field :name, :string

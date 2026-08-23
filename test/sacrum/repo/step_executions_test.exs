@@ -98,6 +98,26 @@ defmodule Sacrum.Repo.StepExecutionsTest do
                ])
     end
 
+    test "accepts stop and persists the existing string representation" do
+      {workflow, project, user} = create_workflow()
+      task = create_task(project, user.id)
+
+      assert {:ok, %StepExecution{step_type: :stop} = execution} =
+               StepExecutions.insert(workflow.user_id, %{
+                 project_id: project.id,
+                 task_id: task.id,
+                 workflow_id: workflow.id,
+                 step_name: "stop",
+                 step_type: "stop",
+                 status: "completed"
+               })
+
+      assert %{rows: [["stop"]]} =
+               Repo.query!("SELECT step_type FROM step_executions WHERE id = $1", [
+                 Ecto.UUID.dump!(execution.id)
+               ])
+    end
+
     test "rejects missing task_id" do
       {workflow, project, _user} = create_workflow()
 
