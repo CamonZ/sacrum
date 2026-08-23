@@ -55,6 +55,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
           {:ok, StepExecution.t()} | {:error, term()}
   def create_and_dispatch(user_id, task, step_id, task_run_or_id, handoff \\ nil) do
     with {:ok, step} <- fetch_step(user_id, step_id),
+         :ok <- validate_dispatchable_step(step),
          :ok <- validate_workflow(task),
          {:ok, task_run} <- fetch_and_validate_task_run(task_run_or_id, task) do
       {:ok, rendered} = render_dispatch_prompt(task, step, task_run, handoff)
@@ -67,6 +68,19 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
     end
   end
 
+  @doc """
+  Validate that a workflow step may be dispatched directly by a client.
+
+  Stop steps are orchestrator-owned run boundaries. They are reached through
+  workflow transitions and are never dispatched to a daemon.
+  """
+  @spec validate_step(String.t(), String.t()) :: :ok | {:error, term()}
+  def validate_step(user_id, step_id) do
+    with {:ok, step} <- fetch_step(user_id, step_id) do
+      validate_dispatchable_step(step)
+    end
+  end
+
   @spec fetch_step(binary(), binary()) :: {:ok, WorkflowStep.t()} | {:error, term()}
   defp fetch_step(user_id, step_id) do
     Accounts.WorkflowSteps.get_by(user_id,
@@ -74,6 +88,11 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
       preloads: [:workflow]
     )
   end
+
+  defp validate_dispatchable_step(%WorkflowStep{step_type: :stop}),
+    do: {:error, :stop_step_not_dispatchable}
+
+  defp validate_dispatchable_step(_step), do: :ok
 
   @spec validate_workflow(map()) :: :ok | {:error, :no_workflow}
   defp validate_workflow(%{workflow_id: nil}), do: {:error, :no_workflow}
@@ -244,6 +263,8 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
        do: :ok
 
   defp mark_dispatch_failure(_task_run_or_id, {:task_run_not_dispatchable, _status}), do: :ok
+
+  defp mark_dispatch_failure(_task_run_or_id, :stop_step_not_dispatchable), do: :ok
 
   defp mark_dispatch_failure(task_run_or_id, reason) do
     case fetch_task_run_for_failure(task_run_or_id) do

@@ -149,6 +149,28 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       assert {:error, :finish_step_cannot_have_outgoing_transition} =
                WorkflowSteps.sync_transitions(finish_step, [%{to_step_id: target_step.id}])
     end
+
+    test "requires exactly one outgoing transition for a stop step" do
+      workflow = create_workflow()
+
+      {:ok, stop_step} =
+        WorkflowSteps.insert(workflow, %{name: "Boundary", step_order: 1, step_type: "stop"})
+
+      {:ok, first_target} = WorkflowSteps.insert(workflow, %{name: "First", step_order: 2})
+      {:ok, second_target} = WorkflowSteps.insert(workflow, %{name: "Second", step_order: 3})
+
+      assert {:error, :stop_step_requires_exactly_one_outgoing_transition} =
+               WorkflowSteps.sync_transitions(stop_step, [])
+
+      assert {:ok, [_transition]} =
+               WorkflowSteps.sync_transitions(stop_step, [%{to_step_id: first_target.id}])
+
+      assert {:error, :stop_step_requires_exactly_one_outgoing_transition} =
+               WorkflowSteps.sync_transitions(stop_step, [
+                 %{to_step_id: first_target.id},
+                 %{to_step_id: second_target.id}
+               ])
+    end
   end
 
   describe "get/1" do

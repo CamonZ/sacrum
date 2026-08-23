@@ -3476,6 +3476,48 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["taskId"] == task.id
     end
 
+    test "runStep rejects stop steps without creating or changing a TaskRun", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+
+      {:ok, stop_step} =
+        Accounts.WorkflowSteps.insert(wf, %{
+          name: "Run boundary",
+          step_type: "stop",
+          prompt: nil
+        })
+
+      {:ok, task} = Sacrum.Repo.TaskWorkflows.assign_workflow(task, wf)
+      {:ok, task_run} = Accounts.TaskRuns.insert(user.id, project.id, task.id, %{status: :queued})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            runStep(
+              taskId: "#{task.id}"
+              stepId: "#{stop_step.id}"
+            ) { id taskRunId status }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["runStep"] == nil
+      assert [%{"message" => message}] = result["errors"]
+      assert message =~ "stop_step_not_dispatchable"
+
+      assert Sacrum.Repo.get!(Sacrum.Repo.Schemas.TaskRun, task_run.id).status == :queued
+
+      assert Sacrum.Repo.get_by(Sacrum.Repo.Schemas.StepExecution,
+               task_run_id: task_run.id
+             ) == nil
+    end
+
     test "runStep reuses an existing active root TaskRun", %{
       conn: conn,
       user: user,

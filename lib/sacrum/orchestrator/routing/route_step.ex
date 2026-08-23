@@ -74,6 +74,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
   defp prepare_route_plan(data, dest_id, "intra_workflow", handoff) do
     with {:ok, _dest_step} <- IntraWorkflow.validate_destination_step(data, dest_id),
          :ok <- IntraWorkflow.validate_step_transition_exists(data.task.current_step_id, dest_id),
+         :ok <- WorkflowGraph.validate_stop_destination(data, dest_id),
          {:ok, changeset} <-
            TaskWorkflows.advance_to_step_changeset(data.task, dest_id,
              skip_orchestrator_check: true
@@ -146,7 +147,13 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
           transitions: transitions
       }
 
-      {:ok, TaskCompletion.next_state_decision(preview_task.current_step_id, decision_data)}
+      with :ok <-
+             WorkflowGraph.validate_stop_destination(
+               decision_data,
+               preview_task.current_step_id
+             ) do
+        {:ok, TaskCompletion.next_state_decision(preview_task.current_step_id, decision_data)}
+      end
     end
   end
 

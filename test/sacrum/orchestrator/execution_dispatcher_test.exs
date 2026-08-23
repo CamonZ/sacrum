@@ -149,6 +149,27 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       assert exec.step_type == :human_input
     end
 
+    test "rejects direct dispatch of a stop step without changing the TaskRun", ctx do
+      step =
+        create_step(ctx.user, ctx.workflow, %{
+          "name" => "Run boundary",
+          "step_type" => "stop",
+          "prompt" => nil
+        })
+
+      task = create_task(ctx.user, ctx.project) |> assign_workflow(ctx.workflow)
+      task_run = create_task_run(ctx, task)
+
+      assert {:error, :stop_step_not_dispatchable} =
+               ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, step.id, task_run)
+
+      assert Sacrum.Repo.get!(Sacrum.Repo.Schemas.TaskRun, task_run.id).status == :queued
+
+      assert Sacrum.Repo.get_by(Sacrum.Repo.Schemas.StepExecution,
+               task_run_id: task_run.id
+             ) == nil
+    end
+
     test "renders {{ task.title }} in step prompt", ctx do
       step = create_step(ctx.user, ctx.workflow, %{"prompt" => "Working on: {{ task.title }}"})
       task = create_task(ctx.user, ctx.project)
