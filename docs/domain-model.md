@@ -397,6 +397,25 @@ Manual runs default to a new root `TaskRun`. Do not attach a manually started ru
 
 Server-side orchestration may create a child run by supplying a validated `parent_task_run_id` and the matching `root_task_run_id`/`triggered_by_step_execution_id`. If the parent run is missing, out of scope, or not created by orchestration, reject the lineage instead of inferring it from task hierarchy. GUI and CLI callers should not propagate child-run lineage directly.
 
+### TaskRun Concurrency
+
+An optional positive `TaskRun.max_concurrency` is stored only on a root run.
+The root run and every descendant share one execution-pool scope identified by
+the root run ID. For a descendant, `root_task_run_id` points to the original
+root even when `parent_task_run_id` points to an intermediate run; there is no
+separate per-parent budget.
+
+The execution pool admits work only when both the global pool and the root
+scope have capacity. A missing or `NULL` root limit preserves the legacy
+global-only behavior. The root limit is selected at root-run creation and is
+immutable for the active run; reusing an active run does not replace it.
+
+The GraphQL `TaskRun.maxConcurrency` field exposes the effective root limit,
+including for descendants. `runWorkflow(maxConcurrency: ...)` is the client
+entry point for selecting the limit. Direct `runStep` dispatch cannot be used
+to bypass a custom root limit and is rejected for such a run; unlimited runs
+continue to use the existing global-only path.
+
 ### StepExecution.status
 
 `StepExecution.status` is attempt-level state. It can record values such as `"started"`, `"in_progress"`, `"waiting"`, `"completed"`, `"failed"`, `"cancelled"`, or `"invalidated"` for a single attempt. Use it for historical execution rows, retry counts, handoff payloads, prompts, output, and telemetry.
