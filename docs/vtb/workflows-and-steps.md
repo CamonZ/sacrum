@@ -46,9 +46,12 @@ vtb step add "Coding" -w <wf-id> \
 # With agents and skills
 vtb step add "Review" -w <wf-id> --agent .claude/agents/reviewer.md --skill review
 
-# Step types: execute (default), evaluate, route, wait_children, human_input
+# Step types: execute (default), evaluate, route, wait_children, human_input, stop
 vtb step add "Evaluate" -w <wf-id> --step-type evaluate \
   --output-schema '{"type":"object","required":["passed"],"properties":{"passed":{"type":"boolean"}}}'
+
+# A stop boundary ends the current TaskRun without completing the task
+vtb step add "Next iteration" -w <wf-id> --step-type stop
 
 # List, show, update, delete
 vtb step list <wf-id>
@@ -71,7 +74,7 @@ vtb step delete <id>
 | `agents` | Agent file paths |
 | `skills` | Slash commands available during this step |
 | `transition-to` | Restrict which steps can follow |
-| `step-type` | `execute`, `evaluate`, `route`, `wait_children`, or `human_input` |
+| `step-type` | `execute`, `evaluate`, `route`, `wait_children`, `human_input`, or `stop` |
 | `output-schema` | JSON Schema for structured output |
 
 ## Step Types
@@ -83,6 +86,11 @@ vtb step delete <id>
 | `route` | Terminal-of-workflow decision step. Emits `{ transition_to, transition_type, handoff }` to direct to the next workflow/step. |
 | `wait_children` | Parks the parent run while child tasks execute, persists a child-state JSON snapshot on the `StepExecution.output`, then resumes when all children complete. |
 | `human_input` | Parks the run for generic human response. The submitted response is validated against `output_schema`, stored on the step execution, and then the same run resumes. |
+| `stop` | Ends the current TaskRun at a run boundary without completing the task. The next workflow run advances through its single outgoing transition before dispatching the next executable step. It is never sent to the daemon. |
+
+Stop steps must have exactly one outgoing transition. Configure the transition
+when authoring the workflow; a missing or ambiguous destination is rejected by
+the API and cannot be used as a run boundary.
 
 ## Prompt Templates
 

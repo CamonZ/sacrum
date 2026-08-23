@@ -74,8 +74,8 @@
 
 | Command | Description |
 |---------|-------------|
-| `vtb run <id>` | Execute current step via daemon |
-| `vtb run-workflow <id>` | Orchestrate full workflow |
+| `vtb run <id>` | Execute current daemon-backed step; rejects orchestration-only stop steps |
+| `vtb run-workflow <id>` | Orchestrate full workflow; a later invocation creates a new run after a stop boundary |
 | `vtb execution create <id>` | Create execution record |
 | `vtb execution list <id>` | List executions for task |
 | `vtb execution show <id>` | Show execution details |
