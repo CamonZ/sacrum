@@ -278,7 +278,7 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflowTest do
 
       result = InterWorkflow.resolve_target_step(workflow_with_steps, nil)
 
-      assert result == {:error, :destination_workflow_has_no_steps}
+      assert result == {:error, :workflow_has_no_steps}
     end
 
     test "returns error when initial_step_id is not found" do

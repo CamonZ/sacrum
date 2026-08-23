@@ -107,13 +107,41 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
       user = create_user()
       project = create_project(user)
       workflow = create_workflow(project)
-      _step2 = create_step(workflow, %{name: "second", step_order: 2})
-      step1 = create_step(workflow, %{name: "first", step_order: 1})
+      _step2 = create_step(workflow, %{name: "second"})
+      step1 = create_step(workflow, %{name: "first", step_order: 0})
       task = create_task(project)
 
       {:ok, updated} = TaskWorkflows.assign_workflow(task, workflow)
 
       assert updated.current_step_id == step1.id
+    end
+
+    test "uses a valid initial pointer even when that step is not first" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(project)
+      first = create_step(workflow, %{name: "first"})
+      second = create_step(workflow, %{name: "second"})
+      {:ok, workflow} = Workflows.update(workflow, %{initial_step_id: second.id})
+      task = create_task(project)
+
+      {:ok, updated} = TaskWorkflows.assign_workflow(task, workflow)
+
+      assert updated.current_step_id == second.id
+      assert first.id != updated.current_step_id
+    end
+
+    test "rejects an initial pointer to a step in another workflow" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(project)
+      other_workflow = create_workflow(project)
+      other_step = create_step(other_workflow, %{name: "other"})
+      task = create_task(project)
+
+      workflow = %{workflow | initial_step_id: other_step.id}
+
+      assert {:error, :initial_step_not_found} = TaskWorkflows.assign_workflow(task, workflow)
     end
 
     test "returns error when workflow has no steps" do
