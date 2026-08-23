@@ -2655,6 +2655,12 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       parent_task = create_task(user, project, %{title: "Parent"})
       parent_task = assign_workflow_to_task(parent_task, parent_workflow)
 
+      {:ok, root_task_run} =
+        Accounts.TaskRuns.insert(user.id, project.id, parent_task.id, %{
+          status: :queued,
+          max_concurrency: 1
+        })
+
       # Create child workflow with wait_children
       child_workflow = create_workflow(user, project)
       child_wait_step = create_wait_children_step(user, child_workflow)
@@ -2738,14 +2744,26 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       assert parent_run.parent_task_run_id == nil
       assert parent_run.root_task_run_id == nil
       assert parent_run.triggered_by_step_execution_id == nil
+      assert parent_run.id == root_task_run.id
+      assert parent_run.max_concurrency == 1
 
       assert child_run.parent_task_run_id == parent_run.id
       assert child_run.root_task_run_id == parent_run.id
       assert child_run.triggered_by_step_execution_id == parent_waiting_exec.id
+      assert child_run.max_concurrency == nil
 
       assert leaf_run.parent_task_run_id == child_run.id
       assert leaf_run.root_task_run_id == parent_run.id
       assert leaf_run.triggered_by_step_execution_id == child_waiting_exec.id
+      assert leaf_run.max_concurrency == nil
+
+      assert {:ok, %{id: parent_root_id, max_concurrency: 1}} =
+               Accounts.TaskRuns.get_concurrency_scope(child_run)
+
+      assert parent_root_id == parent_run.id
+
+      assert {:ok, %{id: ^parent_root_id, max_concurrency: 1}} =
+               Accounts.TaskRuns.get_concurrency_scope(leaf_run)
 
       assert Registry.lookup(Sacrum.Orchestrator.TaskRegistry, parent_task.id) == [],
              "Parent orchestrator must exit (pause lives in DB)"
