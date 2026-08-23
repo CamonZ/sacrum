@@ -137,6 +137,23 @@ defmodule Sacrum.Orchestrator.SchedulerTest do
       assert Registry.lookup(TaskRegistry, task.id) != []
     end
 
+    test "persists max concurrency on a newly scheduled root TaskRun" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project)
+      step = create_step(user, workflow, %{name: "Step 1", step_order: 1})
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: step.id})
+
+      task = create_task(user, project)
+      task = assign_workflow_to_task(user, task, workflow)
+
+      on_exit(fn -> Sacrum.Orchestrator.stop(task.id) end)
+
+      assert :ok = Scheduler.schedule_task(%{id: task.id, max_concurrency: 2})
+      assert {:ok, task_run} = Accounts.TaskRuns.get_active_for_task(user.id, task.id)
+      assert task_run.max_concurrency == 2
+    end
+
     test "rejects already completed task" do
       user = create_user()
       project = create_project(user)

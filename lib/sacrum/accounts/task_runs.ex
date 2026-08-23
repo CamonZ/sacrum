@@ -23,6 +23,10 @@ defmodule Sacrum.Accounts.TaskRuns do
     TaskRunsRepo.update(task_run, attrs)
   end
 
+  @spec get_concurrency_scope(TaskRun.t()) ::
+          {:ok, TaskRunsRepo.concurrency_scope()} | {:error, :not_found}
+  defdelegate get_concurrency_scope(task_run), to: TaskRunsRepo
+
   @spec get_active_for_task(String.t(), String.t()) :: {:ok, TaskRun.t()} | {:error, :not_found}
   def get_active_for_task(user_id, task_id) when is_binary(user_id) and is_binary(task_id) do
     TaskRunsRepo.fetch_active(conditions: [user_id: user_id, task_id: task_id])

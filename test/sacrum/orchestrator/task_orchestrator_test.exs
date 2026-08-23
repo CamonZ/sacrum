@@ -6,6 +6,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
   alias Sacrum.Accounts
   alias Sacrum.Orchestrator.FSMData
+  alias Sacrum.Orchestrator.ExecutionPool
   alias Sacrum.Orchestrator.TaskOrchestrator
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{StepExecution, TaskRun}
@@ -332,6 +333,28 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       assert task_run.latest_step_execution_id == nil
       assert %DateTime{} = task_run.ended_at
       assert {:error, :not_found} = Accounts.TaskRuns.get_active_for_task(user.id, task.id)
+    end
+
+    test "uses the root TaskRun scope when requesting an execution slot" do
+      %{user: user, task: task} = setup_linear_workflow(step_count: 2)
+
+      {:ok, task_run} =
+        Accounts.TaskRuns.insert(user.id, task.project_id, task.id, %{
+          status: :queued,
+          max_concurrency: 1
+        })
+
+      {:ok, pid} =
+        TaskOrchestrator.start_link(task_id: task.id, user_id: user.id, task_run_id: task_run.id)
+
+      wait_for_state(pid, :executing)
+
+      assert ExecutionPool.pool_status().in_use_by_scope == %{task_run.id => 1}
+
+      ref = Process.monitor(pid)
+      :ok = :gen_statem.stop(pid)
+      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 2000
+      assert ExecutionPool.pool_status().in_use_by_scope == %{}
     end
   end
 
@@ -2632,6 +2655,12 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       parent_task = create_task(user, project, %{title: "Parent"})
       parent_task = assign_workflow_to_task(parent_task, parent_workflow)
 
+      {:ok, root_task_run} =
+        Accounts.TaskRuns.insert(user.id, project.id, parent_task.id, %{
+          status: :queued,
+          max_concurrency: 1
+        })
+
       # Create child workflow with wait_children
       child_workflow = create_workflow(user, project)
       child_wait_step = create_wait_children_step(user, child_workflow)
@@ -2715,14 +2744,26 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       assert parent_run.parent_task_run_id == nil
       assert parent_run.root_task_run_id == nil
       assert parent_run.triggered_by_step_execution_id == nil
+      assert parent_run.id == root_task_run.id
+      assert parent_run.max_concurrency == 1
 
       assert child_run.parent_task_run_id == parent_run.id
       assert child_run.root_task_run_id == parent_run.id
       assert child_run.triggered_by_step_execution_id == parent_waiting_exec.id
+      assert child_run.max_concurrency == nil
 
       assert leaf_run.parent_task_run_id == child_run.id
       assert leaf_run.root_task_run_id == parent_run.id
       assert leaf_run.triggered_by_step_execution_id == child_waiting_exec.id
+      assert leaf_run.max_concurrency == nil
+
+      assert {:ok, %{id: parent_root_id, max_concurrency: 1}} =
+               Accounts.TaskRuns.get_concurrency_scope(child_run)
+
+      assert parent_root_id == parent_run.id
+
+      assert {:ok, %{id: ^parent_root_id, max_concurrency: 1}} =
+               Accounts.TaskRuns.get_concurrency_scope(leaf_run)
 
       assert Registry.lookup(Sacrum.Orchestrator.TaskRegistry, parent_task.id) == [],
              "Parent orchestrator must exit (pause lives in DB)"

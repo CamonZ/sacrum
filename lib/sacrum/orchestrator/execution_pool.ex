@@ -25,13 +25,26 @@ defmodule Sacrum.Orchestrator.ExecutionPool do
   The given `pid` is monitored; its slot is auto-released if it dies.
   """
   @spec request_slot(pid(), timeout()) :: {:ok, integer()} | {:error, atom()}
-  def request_slot(pid, timeout \\ :infinity) do
-    request_slot(__MODULE__, pid, timeout)
+  def request_slot(pid, timeout \\ :infinity)
+
+  def request_slot(pid, timeout) when is_pid(pid) do
+    request_slot(__MODULE__, pid, timeout, [])
+  end
+
+  @spec request_slot(pid(), timeout(), keyword()) :: {:ok, integer()} | {:error, atom()}
+  def request_slot(pid, timeout, opts) when is_pid(pid) and is_list(opts) do
+    request_slot(__MODULE__, pid, timeout, opts)
   end
 
   @spec request_slot(GenServer.server(), pid(), timeout()) :: {:ok, integer()} | {:error, atom()}
   def request_slot(server, pid, timeout) do
-    GenServer.call(server, {:request_slot, pid}, timeout)
+    request_slot(server, pid, timeout, [])
+  end
+
+  @spec request_slot(GenServer.server(), pid(), timeout(), keyword()) ::
+          {:ok, integer()} | {:error, atom()}
+  def request_slot(server, pid, timeout, opts) when is_list(opts) do
+    GenServer.call(server, {:request_slot, pid, normalize_scope(opts)}, timeout)
   end
 
   @spec release_slot(integer()) :: :ok
@@ -69,6 +82,7 @@ defmodule Sacrum.Orchestrator.ExecutionPool do
       max_concurrent: max_concurrent,
       next_slot_id: 1,
       in_use: %{},
+      in_use_by_scope: %{},
       monitors: %{},
       queue: :queue.new()
     }
@@ -78,21 +92,21 @@ defmodule Sacrum.Orchestrator.ExecutionPool do
   end
 
   @impl true
-  def handle_call({:request_slot, pid}, from, state) do
-    if available_slots(state) > 0 do
-      {slot_id, new_state} = grant_slot(state, pid)
+  def handle_call({:request_slot, pid, scope}, from, state) do
+    if slot_available?(state, scope) do
+      {slot_id, new_state} = grant_slot(state, %{pid: pid, scope: scope})
 
       Logger.info(
-        "[ExecutionPool] Granted slot #{slot_id} to #{inspect(pid)} (#{available_slots(new_state)} remaining)"
+        "[ExecutionPool] Granted slot #{slot_id} to #{inspect(pid)} scope=#{inspect(scope)} (#{available_slots(new_state)} remaining)"
       )
 
       {:reply, {:ok, slot_id}, new_state}
     else
       Logger.info(
-        "[ExecutionPool] No slots available, queuing #{inspect(pid)} (queue_len=#{:queue.len(state.queue) + 1})"
+        "[ExecutionPool] No slots available, queuing #{inspect(pid)} scope=#{inspect(scope)} (queue_len=#{:queue.len(state.queue) + 1})"
       )
 
-      new_state = %{state | queue: :queue.in({pid, from}, state.queue)}
+      new_state = %{state | queue: :queue.in(%{pid: pid, from: from, scope: scope}, state.queue)}
       {:noreply, new_state}
     end
   end
@@ -100,8 +114,7 @@ defmodule Sacrum.Orchestrator.ExecutionPool do
   @impl true
   def handle_call({:release_slot, slot_id}, _from, state) do
     case Map.fetch(state.in_use, slot_id) do
-      {:ok, {_pid, monitor_ref}} ->
-        Process.demonitor(monitor_ref, [:flush])
+      {:ok, _entry} ->
         new_state = remove_slot_and_serve_queue(state, slot_id)
         {:reply, :ok, new_state}
 
@@ -115,6 +128,7 @@ defmodule Sacrum.Orchestrator.ExecutionPool do
     status = %{
       available_slots: available_slots(state),
       in_use_count: map_size(state.in_use),
+      in_use_by_scope: state.in_use_by_scope,
       max_concurrent: state.max_concurrent,
       queue_length: :queue.len(state.queue)
     }
@@ -138,14 +152,26 @@ defmodule Sacrum.Orchestrator.ExecutionPool do
 
   defp available_slots(state), do: state.max_concurrent - map_size(state.in_use)
 
-  defp grant_slot(state, pid) do
+  defp slot_available?(state, scope) do
+    available_slots(state) > 0 and scope_available?(state, scope)
+  end
+
+  defp scope_available?(_state, nil), do: true
+
+  defp scope_available?(state, %{id: id, limit: limit}) do
+    Map.get(state.in_use_by_scope, id, 0) < limit
+  end
+
+  defp grant_slot(state, %{pid: pid, scope: scope}) do
     slot_id = state.next_slot_id
     monitor_ref = Process.monitor(pid)
 
     new_state = %{
       state
       | next_slot_id: state.next_slot_id + 1,
-        in_use: Map.put(state.in_use, slot_id, {pid, monitor_ref}),
+        in_use:
+          Map.put(state.in_use, slot_id, %{pid: pid, monitor_ref: monitor_ref, scope: scope}),
+        in_use_by_scope: increment_scope(state.in_use_by_scope, scope),
         monitors: Map.put(state.monitors, monitor_ref, slot_id)
     }
 
@@ -153,23 +179,68 @@ defmodule Sacrum.Orchestrator.ExecutionPool do
   end
 
   defp remove_slot_and_serve_queue(state, slot_id) do
-    {_entry, monitors} =
-      case Map.fetch(state.in_use, slot_id) do
-        {:ok, {_pid, ref}} -> {{slot_id, ref}, Map.delete(state.monitors, ref)}
-        :error -> {nil, state.monitors}
-      end
-
-    new_in_use = Map.delete(state.in_use, slot_id)
-    state = %{state | in_use: new_in_use, monitors: monitors}
-
-    case :queue.out(state.queue) do
-      {:empty, _} ->
+    case Map.pop(state.in_use, slot_id) do
+      {nil, _in_use} ->
         state
 
-      {{:value, {queued_pid, queued_from}}, rest} ->
-        {new_slot_id, new_state} = grant_slot(%{state | queue: rest}, queued_pid)
-        GenServer.reply(queued_from, {:ok, new_slot_id})
-        new_state
+      {%{monitor_ref: monitor_ref, scope: scope}, in_use} ->
+        Process.demonitor(monitor_ref, [:flush])
+
+        state
+        |> Map.put(:in_use, in_use)
+        |> Map.put(:monitors, Map.delete(state.monitors, monitor_ref))
+        |> Map.put(:in_use_by_scope, decrement_scope(state.in_use_by_scope, scope))
+        |> serve_queue()
+    end
+  end
+
+  defp serve_queue(state) do
+    case take_eligible_request(state) do
+      {:none, state} ->
+        state
+
+      {%{from: from} = request, state} ->
+        {slot_id, state} = grant_slot(state, request)
+        GenServer.reply(from, {:ok, slot_id})
+        serve_queue(state)
+    end
+  end
+
+  defp take_eligible_request(state) do
+    queue = :queue.to_list(state.queue)
+
+    case Enum.find_index(queue, &slot_available?(state, &1.scope)) do
+      nil ->
+        {:none, state}
+
+      index ->
+        {request, queue} = List.pop_at(queue, index)
+        {request, %{state | queue: :queue.from_list(queue)}}
+    end
+  end
+
+  defp increment_scope(counts, nil), do: counts
+
+  defp increment_scope(counts, %{id: id}) do
+    Map.update(counts, id, 1, &(&1 + 1))
+  end
+
+  defp decrement_scope(counts, nil), do: counts
+
+  defp decrement_scope(counts, %{id: id}) do
+    case Map.get(counts, id, 0) do
+      count when count <= 1 -> Map.delete(counts, id)
+      count -> Map.put(counts, id, count - 1)
+    end
+  end
+
+  defp normalize_scope(opts) do
+    case {Keyword.get(opts, :root_task_run_id), Keyword.get(opts, :max_concurrency)} do
+      {id, limit} when is_binary(id) and is_integer(limit) and limit > 0 ->
+        %{id: id, limit: limit}
+
+      _ ->
+        nil
     end
   end
 end

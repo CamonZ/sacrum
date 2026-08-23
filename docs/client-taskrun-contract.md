@@ -48,6 +48,7 @@ type TaskRunSummary = {
   latestStepExecutionId: string | null;
   outcomeKind: "run_boundary" | string | null;
   outcomeContext: Record<string, unknown> | null;
+  maxConcurrency: number | null;
   parentTaskRunId: string | null;
   rootTaskRunId: string | null;
   triggeredByStepExecutionId: string | null;
@@ -124,6 +125,26 @@ Do not infer TaskRun parentage from task hierarchy. Parent/child run lineage is 
 If those fields are null, treat the run as a standalone/root run, even if the task has a parent task.
 
 See [Domain Model: Child Run Lineage](domain-model.md#child-run-lineage) for the backend lineage rule.
+
+### TaskRun Concurrency
+
+`runWorkflow` accepts an optional `maxConcurrency` positive integer. The value
+limits the number of concurrently executing step attempts in the entire root
+TaskRun tree. A child run does not get a separate budget: its
+`rootTaskRunId` identifies the shared scope, and its `maxConcurrency` read is
+the effective inherited root limit.
+
+The limit is evaluated together with Sacrum's global execution-pool limit, so
+setting a root limit does not increase the global capacity. Omit
+`maxConcurrency` or pass `null` to use only the global pool limit. The root
+limit is chosen when the active root run is created and is not changed by
+reusing that run.
+
+Clients should start limited runs through `runWorkflow`; they should not send
+`parentTaskRunId` or `rootTaskRunId` when creating a run. A direct `runStep`
+dispatch is rejected when the selected active run has a custom root limit, so
+that work cannot bypass the hierarchical budget. Existing runs without a
+custom limit retain the legacy global-only behavior.
 
 ## Task Status Compatibility
 
@@ -255,12 +276,13 @@ active `TaskRun` rows for those tasks with statuses `queued`, `executing`,
 ### Run Workflow
 
 ```graphql
-mutation RunWorkflow($taskId: Uuid4!) {
-  runWorkflow(taskId: $taskId) {
+mutation RunWorkflow($taskId: Uuid4!, $maxConcurrency: Int) {
+  runWorkflow(taskId: $taskId, maxConcurrency: $maxConcurrency) {
     id
     taskId
     projectId
     status
+    maxConcurrency
     startedAt
     latestStepExecutionId
   }

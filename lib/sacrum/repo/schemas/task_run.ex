@@ -11,7 +11,7 @@ defmodule Sacrum.Repo.Schemas.TaskRun do
   @statuses TaskRunStatus.values()
 
   @create_fields ~w(
-    task_id project_id user_id status started_at ended_at stop_requested_at
+    task_id project_id user_id status max_concurrency started_at ended_at stop_requested_at
     latest_step_execution_id outcome_kind outcome_context parent_task_run_id root_task_run_id
     triggered_by_step_execution_id
   )a
@@ -26,6 +26,7 @@ defmodule Sacrum.Repo.Schemas.TaskRun do
 
   schema "task_runs" do
     field :status, Ecto.Enum, values: @statuses, default: :executing
+    field :max_concurrency, :integer
     field :started_at, :utc_datetime_usec
     field :ended_at, :utc_datetime_usec
     field :stop_requested_at, :utc_datetime_usec
@@ -56,6 +57,8 @@ defmodule Sacrum.Repo.Schemas.TaskRun do
     |> cast(attrs, @create_fields)
     |> put_started_at()
     |> validate_required([:task_id, :project_id, :user_id, :status, :started_at])
+    |> validate_number(:max_concurrency, greater_than: 0)
+    |> validate_root_max_concurrency()
     |> foreign_key_constraint(:task_id)
     |> foreign_key_constraint(:project_id)
     |> foreign_key_constraint(:user_id)
@@ -84,6 +87,17 @@ defmodule Sacrum.Repo.Schemas.TaskRun do
     |> foreign_key_constraint(:parent_task_run_id)
     |> foreign_key_constraint(:root_task_run_id)
     |> foreign_key_constraint(:triggered_by_step_execution_id)
+  end
+
+  @spec validate_root_max_concurrency(Ecto.Changeset.t()) :: Ecto.Changeset.t()
+  defp validate_root_max_concurrency(changeset) do
+    if get_field(changeset, :max_concurrency) &&
+         (get_field(changeset, :parent_task_run_id) ||
+            get_field(changeset, :root_task_run_id)) do
+      add_error(changeset, :max_concurrency, "can only be set on a root TaskRun")
+    else
+      changeset
+    end
   end
 
   @spec put_started_at(Ecto.Changeset.t()) :: Ecto.Changeset.t()
