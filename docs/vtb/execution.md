@@ -15,16 +15,19 @@ vtb daemon uninstall
 
 ```bash
 vtb run <task-id>            # Execute current step via daemon
-vtb run-workflow <task-id>   # Orchestrate full workflow automatically
+vtb start-taskrun <task-id>  # Start a durable workflow run
+vtb stop-taskrun <task-id>   # Stop the active durable workflow run
 ```
 
-`vtb run` executes a single step. `vtb run-workflow` orchestrates through all steps, handling transitions, eval prompts, and workflow chaining.
+`vtb run` executes a single current step. `vtb start-taskrun` orchestrates a
+durable TaskRun through all workflow steps, handling transitions, eval prompts,
+and workflow chaining. `vtb stop-taskrun` stops the task's active TaskRun.
 
 `stop` steps are orchestration boundaries, not daemon work. `vtb run` cannot
-dispatch one directly. When `vtb run-workflow` reaches a stop step, the current
+dispatch one directly. When `vtb start-taskrun` reaches a stop step, the current
 TaskRun ends with `status: stopped` and `outcome_kind: run_boundary`; running
-the workflow again creates a new TaskRun, advances through the stop step's
-single outgoing transition, and dispatches the next executable step.
+`vtb start-taskrun` again creates a new TaskRun, advances through the stop
+step's single outgoing transition, and dispatches the next executable step.
 
 ## Execution Tracking
 

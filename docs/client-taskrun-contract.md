@@ -552,13 +552,13 @@ Update CLI commands as follows:
 
 - `list`: show a run state column from `runControls.activeRun.status`, not `Task.status`.
 - `status` / `show`: show both workflow position and active run state.
-- `run`: call `runWorkflow(taskId)`.
-- `stop`: call `stopRun(taskRunId)` when an active run is known; otherwise call `stopRun(taskId)`.
+- `run`: execute the current step only through the single-step `runStep` operation.
+- `start-taskrun`: call `runWorkflow(taskId)` to create/start a durable TaskRun.
+- `stop-taskrun`: call `stopRun(taskRunId)` when an active run is known; otherwise call `stopRun(taskId)`.
 - `trace`: use `taskRunTrace(rootTaskRunId)` for the selected `TaskRun` only.
 - `logs`: prefer `StepExecution` and `SessionLog` data scoped by `TaskRun` when available.
-- `run-workflow`: when the current step is a stop boundary, report the new
-  TaskRun ID and the first dispatched step; do not present it as resuming the
-  prior run.
+- When `start-taskrun` reaches a stop boundary, report the new TaskRun ID and
+  first dispatched step; do not present it as resuming the prior run.
 
 Suggested CLI language:
 

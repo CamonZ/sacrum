@@ -12,7 +12,7 @@ vtb is a CLI client for the Sacrum REST API. Hierarchy: `epic → ticket → tas
 | [Navigation](vtb/navigation.md) | Moving tasks through steps, completing work, handling rejections |
 | [Dependencies & Refs](vtb/dependencies-and-refs.md) | Linking tasks as blockers, attaching code references |
 | [Querying & Updating](vtb/querying-and-updating.md) | Listing/filtering/searching tasks, editing fields, archiving |
-| [Execution](vtb/execution.md) | Running steps via daemon, `vtb run-workflow`, execution tracking |
+| [Execution](vtb/execution.md) | Running steps via daemon, durable TaskRuns, execution tracking |
 | [Command Reference](vtb/command-reference.md) | Quick lookup of any vtb command |
 
 ## Quick Reference
