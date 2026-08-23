@@ -60,6 +60,12 @@ vtb step update <id> --name "New Name"
 vtb step delete <id>
 ```
 
+Step orders are zero-based and contiguous. Omit `--order` to append, or use a
+zero-based position to insert/move a step; later siblings shift automatically.
+The workflow's `initial_step_id` is the entry point when valid, independent of
+order. If it is unset, task entry uses the lowest ordered step without
+backfilling the pointer.
+
 ## Step Properties
 
 | Property | Description |

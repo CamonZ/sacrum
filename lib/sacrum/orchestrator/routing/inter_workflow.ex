@@ -18,6 +18,7 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflow do
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{Task, Workflow, WorkflowStep, WorkflowTransition}
   alias Sacrum.Repo.TaskWorkflows
+  alias Sacrum.Repo.WorkflowInitialStep
   alias Sacrum.Tasks.Status
 
   @doc """
@@ -127,8 +128,6 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflow do
   @spec assign_destination_workflow(struct(), struct(), String.t() | nil, map() | nil) ::
           {:ok, struct()} | {:error, term()}
   def assign_destination_workflow(task, dest_workflow, target_step_id, handoff) do
-    dest_workflow = Repo.preload(dest_workflow, :workflow_steps)
-
     with {:ok, target_step} <- resolve_target_step(dest_workflow, target_step_id) do
       do_assign_destination_workflow(task, dest_workflow, target_step, handoff)
     end
@@ -155,8 +154,6 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflow do
   @spec assign_destination_workflow_plan(struct(), struct(), String.t() | nil) ::
           {:ok, %{changeset: Ecto.Changeset.t(), target_step: struct()}} | {:error, term()}
   def assign_destination_workflow_plan(task, dest_workflow, target_step_id) do
-    dest_workflow = Repo.preload(dest_workflow, :workflow_steps)
-
     with {:ok, target_step} <- resolve_target_step(dest_workflow, target_step_id) do
       {:ok,
        %{
@@ -171,25 +168,24 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflow do
   `initial_step_id` when set, otherwise the first step by `step_order`.
   """
   @spec resolve_target_step(struct(), String.t() | nil) :: {:ok, struct()} | {:error, term()}
-  def resolve_target_step(_workflow, step_id) when not is_nil(step_id) do
-    case Repo.get(WorkflowStep, step_id) do
+  def resolve_target_step(%Workflow{} = workflow, step_id) when not is_nil(step_id) do
+    query =
+      from(s in WorkflowStep,
+        where:
+          s.id == ^step_id and
+            s.workflow_id == ^workflow.id and
+            s.project_id == ^workflow.project_id and
+            s.user_id == ^workflow.user_id
+      )
+
+    case Repo.one(query) do
       nil -> {:error, :target_step_not_found}
       step -> {:ok, step}
     end
   end
 
-  def resolve_target_step(%{initial_step_id: nil, workflow_steps: steps}, nil) do
-    case Enum.sort_by(steps, & &1.step_order) do
-      [first | _] -> {:ok, first}
-      [] -> {:error, :destination_workflow_has_no_steps}
-    end
-  end
-
-  def resolve_target_step(%{initial_step_id: step_id}, nil) do
-    case Repo.get(WorkflowStep, step_id) do
-      nil -> {:error, :initial_step_not_found}
-      step -> {:ok, step}
-    end
+  def resolve_target_step(%Workflow{} = workflow, nil) do
+    WorkflowInitialStep.resolve(workflow)
   end
 
   @doc """

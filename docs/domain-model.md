@@ -6,7 +6,7 @@ Sacrum is an API-only workflow engine and task management system built with Phoe
 
 ## What It Does
 
-**Workflow definition** — Users create projects containing workflows. Each workflow is an ordered sequence of steps connected by transitions, forming a directed graph. Workflows can also transition to other workflows, enabling multi-phase processes.
+**Workflow definition** — Users create projects containing workflows. Each workflow is an ordered sequence of steps connected by transitions, forming a directed graph. Workflow step order is zero-based and contiguous after explicit step mutations; `initial_step_id` independently identifies the entry step. Workflows can also transition to other workflows, enabling multi-phase processes. See [Workflow Step Ordering](workflow-step-ordering.md).
 
 **Task management** — Tasks live inside projects and can be assigned to workflows. Once assigned, a task tracks its current step and can be moved along defined transitions. Tasks support:
 - Parent-child hierarchies (tree decomposition)

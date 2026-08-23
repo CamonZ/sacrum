@@ -6,7 +6,8 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
   alias Sacrum.Repo.Workflows
   alias Sacrum.Repo.Projects
   alias Sacrum.Repo.Users
-  alias Sacrum.Repo.Schemas.WorkflowStep
+  alias Sacrum.Repo.Schemas.{Workflow, WorkflowStep}
+  alias Sacrum.Repo.WorkflowInitialStep
 
   @valid_user_attrs %{
     email: "test@example.com",
@@ -20,7 +21,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
     agents: ["reviewer"],
     skills: ["code-review"],
     agent_config: %{"timeout" => 300},
-    step_order: 1
+    step_order: 0
   }
 
   defp create_workflow do
@@ -39,7 +40,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       assert step.agents == ["reviewer"]
       assert step.skills == ["code-review"]
       assert step.agent_config == %{"timeout" => 300}
-      assert step.step_order == 1
+      assert step.step_order == 0
       assert step.workflow_id == workflow.id
     end
 
@@ -113,8 +114,8 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
   describe "all/1" do
     test "returns steps for a workflow ordered by step_order" do
       workflow = create_workflow()
-      {:ok, s2} = WorkflowSteps.insert(workflow, %{name: "Second", step_order: 2})
-      {:ok, s1} = WorkflowSteps.insert(workflow, %{name: "First", step_order: 1})
+      {:ok, s1} = WorkflowSteps.insert(workflow, %{name: "First"})
+      {:ok, s2} = WorkflowSteps.insert(workflow, %{name: "Second"})
 
       steps =
         WorkflowSteps.all(
@@ -134,6 +135,59 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
                  conditions: [workflow_id: workflow.id],
                  order_by: [asc: :step_order, asc: :inserted_at]
                )
+    end
+  end
+
+  describe "ordering and initial step" do
+    test "inserts, moves, and deletes steps while keeping orders contiguous" do
+      workflow = create_workflow()
+      {:ok, first} = WorkflowSteps.insert(workflow, %{name: "First"})
+      {:ok, second} = WorkflowSteps.insert(workflow, %{name: "Second"})
+      {:ok, third} = WorkflowSteps.insert(workflow, %{name: "Third"})
+
+      {:ok, inserted} = WorkflowSteps.insert(workflow, %{name: "Inserted", step_order: 1})
+      assert ordered_step_ids(workflow) == [first.id, inserted.id, second.id, third.id]
+      assert ordered_step_orders(workflow) == [0, 1, 2, 3]
+
+      {:ok, _inserted} = WorkflowSteps.update(inserted, %{step_order: 3})
+      assert ordered_step_ids(workflow) == [first.id, second.id, third.id, inserted.id]
+      assert ordered_step_orders(workflow) == [0, 1, 2, 3]
+
+      assert {:ok, _} = WorkflowSteps.delete(second)
+      assert ordered_step_orders(workflow) == [0, 1, 2]
+    end
+
+    test "keeps the pointer authoritative and reconciles it on deletion" do
+      workflow = create_workflow()
+      {:ok, first} = WorkflowSteps.insert(workflow, %{name: "First"})
+      {:ok, second} = WorkflowSteps.insert(workflow, %{name: "Second"})
+      {:ok, third} = WorkflowSteps.insert(workflow, %{name: "Third"})
+
+      {:ok, workflow} = Workflows.update(workflow, %{initial_step_id: third.id})
+      assert {:ok, ^third} = WorkflowInitialStep.resolve(workflow)
+
+      assert {:ok, _} = WorkflowSteps.delete(first)
+      assert Repo.get!(Workflow, workflow.id).initial_step_id == third.id
+
+      assert {:ok, _} = WorkflowSteps.delete(third)
+      assert Repo.get!(Workflow, workflow.id).initial_step_id == second.id
+
+      assert {:ok, _} = WorkflowSteps.delete(second)
+      assert Repo.get!(Workflow, workflow.id).initial_step_id == nil
+    end
+
+    test "rejects an initial pointer outside the workflow" do
+      workflow = create_workflow()
+
+      {:ok, other_workflow} =
+        Workflows.insert(workflow.project_id, workflow.user_id, %{name: "Other"})
+
+      {:ok, other_step} = WorkflowSteps.insert(other_workflow, %{name: "Other Step"})
+
+      assert {:error, changeset} = Workflows.update(workflow, %{initial_step_id: other_step.id})
+
+      assert %{initial_step_id: ["must reference a step owned by this workflow"]} =
+               errors_on(changeset)
     end
   end
 
@@ -811,5 +865,20 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
   defp assert_output_schema_error(changeset, expected_message) do
     assert %{output_schema: messages} = errors_on(changeset)
     assert Enum.any?(messages, &String.contains?(&1, expected_message))
+  end
+
+  defp ordered_step_ids(workflow) do
+    ordered_steps(workflow) |> Enum.map(& &1.id)
+  end
+
+  defp ordered_step_orders(workflow) do
+    ordered_steps(workflow) |> Enum.map(& &1.step_order)
+  end
+
+  defp ordered_steps(workflow) do
+    WorkflowSteps.all(
+      conditions: [workflow_id: workflow.id],
+      order_by: [asc: :step_order, asc: :inserted_at, asc: :id]
+    )
   end
 end
