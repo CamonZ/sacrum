@@ -16,8 +16,10 @@ defmodule Sacrum.Repo.Tasks do
   alias Sacrum.Repo.Schemas.Project
   alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.Schemas.TaskDependency
-  alias Sacrum.Repo.WorkflowInitialStep
   alias Sacrum.Repo.UuidPrefixResolver
+  alias Sacrum.Repo.WorkflowInitialStep
+
+  @type workflow_entry_error :: :initial_step_not_found | :workflow_has_no_steps
 
   @doc """
   Lists tasks with optional filters.
@@ -237,7 +239,8 @@ defmodule Sacrum.Repo.Tasks do
     UuidPrefixResolver.find_by_prefix(query, prefix, preloads: [:sections, :parent])
   end
 
-  @spec insert(Project.t(), map()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
+  @spec insert(Project.t(), map()) ::
+          {:ok, Task.t()} | {:error, Ecto.Changeset.t()} | {:error, workflow_entry_error()}
   def insert(%Project{id: project_id, user_id: user_id}, attrs) when is_binary(user_id) do
     insert(project_id, user_id, attrs)
   end
@@ -246,14 +249,16 @@ defmodule Sacrum.Repo.Tasks do
     insert(project_id, attrs)
   end
 
-  @spec insert(String.t(), map()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
+  @spec insert(String.t(), map()) ::
+          {:ok, Task.t()} | {:error, Ecto.Changeset.t()} | {:error, workflow_entry_error()}
   def insert(project_id, attrs) when is_binary(project_id) and is_map(attrs) do
     do_insert(%Task{project_id: project_id}, project_id, nil, attrs)
   end
 
   defoverridable insert: 2
 
-  @spec insert(String.t(), String.t(), map()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
+  @spec insert(String.t(), String.t(), map()) ::
+          {:ok, Task.t()} | {:error, Ecto.Changeset.t()} | {:error, workflow_entry_error()}
   def insert(project_id, user_id, attrs) when is_binary(project_id) and is_binary(user_id) do
     do_insert(%Task{project_id: project_id, user_id: user_id}, project_id, user_id, attrs)
   end
@@ -314,7 +319,8 @@ defmodule Sacrum.Repo.Tasks do
   workflow exists, returns attrs unchanged so the NOT NULL constraint surfaces
   the error at insert time.
   """
-  @spec assign_default_workflow_attrs(map(), String.t()) :: map()
+  @spec assign_default_workflow_attrs(map(), String.t()) ::
+          map() | {:error, workflow_entry_error()}
   def assign_default_workflow_attrs(attrs, project_id)
       when not is_map_key(attrs, :workflow_id) and not is_map_key(attrs, "workflow_id") do
     case find_default_workflow(project_id) do

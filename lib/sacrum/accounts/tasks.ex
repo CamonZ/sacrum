@@ -80,12 +80,14 @@ defmodule Sacrum.Accounts.Tasks do
   auto-assigned from the project's default Backlog workflow. An error is
   raised if no default workflow exists.
   """
-  @spec insert(map(), map()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
+  @spec insert(map(), map()) ::
+          {:ok, Task.t()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
   def insert(%{id: project_id, user_id: user_id}, attrs) do
     insert(user_id, project_id, attrs)
   end
 
-  @spec insert(String.t(), String.t(), map()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
+  @spec insert(String.t(), String.t(), map()) ::
+          {:ok, Task.t()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
   def insert(user_id, project_id, attrs) when is_binary(user_id) and is_binary(project_id) do
     TasksRepo.insert(project_id, user_id, attrs)
   end

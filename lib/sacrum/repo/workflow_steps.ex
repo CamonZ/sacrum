@@ -84,14 +84,14 @@ defmodule Sacrum.Repo.WorkflowSteps do
 
   @spec update(WorkflowStep.t(), map()) :: {:ok, WorkflowStep.t()} | {:error, Ecto.Changeset.t()}
   def update(%WorkflowStep{} = step, attrs) do
-    Repo.transaction(fn ->
-      workflow = lock_workflow(step.workflow_id)
+    Repo.transaction(fn -> update_in_transaction(step, attrs) end)
+  end
 
-      case lock_step(step) do
-        nil -> Repo.rollback(missing_step_changeset(step, attrs))
-        current_step -> update_locked_step(workflow, current_step, attrs)
-      end
-    end)
+  defp update_in_transaction(step, attrs) do
+    case lock_workflow(step.workflow_id) do
+      nil -> Repo.rollback(missing_step_changeset(step, attrs))
+      workflow -> update_locked_step(workflow, step, attrs)
+    end
   end
 
   @doc """
@@ -214,14 +214,14 @@ defmodule Sacrum.Repo.WorkflowSteps do
 
   @spec delete(WorkflowStep.t()) :: {:ok, WorkflowStep.t()} | {:error, Ecto.Changeset.t()}
   def delete(%WorkflowStep{} = step) do
-    Repo.transaction(fn ->
-      workflow = lock_workflow(step.workflow_id)
+    Repo.transaction(fn -> delete_in_transaction(step) end)
+  end
 
-      case lock_step(step) do
-        nil -> Repo.rollback(missing_step_changeset(step, %{}))
-        current_step -> delete_locked_step(workflow, current_step)
-      end
-    end)
+  defp delete_in_transaction(step) do
+    case lock_workflow(step.workflow_id) do
+      nil -> Repo.rollback(missing_step_changeset(step, %{}))
+      workflow -> delete_locked_step(workflow, step)
+    end
   end
 
   # Ordering and pointer changes share the workflow row lock. This keeps the
@@ -250,7 +250,14 @@ defmodule Sacrum.Repo.WorkflowSteps do
     end)
   end
 
-  defp update_locked_step(workflow, current_step, attrs) do
+  defp update_locked_step(workflow, step, attrs) do
+    case lock_step(step) do
+      nil -> Repo.rollback(missing_step_changeset(step, attrs))
+      current_step -> do_update_locked_step(workflow, current_step, attrs)
+    end
+  end
+
+  defp do_update_locked_step(workflow, current_step, attrs) do
     with :ok <- validate_initial_step(workflow, current_step),
          changeset <- WorkflowStep.update_changeset(current_step, preserve_order(attrs)),
          :ok <- ensure_valid(changeset) do
@@ -264,7 +271,14 @@ defmodule Sacrum.Repo.WorkflowSteps do
     end
   end
 
-  defp delete_locked_step(workflow, current_step) do
+  defp delete_locked_step(workflow, step) do
+    case lock_step(step) do
+      nil -> Repo.rollback(missing_step_changeset(step, %{}))
+      current_step -> do_delete_locked_step(workflow, current_step)
+    end
+  end
+
+  defp do_delete_locked_step(workflow, current_step) do
     with :ok <- validate_initial_step(workflow, current_step),
          siblings <- workflow_steps(workflow.id, current_step.id),
          {:ok, deleted_step} <- Repo.delete(current_step),

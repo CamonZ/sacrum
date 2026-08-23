@@ -71,24 +71,32 @@ defmodule Sacrum.Repo.Workflows do
   @spec update(Workflow.t(), map()) :: {:ok, Workflow.t()} | {:error, Ecto.Changeset.t()}
   def update(%Workflow{} = workflow, attrs) do
     if initial_step_supplied?(attrs) do
-      Repo.transaction(fn ->
-        workflow = lock_workflow(workflow.id) || workflow
-        changeset = Workflow.update_changeset(workflow, attrs)
-
-        with :ok <- validate_changeset(changeset),
-             :ok <- validate_initial_step(workflow, changeset) do
-          case Repo.update(changeset) do
-            {:ok, updated_workflow} -> updated_workflow
-            {:error, changeset} -> Repo.rollback(changeset)
-          end
-        else
-          {:error, reason} -> Repo.rollback(reason)
-        end
-      end)
+      update_with_initial_step(workflow, attrs)
     else
       workflow
       |> Workflow.update_changeset(attrs)
       |> Repo.update()
+    end
+  end
+
+  defp update_with_initial_step(workflow, attrs) do
+    Repo.transaction(fn ->
+      workflow = lock_workflow(workflow.id) || workflow
+      changeset = Workflow.update_changeset(workflow, attrs)
+
+      with :ok <- validate_changeset(changeset),
+           :ok <- validate_initial_step(workflow, changeset) do
+        update_workflow(changeset)
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp update_workflow(changeset) do
+    case Repo.update(changeset) do
+      {:ok, workflow} -> workflow
+      {:error, changeset} -> Repo.rollback(changeset)
     end
   end
 
