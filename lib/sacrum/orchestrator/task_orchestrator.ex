@@ -33,6 +33,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     WorkflowGraph
   }
 
+  alias Sacrum.Accounts.TaskRuns, as: AccountTaskRuns
   alias Sacrum.Orchestrator.ExecutionEvents
   alias Sacrum.Orchestrator.Routing.{HumanInput, RouteStep, WaitChildren}
   alias Sacrum.Orchestrator.TaskRuns.{Failure, Lookup, Root}
@@ -86,21 +87,22 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
         :stop
 
       task ->
-        case ensure_task_run_id(task, task_run_id) do
-          {:ok, task_run_id} ->
-            data = %FSMData{
-              user_id: user_id,
-              task: task,
-              task_run_id: task_run_id,
-              project_id: task.project_id
-            }
+        with {:ok, task_run_id} <- ensure_task_run_id(task, task_run_id),
+             {:ok, concurrency_scope} <- task_run_concurrency_scope(task_run_id) do
+          data = %FSMData{
+            user_id: user_id,
+            task: task,
+            task_run_id: task_run_id,
+            concurrency_scope: concurrency_scope,
+            project_id: task.project_id
+          }
 
-            Logger.info(
-              "[TaskOrchestrator:#{task_id}] Starting user=#{user_id} project=#{task.project_id} task_run=#{task_run_id} workflow=#{inspect(task.workflow_id)} step=#{inspect(task.current_step_id)}"
-            )
+          Logger.info(
+            "[TaskOrchestrator:#{task_id}] Starting user=#{user_id} project=#{task.project_id} task_run=#{task_run_id} workflow=#{inspect(task.workflow_id)} step=#{inspect(task.current_step_id)}"
+          )
 
-            {:ok, :initializing, data}
-
+          {:ok, :initializing, data}
+        else
           {:error, reason} ->
             Logger.error(
               "[TaskOrchestrator:#{task_id}] Failed to initialize TaskRun: #{inspect(reason)}"
@@ -656,9 +658,12 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   @spec request_execution_slot(binary(), FSMData.t()) ::
           {:next_state, :executing | :failed, FSMData.t()}
   defp request_execution_slot(task_id, data) do
-    case ExecutionPool.request_slot(self()) do
+    case ExecutionPool.request_slot(self(), :infinity, execution_slot_options(data)) do
       {:ok, slot_id} ->
-        Logger.info("[TaskOrchestrator:#{task_id}] Got pool slot #{slot_id}")
+        Logger.info(
+          "[TaskOrchestrator:#{task_id}] Got pool slot #{slot_id} scope=#{inspect(data.concurrency_scope)}"
+        )
+
         {:next_state, :executing, %{data | slot_id: slot_id}}
 
       {:error, reason} ->
@@ -688,6 +693,21 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
         :fresh
     end
   end
+
+  @spec task_run_concurrency_scope(binary()) ::
+          {:ok, %{id: binary(), max_concurrency: pos_integer() | nil}} | {:error, term()}
+  defp task_run_concurrency_scope(task_run_id) do
+    with {:ok, task_run} <- Lookup.fetch(task_run_id) do
+      AccountTaskRuns.get_concurrency_scope(task_run)
+    end
+  end
+
+  @spec execution_slot_options(FSMData.t()) :: keyword()
+  defp execution_slot_options(%{concurrency_scope: %{id: id, max_concurrency: limit}}) do
+    [root_task_run_id: id, max_concurrency: limit]
+  end
+
+  defp execution_slot_options(_data), do: []
 
   @spec human_input_latest_execution_status(FSMData.t()) :: String.t() | nil
   defp human_input_latest_execution_status(data) do

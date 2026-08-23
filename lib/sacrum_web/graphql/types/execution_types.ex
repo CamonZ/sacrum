@@ -367,7 +367,8 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
                ),
              :ok <- ExecutionDispatcher.validate_step(user.id, step_id),
              :ok <- check_daemon_presence(task.project_id) do
-          with {:ok, task_run} <- Root.get_or_create(task) do
+          with {:ok, task_run} <- Root.get_or_create(task),
+               :ok <- validate_manual_step_dispatch(task_run) do
             ExecutionDispatcher.create_and_dispatch(user.id, task, step_id, task_run)
           end
         end
@@ -386,6 +387,20 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
         end
       else
         :ok
+      end
+    end
+
+    defp validate_manual_step_dispatch(task_run) do
+      case Accounts.TaskRuns.get_concurrency_scope(task_run) do
+        {:ok, %{max_concurrency: nil}} ->
+          :ok
+
+        {:ok, %{max_concurrency: limit}} ->
+          {:error,
+           "runStep cannot dispatch into a TaskRun with maxConcurrency=#{limit}; use runWorkflow"}
+
+        {:error, :not_found} ->
+          {:error, "TaskRun concurrency scope not found"}
       end
     end
 

@@ -6,6 +6,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
   alias Sacrum.Accounts
   alias Sacrum.Orchestrator.FSMData
+  alias Sacrum.Orchestrator.ExecutionPool
   alias Sacrum.Orchestrator.TaskOrchestrator
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{StepExecution, TaskRun}
@@ -332,6 +333,28 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       assert task_run.latest_step_execution_id == nil
       assert %DateTime{} = task_run.ended_at
       assert {:error, :not_found} = Accounts.TaskRuns.get_active_for_task(user.id, task.id)
+    end
+
+    test "uses the root TaskRun scope when requesting an execution slot" do
+      %{user: user, task: task} = setup_linear_workflow(step_count: 2)
+
+      {:ok, task_run} =
+        Accounts.TaskRuns.insert(user.id, task.project_id, task.id, %{
+          status: :queued,
+          max_concurrency: 1
+        })
+
+      {:ok, pid} =
+        TaskOrchestrator.start_link(task_id: task.id, user_id: user.id, task_run_id: task_run.id)
+
+      wait_for_state(pid, :executing)
+
+      assert ExecutionPool.pool_status().in_use_by_scope == %{task_run.id => 1}
+
+      ref = Process.monitor(pid)
+      :ok = :gen_statem.stop(pid)
+      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 2000
+      assert ExecutionPool.pool_status().in_use_by_scope == %{}
     end
   end
 

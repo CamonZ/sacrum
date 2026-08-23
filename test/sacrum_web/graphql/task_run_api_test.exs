@@ -875,6 +875,29 @@ defmodule SacrumWeb.Graphql.TaskRunApiTest do
              }
     end
 
+    test "runStep rejects a TaskRun with a root concurrency limit", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {task, workflow} = create_workflow_task(user, project)
+      {:ok, step} = Accounts.WorkflowSteps.get_by(user.id, conditions: [workflow_id: workflow.id])
+
+      {:ok, _task_run} =
+        Accounts.TaskRuns.insert(user.id, project.id, task.id, %{max_concurrency: 2})
+
+      result =
+        graphql_result(conn, user, """
+        mutation {
+          runStep(taskId: "#{task.id}", stepId: "#{step.id}") { id }
+        }
+        """)
+
+      assert result["data"]["runStep"] == nil
+      assert [%{"message" => message}] = result["errors"]
+      assert message =~ "use runWorkflow"
+    end
+
     test "stopRun stops a supplied run id", %{
       conn: conn,
       user: user,
