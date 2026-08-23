@@ -16,6 +16,7 @@ defmodule Sacrum.Repo.Tasks do
   alias Sacrum.Repo.Schemas.Project
   alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.Schemas.TaskDependency
+  alias Sacrum.Repo.WorkflowInitialStep
   alias Sacrum.Repo.UuidPrefixResolver
 
   @doc """
@@ -267,11 +268,14 @@ defmodule Sacrum.Repo.Tasks do
   end
 
   defp prepare_workflow_attrs(attrs, project_id, user_id) do
-    case Map.fetch(attrs, :workflow_id) do
-      :error ->
-        {:ok, assign_default_workflow_attrs(attrs, project_id)}
+    case workflow_id_from_attrs(attrs) do
+      :missing ->
+        case assign_default_workflow_attrs(attrs, project_id) do
+          {:error, reason} -> {:error, reason}
+          prepared_attrs -> {:ok, prepared_attrs}
+        end
 
-      {:ok, workflow_id} ->
+      workflow_id ->
         seed_provided_workflow(attrs, project_id, user_id, workflow_id)
     end
   end
@@ -290,8 +294,17 @@ defmodule Sacrum.Repo.Tasks do
         {:error, changeset}
 
       workflow ->
-        step = resolve_initial_step(workflow)
-        {:ok, Map.put_new(attrs, :current_step_id, step.id)}
+        with {:ok, step} <- WorkflowInitialStep.resolve(workflow) do
+          {:ok, put_current_step(attrs, step.id)}
+        end
+    end
+  end
+
+  defp workflow_id_from_attrs(attrs) do
+    cond do
+      Map.has_key?(attrs, :workflow_id) -> Map.get(attrs, :workflow_id)
+      Map.has_key?(attrs, "workflow_id") -> Map.get(attrs, "workflow_id")
+      true -> :missing
     end
   end
 
@@ -309,11 +322,11 @@ defmodule Sacrum.Repo.Tasks do
         attrs
 
       workflow ->
-        step = resolve_initial_step(workflow)
-
-        attrs
-        |> Map.put(:workflow_id, workflow.id)
-        |> Map.put(:current_step_id, step.id)
+        with {:ok, step} <- WorkflowInitialStep.resolve(workflow) do
+          attrs
+          |> Map.put(:workflow_id, workflow.id)
+          |> put_current_step(step.id)
+        end
     end
   end
 
@@ -328,18 +341,11 @@ defmodule Sacrum.Repo.Tasks do
     )
   end
 
-  defp resolve_initial_step(%{initial_step_id: step_id}) when not is_nil(step_id) do
-    Repo.get!(Sacrum.Repo.Schemas.WorkflowStep, step_id)
-  end
-
-  defp resolve_initial_step(workflow) do
-    Repo.one!(
-      from(s in Sacrum.Repo.Schemas.WorkflowStep,
-        where: s.workflow_id == ^workflow.id,
-        order_by: s.step_order,
-        limit: 1
-      )
-    )
+  defp put_current_step(attrs, step_id) do
+    attrs
+    |> Map.delete(:current_step_id)
+    |> Map.delete("current_step_id")
+    |> Map.put(:current_step_id, step_id)
   end
 
   @spec delete(Task.t(), keyword()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}

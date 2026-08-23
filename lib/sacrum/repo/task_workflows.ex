@@ -37,6 +37,7 @@ defmodule Sacrum.Repo.TaskWorkflows do
   import Ecto.Query
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{StepTransition, Task, Workflow, WorkflowStep}
+  alias Sacrum.Repo.WorkflowInitialStep
   alias Sacrum.Tasks.Status
 
   @doc """
@@ -51,7 +52,6 @@ defmodule Sacrum.Repo.TaskWorkflows do
           {:ok, Task.t()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
   def assign_workflow(%Task{} = task, %Workflow{} = workflow) do
     with :ok <- check_orchestrator_not_active(task.id),
-         workflow = Repo.preload(workflow, :workflow_steps),
          {:ok, initial_step} <- resolve_initial_step(workflow) do
       if already_assigned?(task, workflow, initial_step) do
         maybe_complete_terminal_position(task, workflow, initial_step)
@@ -173,20 +173,8 @@ defmodule Sacrum.Repo.TaskWorkflows do
   @spec resolve_initial_step(Workflow.t()) ::
           {:ok, WorkflowStep.t()}
           | {:error, :initial_step_not_found | :workflow_has_no_steps}
-  defp resolve_initial_step(%Workflow{initial_step_id: step_id})
-       when not is_nil(step_id) do
-    case Repo.get(WorkflowStep, step_id) do
-      nil -> {:error, :initial_step_not_found}
-      step -> {:ok, step}
-    end
-  end
-
-  defp resolve_initial_step(%Workflow{workflow_steps: steps}) when is_list(steps) do
-    case Enum.sort_by(steps, & &1.step_order) do
-      [first | _] -> {:ok, first}
-      [] -> {:error, :workflow_has_no_steps}
-    end
-  end
+  defp resolve_initial_step(%Workflow{} = workflow),
+    do: WorkflowInitialStep.resolve(workflow)
 
   @spec maybe_complete_terminal_position(Task.t(), Workflow.t(), WorkflowStep.t()) ::
           {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
