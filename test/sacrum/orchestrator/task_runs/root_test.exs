@@ -16,6 +16,15 @@ defmodule Sacrum.Orchestrator.TaskRuns.RootTest do
     assert task_run.user_id == user.id
     assert task_run.parent_task_run_id == nil
     assert task_run.root_task_run_id == nil
+    assert task_run.max_concurrency == nil
+  end
+
+  test "get_or_create persists the root concurrency limit" do
+    user = create_user()
+    {_project, task} = create_task(user)
+
+    assert {:ok, task_run} = Root.get_or_create(task, max_concurrency: 2)
+    assert task_run.max_concurrency == 2
   end
 
   test "get_or_create reuses an active root run" do

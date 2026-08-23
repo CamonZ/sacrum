@@ -10,6 +10,8 @@ defmodule Sacrum.Repo.TaskRuns do
   alias Sacrum.Repo.Schemas.{SessionLog, StepExecution, TaskRun}
   alias Sacrum.TaskRuns.Status, as: TaskRunStatus
 
+  @type concurrency_scope :: %{id: String.t(), max_concurrency: pos_integer() | nil}
+
   @spec insert(String.t(), String.t(), String.t(), map()) ::
           {:ok, TaskRun.t()} | {:error, Ecto.Changeset.t()}
   def insert(user_id, project_id, task_id, attrs)
@@ -24,6 +26,22 @@ defmodule Sacrum.Repo.TaskRuns do
     task_run
     |> TaskRun.update_changeset(attrs)
     |> Repo.update()
+  end
+
+  @spec get_concurrency_scope(TaskRun.t()) ::
+          {:ok, concurrency_scope()} | {:error, :not_found}
+  def get_concurrency_scope(%TaskRun{root_task_run_id: nil, id: id, max_concurrency: limit}) do
+    {:ok, %{id: id, max_concurrency: limit}}
+  end
+
+  def get_concurrency_scope(%TaskRun{root_task_run_id: root_task_run_id}) do
+    case Repo.get(TaskRun, root_task_run_id) do
+      %TaskRun{id: id, max_concurrency: limit} ->
+        {:ok, %{id: id, max_concurrency: limit}}
+
+      nil ->
+        {:error, :not_found}
+    end
   end
 
   @spec fetch_active(keyword()) :: {:ok, TaskRun.t()} | {:error, :not_found}

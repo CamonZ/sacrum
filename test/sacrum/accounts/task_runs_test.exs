@@ -123,6 +123,39 @@ defmodule Sacrum.Accounts.TaskRunsTest do
         assert %{status: ["is invalid"]} = errors_on(changeset)
       end
     end
+
+    test "accepts positive max concurrency and rejects non-positive values" do
+      task_run = %TaskRun{
+        task_id: Ecto.UUID.generate(),
+        project_id: Ecto.UUID.generate(),
+        user_id: Ecto.UUID.generate()
+      }
+
+      assert TaskRun.create_changeset(task_run, %{max_concurrency: 3}).valid?
+
+      for value <- [0, -1] do
+        changeset = TaskRun.create_changeset(task_run, %{max_concurrency: value})
+
+        assert %{max_concurrency: ["must be greater than 0"]} = errors_on(changeset)
+      end
+    end
+
+    test "rejects max concurrency on child TaskRuns" do
+      task_run = %TaskRun{
+        task_id: Ecto.UUID.generate(),
+        project_id: Ecto.UUID.generate(),
+        user_id: Ecto.UUID.generate()
+      }
+
+      changeset =
+        TaskRun.create_changeset(task_run, %{
+          max_concurrency: 2,
+          parent_task_run_id: Ecto.UUID.generate(),
+          root_task_run_id: Ecto.UUID.generate()
+        })
+
+      assert %{max_concurrency: ["can only be set on a root TaskRun"]} = errors_on(changeset)
+    end
   end
 
   describe "insert/4" do
@@ -137,6 +170,44 @@ defmodule Sacrum.Accounts.TaskRunsTest do
       assert task_run.task_id == task.id
       assert task_run.status == :executing
       assert %DateTime{} = task_run.started_at
+    end
+  end
+
+  describe "get_concurrency_scope/1" do
+    test "resolves the root budget for nested TaskRuns" do
+      user = create_user()
+      {project, root_task, _workflow} = create_task_with_workflow(user)
+      {:ok, child_task} = Tasks.insert(user.id, project.id, %{title: "Child task"})
+      {:ok, grandchild_task} = Tasks.insert(user.id, project.id, %{title: "Grandchild task"})
+
+      {:ok, root_run} =
+        TaskRuns.insert(user.id, project.id, root_task.id, %{
+          status: :queued,
+          max_concurrency: 2
+        })
+
+      {:ok, child_run} =
+        TaskRuns.insert(user.id, project.id, child_task.id, %{
+          status: :queued,
+          parent_task_run_id: root_run.id,
+          root_task_run_id: root_run.id
+        })
+
+      {:ok, grandchild_run} =
+        TaskRuns.insert(user.id, project.id, grandchild_task.id, %{
+          status: :queued,
+          parent_task_run_id: child_run.id,
+          root_task_run_id: root_run.id
+        })
+
+      assert {:ok, %{id: root_id, max_concurrency: 2}} =
+               TaskRuns.get_concurrency_scope(root_run)
+
+      assert {:ok, %{id: ^root_id, max_concurrency: 2}} =
+               TaskRuns.get_concurrency_scope(child_run)
+
+      assert {:ok, %{id: ^root_id, max_concurrency: 2}} =
+               TaskRuns.get_concurrency_scope(grandchild_run)
     end
   end
 
