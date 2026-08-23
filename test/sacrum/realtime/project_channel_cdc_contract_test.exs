@@ -132,6 +132,18 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContractTest do
       :updated_at
     ])
 
+    for event <- ["workflow_created", "workflow_updated"] do
+      assert_payload_includes(event, [
+        :schema_version,
+        :id,
+        :name,
+        :description,
+        :factory_name,
+        :project_id,
+        :updated_at
+      ])
+    end
+
     assert {:ok, task_updated_contract} =
              ProjectChannelCdcContract.contract_for("task_updated")
 

@@ -72,6 +72,24 @@ defmodule Sacrum.Repo.WorkflowsTest do
       assert workflow.metadata == %{"color" => "blue"}
     end
 
+    test "persists factory_name on insert and update and allows clearing it" do
+      project = create_project()
+
+      assert {:ok, workflow} =
+               Workflows.insert(project, Map.put(@valid_attrs, :factory_name, "Initial Factory"))
+
+      assert workflow.factory_name == "Initial Factory"
+
+      assert {:ok, updated_workflow} =
+               Workflows.update(workflow, %{factory_name: "Updated Factory"})
+
+      assert updated_workflow.factory_name == "Updated Factory"
+
+      assert {:ok, cleared_workflow} = Workflows.update(updated_workflow, %{factory_name: nil})
+      assert cleared_workflow.factory_name == nil
+      assert Repo.get!(Workflow, workflow.id).factory_name == nil
+    end
+
     test "rejects creating second default workflow in same project" do
       project = create_project()
       # A default workflow (Backlog) is auto-created with the project

@@ -63,7 +63,7 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
 
   @workflow_payload_keys ~w(
     id name description is_default display_order metadata initial_step_id
-    kanban_column project_id inserted_at updated_at
+    kanban_column factory_name project_id inserted_at updated_at
   )a
 
   @workflow_event_payload_keys [:schema_version | @workflow_payload_keys]

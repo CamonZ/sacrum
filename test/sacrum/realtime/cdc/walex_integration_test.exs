@@ -382,7 +382,8 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
       {:ok, workflow} =
         Workflows.insert(project, %{
           name: "CDC workflow",
-          display_order: 2
+          display_order: 2,
+          factory_name: "CDC Factory"
         })
 
       _created_payload =
@@ -391,12 +392,17 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
           %{
             id: workflow.id,
             name: "CDC workflow",
+            factory_name: "CDC Factory",
             project_id: project.id
           },
           1_000
         )
 
-      {:ok, _updated_workflow} = Workflows.update(workflow, %{name: "CDC workflow updated"})
+      {:ok, _updated_workflow} =
+        Workflows.update(workflow, %{
+          name: "CDC workflow updated",
+          factory_name: "Updated CDC Factory"
+        })
 
       _updated_payload =
         assert_project_broadcast(
@@ -404,6 +410,7 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
           %{
             id: workflow.id,
             name: "CDC workflow updated",
+            factory_name: "Updated CDC Factory",
             project_id: project.id
           },
           1_000

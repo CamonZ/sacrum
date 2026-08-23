@@ -14,6 +14,7 @@ defmodule Sacrum.Repo.Schemas.Workflow do
     field :display_order, :integer
     field :is_default, :boolean, default: false
     field :kanban_column, :string
+    field :factory_name, :string
 
     belongs_to :project, Sacrum.Repo.Schemas.Project
     belongs_to :user, Sacrum.Repo.Schemas.User
@@ -23,8 +24,13 @@ defmodule Sacrum.Repo.Schemas.Workflow do
     timestamps(type: :utc_datetime_usec)
   end
 
-  @create_fields ~w(name description metadata display_order is_default kanban_column user_id)a
-  @update_fields ~w(name description metadata display_order is_default initial_step_id kanban_column)a
+  @create_fields ~w(
+    name description metadata display_order is_default kanban_column factory_name user_id
+  )a
+
+  @update_fields ~w(
+    name description metadata display_order is_default initial_step_id kanban_column factory_name
+  )a
 
   @spec create_changeset(t(), map()) :: Ecto.Changeset.t()
   def create_changeset(workflow, attrs) do
