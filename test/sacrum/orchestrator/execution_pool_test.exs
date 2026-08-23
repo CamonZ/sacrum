@@ -261,6 +261,67 @@ defmodule Sacrum.Orchestrator.ExecutionPoolTest do
       Process.exit(waiter_a, :kill)
       Enum.each([root_a_slot | tl(unscoped_slots)], &ExecutionPool.release_slot(pool, &1))
     end
+
+    test "monitor cleanup releases a scoped slot and wakes its queue", %{pool: pool} do
+      parent = self()
+      root_id = Ecto.UUID.generate()
+      opts = [root_task_run_id: root_id, max_concurrency: 1]
+
+      {:ok, holder} =
+        Task.start(fn ->
+          {:ok, slot} = ExecutionPool.request_slot(pool, self(), :infinity, opts)
+          send(parent, {:holder_slot, slot})
+
+          receive do
+            :stop -> :ok
+          end
+        end)
+
+      assert_receive {:holder_slot, _slot}, 1000
+
+      {:ok, waiter} =
+        Task.start(fn ->
+          result = ExecutionPool.request_slot(pool, self(), :infinity, opts)
+          send(parent, {:waiter_slot, result})
+
+          receive do
+            :release ->
+              {:ok, slot_id} = result
+              ExecutionPool.release_slot(pool, slot_id)
+          end
+        end)
+
+      wait_for_queue(pool, 1)
+      Process.exit(holder, :kill)
+
+      assert_receive {:waiter_slot, {:ok, _slot}}, 1000
+      assert ExecutionPool.pool_status(pool).in_use_by_scope == %{root_id => 1}
+
+      send(waiter, :release)
+      waiter_ref = Process.monitor(waiter)
+      assert_receive {:DOWN, ^waiter_ref, :process, ^waiter, :normal}, 1000
+      assert ExecutionPool.pool_status(pool).in_use_by_scope == %{}
+    end
+
+    test "scoped release is idempotent", %{pool: pool} do
+      opts = [root_task_run_id: Ecto.UUID.generate(), max_concurrency: 1]
+      {:ok, slot} = ExecutionPool.request_slot(pool, self(), :infinity, opts)
+
+      assert :ok = ExecutionPool.release_slot(pool, slot)
+      assert :ok = ExecutionPool.release_slot(pool, slot)
+      assert ExecutionPool.pool_status(pool).in_use_by_scope == %{}
+
+      {:ok, replacement} = ExecutionPool.request_slot(pool, self(), :infinity, opts)
+      assert :ok = ExecutionPool.release_slot(pool, replacement)
+    end
+
+    test "a root id without a limit uses global-only accounting", %{pool: pool} do
+      opts = [root_task_run_id: Ecto.UUID.generate(), max_concurrency: nil]
+      {:ok, slot} = ExecutionPool.request_slot(pool, self(), :infinity, opts)
+
+      assert ExecutionPool.pool_status(pool).in_use_by_scope == %{}
+      assert :ok = ExecutionPool.release_slot(pool, slot)
+    end
   end
 
   describe "concurrent execution" do
