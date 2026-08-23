@@ -517,6 +517,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
       create_transition(user, work_step, stop_step)
       create_transition(user, stop_step, loop_start)
+      create_transition(user, loop_start, stop_step)
       {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: work_step.id})
 
       task = create_task(user, project)
@@ -548,6 +549,39 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
       assert [%StepExecution{step_name: "work_step", status: "completed"}] =
                get_all_executions(task.id)
+    end
+
+    test "a new TaskRun bypasses stop and executes the destination in that run" do
+      %{user: user, project: project, task: task, stop_step: stop_step} =
+        setup_stop_boundary_workflow()
+
+      first_pid = start_orchestrator(task, user)
+      wait_for_state(first_pid, :executing)
+      simulate_daemon_completion(task.id, project.id, "first iteration")
+      wait_for_exit(first_pid)
+
+      first_run = latest_task_run(task.id)
+      assert first_run.status == :stopped
+
+      second_pid = start_orchestrator(task, user)
+      wait_for_state(second_pid, :executing)
+
+      second_run = latest_task_run(task.id)
+      assert second_run.id != first_run.id
+      assert reload_task(task).current_step_id != stop_step.id
+
+      second_execution = get_latest_started_execution(task.id)
+      assert second_execution.task_run_id == second_run.id
+      assert second_execution.step_name == "loop_start"
+
+      simulate_daemon_completion(task.id, project.id, "second iteration")
+      wait_for_exit(second_pid)
+
+      final_run = latest_task_run(task.id)
+      assert final_run.id == second_run.id
+      assert final_run.status == :stopped
+      assert final_run.outcome_kind == "run_boundary"
+      refute reload_task(task).completed_at
     end
   end
 

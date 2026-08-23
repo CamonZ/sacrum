@@ -248,6 +248,9 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
       {:ok, %{step_type: :finish}} ->
         complete_finish_step(data)
 
+      {:ok, %{step_type: :stop}} ->
+        bypass_stop_step(data)
+
       _ ->
         case resume_reason(data) do
           :wait_children ->
@@ -466,6 +469,39 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
       _decision ->
         TaskCompletion.determine_next_state(next_step_id, data)
     end
+  end
+
+  @spec bypass_stop_step(FSMData.t()) :: fsm_transition()
+  defp bypass_stop_step(data) do
+    task_id = data.task.id
+    stop_step_id = data.task.current_step_id
+    next_transitions = WorkflowGraph.get_outgoing_transitions(data, stop_step_id)
+
+    with {:ok, next_step_id} <- WorkflowGraph.select_single_transition(next_transitions),
+         {:ok, %{task: updated_task}} <- commit_stop_bypass(data, next_step_id) do
+      Logger.info(
+        "[TaskOrchestrator:#{task_id}] New TaskRun bypassed stop step=#{stop_step_id} to step=#{next_step_id}"
+      )
+
+      {:keep_state, %{data | task: updated_task}, [{:state_timeout, 0, :run}]}
+    else
+      {:error, reason} ->
+        Logger.error(
+          "[TaskOrchestrator:#{task_id}] Failed to bypass stop step=#{stop_step_id}: #{inspect(reason)}"
+        )
+
+        {:next_state, :failed, data}
+    end
+  end
+
+  @spec commit_stop_bypass(FSMData.t(), binary()) :: {:ok, map()} | {:error, term()}
+  defp commit_stop_bypass(data, next_step_id) do
+    Repo.transaction(fn ->
+      case advance_task_step(data, next_step_id, %{}) do
+        {:ok, changes} -> changes
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
   end
 
   @spec maybe_complete_waiting_execution(FSMData.t(), map()) :: {:ok, map()} | {:error, term()}
