@@ -33,7 +33,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     WorkflowGraph
   }
 
-  alias Sacrum.Accounts.TaskRuns, as: AccountTaskRuns
+  alias Sacrum.Accounts.TaskRuns
   alias Sacrum.Orchestrator.ExecutionEvents
   alias Sacrum.Orchestrator.Routing.{HumanInput, RouteStep, WaitChildren}
   alias Sacrum.Orchestrator.TaskRuns.{Failure, Lookup, Root}
@@ -698,12 +698,13 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
           {:ok, %{id: binary(), max_concurrency: pos_integer() | nil}} | {:error, term()}
   defp task_run_concurrency_scope(task_run_id) do
     with {:ok, task_run} <- Lookup.fetch(task_run_id) do
-      AccountTaskRuns.get_concurrency_scope(task_run)
+      TaskRuns.get_concurrency_scope(task_run)
     end
   end
 
   @spec execution_slot_options(FSMData.t()) :: keyword()
-  defp execution_slot_options(%{concurrency_scope: %{id: id, max_concurrency: limit}}) do
+  defp execution_slot_options(%{concurrency_scope: %{id: id, max_concurrency: limit}})
+       when is_integer(limit) and limit > 0 do
     [root_task_run_id: id, max_concurrency: limit]
   end
 
