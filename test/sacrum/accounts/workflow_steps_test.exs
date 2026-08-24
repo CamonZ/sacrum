@@ -3,6 +3,7 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
 
   alias Sacrum.Accounts.WorkflowSteps
   alias Sacrum.Accounts.Workflows
+  alias Sacrum.Accounts.Tasks
   alias Sacrum.Accounts.Projects
   alias Sacrum.Repo.Users
   alias Sacrum.Repo.Schemas.WorkflowStep
@@ -75,6 +76,38 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
 
       # User2 cannot access user1's step
       assert {:error, :not_found} = WorkflowSteps.get_by(user2.id, conditions: [id: step.id])
+    end
+  end
+
+  describe "delete/1" do
+    test "translates assigned-task conflicts into a client-safe error" do
+      user = create_user()
+      {project, workflow} = create_workflow(user)
+      {:ok, step} = WorkflowSteps.insert(workflow, %{name: "Assigned step"})
+      {:ok, workflow} = Workflows.update(workflow, %{initial_step_id: step.id})
+
+      {:ok, task_one} =
+        Tasks.insert(user.id, project.id, %{title: "Task one", workflow_id: workflow.id})
+
+      {:ok, task_two} =
+        Tasks.insert(user.id, project.id, %{title: "Task two", workflow_id: workflow.id})
+
+      assert task_one.current_step_id == step.id
+      assert task_two.current_step_id == step.id
+
+      assert {:error, "cannot delete a workflow step that is assigned to one or more tasks"} =
+               WorkflowSteps.delete(step)
+
+      assert {:ok, found_step} = WorkflowSteps.get_by(user.id, conditions: [id: step.id])
+      assert found_step.id == step.id
+
+      assert {:ok, found_task_one} = Tasks.get_by(user.id, conditions: [id: task_one.id])
+      assert found_task_one.current_step_id == step.id
+      assert found_task_one.title == "Task one"
+
+      assert {:ok, found_task_two} = Tasks.get_by(user.id, conditions: [id: task_two.id])
+      assert found_task_two.current_step_id == step.id
+      assert found_task_two.title == "Task two"
     end
   end
 

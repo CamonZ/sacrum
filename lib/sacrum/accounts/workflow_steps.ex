@@ -59,9 +59,16 @@ defmodule Sacrum.Accounts.WorkflowSteps do
   @doc """
   Delete a workflow step.
   """
-  @spec delete(WorkflowStep.t()) :: {:ok, WorkflowStep.t()} | {:error, Ecto.Changeset.t()}
+  @spec delete(WorkflowStep.t()) ::
+          {:ok, WorkflowStep.t()} | {:error, Ecto.Changeset.t()} | {:error, String.t()}
   def delete(%WorkflowStep{} = step) do
-    WorkflowStepsRepo.delete(step)
+    case WorkflowStepsRepo.delete(step) do
+      {:error, :assigned_tasks} ->
+        {:error, "cannot delete a workflow step that is assigned to one or more tasks"}
+
+      result ->
+        result
+    end
   end
 
   @doc """

@@ -6,6 +6,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
   alias Sacrum.Repo.Workflows
   alias Sacrum.Repo.Projects
   alias Sacrum.Repo.Users
+  alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.Schemas.WorkflowStep
 
   @valid_user_attrs %{
@@ -28,6 +29,17 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
     {:ok, project} = Projects.insert(user, %{name: "My Project"})
     {:ok, workflow} = Workflows.insert(project, %{name: "Default"})
     workflow
+  end
+
+  defp create_task(workflow, step, title) do
+    %Task{
+      project_id: workflow.project_id,
+      user_id: workflow.user_id,
+      workflow_id: workflow.id,
+      current_step_id: step.id
+    }
+    |> Task.create_changeset(%{title: title})
+    |> Repo.insert()
   end
 
   describe "insert/2" do
@@ -222,6 +234,24 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       {:ok, step} = WorkflowSteps.insert(workflow, @valid_attrs)
       assert {:ok, _} = WorkflowSteps.delete(step)
       assert {:error, :not_found} = WorkflowSteps.get(step.id)
+    end
+
+    test "rejects deleting a step assigned to multiple tasks without changing either record" do
+      workflow = create_workflow()
+      {:ok, step} = WorkflowSteps.insert(workflow, @valid_attrs)
+      {:ok, task_one} = create_task(workflow, step, "Task one")
+      {:ok, task_two} = create_task(workflow, step, "Task two")
+
+      assert {:error, :assigned_tasks} = WorkflowSteps.delete(step)
+
+      assert {:ok, found_step} = WorkflowSteps.get(step.id)
+      assert found_step.id == step.id
+
+      assert %Task{title: "Task one", current_step_id: step_id} = Repo.get!(Task, task_one.id)
+      assert step_id == step.id
+
+      assert %Task{title: "Task two", current_step_id: step_id} = Repo.get!(Task, task_two.id)
+      assert step_id == step.id
     end
   end
 
