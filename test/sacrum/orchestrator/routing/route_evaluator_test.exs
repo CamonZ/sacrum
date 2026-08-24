@@ -47,6 +47,34 @@ defmodule Sacrum.Orchestrator.Routing.RouteEvaluatorTest do
              RouteEvaluator.evaluate(program, context("retry", "task", ["backend", "urgent"], 3))
   end
 
+  test "evaluates each whitelisted predicate family" do
+    context = context("approved", "ticket", ["backend", "urgent"], 3)
+
+    cases = [
+      {"result", "previous_output.route.result", "in", ["approved"], true},
+      {"level", "task.level", "neq", "epic", true},
+      {"tags", "task.tags", "contains", "backend", true},
+      {"tags", "task.tags", "contains_any", ["other", "urgent"], true},
+      {"tags", "task.tags", "contains_all", ["backend", "urgent"], true},
+      {"count", "execution.step_visit_count", "eq", 3, true},
+      {"count", "execution.step_visit_count", "neq", 2, true},
+      {"count", "execution.step_visit_count", "lt", 4, true},
+      {"count", "execution.step_visit_count", "lte", 3, true},
+      {"count", "execution.step_visit_count", "gt", 2, true},
+      {"count", "execution.step_visit_count", "gte", 3, true},
+      {"count", "execution.step_visit_count", "in", [1, 3], true},
+      {"count", "execution.step_visit_count", "lt", 3, false}
+    ]
+
+    for {family, reference, operator, value, matches?} <- cases do
+      program = program([rule("#{family}-#{operator}", predicate(reference, operator, value))])
+
+      assert {:ok, result} = RouteEvaluator.evaluate(program, context)
+      assert result.matched_rule_id == if(matches?, do: "#{family}-#{operator}", else: nil)
+      assert result.used_default == !matches?
+    end
+  end
+
   test "uses the explicit default when no rule matches" do
     program =
       program(
