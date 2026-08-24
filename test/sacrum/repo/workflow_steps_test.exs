@@ -822,6 +822,23 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       assert updated.step_type == :evaluate
       assert updated.route_config == nil
     end
+
+    test "rejects an unsupported route_config version when staging a route" do
+      workflow = create_workflow()
+
+      assert {:error, changeset} =
+               WorkflowSteps.insert(
+                 workflow,
+                 Map.merge(@valid_attrs, %{
+                   step_type: "route",
+                   prompt: "Choose a destination",
+                   route_config: Map.put(route_config(), "version", 2)
+                 })
+               )
+
+      assert %{route_config: [message]} = errors_on(changeset)
+      assert message =~ "$.version: only version 1 is supported"
+    end
   end
 
   describe "verbose_daemon_logging field" do

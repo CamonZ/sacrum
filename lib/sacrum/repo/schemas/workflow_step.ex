@@ -3,6 +3,8 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
   import Ecto.Changeset
   require Logger
 
+  alias Sacrum.Orchestrator.Routing.RouteConfig
+
   @type t :: %__MODULE__{}
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -178,7 +180,13 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
         changeset
 
       {:route, route_config} when is_map(route_config) ->
-        changeset
+        case RouteConfig.decode(route_config) do
+          {:ok, _decoded} ->
+            changeset
+
+          {:error, %{path: path, message: message}} ->
+            add_error(changeset, :route_config, "#{path}: #{message}")
+        end
 
       {:route, _route_config} ->
         add_error(changeset, :route_config, "must be a map or null")
