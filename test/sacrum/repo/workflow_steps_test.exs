@@ -287,7 +287,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
     test "route steps auto-set strict routing contract schema on create" do
       workflow = create_workflow()
 
-      attrs = Map.merge(@valid_attrs, %{step_type: "route"})
+      attrs = Map.merge(@valid_attrs, %{step_type: "route", prompt: "Legacy route"})
 
       assert {:ok, %WorkflowStep{step_type: :route} = step} =
                WorkflowSteps.insert(workflow, attrs)
@@ -377,7 +377,11 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
     test "route steps enforce routing contract on update" do
       workflow = create_workflow()
 
-      {:ok, step} = WorkflowSteps.insert(workflow, Map.merge(@valid_attrs, %{step_type: "route"}))
+      {:ok, step} =
+        WorkflowSteps.insert(
+          workflow,
+          Map.merge(@valid_attrs, %{step_type: "route", prompt: "Legacy route"})
+        )
 
       invalid_schema = %{
         "type" => "object",
@@ -707,7 +711,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
     test "route steps auto-set strict schema stays consistent on update" do
       workflow = create_workflow()
 
-      attrs = Map.merge(@valid_attrs, %{step_type: "route"})
+      attrs = Map.merge(@valid_attrs, %{step_type: "route", prompt: "Legacy route"})
       {:ok, step} = WorkflowSteps.insert(workflow, attrs)
 
       expected_schema = WorkflowStep.routing_contract_schema()
@@ -717,6 +721,106 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       # Update other fields and verify schema remains intact
       {:ok, updated} = WorkflowSteps.update(step, %{name: "Updated Route Step"})
       assert updated.output_schema == expected_schema
+    end
+  end
+
+  describe "route_config persistence and migration bridge" do
+    test "keeps prompt-only routes on the legacy output contract" do
+      workflow = create_workflow()
+
+      assert {:ok, step} =
+               WorkflowSteps.insert(
+                 workflow,
+                 Map.merge(@valid_attrs, %{step_type: "route", prompt: "Choose a destination"})
+               )
+
+      assert step.route_config == nil
+      assert step.output_schema == WorkflowStep.routing_contract_schema()
+    end
+
+    test "persists nested staged route_config unchanged" do
+      workflow = create_workflow()
+      route_config = route_config()
+
+      assert {:ok, step} =
+               WorkflowSteps.insert(
+                 workflow,
+                 Map.merge(@valid_attrs, %{
+                   step_type: "route",
+                   prompt: "Choose a destination",
+                   route_config: route_config
+                 })
+               )
+
+      assert step.route_config == route_config
+      assert step.output_schema == WorkflowStep.routing_contract_schema()
+
+      assert {:ok, reloaded} = WorkflowSteps.get(step.id)
+      assert reloaded.route_config == route_config
+    end
+
+    test "explicitly clearing a staged prompt preserves deterministic configuration" do
+      workflow = create_workflow()
+      route_config = route_config()
+
+      {:ok, staged} =
+        WorkflowSteps.insert(
+          workflow,
+          Map.merge(@valid_attrs, %{
+            step_type: "route",
+            prompt: "Choose a destination",
+            route_config: route_config
+          })
+        )
+
+      assert {:ok, deterministic} = WorkflowSteps.update(staged, %{prompt: nil})
+      assert deterministic.prompt == nil
+      assert deterministic.route_config == route_config
+    end
+
+    test "allows a promptless route without configuration as an authoring draft" do
+      workflow = create_workflow()
+
+      assert {:ok, draft} =
+               WorkflowSteps.insert(
+                 workflow,
+                 Map.merge(@valid_attrs, %{step_type: "route", prompt: nil})
+               )
+
+      assert draft.route_config == nil
+      assert draft.output_schema == nil
+    end
+
+    test "treats empty prompts as legacy rather than clearing them" do
+      workflow = create_workflow()
+
+      assert {:ok, step} =
+               WorkflowSteps.insert(
+                 workflow,
+                 Map.merge(@valid_attrs, %{step_type: "route", prompt: ""})
+               )
+
+      assert step.prompt == ""
+      assert step.output_schema == WorkflowStep.routing_contract_schema()
+    end
+
+    test "requires explicit route_config clearing before changing to a non-route step" do
+      workflow = create_workflow()
+
+      {:ok, step} =
+        WorkflowSteps.insert(
+          workflow,
+          Map.merge(@valid_attrs, %{step_type: "route", route_config: route_config()})
+        )
+
+      assert {:error, changeset} = WorkflowSteps.update(step, %{step_type: "evaluate"})
+      assert %{route_config: ["is only supported for route steps"]} = errors_on(changeset)
+
+      assert {:ok, updated} =
+               WorkflowSteps.update(step, %{step_type: "evaluate", route_config: nil})
+
+      assert updated.step_type == :evaluate
+      assert updated.route_config == nil
     end
   end
 
@@ -772,7 +876,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
 
     test "route step persisted output_schema matches new canonical schema without format" do
       workflow = create_workflow()
-      attrs = Map.merge(@valid_attrs, %{step_type: "route"})
+      attrs = Map.merge(@valid_attrs, %{step_type: "route", prompt: "Legacy route"})
       {:ok, step} = WorkflowSteps.insert(workflow, attrs)
 
       {:ok, fetched_step} = WorkflowSteps.get(step.id)
@@ -841,5 +945,22 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
   defp assert_output_schema_error(changeset, expected_message) do
     assert %{output_schema: messages} = errors_on(changeset)
     assert Enum.any?(messages, &String.contains?(&1, expected_message))
+  end
+
+  defp route_config do
+    %{
+      "version" => 1,
+      "match_policy" => "exactly_one",
+      "rules" => [
+        %{
+          "id" => "high_priority",
+          "when" => %{"ref" => "task.tags", "op" => "contains", "value" => "priority"},
+          "transition" => %{"type" => "intra_workflow", "step_id" => Ecto.UUID.generate()}
+        }
+      ],
+      "default" => %{
+        "transition" => %{"type" => "inter_workflow", "workflow_id" => Ecto.UUID.generate()}
+      }
+    }
   end
 end

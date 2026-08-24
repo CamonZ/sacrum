@@ -18,6 +18,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     field :step_type, Ecto.Enum, values: @step_types, default: :execute
     field :prompt, :string
     field :output_schema, :map
+    field :route_config, :map
     field :verbose_daemon_logging, :boolean, default: false
 
     belongs_to :workflow, Sacrum.Repo.Schemas.Workflow
@@ -29,8 +30,8 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     timestamps(type: :utc_datetime_usec)
   end
 
-  @create_fields ~w(name goal agents skills agent_config step_order step_type prompt output_schema)a
-  @update_fields ~w(name goal agents skills agent_config step_order step_type prompt output_schema)a
+  @create_fields ~w(name goal agents skills agent_config step_order step_type prompt output_schema route_config)a
+  @update_fields ~w(name goal agents skills agent_config step_order step_type prompt output_schema route_config)a
 
   @spec step_types() :: [atom()]
   def step_types, do: @step_types
@@ -43,12 +44,13 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
   @spec create_changeset(t(), map()) :: Ecto.Changeset.t()
   def create_changeset(step, attrs) do
     step
-    |> cast(attrs, @create_fields)
+    |> cast_step(attrs, @create_fields)
     |> validate_required([:name])
     |> validate_length(:name, min: 1, max: 255)
     |> validate_finish_step_prompt()
     |> validate_output_schema()
     |> validate_route_step_schema()
+    |> validate_route_config()
     |> foreign_key_constraint(:workflow_id)
     |> foreign_key_constraint(:project_id)
   end
@@ -56,14 +58,24 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
   @spec update_changeset(t(), map()) :: Ecto.Changeset.t()
   def update_changeset(step, attrs) do
     step
-    |> cast(attrs, @update_fields)
+    |> cast_step(attrs, @update_fields)
     |> validate_length(:name, min: 1, max: 255)
     |> validate_finish_step_prompt()
     |> validate_output_schema()
     |> validate_route_step_schema()
+    |> validate_route_config()
   end
 
   # Private validation functions
+
+  defp cast_step(step, attrs, fields) do
+    changeset = cast(step, attrs, fields)
+
+    case Map.get(attrs, :prompt, Map.get(attrs, "prompt")) do
+      "" -> put_change(changeset, :prompt, "")
+      _ -> changeset
+    end
+  end
 
   defp validate_finish_step_prompt(changeset) do
     if get_field(changeset, :step_type) == :finish and
@@ -146,17 +158,33 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
   defp validate_route_step_schema(changeset) do
     step_type = get_field(changeset, :step_type)
     output_schema = get_field(changeset, :output_schema)
+    prompt = get_field(changeset, :prompt)
 
-    case step_type do
-      :route ->
-        if output_schema == nil do
-          put_change(changeset, :output_schema, routing_contract_schema())
-        else
-          validate_routing_contract_schema(changeset, output_schema)
-        end
+    case {step_type, prompt, output_schema} do
+      {:route, prompt, nil} when not is_nil(prompt) ->
+        put_change(changeset, :output_schema, routing_contract_schema())
+
+      {:route, _prompt, schema} when is_map(schema) ->
+        validate_routing_contract_schema(changeset, schema)
 
       _ ->
         changeset
+    end
+  end
+
+  defp validate_route_config(changeset) do
+    case {get_field(changeset, :step_type), get_field(changeset, :route_config)} do
+      {_step_type, nil} ->
+        changeset
+
+      {:route, route_config} when is_map(route_config) ->
+        changeset
+
+      {:route, _route_config} ->
+        add_error(changeset, :route_config, "must be a map or null")
+
+      {_step_type, _route_config} ->
+        add_error(changeset, :route_config, "is only supported for route steps")
     end
   end
 
@@ -172,10 +200,6 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
           "route steps must use a strict routing contract schema: #{reason}"
         )
     end
-  end
-
-  defp validate_routing_contract_schema(changeset, _schema) do
-    add_error(changeset, :output_schema, "must be a valid map for route steps")
   end
 
   @spec routing_contract_schema() :: map()
