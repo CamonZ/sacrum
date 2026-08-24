@@ -81,6 +81,13 @@ defmodule Sacrum.Orchestrator.Routing.RouteConfigTest do
              RouteConfig.decode(config_with_when(%{"all" => []}))
   end
 
+  test "rejects task.title at its submitted reference path" do
+    assert {:error, %{path: "$.rules[0].when.ref"}} =
+             RouteConfig.decode(
+               config_with_when(%{"ref" => "task.title", "op" => "eq", "value" => "Title"})
+             )
+  end
+
   test "rejects duplicate rule identifiers and invalid targets" do
     duplicated =
       base_config()

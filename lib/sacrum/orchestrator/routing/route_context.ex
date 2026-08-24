@@ -28,19 +28,21 @@ defmodule Sacrum.Orchestrator.Routing.RouteContext do
   @type error :: %{code: atom(), path: String.t(), message: String.t()}
 
   @doc """
-  Builds the complete runtime RouteContext from already-selected route inputs.
+  Builds the complete runtime RouteContext from JSON-shaped route inputs.
+
+  Both `previous_output` and `task` use string keys at this boundary. The
+  resulting RouteContext uses its internal atom-keyed representation.
   """
   @spec build(map(), map(), term()) :: {:ok, t()} | {:error, error()}
   def build(previous_output, task, step_visit_count)
       when is_map(previous_output) and is_map(task) do
     with {:ok, result, handoff} <- decode_route_output(previous_output),
-         :ok <- validate_level(Map.get(task, :level)),
-         :ok <- validate_tags(Map.get(task, :tags)),
+         {:ok, normalized_task} <- decode_task(task),
          :ok <- validate_visit_count(step_visit_count) do
       {:ok,
        %{
          previous_output: %{route: %{result: result, handoff: handoff}},
-         task: %{level: task.level, tags: task.tags},
+         task: normalized_task,
          execution: %{step_visit_count: step_visit_count}
        }}
     end
@@ -68,8 +70,8 @@ defmodule Sacrum.Orchestrator.Routing.RouteContext do
   @doc """
   Validates every type rule that does not depend on a predecessor result enum.
 
-  Use this while a route configuration is staged. A promptless deterministic
-  route must additionally call validate/2 with its predecessor environment.
+  Use this at write and evaluation boundaries. Where predecessor schemas are
+  available, use validate/2 with their declared result enum as well.
   """
   @spec validate(map()) :: :ok | {:error, error()}
   def validate(program), do: validate(program, :unknown_result_values)
@@ -157,6 +159,16 @@ defmodule Sacrum.Orchestrator.Routing.RouteContext do
        "must contain a non-empty result string and handoff object"
      )}
   end
+
+  defp decode_task(%{"level" => level, "tags" => tags}) do
+    with :ok <- validate_level(level),
+         :ok <- validate_tags(tags) do
+      {:ok, %{level: level, tags: tags}}
+    end
+  end
+
+  defp decode_task(_task),
+    do: {:error, error(:route_input_invalid, "$.task", "must contain level and tags")}
 
   defp validate_level(level) when is_binary(level) do
     if MapSet.member?(@levels, level) do

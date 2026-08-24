@@ -3,6 +3,8 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
   import Ecto.Changeset
   require Logger
 
+  alias Sacrum.Orchestrator.Routing.RouteMode
+
   @type t :: %__MODULE__{}
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -44,7 +46,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
   @spec create_changeset(t(), map()) :: Ecto.Changeset.t()
   def create_changeset(step, attrs) do
     step
-    |> cast_step(attrs, @create_fields)
+    |> cast(attrs, @create_fields)
     |> validate_required([:name])
     |> validate_length(:name, min: 1, max: 255)
     |> validate_finish_step_prompt()
@@ -58,7 +60,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
   @spec update_changeset(t(), map()) :: Ecto.Changeset.t()
   def update_changeset(step, attrs) do
     step
-    |> cast_step(attrs, @update_fields)
+    |> cast(attrs, @update_fields)
     |> validate_length(:name, min: 1, max: 255)
     |> validate_finish_step_prompt()
     |> validate_output_schema()
@@ -67,19 +69,6 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
   end
 
   # Private validation functions
-
-  defp cast_step(step, attrs, fields) do
-    changeset = cast(step, attrs, fields)
-
-    if submitted_empty_prompt?(attrs), do: put_change(changeset, :prompt, ""), else: changeset
-  end
-
-  # Changesets are called directly by atom-keyed repository callers and
-  # string-keyed import/API callers. Preserve explicit empty prompts in both
-  # formats because Ecto's default cast would otherwise turn them into nil.
-  defp submitted_empty_prompt?(%{prompt: prompt}), do: prompt == ""
-  defp submitted_empty_prompt?(%{"prompt" => prompt}), do: prompt == ""
-  defp submitted_empty_prompt?(_attrs), do: false
 
   defp validate_finish_step_prompt(changeset) do
     if get_field(changeset, :step_type) == :finish and
@@ -90,8 +79,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     end
   end
 
-  defp nonblank_prompt?(prompt) when is_binary(prompt), do: String.trim(prompt) != ""
-  defp nonblank_prompt?(_prompt), do: false
+  defp nonblank_prompt?(prompt), do: RouteMode.legacy_prompt?(prompt)
 
   defp validate_output_schema(changeset) do
     case get_field(changeset, :output_schema) do
@@ -164,11 +152,15 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     output_schema = get_field(changeset, :output_schema)
     prompt = get_field(changeset, :prompt)
 
-    case {step_type, prompt, output_schema} do
-      {:route, prompt, nil} when not is_nil(prompt) ->
-        put_change(changeset, :output_schema, routing_contract_schema())
+    case {step_type, output_schema} do
+      {:route, nil} ->
+        if RouteMode.legacy_prompt?(prompt) do
+          put_change(changeset, :output_schema, routing_contract_schema())
+        else
+          changeset
+        end
 
-      {:route, _prompt, schema} when is_map(schema) ->
+      {:route, schema} when is_map(schema) ->
         validate_routing_contract_schema(changeset, schema)
 
       _ ->

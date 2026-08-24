@@ -24,7 +24,8 @@ defmodule Sacrum.Orchestrator.Routing.RouteEvaluator do
   @spec evaluate(map(), RouteContext.t()) :: {:ok, result()} | {:error, error()}
   def evaluate(%{rules: rules, default: default}, context)
       when is_list(rules) and is_map(context) do
-    with {:ok, handoff} <- fetch_handoff(context),
+    with :ok <- RouteContext.validate(%{rules: rules, default: default}),
+         {:ok, handoff} <- fetch_handoff(context),
          {:ok, matching_rules} <- matching_rules(rules, context) do
       select_result(matching_rules, default, handoff)
     end

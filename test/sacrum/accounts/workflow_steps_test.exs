@@ -3,7 +3,6 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
 
   alias Sacrum.Accounts.WorkflowSteps
   alias Sacrum.Accounts.Workflows
-  alias Sacrum.Accounts.StepTransitions
   alias Sacrum.Accounts.Tasks
   alias Sacrum.Accounts.Projects
   alias Sacrum.Repo.Users
@@ -161,7 +160,12 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
       {_project, workflow} = create_workflow(user)
 
       for type <- ~w(execute evaluate route finish) do
-        attrs = if type == "finish", do: %{prompt: nil}, else: %{}
+        attrs =
+          case type do
+            "finish" -> %{prompt: nil}
+            "route" -> %{prompt: "Choose a destination"}
+            _ -> %{}
+          end
 
         assert {:ok, %WorkflowStep{} = step} =
                  WorkflowSteps.insert(
@@ -190,7 +194,9 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
       {:ok, step} = WorkflowSteps.insert(workflow, %{name: "Draft"})
       assert step.step_type == :execute
 
-      assert {:ok, updated} = WorkflowSteps.update(step, %{step_type: "route"})
+      assert {:ok, updated} =
+               WorkflowSteps.update(step, %{step_type: "route", prompt: "Choose a destination"})
+
       assert updated.step_type == :route
     end
   end
@@ -301,61 +307,40 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
       end
     end
 
-    test "requires valid predecessor envelopes when activating deterministic routing" do
+    test "allows a promptless configured route" do
       user = create_user()
       {_project, workflow} = create_workflow(user)
 
-      {:ok, staged} =
-        WorkflowSteps.insert(workflow, %{
-          name: "Route",
-          step_type: "route",
-          prompt: "Choose a destination",
-          route_config:
-            route_config(%{
-              "ref" => "previous_output.route.result",
-              "op" => "eq",
-              "value" => "approved"
-            })
-        })
-
-      assert {:error, changeset} = WorkflowSteps.update(staged, %{prompt: nil})
-      assert %{route_config: [message]} = errors_on(changeset)
-      assert message =~ "$.predecessors"
-    end
-
-    test "activates a configuration whose predecessor envelope type-checks" do
-      user = create_user()
-      {project, workflow} = create_workflow(user)
-
-      {:ok, staged} =
-        WorkflowSteps.insert(workflow, %{
-          name: "Route",
-          step_type: "route",
-          prompt: "Choose a destination",
-          route_config:
-            route_config(%{
-              "ref" => "previous_output.route.result",
-              "op" => "eq",
-              "value" => "approved"
-            })
-        })
-
-      {:ok, predecessor} =
-        WorkflowSteps.insert(workflow, %{
-          name: "Source",
-          prompt: "Produce a route result",
-          output_schema: predecessor_schema()
-        })
-
-      assert {:ok, _transition} =
-               StepTransitions.insert(user.id, %{
-                 from_step_id: predecessor.id,
-                 to_step_id: staged.id,
-                 project_id: project.id
+      assert {:ok, route} =
+               WorkflowSteps.insert(workflow, %{
+                 name: "Route",
+                 step_type: "route",
+                 prompt: nil,
+                 route_config:
+                   route_config(%{
+                     "ref" => "previous_output.route.result",
+                     "op" => "eq",
+                     "value" => "approved"
+                   })
                })
 
-      assert {:ok, deterministic} = WorkflowSteps.update(staged, %{prompt: nil})
-      assert deterministic.prompt == nil
+      assert route.prompt == nil
+    end
+
+    test "rejects a route without a legacy prompt or deterministic configuration" do
+      user = create_user()
+      {_project, workflow} = create_workflow(user)
+
+      for prompt <- [nil, "", "   "] do
+        assert {:error, changeset} =
+                 WorkflowSteps.insert(workflow, %{
+                   name: "Route",
+                   step_type: "route",
+                   prompt: prompt
+                 })
+
+        assert %{route_config: ["is required when prompt is blank"]} = errors_on(changeset)
+      end
     end
   end
 
@@ -383,30 +368,6 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
         "type" => "intra_workflow",
         "step_id" => "00000000-0000-0000-0000-000000000002"
       }
-    }
-  end
-
-  defp predecessor_schema do
-    %{
-      "type" => "object",
-      "properties" => %{
-        "route" => %{
-          "type" => "object",
-          "additionalProperties" => false,
-          "required" => ["result", "handoff"],
-          "properties" => %{
-            "result" => %{"type" => "string", "enum" => ["approved", "rejected"]},
-            "handoff" => %{
-              "type" => "object",
-              "additionalProperties" => false,
-              "required" => ["note"],
-              "properties" => %{"note" => %{"type" => "string"}}
-            }
-          }
-        }
-      },
-      "required" => ["route"],
-      "additionalProperties" => false
     }
   end
 end

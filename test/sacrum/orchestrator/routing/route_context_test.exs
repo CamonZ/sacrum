@@ -7,7 +7,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteContextTest do
 
   test "builds only the four whitelisted route values" do
     previous_output = %{"route" => %{"result" => "approved", "handoff" => %{"note" => "ready"}}}
-    task = %{level: "ticket", tags: ["backend", "urgent"]}
+    task = %{"level" => "ticket", "tags" => ["backend", "urgent"]}
 
     assert {:ok, context} = RouteContext.build(previous_output, task, 2)
     assert {:ok, "approved"} = RouteContext.fetch(context, :previous_output_route_result)
@@ -20,16 +20,19 @@ defmodule Sacrum.Orchestrator.Routing.RouteContextTest do
 
   test "rejects malformed predecessor output and invalid task values" do
     assert {:error, %{code: :route_input_invalid, path: "$.previous_output.route"}} =
-             RouteContext.build(%{"route" => %{}}, %{level: "task", tags: []}, 1)
+             RouteContext.build(%{"route" => %{}}, %{"level" => "task", "tags" => []}, 1)
 
     assert {:error, %{path: "$.task.level"}} =
-             RouteContext.build(valid_output(), %{level: "high", tags: []}, 1)
+             RouteContext.build(valid_output(), %{"level" => "high", "tags" => []}, 1)
 
     assert {:error, %{path: "$.task.tags"}} =
-             RouteContext.build(valid_output(), %{level: "task", tags: [1]}, 1)
+             RouteContext.build(valid_output(), %{"level" => "task", "tags" => [1]}, 1)
 
     assert {:error, %{path: "$.execution.step_visit_count"}} =
-             RouteContext.build(valid_output(), %{level: "task", tags: []}, 0)
+             RouteContext.build(valid_output(), %{"level" => "task", "tags" => []}, 0)
+
+    assert {:error, %{path: "$.task"}} =
+             RouteContext.build(valid_output(), %{level: "task", tags: []}, 1)
   end
 
   test "derives the result enum union from valid predecessor envelopes" do
@@ -110,6 +113,14 @@ defmodule Sacrum.Orchestrator.Routing.RouteContextTest do
              RouteContext.validate(predicate_program(:task_tags, :contains, "backend", nil), [
                "approved"
              ])
+  end
+
+  test "rejects predecessor result values outside its declared enum" do
+    assert {:error, %{code: :route_config_invalid, path: "$.rules[0].when.value"}} =
+             RouteContext.validate(
+               predicate_program(:previous_output_route_result, :eq, "maybe"),
+               ["approved"]
+             )
   end
 
   defp valid_output do

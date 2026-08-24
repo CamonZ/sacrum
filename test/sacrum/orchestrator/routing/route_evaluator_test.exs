@@ -136,6 +136,22 @@ defmodule Sacrum.Orchestrator.Routing.RouteEvaluatorTest do
              RouteEvaluator.evaluate(invalid_program, context("approved", "task", [], 2))
   end
 
+  test "rejects decoded programs that fail static route validation" do
+    invalid_program = %{
+      rules: [
+        %{
+          id: "invalid-tags",
+          when: %{kind: :predicate, ref: :task_tags, operator: :eq, value: "backend"},
+          transition: %{type: :intra_workflow, step_id: @step_id}
+        }
+      ],
+      default: %{type: :intra_workflow, step_id: @step_id}
+    }
+
+    assert {:error, %{code: :route_operand_type_mismatch, path: "$.rules[0].when.op"}} =
+             RouteEvaluator.evaluate(invalid_program, context("approved", "task", [], 2))
+  end
+
   defp program(rules, default \\ default()) do
     {:ok, decoded} =
       RouteConfig.decode(%{
@@ -167,7 +183,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteEvaluatorTest do
     {:ok, route_context} =
       RouteContext.build(
         %{"route" => %{"result" => result, "handoff" => handoff}},
-        %{level: level, tags: tags},
+        %{"level" => level, "tags" => tags},
         count
       )
 

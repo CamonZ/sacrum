@@ -7,6 +7,7 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
   require Logger
 
   alias Sacrum.Orchestrator.FSMData
+  alias Sacrum.Orchestrator.Routing.RouteMode
   alias Sacrum.Orchestrator.TaskRuns.{Completion, Lookup}
   alias Sacrum.Orchestrator.TaskRuns.StateTransitions
   alias Sacrum.Repo
@@ -101,8 +102,7 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
   end
 
   @spec prompted_step?(WorkflowStep.t() | struct()) :: boolean()
-  def prompted_step?(%{prompt: prompt}) when is_binary(prompt), do: String.trim(prompt) != ""
-  def prompted_step?(_step), do: false
+  def prompted_step?(%{prompt: prompt}), do: RouteMode.legacy_prompt?(prompt)
 
   @spec next_state_for_step(WorkflowStep.t() | struct(), binary()) ::
           {:next_state, :awaiting_execution} | {:stop, :normal, map()}

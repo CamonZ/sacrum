@@ -778,20 +778,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       assert deterministic.route_config == route_config
     end
 
-    test "allows a promptless route without configuration as an authoring draft" do
-      workflow = create_workflow()
-
-      assert {:ok, draft} =
-               WorkflowSteps.insert(
-                 workflow,
-                 Map.merge(@valid_attrs, %{step_type: "route", prompt: nil})
-               )
-
-      assert draft.route_config == nil
-      assert draft.output_schema == nil
-    end
-
-    test "preserves empty prompts from either key format rather than clearing them" do
+    test "does not promote blank prompts to the legacy route contract" do
       workflow = create_workflow()
       string_attrs = Map.new(@valid_attrs, fn {key, value} -> {to_string(key), value} end)
 
@@ -801,8 +788,8 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
           ] do
         assert {:ok, step} = WorkflowSteps.insert(workflow, attrs)
 
-        assert step.prompt == ""
-        assert step.output_schema == WorkflowStep.routing_contract_schema()
+        assert step.prompt == nil
+        assert step.output_schema == nil
       end
     end
 
