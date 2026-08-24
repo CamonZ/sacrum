@@ -163,7 +163,7 @@ defmodule Sacrum.Orchestrator.OutputValidatorTest do
 
     test "accepts handoff matching a custom strict route schema" do
       schema =
-        Sacrum.Repo.Schemas.WorkflowStep.routing_contract_schema(%{
+        Sacrum.Routing.Contract.output_schema(%{
           "type" => "object",
           "properties" => %{
             "summary" => %{"type" => "string"},
@@ -184,7 +184,7 @@ defmodule Sacrum.Orchestrator.OutputValidatorTest do
 
     test "rejects handoff that does not match a custom strict route schema" do
       schema =
-        Sacrum.Repo.Schemas.WorkflowStep.routing_contract_schema(%{
+        Sacrum.Routing.Contract.output_schema(%{
           "type" => "object",
           "properties" => %{"summary" => %{"type" => "string"}},
           "required" => ["summary"],

@@ -8,6 +8,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
   alias Sacrum.Repo.Users
   alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.Schemas.WorkflowStep
+  alias Sacrum.Routing.Contract
 
   @valid_user_attrs %{
     email: "test@example.com",
@@ -292,7 +293,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       assert {:ok, %WorkflowStep{step_type: :route} = step} =
                WorkflowSteps.insert(workflow, attrs)
 
-      assert step.output_schema == WorkflowStep.routing_contract_schema()
+      assert step.output_schema == Contract.output_schema()
       refute Map.has_key?(step.output_schema["properties"], "handoff")
     end
 
@@ -418,7 +419,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
         "additionalProperties" => false
       }
 
-      schema_with_handoff = WorkflowStep.routing_contract_schema(handoff_schema)
+      schema_with_handoff = Contract.output_schema(handoff_schema)
 
       attrs =
         Map.merge(@valid_attrs, %{
@@ -437,7 +438,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       workflow = create_workflow()
 
       invalid_schema =
-        WorkflowStep.routing_contract_schema(%{
+        Contract.output_schema(%{
           "type" => "object",
           "properties" => %{"summary" => %{"type" => "string"}},
           "required" => ["summary"]
@@ -458,7 +459,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       workflow = create_workflow()
 
       invalid_schema =
-        WorkflowStep.routing_contract_schema(%{
+        Contract.output_schema(%{
           "type" => "object",
           "properties" => %{
             "summary" => %{"type" => "string"},
@@ -483,7 +484,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       workflow = create_workflow()
 
       invalid_schema =
-        WorkflowStep.routing_contract_schema(%{
+        Contract.output_schema(%{
           "type" => "object",
           "properties" => %{
             "items" => %{
@@ -518,7 +519,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       workflow = create_workflow()
 
       schema_with_nullable_handoff =
-        WorkflowStep.routing_contract_schema(%{
+        Contract.output_schema(%{
           "type" => ["null", "object"],
           "properties" => %{"summary" => %{"type" => "string"}},
           "required" => ["summary"],
@@ -543,7 +544,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       workflow = create_workflow()
 
       schema_with_nullable_handoff =
-        WorkflowStep.routing_contract_schema(%{
+        Contract.output_schema(%{
           "type" => ["null", "object"],
           "properties" => %{"summary" => %{"type" => "string"}},
           "required" => ["summary"],
@@ -759,7 +760,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       attrs = Map.merge(@valid_attrs, %{step_type: "route", prompt: "Legacy route"})
       {:ok, step} = WorkflowSteps.insert(workflow, attrs)
 
-      expected_schema = WorkflowStep.routing_contract_schema()
+      expected_schema = Contract.output_schema()
 
       assert step.output_schema == expected_schema
 
@@ -812,9 +813,9 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
     end
   end
 
-  describe "routing_contract_schema without format key" do
-    test "routing_contract_schema/0 does not contain format key under transition_to" do
-      schema = WorkflowStep.routing_contract_schema()
+  describe "routing contract schema without format key" do
+    test "output_schema/0 does not contain format key under transition_to" do
+      schema = Contract.output_schema()
 
       assert schema["properties"]["transition_to"] == %{"type" => "string"}
     end
@@ -826,7 +827,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
 
       {:ok, fetched_step} = WorkflowSteps.get(step.id)
 
-      assert fetched_step.output_schema == WorkflowStep.routing_contract_schema()
+      assert fetched_step.output_schema == Contract.output_schema()
       refute Map.has_key?(fetched_step.output_schema["properties"]["transition_to"], "format")
     end
 
@@ -834,7 +835,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       workflow = create_workflow()
       {:ok, step} = WorkflowSteps.insert(workflow, @valid_attrs)
 
-      canonical_schema = WorkflowStep.routing_contract_schema()
+      canonical_schema = Contract.output_schema()
       attrs = %{step_type: "route", prompt: "Legacy route", output_schema: canonical_schema}
 
       assert {:ok, updated} = WorkflowSteps.update(step, attrs)

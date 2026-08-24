@@ -6,9 +6,25 @@ defmodule Sacrum.JsonSchema.Strict do
   routing predecessor envelopes can share the same structural check.
   """
 
-  @spec validate(map()) :: :ok | {:error, String.t()}
+  @spec validate(term()) :: :ok | {:error, String.t()}
   def validate(schema) when is_map(schema), do: validate(schema, "schema")
   def validate(_schema), do: {:error, "schema must be a map"}
+
+  @spec fetch_map(term(), String.t(), String.t()) :: {:ok, map()} | {:error, String.t()}
+  def fetch_map(schema, key, error_message) when is_map(schema) do
+    case Map.get(schema, key) do
+      value when is_map(value) -> {:ok, value}
+      _ -> {:error, error_message}
+    end
+  end
+
+  def fetch_map(_schema, _key, error_message), do: {:error, error_message}
+
+  @spec require_exact_value(map(), String.t(), term(), String.t()) ::
+          :ok | {:error, String.t()}
+  def require_exact_value(schema, key, expected, error_message) when is_map(schema) do
+    if Map.get(schema, key) == expected, do: :ok, else: {:error, error_message}
+  end
 
   defp validate(schema, path) when is_map(schema) do
     cond do
@@ -75,17 +91,6 @@ defmodule Sacrum.JsonSchema.Strict do
 
       _ ->
         {:error, "#{label} must list every declared property"}
-    end
-  end
-
-  defp require_exact_value(schema, key, expected, error_message) do
-    if Map.get(schema, key) == expected, do: :ok, else: {:error, error_message}
-  end
-
-  defp fetch_map(schema, key, error_message) do
-    case Map.get(schema, key) do
-      value when is_map(value) -> {:ok, value}
-      _ -> {:error, error_message}
     end
   end
 end

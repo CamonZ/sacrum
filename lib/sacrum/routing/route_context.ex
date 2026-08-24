@@ -1,4 +1,4 @@
-defmodule Sacrum.Orchestrator.Routing.RouteContext do
+defmodule Sacrum.Routing.RouteContext do
   @moduledoc """
   Builds the closed runtime value used by deterministic routes.
 

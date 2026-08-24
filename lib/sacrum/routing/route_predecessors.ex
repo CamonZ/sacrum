@@ -1,14 +1,14 @@
-defmodule Sacrum.Orchestrator.Routing.RoutePredecessors do
+defmodule Sacrum.Routing.RoutePredecessors do
   @moduledoc """
   Validates route predecessor envelopes and their declared result enums.
 
-  This module is used only at boundaries where incoming predecessor schemas
-  are available. Runtime route evaluation uses the already-built
-  `RouteContext` instead.
+  The predecessor envelope is `route.{result, handoff}`. Handoff objects use
+  the shared strict JSON Schema subset; result values are a string enum. Runtime
+  evaluation uses the already-built `RouteContext` instead of this module.
   """
 
   alias Sacrum.JsonSchema.Strict
-  alias Sacrum.Orchestrator.Routing.RouteConfig
+  alias Sacrum.Routing.{RouteConfig, Traverse}
 
   @type type_environment :: %{result_values: MapSet.t(String.t())}
   @type error :: %{code: atom(), path: String.t(), message: String.t()}
@@ -31,21 +31,34 @@ defmodule Sacrum.Orchestrator.Routing.RoutePredecessors do
   """
   @spec validate_predecessor_schema(map()) :: {:ok, type_environment()} | {:error, error()}
   def validate_predecessor_schema(schema) when is_map(schema) do
-    with :ok <- require_route_property(schema),
-         {:ok, route} <- fetch_map(schema["properties"], "route", "$.properties.route"),
-         :ok <- require_exact_value(route, "type", "object", "$.properties.route.type"),
+    with {:ok, properties} <- fetch_object(schema, "properties", "$.properties"),
+         :ok <- require_route_key(schema, properties),
+         {:ok, route} <- fetch_object(properties, "route", "$.properties.route"),
          :ok <-
-           require_exact_value(
-             route,
-             "additionalProperties",
-             false,
+           typed_error(
+             Strict.require_exact_value(route, "type", "object", "must be object"),
+             "$.properties.route.type"
+           ),
+         :ok <-
+           typed_error(
+             Strict.require_exact_value(
+               route,
+               "additionalProperties",
+               false,
+               "must be false"
+             ),
              "$.properties.route.additionalProperties"
            ),
          :ok <-
-           require_keys(route["required"], ["result", "handoff"], "$.properties.route.required"),
-         {:ok, properties} <- fetch_map(route, "properties", "$.properties.route.properties"),
-         {:ok, result_values} <- validate_result_schema(properties["result"]),
-         :ok <- validate_handoff_schema(properties["handoff"]) do
+           require_included_keys(
+             route["required"],
+             ["result", "handoff"],
+             "$.properties.route.required"
+           ),
+         {:ok, route_properties} <-
+           fetch_object(route, "properties", "$.properties.route.properties"),
+         {:ok, result_values} <- validate_result_schema(route_properties["result"]),
+         :ok <- validate_handoff_schema(route_properties["handoff"]) do
       {:ok, %{result_values: MapSet.new(result_values)}}
     end
   end
@@ -58,20 +71,13 @@ defmodule Sacrum.Orchestrator.Routing.RoutePredecessors do
   """
   @spec derive_type_environment([map()]) :: {:ok, type_environment()} | {:error, error()}
   def derive_type_environment(schemas) when is_list(schemas) and schemas != [] do
-    schemas
-    |> Enum.with_index()
-    |> Enum.reduce_while({:ok, MapSet.new()}, fn {schema, index}, {:ok, result_values} ->
-      case validate_predecessor_schema(schema) do
-        {:ok, %{result_values: declared_values}} ->
-          {:cont, {:ok, MapSet.union(result_values, declared_values)}}
+    with {:ok, environments} <- Traverse.map_while(schemas, &validate_schema(&1, &2)) do
+      result_values =
+        Enum.reduce(environments, MapSet.new(), fn %{result_values: values}, acc ->
+          MapSet.union(acc, values)
+        end)
 
-        {:error, %{path: path} = reason} ->
-          {:halt, {:error, %{reason | path: "$.predecessors[#{index}]#{drop_root(path)}"}}}
-      end
-    end)
-    |> case do
-      {:ok, result_values} -> {:ok, %{result_values: result_values}}
-      {:error, reason} -> {:error, reason}
+      {:ok, %{result_values: result_values}}
     end
   end
 
@@ -79,26 +85,26 @@ defmodule Sacrum.Orchestrator.Routing.RoutePredecessors do
     do:
       {:error, error(:route_input_invalid, "$.predecessors", "must contain at least one schema")}
 
+  defp validate_schema(schema, index) do
+    case validate_predecessor_schema(schema) do
+      {:ok, environment} ->
+        {:ok, environment}
+
+      {:error, %{path: path} = reason} ->
+        {:error, %{reason | path: "$.predecessors[#{index}]#{drop_root(path)}"}}
+    end
+  end
+
   defp validate_rules(rules, result_values) do
-    rules
-    |> Enum.with_index()
-    |> Enum.reduce_while(:ok, fn {%{when: expression}, index}, :ok ->
-      case validate_expression(expression, result_values, "$.rules[#{index}].when") do
-        :ok -> {:cont, :ok}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
+    Traverse.each_while(rules, fn %{when: expression}, index ->
+      validate_expression(expression, result_values, "$.rules[#{index}].when")
     end)
   end
 
   defp validate_expression(%{kind: kind, expressions: expressions}, result_values, path)
        when kind in [:all, :any] do
-    expressions
-    |> Enum.with_index()
-    |> Enum.reduce_while(:ok, fn {expression, index}, :ok ->
-      case validate_expression(expression, result_values, "#{path}.#{kind}[#{index}]") do
-        :ok -> {:cont, :ok}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
+    Traverse.each_while(expressions, fn expression, index ->
+      validate_expression(expression, result_values, "#{path}.#{kind}[#{index}]")
     end)
   end
 
@@ -121,22 +127,26 @@ defmodule Sacrum.Orchestrator.Routing.RoutePredecessors do
       nil ->
         :ok
 
-      value ->
+      undeclared ->
         {:error,
-         error(:route_config_invalid, "#{path}.value", "#{inspect(value)} is not declared")}
+         error(:route_config_invalid, "#{path}.value", "#{inspect(undeclared)} is not declared")}
     end
   end
 
   defp validate_expression(%{kind: :predicate}, _result_values, _path), do: :ok
 
-  defp require_route_property(schema) do
-    with {:ok, properties} <- fetch_map(schema, "properties", "$.properties"),
-         :ok <- require_keys(schema["required"], ["route"], "$.required"),
-         true <- Map.has_key?(properties, "route") do
-      :ok
-    else
-      false -> {:error, error(:route_input_invalid, "$.properties.route", "is required")}
-      {:error, reason} -> {:error, reason}
+  defp require_route_key(schema, properties) do
+    required = schema["required"]
+
+    cond do
+      not is_list(required) ->
+        {:error, error(:route_input_invalid, "$.required", "must include route")}
+
+      "route" not in required or not Map.has_key?(properties, "route") ->
+        {:error, error(:route_input_invalid, "$.properties.route", "is required")}
+
+      true ->
+        :ok
     end
   end
 
@@ -182,25 +192,14 @@ defmodule Sacrum.Orchestrator.Routing.RoutePredecessors do
      )}
   end
 
-  defp fetch_map(map, key, path) when is_map(map) do
-    case Map.get(map, key) do
-      value when is_map(value) -> {:ok, value}
-      _ -> {:error, error(:route_input_invalid, path, "must be an object")}
+  defp fetch_object(map, key, path) do
+    case Strict.fetch_map(map, key, "must be an object") do
+      {:ok, value} -> {:ok, value}
+      {:error, message} -> {:error, error(:route_input_invalid, path, message)}
     end
   end
 
-  defp fetch_map(_map, _key, path),
-    do: {:error, error(:route_input_invalid, path, "must be an object")}
-
-  defp require_exact_value(map, key, expected, path) when is_map(map) do
-    if Map.get(map, key) == expected do
-      :ok
-    else
-      {:error, error(:route_input_invalid, path, "must be #{inspect(expected)}")}
-    end
-  end
-
-  defp require_keys(keys, required, path) when is_list(keys) do
+  defp require_included_keys(keys, required, path) when is_list(keys) do
     if Enum.all?(required, &(&1 in keys)) do
       :ok
     else
@@ -208,8 +207,13 @@ defmodule Sacrum.Orchestrator.Routing.RoutePredecessors do
     end
   end
 
-  defp require_keys(_keys, _required, path),
+  defp require_included_keys(_keys, _required, path),
     do: {:error, error(:route_input_invalid, path, "must be an array")}
+
+  defp typed_error(:ok, _path), do: :ok
+
+  defp typed_error({:error, message}, path),
+    do: {:error, error(:route_input_invalid, path, message)}
 
   defp drop_root("$"), do: ""
   defp drop_root(path), do: String.replace_prefix(path, "$", "")

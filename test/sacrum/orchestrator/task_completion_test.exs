@@ -108,10 +108,21 @@ defmodule Sacrum.Orchestrator.TaskCompletionTest do
   end
 
   describe "determine_next_state/2" do
-    test "treats every present prompt as dispatchable" do
-      assert TaskCompletion.prompted_step?(%{prompt: ""})
-      assert TaskCompletion.prompted_step?(%{prompt: "   "})
-      refute TaskCompletion.prompted_step?(%{prompt: nil})
+    test "dispatches execute steps regardless of prompt presence" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project)
+      next_step = create_step(user, workflow, %{"prompt" => nil})
+      task = create_task(user, project, workflow)
+
+      data = %{
+        task: task,
+        steps: %{next_step.id => next_step},
+        workflow: workflow
+      }
+
+      assert TaskCompletion.determine_next_state(next_step.id, data) ==
+               {:next_state, :awaiting_execution, data}
     end
 
     test "returns failed state when next_step_id is nil" do
@@ -269,7 +280,7 @@ defmodule Sacrum.Orchestrator.TaskCompletionTest do
       end
     end
 
-    test "stops when a generic execution destination has a blank prompt" do
+    test "dispatches a blank-prompt execute destination instead of completing the run" do
       user = create_user()
       project = create_project(user)
       workflow = create_workflow(user, project)
@@ -284,17 +295,14 @@ defmodule Sacrum.Orchestrator.TaskCompletionTest do
         workflow: workflow
       }
 
-      result = TaskCompletion.determine_next_state(next_step.id, data)
-
-      assert result == {:stop, :normal, data}
+      assert TaskCompletion.determine_next_state(next_step.id, data) ==
+               {:next_state, :awaiting_execution, data}
 
       unchanged_run = Repo.get!(Sacrum.Repo.Schemas.TaskRun, task_run.id)
       assert unchanged_run.status == :executing
 
-      assert {:stop, :normal, attrs} = TaskCompletion.next_state_decision(next_step.id, data)
-      assert attrs.outcome_kind == "step_completed"
-      assert attrs.outcome_context["reason"] == "promptless_destination_step"
-      assert attrs.outcome_context["current_step_id"] == next_step.id
+      assert TaskCompletion.next_state_decision(next_step.id, data) ==
+               {:next_state, :awaiting_execution}
     end
   end
 end

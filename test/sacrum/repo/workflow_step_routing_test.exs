@@ -2,7 +2,7 @@ defmodule Sacrum.Repo.WorkflowStepRoutingTest do
   use Sacrum.DataCase, async: true
 
   alias Sacrum.Repo.{Projects, Users, WorkflowSteps, Workflows}
-  alias Sacrum.Repo.Schemas.WorkflowStep
+  alias Sacrum.Routing.Contract
 
   @valid_user_attrs %{
     email: "workflow_step_routing_test@example.com",
@@ -29,7 +29,7 @@ defmodule Sacrum.Repo.WorkflowStepRoutingTest do
              )
 
     assert step.route_config == nil
-    assert step.output_schema == WorkflowStep.routing_contract_schema()
+    assert step.output_schema == Contract.output_schema()
   end
 
   test "persists nested staged route_config unchanged" do
@@ -47,13 +47,13 @@ defmodule Sacrum.Repo.WorkflowStepRoutingTest do
              )
 
     assert step.route_config == route_config
-    assert step.output_schema == WorkflowStep.routing_contract_schema()
+    assert step.output_schema == nil
 
     assert {:ok, reloaded} = WorkflowSteps.get(step.id)
     assert reloaded.route_config == route_config
   end
 
-  test "requires clearing the legacy output schema before a route becomes deterministic" do
+  test "keeps a compiled route_config when the leftover prompt is cleared" do
     workflow = create_workflow()
     route_config = route_config()
 
@@ -67,13 +67,7 @@ defmodule Sacrum.Repo.WorkflowStepRoutingTest do
         })
       )
 
-    assert {:error, changeset} = WorkflowSteps.update(staged, %{prompt: nil})
-
-    assert %{output_schema: ["must be blank for deterministic route steps"]} =
-             errors_on(changeset)
-
-    assert {:ok, deterministic} =
-             WorkflowSteps.update(staged, %{prompt: nil, output_schema: nil})
+    assert {:ok, deterministic} = WorkflowSteps.update(staged, %{prompt: nil})
 
     assert deterministic.prompt == nil
     assert deterministic.output_schema == nil
@@ -121,22 +115,23 @@ defmodule Sacrum.Repo.WorkflowStepRoutingTest do
     assert route.output_schema == nil
   end
 
-  test "rejects an output schema for deterministic routes" do
+  test "allows a leftover routing contract on a compiled route" do
     workflow = create_workflow()
+    route_config = route_config()
 
-    assert {:error, changeset} =
+    assert {:ok, step} =
              WorkflowSteps.insert(
                workflow,
                Map.merge(@valid_attrs, %{
                  step_type: "route",
                  prompt: nil,
-                 route_config: route_config(),
-                 output_schema: WorkflowStep.routing_contract_schema()
+                 route_config: route_config,
+                 output_schema: Contract.output_schema()
                })
              )
 
-    assert %{output_schema: ["must be blank for deterministic route steps"]} =
-             errors_on(changeset)
+    assert step.output_schema == Contract.output_schema()
+    assert step.route_config == route_config
   end
 
   test "requires explicit route_config clearing before changing to a non-route step" do

@@ -1,10 +1,12 @@
-defmodule Sacrum.Orchestrator.Routing.RouteConfig do
+defmodule Sacrum.Routing.RouteConfig do
   @moduledoc """
   Decodes the closed, versioned route configuration language.
 
   The decoder turns untrusted JSON-shaped data into a small map-based AST. It
   never resolves database entities or turns submitted strings into atoms.
   """
+
+  alias Sacrum.Routing.Traverse
 
   @type target ::
           %{type: :intra_workflow, step_id: String.t()}
@@ -46,24 +48,36 @@ defmodule Sacrum.Orchestrator.Routing.RouteConfig do
         }
 
   @references %{
-    "previous_output.route.result" => :previous_output_route_result,
-    "task.level" => :task_level,
-    "task.tags" => :task_tags,
-    "execution.step_visit_count" => :execution_step_visit_count
+    "previous_output.route.result" => %{
+      atom: :previous_output_route_result,
+      operators: [:eq, :neq, :in],
+      value: :string,
+      open?: false
+    },
+    "task.level" => %{
+      atom: :task_level,
+      operators: [:eq, :neq, :in],
+      value: :level,
+      open?: false
+    },
+    "task.tags" => %{
+      atom: :task_tags,
+      operators: [:contains, :contains_any, :contains_all],
+      value: :tags,
+      open?: true
+    },
+    "execution.step_visit_count" => %{
+      atom: :execution_step_visit_count,
+      operators: [:eq, :neq, :lt, :lte, :gt, :gte, :in],
+      value: :count,
+      open?: true
+    }
   }
 
-  @operators %{
-    "eq" => :eq,
-    "neq" => :neq,
-    "in" => :in,
-    "contains" => :contains,
-    "contains_any" => :contains_any,
-    "contains_all" => :contains_all,
-    "lt" => :lt,
-    "lte" => :lte,
-    "gt" => :gt,
-    "gte" => :gte
-  }
+  @operators Map.new(
+               [:eq, :neq, :in, :contains, :contains_any, :contains_all, :lt, :lte, :gt, :gte],
+               &{Atom.to_string(&1), &1}
+             )
 
   @levels MapSet.new(["epic", "ticket", "task"])
 
@@ -98,22 +112,11 @@ defmodule Sacrum.Orchestrator.Routing.RouteConfig do
     do: {:error, error("$.match_policy", "must be exactly_one")}
 
   defp decode_rules(rules) when is_list(rules) and rules != [] do
-    rules
-    |> Enum.with_index()
-    |> Enum.reduce_while({:ok, []}, fn {rule, index}, {:ok, decoded_rules} ->
-      case decode_rule(rule, "$.rules[#{index}]") do
-        {:ok, decoded_rule} -> {:cont, {:ok, [decoded_rule | decoded_rules]}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-    |> case do
-      {:ok, decoded_rules} ->
-        decoded_rules
-        |> Enum.reverse()
-        |> validate_unique_rule_ids()
-
-      {:error, reason} ->
-        {:error, reason}
+    with {:ok, decoded_rules} <-
+           Traverse.map_while(rules, fn rule, index ->
+             decode_rule(rule, "$.rules[#{index}]")
+           end) do
+      validate_unique_rule_ids(decoded_rules)
     end
   end
 
@@ -155,17 +158,11 @@ defmodule Sacrum.Orchestrator.Routing.RouteConfig do
 
   defp decode_composition(kind, expressions, path)
        when is_list(expressions) and expressions != [] do
-    expressions
-    |> Enum.with_index()
-    |> Enum.reduce_while({:ok, []}, fn {expression, index}, {:ok, decoded} ->
-      case decode_expression(expression, "#{path}.#{kind}[#{index}]") do
-        {:ok, decoded_expression} -> {:cont, {:ok, [decoded_expression | decoded]}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-    |> case do
-      {:ok, decoded} -> {:ok, %{kind: kind, expressions: Enum.reverse(decoded)}}
-      {:error, reason} -> {:error, reason}
+    with {:ok, decoded} <-
+           Traverse.map_while(expressions, fn expression, index ->
+             decode_expression(expression, "#{path}.#{kind}[#{index}]")
+           end) do
+      {:ok, %{kind: kind, expressions: decoded}}
     end
   end
 
@@ -181,18 +178,23 @@ defmodule Sacrum.Orchestrator.Routing.RouteConfig do
 
   defp decode_predicate(predicate, path) do
     with :ok <- validate_keys(predicate, ["ref", "op", "value"], [], path),
-         {:ok, ref} <- decode_reference(Map.fetch!(predicate, "ref"), "#{path}.ref"),
+         {:ok, spec} <- decode_reference(Map.fetch!(predicate, "ref"), "#{path}.ref"),
          {:ok, operator} <- decode_operator(Map.fetch!(predicate, "op"), "#{path}.op"),
-         :ok <- validate_operator(ref, operator, "#{path}.op"),
-         :ok <- validate_value(ref, operator, Map.fetch!(predicate, "value"), path) do
+         :ok <- validate_operator(spec, operator, "#{path}.op"),
+         :ok <- validate_value(spec, operator, Map.fetch!(predicate, "value"), path) do
       {:ok,
-       %{kind: :predicate, ref: ref, operator: operator, value: Map.fetch!(predicate, "value")}}
+       %{
+         kind: :predicate,
+         ref: spec.atom,
+         operator: operator,
+         value: Map.fetch!(predicate, "value")
+       }}
     end
   end
 
   defp decode_reference(reference, path) when is_binary(reference) do
     case Map.fetch(@references, reference) do
-      {:ok, normalized_reference} -> {:ok, normalized_reference}
+      {:ok, spec} -> {:ok, spec}
       :error -> {:error, error(path, "is not a supported route reference")}
     end
   end
@@ -208,55 +210,47 @@ defmodule Sacrum.Orchestrator.Routing.RouteConfig do
 
   defp decode_operator(_operator, path), do: {:error, error(path, "must be a string")}
 
-  defp validate_operator(reference, operator, _path)
-       when reference in [:previous_output_route_result, :task_level] and
-              operator in [:eq, :neq, :in],
-       do: :ok
+  defp validate_operator(%{operators: operators} = spec, operator, path) do
+    if operator in operators do
+      :ok
+    else
+      validate_operator_error(spec, operator, path)
+    end
+  end
 
-  defp validate_operator(:task_tags, operator, _path)
-       when operator in [:contains, :contains_any, :contains_all],
-       do: :ok
-
-  defp validate_operator(:execution_step_visit_count, operator, _path)
-       when operator in [:eq, :neq, :lt, :lte, :gt, :gte, :in],
-       do: :ok
-
-  defp validate_operator(reference, operator, path) do
+  defp validate_operator_error(%{atom: atom}, operator, path) do
     {:error,
      error(
        path,
-       "#{inspect(operator)} is not valid for #{inspect(reference)}",
+       "#{inspect(operator)} is not valid for #{inspect(atom)}",
        :route_operand_type_mismatch
      )}
   end
 
-  defp validate_value(:previous_output_route_result, operator, value, path),
-    do: validate_string_value(operator, value, path)
+  defp validate_value(%{value: :string}, :in, value, path),
+    do: validate_nonempty_string_list(value, "#{path}.value")
 
-  defp validate_value(:task_level, operator, value, path) do
+  defp validate_value(%{value: :string}, _operator, value, path),
+    do: validate_nonempty_string(value, "#{path}.value")
+
+  defp validate_value(%{value: :level}, operator, value, path) do
     case string_values(operator, value, path) do
       {:ok, values} -> validate_level_values(values, path)
       {:error, reason} -> {:error, reason}
     end
   end
 
-  defp validate_value(:task_tags, :contains, value, path),
+  defp validate_value(%{value: :tags}, :contains, value, path),
     do: validate_nonempty_string(value, "#{path}.value")
 
-  defp validate_value(:task_tags, _operator, value, path),
+  defp validate_value(%{value: :tags}, _operator, value, path),
     do: validate_nonempty_string_list(value, "#{path}.value")
 
-  defp validate_value(:execution_step_visit_count, :in, value, path),
+  defp validate_value(%{value: :count}, :in, value, path),
     do: validate_positive_integer_list(value, "#{path}.value")
 
-  defp validate_value(:execution_step_visit_count, _operator, value, path),
+  defp validate_value(%{value: :count}, _operator, value, path),
     do: validate_positive_integer(value, "#{path}.value")
-
-  defp validate_string_value(:in, value, path),
-    do: validate_nonempty_string_list(value, "#{path}.value")
-
-  defp validate_string_value(_operator, value, path),
-    do: validate_nonempty_string(value, "#{path}.value")
 
   defp string_values(:in, value, path) do
     with :ok <- validate_nonempty_string_list(value, "#{path}.value"), do: {:ok, value}
@@ -337,8 +331,9 @@ defmodule Sacrum.Orchestrator.Routing.RouteConfig do
   defp uses_open_domain_expression?(%{kind: :not, expression: expression}),
     do: uses_open_domain_expression?(expression)
 
-  defp uses_open_domain_expression?(%{kind: :predicate, ref: ref}),
-    do: ref in [:task_tags, :execution_step_visit_count]
+  defp uses_open_domain_expression?(%{kind: :predicate, ref: ref}) do
+    Enum.any?(@references, fn {_key, spec} -> spec.atom == ref and spec.open? end)
+  end
 
   defp decode_target(target, path) when is_map(target) do
     case Map.get(target, "type") do

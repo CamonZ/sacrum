@@ -1,7 +1,7 @@
-defmodule Sacrum.Orchestrator.Routing.RouteEvaluatorTest do
+defmodule Sacrum.Routing.RouteEvaluatorTest do
   use ExUnit.Case, async: true
 
-  alias Sacrum.Orchestrator.Routing.{RouteConfig, RouteContext, RouteEvaluator}
+  alias Sacrum.Routing.{RouteConfig, RouteContext, RouteEvaluator}
 
   @step_id "00000000-0000-0000-0000-000000000001"
   @workflow_id "00000000-0000-0000-0000-000000000002"

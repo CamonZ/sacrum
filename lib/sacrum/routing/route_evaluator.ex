@@ -1,4 +1,4 @@
-defmodule Sacrum.Orchestrator.Routing.RouteEvaluator do
+defmodule Sacrum.Routing.RouteEvaluator do
   @moduledoc """
   Pure evaluator for validated deterministic route programs.
 
@@ -6,7 +6,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteEvaluator do
   no repository, clock, prompt, daemon, or random dependencies.
   """
 
-  alias Sacrum.Orchestrator.Routing.{RouteConfig, RouteContext}
+  alias Sacrum.Routing.{RouteConfig, RouteContext, Traverse}
 
   @type result :: %{
           matched_rule_id: String.t() | nil,
@@ -30,18 +30,15 @@ defmodule Sacrum.Orchestrator.Routing.RouteEvaluator do
   end
 
   defp matching_rules(rules, context) do
-    rules
-    |> Enum.with_index()
-    |> Enum.reduce_while({:ok, []}, fn {rule, index}, {:ok, matches} ->
-      case rule_matches?(rule, context, "$.rules[#{index}]") do
-        {:ok, true} -> {:cont, {:ok, [rule | matches]}}
-        {:ok, false} -> {:cont, {:ok, matches}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-    |> case do
-      {:ok, matches} -> {:ok, Enum.reverse(matches)}
+    case Traverse.map_while(rules, &match_rule(&1, context, &2)) do
+      {:ok, matches} -> {:ok, for({true, rule} <- matches, do: rule)}
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp match_rule(rule, context, index) do
+    with {:ok, matched?} <- rule_matches?(rule, context, "$.rules[#{index}]") do
+      {:ok, {matched?, rule}}
     end
   end
 
@@ -67,7 +64,10 @@ defmodule Sacrum.Orchestrator.Routing.RouteEvaluator do
 
   defp evaluate_expression(%{kind: kind, expressions: expressions}, context, path)
        when kind in [:all, :any] do
-    with {:ok, results} <- evaluate_expressions(expressions, context, "#{path}.#{kind}") do
+    with {:ok, results} <-
+           Traverse.map_while(expressions, fn expression, index ->
+             evaluate_expression(expression, context, "#{path}.#{kind}[#{index}]")
+           end) do
       {:ok, if(kind == :all, do: Enum.all?(results), else: Enum.any?(results))}
     end
   end
@@ -83,22 +83,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteEvaluator do
          path
        ) do
     with {:ok, actual} <- fetch_reference(context, reference, path) do
-      {:ok, predicate_matches?(reference, operator, actual, expected)}
-    end
-  end
-
-  defp evaluate_expressions(expressions, context, path) do
-    expressions
-    |> Enum.with_index()
-    |> Enum.reduce_while({:ok, []}, fn {expression, index}, {:ok, results} ->
-      case evaluate_expression(expression, context, "#{path}[#{index}]") do
-        {:ok, result} -> {:cont, {:ok, [result | results]}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-    |> case do
-      {:ok, results} -> {:ok, Enum.reverse(results)}
-      {:error, reason} -> {:error, reason}
+      {:ok, predicate(operator, actual, expected)}
     end
   end
 
@@ -120,46 +105,16 @@ defmodule Sacrum.Orchestrator.Routing.RouteEvaluator do
     end
   end
 
-  defp predicate_matches?(reference, :eq, actual, expected)
-       when reference in [:previous_output_route_result, :task_level],
-       do: actual == expected
-
-  defp predicate_matches?(reference, :neq, actual, expected)
-       when reference in [:previous_output_route_result, :task_level],
-       do: actual != expected
-
-  defp predicate_matches?(reference, :in, actual, expected)
-       when reference in [:previous_output_route_result, :task_level],
-       do: actual in expected
-
-  defp predicate_matches?(:task_tags, :contains, tags, expected), do: expected in tags
-
-  defp predicate_matches?(:task_tags, :contains_any, tags, expected),
-    do: Enum.any?(expected, &(&1 in tags))
-
-  defp predicate_matches?(:task_tags, :contains_all, tags, expected),
-    do: Enum.all?(expected, &(&1 in tags))
-
-  defp predicate_matches?(:execution_step_visit_count, :eq, actual, expected),
-    do: actual == expected
-
-  defp predicate_matches?(:execution_step_visit_count, :neq, actual, expected),
-    do: actual != expected
-
-  defp predicate_matches?(:execution_step_visit_count, :lt, actual, expected),
-    do: actual < expected
-
-  defp predicate_matches?(:execution_step_visit_count, :lte, actual, expected),
-    do: actual <= expected
-
-  defp predicate_matches?(:execution_step_visit_count, :gt, actual, expected),
-    do: actual > expected
-
-  defp predicate_matches?(:execution_step_visit_count, :gte, actual, expected),
-    do: actual >= expected
-
-  defp predicate_matches?(:execution_step_visit_count, :in, actual, expected),
-    do: actual in expected
+  defp predicate(:eq, actual, expected), do: actual == expected
+  defp predicate(:neq, actual, expected), do: actual != expected
+  defp predicate(:in, actual, expected), do: actual in expected
+  defp predicate(:contains, tags, expected), do: expected in tags
+  defp predicate(:contains_any, tags, expected), do: Enum.any?(expected, &(&1 in tags))
+  defp predicate(:contains_all, tags, expected), do: Enum.all?(expected, &(&1 in tags))
+  defp predicate(:lt, actual, expected), do: actual < expected
+  defp predicate(:lte, actual, expected), do: actual <= expected
+  defp predicate(:gt, actual, expected), do: actual > expected
+  defp predicate(:gte, actual, expected), do: actual >= expected
 
   defp error(code, path, message), do: %{code: code, path: path, message: message}
 end

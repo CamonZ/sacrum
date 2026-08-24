@@ -1,7 +1,7 @@
-defmodule Sacrum.Orchestrator.Routing.RouteContextTest do
+defmodule Sacrum.Routing.RouteContextTest do
   use ExUnit.Case, async: true
 
-  alias Sacrum.Orchestrator.Routing.RouteContext
+  alias Sacrum.Routing.RouteContext
 
   test "builds only the four whitelisted route values" do
     previous_output = %{"route" => %{"result" => "approved", "handoff" => %{"note" => "ready"}}}

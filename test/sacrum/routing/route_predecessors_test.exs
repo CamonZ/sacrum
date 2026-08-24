@@ -1,7 +1,7 @@
-defmodule Sacrum.Orchestrator.Routing.RoutePredecessorsTest do
+defmodule Sacrum.Routing.RoutePredecessorsTest do
   use ExUnit.Case, async: true
 
-  alias Sacrum.Orchestrator.Routing.{RouteConfig, RoutePredecessors}
+  alias Sacrum.Routing.{RouteConfig, RoutePredecessors}
 
   @step_id "00000000-0000-0000-0000-000000000001"
 

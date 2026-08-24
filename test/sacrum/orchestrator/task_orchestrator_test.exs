@@ -181,6 +181,27 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     end
   end
 
+  defp wait_for_task_step(task, step_id, timeout \\ 2000) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+    do_wait_for_task_step(task, step_id, deadline)
+  end
+
+  defp do_wait_for_task_step(task, step_id, deadline) do
+    reloaded = reload_task(task)
+
+    cond do
+      reloaded.current_step_id == step_id ->
+        reloaded
+
+      System.monotonic_time(:millisecond) > deadline ->
+        flunk("Timed out waiting for task to reach step #{step_id}")
+
+      true ->
+        Process.sleep(10)
+        do_wait_for_task_step(task, step_id, deadline)
+    end
+  end
+
   defp cleanup_spawned_orchestrators(task_ids) do
     Enum.each(task_ids, fn task_id ->
       case Registry.lookup(Sacrum.Orchestrator.TaskRegistry, task_id) do
@@ -609,7 +630,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
   end
 
   describe "non-prompted continuation workflow" do
-    test "stops after completing and transitioning to next step" do
+    test "continues into a promptless execute step instead of stopping" do
       %{user: user, project: project, steps: [_s1, s2, _s3], task: task} =
         setup_linear_workflow(step_count: 3, promptless_after_first: true)
 
@@ -617,12 +638,10 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       wait_for_state(pid, :executing)
 
       simulate_daemon_completion(task.id, project.id)
-      wait_for_exit(pid)
+      wait_for_task_step(task, s2.id)
 
-      # Task should have advanced to step 2 but orchestrator stopped
-      assert reload_task(task).current_step_id == s2.id
-      # Task should NOT be completed
       assert reload_task(task).completed_at == nil
+      assert Process.alive?(pid)
     end
 
     test "completes at a promptless final sink step in a final workflow without executing it" do
@@ -742,13 +761,9 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
       simulate_daemon_completion(task.id, project.id, route_output)
 
-      # Orchestrator should stop (promptless destination)
-      wait_for_exit(pid)
-
-      # Task should now be at dest_step
-      task = reload_task(task)
-      assert task.current_step_id == dest_step.id
+      task = wait_for_task_step(task, dest_step.id)
       assert task.completed_at == nil
+      assert Process.alive?(pid)
     end
 
     test "fails when route step output has invalid destination in same workflow" do
@@ -864,13 +879,10 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
       simulate_daemon_completion(task.id, project.id, route_output)
 
-      wait_for_exit(pid)
-
-      # Task should now be in workflow2, at its initial step
-      task = reload_task(task)
+      task = wait_for_task_step(task, step2_1.id)
       assert task.workflow_id == workflow2.id
-      assert task.current_step_id == step2_1.id
       assert task.completed_at == nil
+      assert Process.alive?(pid)
     end
 
     test "routes task to destination workflow with target step override" do
@@ -933,14 +945,10 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
       simulate_daemon_completion(task.id, project.id, route_output)
 
-      wait_for_exit(pid)
-
-      # workflow2 has promptless, so the orchestrator stops at the
-      # final step instead of dispatching it; completed_at stays nil.
-      task = reload_task(task)
+      task = wait_for_task_step(task, step2_2.id)
       assert task.workflow_id == workflow2.id
-      assert task.current_step_id == step2_2.id
       assert task.completed_at == nil
+      assert Process.alive?(pid)
     end
 
     test "fails when route output references workflow in different project" do
@@ -1209,7 +1217,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "dest_step",
           step_order: 2,
-          step_type: "execute",
+          step_type: "finish",
           prompt: nil
         })
 
@@ -1263,7 +1271,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "dest_step",
           step_order: 2,
-          step_type: "execute",
+          step_type: "finish",
           prompt: nil
         })
 
@@ -1305,7 +1313,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "dest_step",
           step_order: 2,
-          step_type: "execute",
+          step_type: "finish",
           prompt: nil
         })
 
@@ -1352,7 +1360,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "dest_step",
           step_order: 2,
-          step_type: "execute",
+          step_type: "finish",
           prompt: nil
         })
 
@@ -1399,7 +1407,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "dest_step",
           step_order: 2,
-          step_type: "execute",
+          step_type: "finish",
           prompt: nil
         })
 
@@ -1457,7 +1465,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "final_step",
           step_order: 3,
-          step_type: "execute",
+          step_type: "finish",
           prompt: nil
         })
 
@@ -1832,7 +1840,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "dest_step",
           step_order: 2,
-          step_type: "execute",
+          step_type: "finish",
           prompt: nil
         })
 
@@ -1897,7 +1905,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow2, %{
           name: "dest_step",
           step_order: 1,
-          step_type: "execute",
+          step_type: "finish",
           prompt: nil
         })
 
@@ -1965,7 +1973,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "dest_step",
           step_order: 2,
-          step_type: "execute",
+          step_type: "finish",
           prompt: nil
         })
 
@@ -2080,7 +2088,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "dest_step",
           step_order: 2,
-          step_type: "execute",
+          step_type: "finish",
           prompt: nil
         })
 
@@ -2228,6 +2236,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "final_step",
           step_order: 2,
+          step_type: "finish",
           prompt: nil
         })
 
@@ -2260,6 +2269,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "final_step",
           step_order: 2,
+          step_type: "finish",
           prompt: nil
         })
 
@@ -2341,6 +2351,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "final_step",
           step_order: 2,
+          step_type: "finish",
           prompt: nil
         })
 
@@ -2389,6 +2400,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "final_step",
           step_order: 2,
+          step_type: "finish",
           prompt: nil
         })
 
@@ -2927,6 +2939,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "final_step",
           step_order: 2,
+          step_type: "finish",
           prompt: nil
         })
 

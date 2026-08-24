@@ -48,17 +48,19 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
   end
 
   @doc """
-  Determine the next FSM state based on the destination step configuration.
+  Determine the next FSM state based on the destination step type.
 
   Returns gen_statem tuples:
-  - `{:next_state, :awaiting_execution, data}` for orchestrator-owned control
-    steps or when the next step has a prompt
-  - `{:stop, :normal, data}` if a generic destination has no prompt
+  - `{:next_state, :awaiting_execution, data}` for execute, evaluate, route,
+    wait_children, and human_input steps
+  - `{:stop, :normal, data}` for finish and stop destinations
   - `{:next_state, :failed, data}` on error (nil step_id / not found)
 
-  A finish destination is promptless and stops normally. The task has already
-  been marked complete by the step-transition changeset before this decision is
-  applied, so the finish step is never dispatched.
+  A finish destination stops normally. The task has already been marked complete
+  by the step-transition changeset before this decision is applied, so the
+  finish step is never dispatched. Prompt presence is not used to decide
+  whether a step runs; interpolation and daemon dispatch belong to the
+  dispatcher and are based on step type.
   """
   @spec determine_next_state(binary() | nil, FSMData.t()) ::
           {:next_state, atom(), FSMData.t()} | {:stop, atom(), FSMData.t()}
@@ -89,40 +91,17 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
     end
   end
 
-  @spec promptless_step_completed_attrs(binary()) :: map()
-  def promptless_step_completed_attrs(next_step_id) do
-    %{
-      outcome_kind: "step_completed",
-      outcome_context: %{
-        "reason" => "promptless_destination_step",
-        "current_step_id" => next_step_id
-      }
-    }
-  end
-
-  @spec prompted_step?(WorkflowStep.t() | struct()) :: boolean()
-  def prompted_step?(%{prompt: prompt}), do: not is_nil(prompt)
-
   @spec next_state_for_step(WorkflowStep.t() | struct(), binary()) ::
           {:next_state, :awaiting_execution} | {:stop, :normal, map()}
-  defp next_state_for_step(step, next_step_id) do
-    cond do
-      step.step_type == :finish ->
-        {:stop, :normal, finish_step_completed_attrs(next_step_id)}
-
-      step.step_type == :stop ->
-        {:stop, :normal, run_boundary_attrs(next_step_id)}
-
-      step.step_type in [:wait_children, :human_input] ->
-        {:next_state, :awaiting_execution}
-
-      prompted_step?(step) ->
-        {:next_state, :awaiting_execution}
-
-      true ->
-        {:stop, :normal, promptless_step_completed_attrs(next_step_id)}
-    end
+  defp next_state_for_step(%{step_type: :finish}, next_step_id) do
+    {:stop, :normal, finish_step_completed_attrs(next_step_id)}
   end
+
+  defp next_state_for_step(%{step_type: :stop}, next_step_id) do
+    {:stop, :normal, run_boundary_attrs(next_step_id)}
+  end
+
+  defp next_state_for_step(_step, _next_step_id), do: {:next_state, :awaiting_execution}
 
   @spec maybe_mark_task_run_completed_for_decision(FSMData.t() | map(), tuple(), map()) ::
           {:ok, map()} | {:error, term()}
