@@ -10,7 +10,11 @@ defmodule Sacrum.Accounts.WorkflowSteps do
     preloads: [],
     default_order: [asc: :step_order, asc: :inserted_at]
 
-  alias Sacrum.Orchestrator.Routing.RouteConfig
+  import Ecto.Query
+
+  alias Sacrum.Orchestrator.Routing.{RouteConfig, RouteContext}
+  alias Sacrum.Repo
+  alias Sacrum.Repo.Schemas.StepTransition
   alias Sacrum.Repo.Schemas.WorkflowStep
   alias Sacrum.Repo.WorkflowSteps, as: WorkflowStepsRepo
 
@@ -94,11 +98,12 @@ defmodule Sacrum.Accounts.WorkflowSteps do
   defp validate_route_config(%{valid?: false} = changeset), do: changeset
 
   defp validate_route_config(changeset) do
-    case Ecto.Changeset.get_field(changeset, :route_config) do
-      route_config when is_map(route_config) ->
+    case {Ecto.Changeset.get_field(changeset, :step_type),
+          Ecto.Changeset.get_field(changeset, :route_config)} do
+      {:route, route_config} when is_map(route_config) ->
         case RouteConfig.decode(route_config) do
-          {:ok, _decoded} ->
-            changeset
+          {:ok, program} ->
+            validate_route_program(changeset, program)
 
           {:error, %{path: path, message: message}} ->
             Ecto.Changeset.add_error(changeset, :route_config, "#{path}: #{message}")
@@ -107,5 +112,42 @@ defmodule Sacrum.Accounts.WorkflowSteps do
       _ ->
         changeset
     end
+  end
+
+  defp validate_route_program(changeset, program) do
+    with :ok <- RouteContext.validate(program),
+         :ok <- validate_deterministic_route_program(changeset, program) do
+      changeset
+    else
+      {:error, %{path: path, message: message}} ->
+        Ecto.Changeset.add_error(changeset, :route_config, "#{path}: #{message}")
+    end
+  end
+
+  defp validate_deterministic_route_program(changeset, program) do
+    if Ecto.Changeset.get_field(changeset, :prompt) == nil do
+      changeset
+      |> predecessor_schemas()
+      |> RouteContext.derive_type_environment()
+      |> case do
+        {:ok, type_environment} -> RouteContext.validate(program, type_environment)
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      :ok
+    end
+  end
+
+  defp predecessor_schemas(%{data: %{id: nil}}), do: []
+
+  defp predecessor_schemas(%{data: %{id: route_step_id}}) do
+    Repo.all(
+      from(transition in StepTransition,
+        join: predecessor in WorkflowStep,
+        on: predecessor.id == transition.from_step_id,
+        where: transition.to_step_id == ^route_step_id,
+        select: predecessor.output_schema
+      )
+    )
   end
 end

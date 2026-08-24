@@ -3,6 +3,7 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
 
   alias Sacrum.Accounts.WorkflowSteps
   alias Sacrum.Accounts.Workflows
+  alias Sacrum.Accounts.StepTransitions
   alias Sacrum.Accounts.Tasks
   alias Sacrum.Accounts.Projects
   alias Sacrum.Repo.Users
@@ -271,5 +272,141 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
       assert %{route_config: [message]} = errors_on(changeset)
       assert message =~ "$.version: only version 1 is supported"
     end
+
+    test "rejects ill-typed staged configurations" do
+      user = create_user()
+      {_project, workflow} = create_workflow(user)
+
+      cases = [
+        {%{"ref" => "task.tags", "op" => "eq", "value" => "backend"}, default_transition(),
+         "$.rules[0].when.op"},
+        {%{"ref" => "execution.step_visit_count", "op" => "gte", "value" => 0},
+         default_transition(), "$.rules[0].when.value"},
+        {%{"ref" => "task.tags", "op" => "contains_all", "value" => []}, default_transition(),
+         "$.rules[0].when.value"},
+        {%{"ref" => "task.tags", "op" => "contains", "value" => "backend"}, nil, "$.default"}
+      ]
+
+      for {condition, default, expected_path} <- cases do
+        assert {:error, changeset} =
+                 WorkflowSteps.insert(workflow, %{
+                   name: "Route",
+                   step_type: "route",
+                   prompt: "Choose a destination",
+                   route_config: route_config(condition, default)
+                 })
+
+        assert %{route_config: [message]} = errors_on(changeset)
+        assert message =~ expected_path
+      end
+    end
+
+    test "requires valid predecessor envelopes when activating deterministic routing" do
+      user = create_user()
+      {_project, workflow} = create_workflow(user)
+
+      {:ok, staged} =
+        WorkflowSteps.insert(workflow, %{
+          name: "Route",
+          step_type: "route",
+          prompt: "Choose a destination",
+          route_config:
+            route_config(%{
+              "ref" => "previous_output.route.result",
+              "op" => "eq",
+              "value" => "approved"
+            })
+        })
+
+      assert {:error, changeset} = WorkflowSteps.update(staged, %{prompt: nil})
+      assert %{route_config: [message]} = errors_on(changeset)
+      assert message =~ "$.predecessors"
+    end
+
+    test "activates a configuration whose predecessor envelope type-checks" do
+      user = create_user()
+      {project, workflow} = create_workflow(user)
+
+      {:ok, staged} =
+        WorkflowSteps.insert(workflow, %{
+          name: "Route",
+          step_type: "route",
+          prompt: "Choose a destination",
+          route_config:
+            route_config(%{
+              "ref" => "previous_output.route.result",
+              "op" => "eq",
+              "value" => "approved"
+            })
+        })
+
+      {:ok, predecessor} =
+        WorkflowSteps.insert(workflow, %{
+          name: "Source",
+          prompt: "Produce a route result",
+          output_schema: predecessor_schema()
+        })
+
+      assert {:ok, _transition} =
+               StepTransitions.insert(user.id, %{
+                 from_step_id: predecessor.id,
+                 to_step_id: staged.id,
+                 project_id: project.id
+               })
+
+      assert {:ok, deterministic} = WorkflowSteps.update(staged, %{prompt: nil})
+      assert deterministic.prompt == nil
+    end
+  end
+
+  defp route_config(condition, default \\ default_transition()) do
+    %{
+      "version" => 1,
+      "match_policy" => "exactly_one",
+      "rules" => [
+        %{
+          "id" => "route",
+          "when" => condition,
+          "transition" => %{
+            "type" => "intra_workflow",
+            "step_id" => "00000000-0000-0000-0000-000000000001"
+          }
+        }
+      ],
+      "default" => default
+    }
+  end
+
+  defp default_transition do
+    %{
+      "transition" => %{
+        "type" => "intra_workflow",
+        "step_id" => "00000000-0000-0000-0000-000000000002"
+      }
+    }
+  end
+
+  defp predecessor_schema do
+    %{
+      "type" => "object",
+      "properties" => %{
+        "route" => %{
+          "type" => "object",
+          "additionalProperties" => false,
+          "required" => ["result", "handoff"],
+          "properties" => %{
+            "result" => %{"type" => "string", "enum" => ["approved", "rejected"]},
+            "handoff" => %{
+              "type" => "object",
+              "additionalProperties" => false,
+              "required" => ["note"],
+              "properties" => %{"note" => %{"type" => "string"}}
+            }
+          }
+        }
+      },
+      "required" => ["route"],
+      "additionalProperties" => false
+    }
   end
 end

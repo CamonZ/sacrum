@@ -90,6 +90,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteContextTest do
         "default" => %{"transition" => %{"type" => "intra_workflow", "step_id" => @step_id}}
       })
 
+    assert :ok = RouteContext.validate(program)
     assert :ok = RouteContext.validate(program, ["approved", "rejected"])
   end
 

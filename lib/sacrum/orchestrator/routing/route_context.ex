@@ -24,6 +24,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteContext do
         }
 
   @type type_environment :: %{result_values: MapSet.t(String.t())}
+  @type result_values :: MapSet.t(String.t()) | :unknown_result_values
   @type error :: %{code: atom(), path: String.t(), message: String.t()}
 
   @doc """
@@ -65,9 +66,19 @@ defmodule Sacrum.Orchestrator.Routing.RouteContext do
     do: {:error, error(:route_reference_unknown, "$", "#{inspect(reference)} is not routable")}
 
   @doc """
+  Validates every type rule that does not depend on a predecessor result enum.
+
+  Use this while a route configuration is staged. A promptless deterministic
+  route must additionally call validate/2 with its predecessor environment.
+  """
+  @spec validate(map()) :: :ok | {:error, error()}
+  def validate(program), do: validate(program, :unknown_result_values)
+
+  @doc """
   Validates a decoded route program against its predecessor result enum union.
   """
-  @spec validate(map(), type_environment() | [String.t()]) :: :ok | {:error, error()}
+  @spec validate(map(), type_environment() | [String.t()] | result_values()) ::
+          :ok | {:error, error()}
   def validate(%{rules: rules, default: default}, environment) when is_list(rules) do
     case result_values(environment) do
       {:ok, result_values} -> validate_rules_and_default(rules, default, result_values)
@@ -176,6 +187,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteContext do
      error(:route_input_invalid, "$.execution.step_visit_count", "must be a positive integer")}
   end
 
+  defp result_values(:unknown_result_values), do: {:ok, :unknown_result_values}
   defp result_values(%{result_values: %MapSet{} = result_values}), do: {:ok, result_values}
 
   defp result_values(result_values) when is_list(result_values) do
@@ -310,6 +322,8 @@ defmodule Sacrum.Orchestrator.Routing.RouteContext do
       {:ok, [value]}
     end
   end
+
+  defp validate_enum_values(_values, :unknown_result_values, _path), do: :ok
 
   defp validate_enum_values(values, allowed_values, path) do
     unknown_values = Enum.reject(values, &MapSet.member?(allowed_values, &1))
