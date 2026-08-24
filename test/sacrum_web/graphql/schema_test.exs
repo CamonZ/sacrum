@@ -2081,36 +2081,47 @@ defmodule SacrumWeb.Graphql.SchemaTest do
     setup [:setup_user_and_project]
 
     test "lists workflows for a project", %{conn: conn, user: user, project: project} do
-      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "My Workflow"})
+      {:ok, wf} =
+        Accounts.Workflows.insert(user.id, project.id, %{
+          name: "My Workflow",
+          factory_name: "Workflow Factory"
+        })
 
       result =
         conn
         |> authenticate(user)
         |> graphql("""
-          { workflows(projectId: "#{project.id}") { id name description } }
+          { workflows(projectId: "#{project.id}") { id name description factoryName } }
         """)
         |> json_response(200)
 
       workflows = result["data"]["workflows"]
       assert length(workflows) == 2
-      assert Enum.any?(workflows, &(&1["id"] == wf.id and &1["name"] == "My Workflow"))
+
+      assert Enum.any?(workflows, fn workflow ->
+               workflow["id"] == wf.id and
+                 workflow["name"] == "My Workflow" and
+                 workflow["factoryName"] == "Workflow Factory"
+             end)
     end
 
     test "gets a single workflow", %{conn: conn, user: user, project: project} do
       {:ok, wf} =
         Accounts.Workflows.insert(user.id, project.id, %{
           name: "WF",
-          description: "A workflow"
+          description: "A workflow",
+          factory_name: "Single Workflow Factory"
         })
 
       result =
         conn
         |> authenticate(user)
-        |> graphql(~s|{ workflow(id: "#{wf.id}") { id name description } }|)
+        |> graphql(~s|{ workflow(id: "#{wf.id}") { id name description factoryName } }|)
         |> json_response(200)
 
       assert result["data"]["workflow"]["id"] == wf.id
       assert result["data"]["workflow"]["description"] == "A workflow"
+      assert result["data"]["workflow"]["factoryName"] == "Single Workflow Factory"
     end
   end
 
@@ -2748,7 +2759,8 @@ defmodule SacrumWeb.Graphql.SchemaTest do
               name: "New WF"
               description: "Desc"
               isDefault: false
-            ) { id name description isDefault }
+              factoryName: "Created Workflow Factory"
+            ) { id name description isDefault factoryName }
           }
         """)
         |> json_response(200)
@@ -2756,6 +2768,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       data = result["data"]["createWorkflow"]
       assert data["name"] == "New WF"
       assert data["isDefault"] == false
+      assert data["factoryName"] == "Created Workflow Factory"
     end
 
     test "updates a workflow", %{conn: conn, user: user, project: project} do
@@ -2766,8 +2779,13 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         |> authenticate(user)
         |> graphql("""
           mutation {
-            updateWorkflow(id: "#{wf.id}", name: "Updated", description: "New desc") {
-              id name description
+            updateWorkflow(
+              id: "#{wf.id}"
+              name: "Updated"
+              description: "New desc"
+              factoryName: "Updated Workflow Factory"
+            ) {
+              id name description factoryName
             }
           }
         """)
@@ -2775,6 +2793,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
       assert result["data"]["updateWorkflow"]["name"] == "Updated"
       assert result["data"]["updateWorkflow"]["description"] == "New desc"
+      assert result["data"]["updateWorkflow"]["factoryName"] == "Updated Workflow Factory"
     end
 
     test "deletes a workflow", %{conn: conn, user: user, project: project} do

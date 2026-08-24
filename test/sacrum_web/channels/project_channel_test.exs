@@ -1114,6 +1114,7 @@ defmodule SacrumWeb.ProjectChannelTest do
       metadata: %{},
       initial_step_id: nil,
       kanban_column: nil,
+      factory_name: nil,
       project_id: project.id,
       inserted_at: now,
       updated_at: now

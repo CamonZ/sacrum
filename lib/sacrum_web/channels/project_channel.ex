@@ -554,6 +554,7 @@ defmodule SacrumWeb.ProjectChannel do
       metadata: workflow.metadata,
       initial_step_id: workflow.initial_step_id,
       kanban_column: workflow.kanban_column,
+      factory_name: workflow.factory_name,
       project_id: workflow.project_id,
       inserted_at: workflow.inserted_at,
       updated_at: workflow.updated_at
