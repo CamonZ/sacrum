@@ -2994,6 +2994,44 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert result["data"]["deleteWorkflowStep"]["id"] == step.id
     end
 
+    test "returns a serialized error and preserves an assigned step and tasks", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      [step] = Accounts.WorkflowSteps.list_by(user.id, conditions: [project_id: project.id])
+      {:ok, task_one} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task one"})
+      {:ok, task_two} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task two"})
+
+      assert task_one.current_step_id == step.id
+      assert task_two.current_step_id == step.id
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation { deleteWorkflowStep(id: "#{step.id}") { id } }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["deleteWorkflowStep"] == nil
+      assert [%{"message" => message}] = result["errors"]
+      assert message == "cannot delete a workflow step that is assigned to one or more tasks"
+      refute message =~ "Postgrex"
+      refute message =~ "SQLSTATE"
+
+      assert {:ok, found_step} = Accounts.WorkflowSteps.get_by(user.id, conditions: [id: step.id])
+      assert found_step.id == step.id
+
+      assert {:ok, found_task_one} = Accounts.Tasks.get_by(user.id, conditions: [id: task_one.id])
+      assert found_task_one.current_step_id == step.id
+      assert found_task_one.title == "Task one"
+
+      assert {:ok, found_task_two} = Accounts.Tasks.get_by(user.id, conditions: [id: task_two.id])
+      assert found_task_two.current_step_id == step.id
+      assert found_task_two.title == "Task two"
+    end
+
     test "creates workflow step with prompt", %{
       conn: conn,
       user: user,

@@ -10,7 +10,7 @@ defmodule Sacrum.Repo.WorkflowSteps do
   - `all/0` returns `[step]`
   - `insert/1` returns `{:ok, step}` or `{:error, changeset}`
   - `update/1` returns `{:ok, step}` or `{:error, changeset}`
-  - `delete/1` returns `{:ok, step}` or `{:error, changeset}`
+  - `delete/1` returns `{:ok, step}` or `{:error, changeset | atom}`
   - `sync_transitions/2` returns `{:ok, [transitions]}` or `{:error, changeset}` or `{:error, atom}`
 
   ## Domain-Specific Errors
@@ -31,6 +31,7 @@ defmodule Sacrum.Repo.WorkflowSteps do
   import Ecto.Query
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.StepTransition
+  alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.Schemas.Workflow
   alias Sacrum.Repo.Schemas.WorkflowStep
   alias Sacrum.Repo.SyncHelper
@@ -219,9 +220,14 @@ defmodule Sacrum.Repo.WorkflowSteps do
     end
   end
 
-  @spec delete(WorkflowStep.t()) :: {:ok, WorkflowStep.t()} | {:error, Ecto.Changeset.t()}
+  @spec delete(WorkflowStep.t()) ::
+          {:ok, WorkflowStep.t()} | {:error, Ecto.Changeset.t()} | {:error, :assigned_tasks}
   def delete(%WorkflowStep{} = step) do
-    Repo.delete(step)
+    if Repo.exists?(from(t in Task, where: t.current_step_id == ^step.id)) do
+      {:error, :assigned_tasks}
+    else
+      Repo.delete(step)
+    end
   end
 
   @doc """
