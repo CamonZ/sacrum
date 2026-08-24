@@ -791,17 +791,19 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       assert draft.output_schema == nil
     end
 
-    test "treats empty prompts as legacy rather than clearing them" do
+    test "treats empty prompts from either key format as legacy rather than clearing them" do
       workflow = create_workflow()
+      string_attrs = Map.new(@valid_attrs, fn {key, value} -> {to_string(key), value} end)
 
-      assert {:ok, step} =
-               WorkflowSteps.insert(
-                 workflow,
-                 Map.merge(@valid_attrs, %{step_type: "route", prompt: ""})
-               )
+      for attrs <- [
+            Map.merge(@valid_attrs, %{step_type: "route", prompt: ""}),
+            Map.merge(string_attrs, %{"step_type" => "route", "prompt" => ""})
+          ] do
+        assert {:ok, step} = WorkflowSteps.insert(workflow, attrs)
 
-      assert step.prompt == ""
-      assert step.output_schema == WorkflowStep.routing_contract_schema()
+        assert step.prompt == ""
+        assert step.output_schema == WorkflowStep.routing_contract_schema()
+      end
     end
 
     test "requires explicit route_config clearing before changing to a non-route step" do

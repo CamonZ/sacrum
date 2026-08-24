@@ -73,11 +73,15 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
   defp cast_step(step, attrs, fields) do
     changeset = cast(step, attrs, fields)
 
-    case Map.get(attrs, :prompt, Map.get(attrs, "prompt")) do
-      "" -> put_change(changeset, :prompt, "")
-      _ -> changeset
-    end
+    if submitted_empty_prompt?(attrs), do: put_change(changeset, :prompt, ""), else: changeset
   end
+
+  # Changesets are called directly by atom-keyed repository callers and
+  # string-keyed import/API callers. Preserve explicit empty prompts in both
+  # formats because Ecto's default cast would otherwise turn them into nil.
+  defp submitted_empty_prompt?(%{prompt: prompt}), do: prompt == ""
+  defp submitted_empty_prompt?(%{"prompt" => prompt}), do: prompt == ""
+  defp submitted_empty_prompt?(_attrs), do: false
 
   defp validate_finish_step_prompt(changeset) do
     if get_field(changeset, :step_type) == :finish and
