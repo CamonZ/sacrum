@@ -3,7 +3,8 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
   import Ecto.Changeset
   require Logger
 
-  alias Sacrum.Orchestrator.Routing.RouteMode
+  alias Sacrum.JsonSchema.Strict
+  alias Sacrum.Orchestrator.Routing.RouteConfig
 
   @type t :: %__MODULE__{}
   @primary_key {:id, :binary_id, autogenerate: true}
@@ -53,6 +54,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     |> validate_output_schema()
     |> validate_route_step_schema()
     |> validate_route_config_scope()
+    |> validate_route_config()
     |> foreign_key_constraint(:workflow_id)
     |> foreign_key_constraint(:project_id)
   end
@@ -66,6 +68,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     |> validate_output_schema()
     |> validate_route_step_schema()
     |> validate_route_config_scope()
+    |> validate_route_config()
   end
 
   # Private validation functions
@@ -79,7 +82,8 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     end
   end
 
-  defp nonblank_prompt?(prompt), do: RouteMode.legacy_prompt?(prompt)
+  defp nonblank_prompt?(prompt) when is_binary(prompt), do: String.trim(prompt) != ""
+  defp nonblank_prompt?(_prompt), do: false
 
   defp validate_output_schema(changeset) do
     case get_field(changeset, :output_schema) do
@@ -113,7 +117,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
   end
 
   defp validate_codex_provider_output_schema(changeset, schema) do
-    case validate_codex_strict_schema(schema) do
+    case Strict.validate(schema) do
       :ok ->
         changeset
 
@@ -152,16 +156,18 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     output_schema = get_field(changeset, :output_schema)
     prompt = get_field(changeset, :prompt)
 
-    case {step_type, output_schema} do
-      {:route, nil} ->
-        if RouteMode.legacy_prompt?(prompt) do
-          put_change(changeset, :output_schema, routing_contract_schema())
-        else
-          changeset
-        end
+    case {step_type, prompt, output_schema} do
+      {:route, prompt, nil} when not is_nil(prompt) ->
+        put_change(changeset, :output_schema, routing_contract_schema())
 
-      {:route, schema} when is_map(schema) ->
+      {:route, prompt, schema} when not is_nil(prompt) and is_map(schema) ->
         validate_routing_contract_schema(changeset, schema)
+
+      {:route, nil, nil} ->
+        changeset
+
+      {:route, nil, _schema} ->
+        add_error(changeset, :output_schema, "must be blank for deterministic route steps")
 
       _ ->
         changeset
@@ -178,6 +184,24 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
 
       {_step_type, _route_config} ->
         add_error(changeset, :route_config, "is only supported for route steps")
+    end
+  end
+
+  defp validate_route_config(%{valid?: false} = changeset), do: changeset
+
+  defp validate_route_config(changeset) do
+    case {get_field(changeset, :step_type), get_field(changeset, :route_config)} do
+      {:route, route_config} when is_map(route_config) ->
+        case RouteConfig.decode(route_config) do
+          {:ok, _program} ->
+            changeset
+
+          {:error, %{path: path, message: message}} ->
+            add_error(changeset, :route_config, "#{path}: #{message}")
+        end
+
+      _ ->
+        changeset
     end
   end
 
@@ -238,68 +262,6 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
   end
 
   def validate_routing_contract_schema(_schema), do: {:error, "schema must be a map"}
-
-  @spec validate_codex_strict_schema(map()) :: :ok | {:error, String.t()}
-  def validate_codex_strict_schema(schema) when is_map(schema) do
-    validate_codex_strict_schema(schema, "schema")
-  end
-
-  def validate_codex_strict_schema(_schema), do: {:error, "schema must be a map"}
-
-  defp validate_codex_strict_schema(schema, path) when is_map(schema) do
-    cond do
-      Map.has_key?(schema, "const") ->
-        {:error, "#{path}.const is not supported"}
-
-      is_list(schema["type"]) ->
-        {:error, "#{path}.type must be a single string, not a type array"}
-
-      not is_binary(schema["type"]) ->
-        {:error, "#{path}.type must be a string"}
-
-      schema["type"] == "object" ->
-        validate_codex_strict_object_schema(schema, path)
-
-      schema["type"] == "array" ->
-        validate_codex_strict_array_schema(schema, path)
-
-      true ->
-        :ok
-    end
-  end
-
-  defp validate_codex_strict_schema(_schema, path),
-    do: {:error, "#{path} must be a schema object"}
-
-  defp validate_codex_strict_object_schema(schema, path) do
-    with :ok <-
-           require_exact_value(
-             schema,
-             "additionalProperties",
-             false,
-             "#{path}.additionalProperties must be false"
-           ),
-         {:ok, properties} <- fetch_map(schema, "properties", "#{path}.properties must be a map"),
-         :ok <- validate_required_keys(schema, Map.keys(properties), "#{path}.required") do
-      validate_codex_strict_properties(properties, path)
-    end
-  end
-
-  defp validate_codex_strict_properties(properties, path) do
-    Enum.reduce_while(properties, :ok, fn {key, property_schema}, :ok ->
-      case validate_codex_strict_schema(property_schema, "#{path}.#{key}") do
-        :ok -> {:cont, :ok}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-  end
-
-  defp validate_codex_strict_array_schema(schema, path) do
-    case Map.get(schema, "items") do
-      items when is_map(items) -> validate_codex_strict_schema(items, "#{path}.items")
-      _ -> {:error, "#{path}.items must be a schema object"}
-    end
-  end
 
   defp validate_route_properties(properties) do
     property_keys = Map.keys(properties)

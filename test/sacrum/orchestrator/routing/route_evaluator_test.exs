@@ -120,38 +120,6 @@ defmodule Sacrum.Orchestrator.Routing.RouteEvaluatorTest do
              Enum.map(1..3, fn _attempt -> RouteEvaluator.evaluate(program, context) end)
   end
 
-  test "defensively rejects an invalid operand type" do
-    invalid_program = %{
-      rules: [
-        %{
-          id: "bad-count",
-          when: %{kind: :predicate, ref: :execution_step_visit_count, operator: :gte, value: "2"},
-          transition: %{type: :intra_workflow, step_id: @step_id}
-        }
-      ],
-      default: nil
-    }
-
-    assert {:error, %{code: :route_operand_type_mismatch, path: "$.rules[0].when.value"}} =
-             RouteEvaluator.evaluate(invalid_program, context("approved", "task", [], 2))
-  end
-
-  test "rejects decoded programs that fail static route validation" do
-    invalid_program = %{
-      rules: [
-        %{
-          id: "invalid-tags",
-          when: %{kind: :predicate, ref: :task_tags, operator: :eq, value: "backend"},
-          transition: %{type: :intra_workflow, step_id: @step_id}
-        }
-      ],
-      default: %{type: :intra_workflow, step_id: @step_id}
-    }
-
-    assert {:error, %{code: :route_operand_type_mismatch, path: "$.rules[0].when.op"}} =
-             RouteEvaluator.evaluate(invalid_program, context("approved", "task", [], 2))
-  end
-
   defp program(rules, default \\ default()) do
     {:ok, decoded} =
       RouteConfig.decode(%{

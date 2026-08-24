@@ -37,7 +37,10 @@ defmodule Sacrum.Orchestrator.Routing.RouteConfig do
   @type rule :: %{id: String.t(), when: expression(), transition: target()}
   @type t :: %{version: 1, match_policy: :exactly_one, rules: [rule()], default: target() | nil}
   @type error :: %{
-          code: :route_config_invalid | :route_config_version_unsupported,
+          code:
+            :route_config_invalid
+            | :route_config_version_unsupported
+            | :route_operand_type_mismatch,
           path: String.t(),
           message: String.t()
         }
@@ -62,6 +65,8 @@ defmodule Sacrum.Orchestrator.Routing.RouteConfig do
     "gte" => :gte
   }
 
+  @levels MapSet.new(["epic", "ticket", "task"])
+
   @rule_id ~r/^[A-Za-z0-9][A-Za-z0-9._-]*$/
 
   @doc """
@@ -73,7 +78,8 @@ defmodule Sacrum.Orchestrator.Routing.RouteConfig do
          :ok <- validate_version(config),
          :ok <- validate_match_policy(config),
          {:ok, rules} <- decode_rules(Map.fetch!(config, "rules")),
-         {:ok, default} <- decode_default(Map.get(config, "default")) do
+         {:ok, default} <- decode_default(Map.get(config, "default")),
+         :ok <- validate_default(rules, default) do
       {:ok, %{version: 1, match_policy: :exactly_one, rules: rules, default: default}}
     end
   end
@@ -176,7 +182,9 @@ defmodule Sacrum.Orchestrator.Routing.RouteConfig do
   defp decode_predicate(predicate, path) do
     with :ok <- validate_keys(predicate, ["ref", "op", "value"], [], path),
          {:ok, ref} <- decode_reference(Map.fetch!(predicate, "ref"), "#{path}.ref"),
-         {:ok, operator} <- decode_operator(Map.fetch!(predicate, "op"), "#{path}.op") do
+         {:ok, operator} <- decode_operator(Map.fetch!(predicate, "op"), "#{path}.op"),
+         :ok <- validate_operator(ref, operator, "#{path}.op"),
+         :ok <- validate_value(ref, operator, Map.fetch!(predicate, "value"), path) do
       {:ok,
        %{kind: :predicate, ref: ref, operator: operator, value: Map.fetch!(predicate, "value")}}
     end
@@ -200,6 +208,105 @@ defmodule Sacrum.Orchestrator.Routing.RouteConfig do
 
   defp decode_operator(_operator, path), do: {:error, error(path, "must be a string")}
 
+  defp validate_operator(reference, operator, _path)
+       when reference in [:previous_output_route_result, :task_level] and
+              operator in [:eq, :neq, :in],
+       do: :ok
+
+  defp validate_operator(:task_tags, operator, _path)
+       when operator in [:contains, :contains_any, :contains_all],
+       do: :ok
+
+  defp validate_operator(:execution_step_visit_count, operator, _path)
+       when operator in [:eq, :neq, :lt, :lte, :gt, :gte, :in],
+       do: :ok
+
+  defp validate_operator(reference, operator, path) do
+    {:error,
+     error(
+       path,
+       "#{inspect(operator)} is not valid for #{inspect(reference)}",
+       :route_operand_type_mismatch
+     )}
+  end
+
+  defp validate_value(:previous_output_route_result, operator, value, path),
+    do: validate_string_value(operator, value, path)
+
+  defp validate_value(:task_level, operator, value, path) do
+    case string_values(operator, value, path) do
+      {:ok, values} -> validate_level_values(values, path)
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp validate_value(:task_tags, :contains, value, path),
+    do: validate_nonempty_string(value, "#{path}.value")
+
+  defp validate_value(:task_tags, _operator, value, path),
+    do: validate_nonempty_string_list(value, "#{path}.value")
+
+  defp validate_value(:execution_step_visit_count, :in, value, path),
+    do: validate_positive_integer_list(value, "#{path}.value")
+
+  defp validate_value(:execution_step_visit_count, _operator, value, path),
+    do: validate_positive_integer(value, "#{path}.value")
+
+  defp validate_string_value(:in, value, path),
+    do: validate_nonempty_string_list(value, "#{path}.value")
+
+  defp validate_string_value(_operator, value, path),
+    do: validate_nonempty_string(value, "#{path}.value")
+
+  defp string_values(:in, value, path) do
+    with :ok <- validate_nonempty_string_list(value, "#{path}.value"), do: {:ok, value}
+  end
+
+  defp string_values(_operator, value, path) do
+    with :ok <- validate_nonempty_string(value, "#{path}.value"), do: {:ok, [value]}
+  end
+
+  defp validate_level_values(values, path) do
+    case Enum.find(values, &(not MapSet.member?(@levels, &1))) do
+      nil -> :ok
+      value -> {:error, error("#{path}.value", "#{inspect(value)} is not a task level")}
+    end
+  end
+
+  defp validate_nonempty_string(value, _path) when is_binary(value) and value != "", do: :ok
+
+  defp validate_nonempty_string(_value, path),
+    do: {:error, error(path, "must be a non-empty string", :route_operand_type_mismatch)}
+
+  defp validate_nonempty_string_list(values, path) when is_list(values) and values != [] do
+    if Enum.all?(values, &(is_binary(&1) and &1 != "")) and
+         length(values) == length(Enum.uniq(values)) do
+      :ok
+    else
+      {:error, error(path, "must be unique non-empty strings", :route_operand_type_mismatch)}
+    end
+  end
+
+  defp validate_nonempty_string_list(_values, path),
+    do: {:error, error(path, "must be a non-empty array", :route_operand_type_mismatch)}
+
+  defp validate_positive_integer(value, _path) when is_integer(value) and value > 0, do: :ok
+
+  defp validate_positive_integer(_value, path),
+    do: {:error, error(path, "must be a positive integer", :route_operand_type_mismatch)}
+
+  defp validate_positive_integer_list(values, path) when is_list(values) and values != [] do
+    if Enum.all?(values, &(is_integer(&1) and &1 > 0)) and
+         length(values) == length(Enum.uniq(values)) do
+      :ok
+    else
+      {:error, error(path, "must be unique positive integers", :route_operand_type_mismatch)}
+    end
+  end
+
+  defp validate_positive_integer_list(_values, path),
+    do: {:error, error(path, "must be a non-empty array", :route_operand_type_mismatch)}
+
   defp decode_default(nil), do: {:ok, nil}
 
   defp decode_default(default) when is_map(default) do
@@ -209,6 +316,29 @@ defmodule Sacrum.Orchestrator.Routing.RouteConfig do
   end
 
   defp decode_default(_default), do: {:error, error("$.default", "must be an object")}
+
+  defp validate_default(rules, nil) do
+    if Enum.any?(rules, &uses_open_domain?/1) do
+      {:error,
+       error("$.default", "is required for tag or visit-count rules", :route_config_invalid)}
+    else
+      :ok
+    end
+  end
+
+  defp validate_default(_rules, _default), do: :ok
+
+  defp uses_open_domain?(%{when: condition}), do: uses_open_domain_expression?(condition)
+
+  defp uses_open_domain_expression?(%{kind: kind, expressions: expressions})
+       when kind in [:all, :any],
+       do: Enum.any?(expressions, &uses_open_domain_expression?/1)
+
+  defp uses_open_domain_expression?(%{kind: :not, expression: expression}),
+    do: uses_open_domain_expression?(expression)
+
+  defp uses_open_domain_expression?(%{kind: :predicate, ref: ref}),
+    do: ref in [:task_tags, :execution_step_visit_count]
 
   defp decode_target(target, path) when is_map(target) do
     case Map.get(target, "type") do

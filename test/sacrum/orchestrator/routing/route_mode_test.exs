@@ -5,21 +5,19 @@ defmodule Sacrum.Orchestrator.Routing.RouteModeTest do
 
   @step_id "00000000-0000-0000-0000-000000000001"
 
-  test "selects legacy routing only for a trimmed non-empty prompt" do
-    assert {:ok, {:legacy, " Choose a destination "}} =
-             RouteMode.routing_mode(%{
-               prompt: " Choose a destination ",
-               route_config: valid_config()
-             })
-
-    refute RouteMode.legacy_prompt?(nil)
-    refute RouteMode.legacy_prompt?("")
-    refute RouteMode.legacy_prompt?("   ")
+  test "selects legacy routing for every present prompt" do
+    for prompt <- ["Choose a destination", "", "   "] do
+      assert {:ok, {:legacy, ^prompt}} =
+               RouteMode.routing_mode(%{
+                 prompt: prompt,
+                 route_config: valid_config()
+               })
+    end
   end
 
-  test "selects deterministic routing for a blank prompt and valid configuration" do
+  test "selects deterministic routing for a null prompt and valid configuration" do
     assert {:ok, {:deterministic, %{version: 1}}} =
-             RouteMode.routing_mode(%{prompt: "   ", route_config: valid_config()})
+             RouteMode.routing_mode(%{prompt: nil, route_config: valid_config()})
   end
 
   test "requires configuration when no legacy prompt is present" do
@@ -28,8 +26,8 @@ defmodule Sacrum.Orchestrator.Routing.RouteModeTest do
   end
 
   test "does not fall back to the prompt path after deterministic configuration errors" do
-    assert {:error, %{code: :route_operand_type_mismatch, path: "$.rules[0].when.op"}} =
-             RouteMode.routing_mode(%{prompt: "", route_config: ill_typed_config()})
+    assert {:error, %{code: :route_config_version_unsupported, path: "$.version"}} =
+             RouteMode.routing_mode(%{prompt: nil, route_config: invalid_config()})
   end
 
   defp valid_config do
@@ -47,11 +45,5 @@ defmodule Sacrum.Orchestrator.Routing.RouteModeTest do
     }
   end
 
-  defp ill_typed_config do
-    put_in(valid_config(), ["rules", Access.at(0), "when"], %{
-      "ref" => "task.tags",
-      "op" => "eq",
-      "value" => "backend"
-    })
-  end
+  defp invalid_config, do: %{valid_config() | "version" => 2}
 end

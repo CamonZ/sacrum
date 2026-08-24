@@ -10,7 +10,6 @@ defmodule Sacrum.Accounts.WorkflowSteps do
     preloads: [],
     default_order: [asc: :step_order, asc: :inserted_at]
 
-  alias Sacrum.Orchestrator.Routing.{RouteConfig, RouteContext, RouteMode}
   alias Sacrum.Repo.Schemas.WorkflowStep
   alias Sacrum.Repo.WorkflowSteps, as: WorkflowStepsRepo
 
@@ -43,9 +42,10 @@ defmodule Sacrum.Accounts.WorkflowSteps do
     project_id = Map.get(attrs, "project_id") || Map.get(attrs, :project_id)
 
     changeset =
-      %WorkflowStep{workflow_id: workflow_id, project_id: project_id, user_id: user_id}
-      |> WorkflowStep.create_changeset(attrs)
-      |> validate_route_config()
+      WorkflowStep.create_changeset(
+        %WorkflowStep{workflow_id: workflow_id, project_id: project_id, user_id: user_id},
+        attrs
+      )
 
     WorkflowStepsRepo.insert(changeset)
   end
@@ -55,10 +55,7 @@ defmodule Sacrum.Accounts.WorkflowSteps do
   """
   @spec update(WorkflowStep.t(), map()) :: {:ok, WorkflowStep.t()} | {:error, Ecto.Changeset.t()}
   def update(%WorkflowStep{} = step, attrs) do
-    changeset =
-      step
-      |> WorkflowStep.update_changeset(attrs)
-      |> validate_route_config()
+    changeset = WorkflowStep.update_changeset(step, attrs)
 
     WorkflowStepsRepo.update(changeset)
   end
@@ -89,38 +86,5 @@ defmodule Sacrum.Accounts.WorkflowSteps do
 
   defp stringify_keys(map) when is_map(map) do
     Map.new(map, fn {k, v} -> {to_string(k), v} end)
-  end
-
-  defp validate_route_config(%{valid?: false} = changeset), do: changeset
-
-  defp validate_route_config(changeset) do
-    case {Ecto.Changeset.get_field(changeset, :step_type),
-          RouteMode.legacy_prompt?(Ecto.Changeset.get_field(changeset, :prompt)),
-          Ecto.Changeset.get_field(changeset, :route_config)} do
-      {:route, false, nil} ->
-        Ecto.Changeset.add_error(changeset, :route_config, "is required when prompt is blank")
-
-      {:route, _legacy?, route_config} when is_map(route_config) ->
-        case RouteConfig.decode(route_config) do
-          {:ok, program} ->
-            validate_route_program(changeset, program)
-
-          {:error, %{path: path, message: message}} ->
-            Ecto.Changeset.add_error(changeset, :route_config, "#{path}: #{message}")
-        end
-
-      _ ->
-        changeset
-    end
-  end
-
-  defp validate_route_program(changeset, program) do
-    case RouteContext.validate(program) do
-      :ok ->
-        changeset
-
-      {:error, %{path: path, message: message}} ->
-        Ecto.Changeset.add_error(changeset, :route_config, "#{path}: #{message}")
-    end
   end
 end

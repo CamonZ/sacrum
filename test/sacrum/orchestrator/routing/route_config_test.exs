@@ -88,6 +88,32 @@ defmodule Sacrum.Orchestrator.Routing.RouteConfigTest do
              )
   end
 
+  test "rejects invalid predicate pairs, operands, and open-domain routes without a default" do
+    assert {:error, %{code: :route_operand_type_mismatch, path: "$.rules[0].when.op"}} =
+             RouteConfig.decode(
+               config_with_when(%{"ref" => "task.tags", "op" => "eq", "value" => "backend"})
+             )
+
+    assert {:error, %{code: :route_operand_type_mismatch, path: "$.rules[0].when.value"}} =
+             RouteConfig.decode(
+               config_with_when(%{
+                 "ref" => "execution.step_visit_count",
+                 "op" => "gte",
+                 "value" => 0
+               })
+             )
+
+    assert {:error, %{code: :route_operand_type_mismatch, path: "$.rules[0].when.value"}} =
+             RouteConfig.decode(
+               config_with_when(%{"ref" => "task.tags", "op" => "contains_all", "value" => []})
+             )
+
+    assert {:error, %{code: :route_config_invalid, path: "$.default"}} =
+             RouteConfig.decode(
+               config_with_when(%{"ref" => "task.tags", "op" => "contains", "value" => "backend"})
+             )
+  end
+
   test "rejects duplicate rule identifiers and invalid targets" do
     duplicated =
       base_config()

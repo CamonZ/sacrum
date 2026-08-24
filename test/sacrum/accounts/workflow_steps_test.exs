@@ -327,20 +327,15 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
       assert route.prompt == nil
     end
 
-    test "rejects a route without a legacy prompt or deterministic configuration" do
+    test "allows a promptless unconfigured route as an authoring draft" do
       user = create_user()
       {_project, workflow} = create_workflow(user)
 
-      for prompt <- [nil, "", "   "] do
-        assert {:error, changeset} =
-                 WorkflowSteps.insert(workflow, %{
-                   name: "Route",
-                   step_type: "route",
-                   prompt: prompt
-                 })
+      assert {:ok, draft} =
+               WorkflowSteps.insert(workflow, %{name: "Route", step_type: "route", prompt: nil})
 
-        assert %{route_config: ["is required when prompt is blank"]} = errors_on(changeset)
-      end
+      assert draft.route_config == nil
+      assert draft.output_schema == nil
     end
   end
 

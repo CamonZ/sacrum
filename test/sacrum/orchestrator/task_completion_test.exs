@@ -108,6 +108,12 @@ defmodule Sacrum.Orchestrator.TaskCompletionTest do
   end
 
   describe "determine_next_state/2" do
+    test "treats every present prompt as dispatchable" do
+      assert TaskCompletion.prompted_step?(%{prompt: ""})
+      assert TaskCompletion.prompted_step?(%{prompt: "   "})
+      refute TaskCompletion.prompted_step?(%{prompt: nil})
+    end
+
     test "returns failed state when next_step_id is nil" do
       user = create_user()
       project = create_project(user)
