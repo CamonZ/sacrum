@@ -8,6 +8,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
   alias Sacrum.Repo.Users
   alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.Schemas.WorkflowStep
+  alias Sacrum.Routing.Contract
 
   @valid_user_attrs %{
     email: "test@example.com",
@@ -287,12 +288,12 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
     test "route steps auto-set strict routing contract schema on create" do
       workflow = create_workflow()
 
-      attrs = Map.merge(@valid_attrs, %{step_type: "route"})
+      attrs = Map.merge(@valid_attrs, %{step_type: "route", prompt: "Legacy route"})
 
       assert {:ok, %WorkflowStep{step_type: :route} = step} =
                WorkflowSteps.insert(workflow, attrs)
 
-      assert step.output_schema == WorkflowStep.routing_contract_schema()
+      assert step.output_schema == Contract.output_schema()
       refute Map.has_key?(step.output_schema["properties"], "handoff")
     end
 
@@ -306,7 +307,13 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
         }
       }
 
-      attrs = Map.merge(@valid_attrs, %{step_type: "route", output_schema: custom_schema})
+      attrs =
+        Map.merge(@valid_attrs, %{
+          step_type: "route",
+          prompt: "Legacy route",
+          output_schema: custom_schema
+        })
+
       assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
 
       assert_output_schema_error(changeset, "routing contract schema")
@@ -328,7 +335,12 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
         "additionalProperties" => false
       }
 
-      attrs = Map.merge(@valid_attrs, %{step_type: "route", output_schema: correct_schema})
+      attrs =
+        Map.merge(@valid_attrs, %{
+          step_type: "route",
+          prompt: "Legacy route",
+          output_schema: correct_schema
+        })
 
       assert {:ok, %WorkflowStep{output_schema: returned_schema}} =
                WorkflowSteps.insert(workflow, attrs)
@@ -377,7 +389,11 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
     test "route steps enforce routing contract on update" do
       workflow = create_workflow()
 
-      {:ok, step} = WorkflowSteps.insert(workflow, Map.merge(@valid_attrs, %{step_type: "route"}))
+      {:ok, step} =
+        WorkflowSteps.insert(
+          workflow,
+          Map.merge(@valid_attrs, %{step_type: "route", prompt: "Legacy route"})
+        )
 
       invalid_schema = %{
         "type" => "object",
@@ -403,9 +419,14 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
         "additionalProperties" => false
       }
 
-      schema_with_handoff = WorkflowStep.routing_contract_schema(handoff_schema)
+      schema_with_handoff = Contract.output_schema(handoff_schema)
 
-      attrs = Map.merge(@valid_attrs, %{step_type: "route", output_schema: schema_with_handoff})
+      attrs =
+        Map.merge(@valid_attrs, %{
+          step_type: "route",
+          prompt: "Legacy route",
+          output_schema: schema_with_handoff
+        })
 
       assert {:ok, %WorkflowStep{output_schema: returned_schema}} =
                WorkflowSteps.insert(workflow, attrs)
@@ -417,13 +438,18 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       workflow = create_workflow()
 
       invalid_schema =
-        WorkflowStep.routing_contract_schema(%{
+        Contract.output_schema(%{
           "type" => "object",
           "properties" => %{"summary" => %{"type" => "string"}},
           "required" => ["summary"]
         })
 
-      attrs = Map.merge(@valid_attrs, %{step_type: "route", output_schema: invalid_schema})
+      attrs =
+        Map.merge(@valid_attrs, %{
+          step_type: "route",
+          prompt: "Legacy route",
+          output_schema: invalid_schema
+        })
 
       assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
       assert_output_schema_error(changeset, "additionalProperties must be false")
@@ -433,7 +459,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       workflow = create_workflow()
 
       invalid_schema =
-        WorkflowStep.routing_contract_schema(%{
+        Contract.output_schema(%{
           "type" => "object",
           "properties" => %{
             "summary" => %{"type" => "string"},
@@ -443,7 +469,12 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
           "additionalProperties" => false
         })
 
-      attrs = Map.merge(@valid_attrs, %{step_type: "route", output_schema: invalid_schema})
+      attrs =
+        Map.merge(@valid_attrs, %{
+          step_type: "route",
+          prompt: "Legacy route",
+          output_schema: invalid_schema
+        })
 
       assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
       assert_output_schema_error(changeset, "required must list every declared property")
@@ -453,7 +484,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       workflow = create_workflow()
 
       invalid_schema =
-        WorkflowStep.routing_contract_schema(%{
+        Contract.output_schema(%{
           "type" => "object",
           "properties" => %{
             "items" => %{
@@ -469,7 +500,12 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
           "additionalProperties" => false
         })
 
-      attrs = Map.merge(@valid_attrs, %{step_type: "route", output_schema: invalid_schema})
+      attrs =
+        Map.merge(@valid_attrs, %{
+          step_type: "route",
+          prompt: "Legacy route",
+          output_schema: invalid_schema
+        })
 
       assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
 
@@ -483,7 +519,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       workflow = create_workflow()
 
       schema_with_nullable_handoff =
-        WorkflowStep.routing_contract_schema(%{
+        Contract.output_schema(%{
           "type" => ["null", "object"],
           "properties" => %{"summary" => %{"type" => "string"}},
           "required" => ["summary"],
@@ -493,6 +529,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       attrs =
         Map.merge(@valid_attrs, %{
           step_type: "route",
+          prompt: "Legacy route",
           output_schema: schema_with_nullable_handoff,
           agent_config: %{"provider" => "openai"}
         })
@@ -507,7 +544,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       workflow = create_workflow()
 
       schema_with_nullable_handoff =
-        WorkflowStep.routing_contract_schema(%{
+        Contract.output_schema(%{
           "type" => ["null", "object"],
           "properties" => %{"summary" => %{"type" => "string"}},
           "required" => ["summary"],
@@ -517,6 +554,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       attrs =
         Map.merge(@valid_attrs, %{
           step_type: "route",
+          prompt: "Legacy route",
           output_schema: schema_with_nullable_handoff,
           agent_config: %{"provider" => "anthropic"}
         })
@@ -676,7 +714,13 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
         "additionalProperties" => false
       }
 
-      attrs = Map.merge(@valid_attrs, %{step_type: "route", output_schema: invalid_schema})
+      attrs =
+        Map.merge(@valid_attrs, %{
+          step_type: "route",
+          prompt: "Legacy route",
+          output_schema: invalid_schema
+        })
+
       assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
       assert_output_schema_error(changeset, "routing contract schema")
     end
@@ -699,7 +743,13 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
         "additionalProperties" => false
       }
 
-      attrs = Map.merge(@valid_attrs, %{step_type: "route", output_schema: invalid_schema})
+      attrs =
+        Map.merge(@valid_attrs, %{
+          step_type: "route",
+          prompt: "Legacy route",
+          output_schema: invalid_schema
+        })
+
       assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
       assert_output_schema_error(changeset, "routing contract schema")
     end
@@ -707,10 +757,10 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
     test "route steps auto-set strict schema stays consistent on update" do
       workflow = create_workflow()
 
-      attrs = Map.merge(@valid_attrs, %{step_type: "route"})
+      attrs = Map.merge(@valid_attrs, %{step_type: "route", prompt: "Legacy route"})
       {:ok, step} = WorkflowSteps.insert(workflow, attrs)
 
-      expected_schema = WorkflowStep.routing_contract_schema()
+      expected_schema = Contract.output_schema()
 
       assert step.output_schema == expected_schema
 
@@ -763,21 +813,21 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
     end
   end
 
-  describe "routing_contract_schema without format key" do
-    test "routing_contract_schema/0 does not contain format key under transition_to" do
-      schema = WorkflowStep.routing_contract_schema()
+  describe "routing contract schema without format key" do
+    test "output_schema/0 does not contain format key under transition_to" do
+      schema = Contract.output_schema()
 
       assert schema["properties"]["transition_to"] == %{"type" => "string"}
     end
 
     test "route step persisted output_schema matches new canonical schema without format" do
       workflow = create_workflow()
-      attrs = Map.merge(@valid_attrs, %{step_type: "route"})
+      attrs = Map.merge(@valid_attrs, %{step_type: "route", prompt: "Legacy route"})
       {:ok, step} = WorkflowSteps.insert(workflow, attrs)
 
       {:ok, fetched_step} = WorkflowSteps.get(step.id)
 
-      assert fetched_step.output_schema == WorkflowStep.routing_contract_schema()
+      assert fetched_step.output_schema == Contract.output_schema()
       refute Map.has_key?(fetched_step.output_schema["properties"]["transition_to"], "format")
     end
 
@@ -785,8 +835,8 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       workflow = create_workflow()
       {:ok, step} = WorkflowSteps.insert(workflow, @valid_attrs)
 
-      canonical_schema = WorkflowStep.routing_contract_schema()
-      attrs = %{step_type: "route", output_schema: canonical_schema}
+      canonical_schema = Contract.output_schema()
+      attrs = %{step_type: "route", prompt: "Legacy route", output_schema: canonical_schema}
 
       assert {:ok, updated} = WorkflowSteps.update(step, attrs)
       assert updated.output_schema == canonical_schema
@@ -809,7 +859,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
         "additionalProperties" => false
       }
 
-      attrs = %{step_type: "route", output_schema: schema_without_handoff}
+      attrs = %{step_type: "route", prompt: "Legacy route", output_schema: schema_without_handoff}
       assert {:ok, updated} = WorkflowSteps.update(step, attrs)
       assert updated.output_schema == schema_without_handoff
     end
@@ -831,7 +881,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
         "additionalProperties" => false
       }
 
-      attrs = %{step_type: "route", output_schema: invalid_schema}
+      attrs = %{step_type: "route", prompt: "Legacy route", output_schema: invalid_schema}
       assert {:error, changeset} = WorkflowSteps.update(step, attrs)
       assert %{output_schema: [message]} = errors_on(changeset)
       assert String.contains?(message, "routing contract schema")

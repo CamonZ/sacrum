@@ -241,7 +241,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
         pending_handoff: nil
       }
 
-      assert {:stop, :normal, returned_data} =
+      assert {:next_state, :awaiting_execution, returned_data} =
                RouteStep.handle_route_step_transition(data, current_step)
 
       assert returned_data.pending_handoff == %{"review" => "needed"}
@@ -257,16 +257,9 @@ defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
                "transition_type" => "intra_workflow"
              }
 
-      completed_run = Repo.get!(Sacrum.Repo.Schemas.TaskRun, task_run.id)
-      assert completed_run.status == :completed
-      assert completed_run.outcome_kind == "step_completed"
-
-      assert completed_run.outcome_context == %{
-               "reason" => "promptless_destination_step",
-               "current_step_id" => next_step.id
-             }
-
-      assert updated_task.current_step_id == next_step.id
+      continued_run = Repo.get!(Sacrum.Repo.Schemas.TaskRun, task_run.id)
+      assert continued_run.status == :executing
+      assert continued_run.outcome_kind == nil
     end
 
     test "intra-workflow route to terminal step completes task and wakes dependents", %{
@@ -579,7 +572,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
       GenServer.stop(pid)
     end
 
-    test "inter-workflow route to non-terminal target keeps step-completed stop", %{pool: pool} do
+    test "inter-workflow route to a non-terminal execute target continues the run", %{pool: pool} do
       user = create_user()
       project = create_project(user)
       from_workflow = create_workflow(user, project, %{name: "From Workflow"})
@@ -626,18 +619,16 @@ defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
         pending_handoff: nil
       }
 
-      assert {:stop, :normal, _returned_data} =
+      assert {:next_state, :awaiting_execution, _returned_data} =
                RouteStep.handle_route_step_transition(data, from_step)
 
       updated_task = Repo.get!(Task, task.id)
       assert updated_task.completed_at == nil
-      assert updated_task.status == "ready"
+      assert updated_task.current_step_id == to_step.id
 
-      completed_run = Repo.get!(TaskRun, task_run.id)
-      assert completed_run.status == :completed
-      assert completed_run.outcome_kind == "step_completed"
-      assert completed_run.outcome_context["reason"] == "promptless_destination_step"
-      assert completed_run.outcome_context["current_step_id"] == to_step.id
+      continued_run = Repo.get!(TaskRun, task_run.id)
+      assert continued_run.status == :executing
+      assert continued_run.outcome_kind == nil
     end
 
     test "invalid output format: missing transition_type leads to failed state", %{pool: pool} do

@@ -160,7 +160,12 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
       {_project, workflow} = create_workflow(user)
 
       for type <- ~w(execute evaluate route finish) do
-        attrs = if type == "finish", do: %{prompt: nil}, else: %{}
+        attrs =
+          case type do
+            "finish" -> %{prompt: nil}
+            "route" -> %{prompt: "Choose a destination"}
+            _ -> %{}
+          end
 
         assert {:ok, %WorkflowStep{} = step} =
                  WorkflowSteps.insert(
@@ -189,7 +194,9 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
       {:ok, step} = WorkflowSteps.insert(workflow, %{name: "Draft"})
       assert step.step_type == :execute
 
-      assert {:ok, updated} = WorkflowSteps.update(step, %{step_type: "route"})
+      assert {:ok, updated} =
+               WorkflowSteps.update(step, %{step_type: "route", prompt: "Choose a destination"})
+
       assert updated.step_type == :route
     end
   end
@@ -236,5 +243,126 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
 
       assert updated_step.prompt == "New prompt"
     end
+  end
+
+  describe "route configuration" do
+    test "rejects an unsupported route_config version" do
+      user = create_user()
+      {_project, workflow} = create_workflow(user)
+
+      assert {:error, changeset} =
+               WorkflowSteps.insert(workflow, %{
+                 name: "Route",
+                 step_type: "route",
+                 prompt: "Choose a destination",
+                 route_config: %{
+                   "version" => 2,
+                   "match_policy" => "exactly_one",
+                   "rules" => [
+                     %{
+                       "id" => "approved",
+                       "when" => %{
+                         "ref" => "previous_output.route.result",
+                         "op" => "eq",
+                         "value" => "approved"
+                       },
+                       "transition" => %{
+                         "type" => "intra_workflow",
+                         "step_id" => "00000000-0000-0000-0000-000000000001"
+                       }
+                     }
+                   ]
+                 }
+               })
+
+      assert %{route_config: [message]} = errors_on(changeset)
+      assert message =~ "$.version: only version 1 is supported"
+    end
+
+    test "rejects ill-typed staged configurations" do
+      user = create_user()
+      {_project, workflow} = create_workflow(user)
+
+      cases = [
+        {%{"ref" => "task.tags", "op" => "eq", "value" => "backend"}, default_transition(),
+         "$.rules[0].when.op"},
+        {%{"ref" => "execution.step_visit_count", "op" => "gte", "value" => 0},
+         default_transition(), "$.rules[0].when.value"},
+        {%{"ref" => "task.tags", "op" => "contains_all", "value" => []}, default_transition(),
+         "$.rules[0].when.value"},
+        {%{"ref" => "task.tags", "op" => "contains", "value" => "backend"}, nil, "$.default"}
+      ]
+
+      for {condition, default, expected_path} <- cases do
+        assert {:error, changeset} =
+                 WorkflowSteps.insert(workflow, %{
+                   name: "Route",
+                   step_type: "route",
+                   prompt: "Choose a destination",
+                   route_config: route_config(condition, default)
+                 })
+
+        assert %{route_config: [message]} = errors_on(changeset)
+        assert message =~ expected_path
+      end
+    end
+
+    test "allows a promptless configured route" do
+      user = create_user()
+      {_project, workflow} = create_workflow(user)
+
+      assert {:ok, route} =
+               WorkflowSteps.insert(workflow, %{
+                 name: "Route",
+                 step_type: "route",
+                 prompt: nil,
+                 route_config:
+                   route_config(%{
+                     "ref" => "previous_output.route.result",
+                     "op" => "eq",
+                     "value" => "approved"
+                   })
+               })
+
+      assert route.prompt == nil
+    end
+
+    test "allows a promptless unconfigured route as an authoring draft" do
+      user = create_user()
+      {_project, workflow} = create_workflow(user)
+
+      assert {:ok, draft} =
+               WorkflowSteps.insert(workflow, %{name: "Route", step_type: "route", prompt: nil})
+
+      assert draft.route_config == nil
+      assert draft.output_schema == nil
+    end
+  end
+
+  defp route_config(condition, default \\ default_transition()) do
+    %{
+      "version" => 1,
+      "match_policy" => "exactly_one",
+      "rules" => [
+        %{
+          "id" => "route",
+          "when" => condition,
+          "transition" => %{
+            "type" => "intra_workflow",
+            "step_id" => "00000000-0000-0000-0000-000000000001"
+          }
+        }
+      ],
+      "default" => default
+    }
+  end
+
+  defp default_transition do
+    %{
+      "transition" => %{
+        "type" => "intra_workflow",
+        "step_id" => "00000000-0000-0000-0000-000000000002"
+      }
+    }
   end
 end

@@ -3508,7 +3508,8 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       {:ok, step} =
         Accounts.WorkflowSteps.insert(wf, %{
           name: "Route decision",
-          step_type: "route"
+          step_type: "route",
+          prompt: "Choose a destination"
         })
 
       {:ok, _task} = Sacrum.Repo.TaskWorkflows.assign_workflow(task, wf)

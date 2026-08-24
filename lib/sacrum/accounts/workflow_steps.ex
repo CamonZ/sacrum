@@ -41,9 +41,13 @@ defmodule Sacrum.Accounts.WorkflowSteps do
     workflow_id = Map.get(attrs, "workflow_id") || Map.get(attrs, :workflow_id)
     project_id = Map.get(attrs, "project_id") || Map.get(attrs, :project_id)
 
-    %WorkflowStep{workflow_id: workflow_id, project_id: project_id, user_id: user_id}
-    |> WorkflowStep.create_changeset(attrs)
-    |> WorkflowStepsRepo.insert()
+    changeset =
+      WorkflowStep.create_changeset(
+        %WorkflowStep{workflow_id: workflow_id, project_id: project_id, user_id: user_id},
+        attrs
+      )
+
+    WorkflowStepsRepo.insert(changeset)
   end
 
   @doc """
@@ -51,9 +55,9 @@ defmodule Sacrum.Accounts.WorkflowSteps do
   """
   @spec update(WorkflowStep.t(), map()) :: {:ok, WorkflowStep.t()} | {:error, Ecto.Changeset.t()}
   def update(%WorkflowStep{} = step, attrs) do
-    step
-    |> WorkflowStep.update_changeset(attrs)
-    |> WorkflowStepsRepo.update()
+    changeset = WorkflowStep.update_changeset(step, attrs)
+
+    WorkflowStepsRepo.update(changeset)
   end
 
   @doc """

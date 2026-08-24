@@ -107,7 +107,8 @@ defmodule Sacrum.Accounts.StepExecutionsTest do
       {:ok, other_step} =
         WorkflowSteps.insert(other_workflow, %{
           name: "Other Step",
-          step_type: "route"
+          step_type: "route",
+          prompt: "Choose a destination"
         })
 
       assert {:error, changeset} =
