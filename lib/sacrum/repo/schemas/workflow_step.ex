@@ -3,8 +3,6 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
   import Ecto.Changeset
   require Logger
 
-  alias Sacrum.Orchestrator.Routing.RouteConfig
-
   @type t :: %__MODULE__{}
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -52,7 +50,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     |> validate_finish_step_prompt()
     |> validate_output_schema()
     |> validate_route_step_schema()
-    |> validate_route_config()
+    |> validate_route_config_scope()
     |> foreign_key_constraint(:workflow_id)
     |> foreign_key_constraint(:project_id)
   end
@@ -65,7 +63,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     |> validate_finish_step_prompt()
     |> validate_output_schema()
     |> validate_route_step_schema()
-    |> validate_route_config()
+    |> validate_route_config_scope()
   end
 
   # Private validation functions
@@ -178,22 +176,13 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     end
   end
 
-  defp validate_route_config(changeset) do
+  defp validate_route_config_scope(changeset) do
     case {get_field(changeset, :step_type), get_field(changeset, :route_config)} do
       {_step_type, nil} ->
         changeset
 
-      {:route, route_config} when is_map(route_config) ->
-        case RouteConfig.decode(route_config) do
-          {:ok, _decoded} ->
-            changeset
-
-          {:error, %{path: path, message: message}} ->
-            add_error(changeset, :route_config, "#{path}: #{message}")
-        end
-
       {:route, _route_config} ->
-        add_error(changeset, :route_config, "must be a map or null")
+        changeset
 
       {_step_type, _route_config} ->
         add_error(changeset, :route_config, "is only supported for route steps")

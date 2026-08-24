@@ -791,7 +791,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       assert draft.output_schema == nil
     end
 
-    test "treats empty prompts from either key format as legacy rather than clearing them" do
+    test "preserves empty prompts from either key format rather than clearing them" do
       workflow = create_workflow()
       string_attrs = Map.new(@valid_attrs, fn {key, value} -> {to_string(key), value} end)
 
@@ -823,23 +823,6 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
 
       assert updated.step_type == :evaluate
       assert updated.route_config == nil
-    end
-
-    test "rejects an unsupported route_config version when staging a route" do
-      workflow = create_workflow()
-
-      assert {:error, changeset} =
-               WorkflowSteps.insert(
-                 workflow,
-                 Map.merge(@valid_attrs, %{
-                   step_type: "route",
-                   prompt: "Choose a destination",
-                   route_config: Map.put(route_config(), "version", 2)
-                 })
-               )
-
-      assert %{route_config: [message]} = errors_on(changeset)
-      assert message =~ "$.version: only version 1 is supported"
     end
   end
 

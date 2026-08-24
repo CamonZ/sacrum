@@ -237,4 +237,39 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
       assert updated_step.prompt == "New prompt"
     end
   end
+
+  describe "route configuration" do
+    test "rejects an unsupported route_config version" do
+      user = create_user()
+      {_project, workflow} = create_workflow(user)
+
+      assert {:error, changeset} =
+               WorkflowSteps.insert(workflow, %{
+                 name: "Route",
+                 step_type: "route",
+                 prompt: "Choose a destination",
+                 route_config: %{
+                   "version" => 2,
+                   "match_policy" => "exactly_one",
+                   "rules" => [
+                     %{
+                       "id" => "approved",
+                       "when" => %{
+                         "ref" => "previous_output.route.result",
+                         "op" => "eq",
+                         "value" => "approved"
+                       },
+                       "transition" => %{
+                         "type" => "intra_workflow",
+                         "step_id" => "00000000-0000-0000-0000-000000000001"
+                       }
+                     }
+                   ]
+                 }
+               })
+
+      assert %{route_config: [message]} = errors_on(changeset)
+      assert message =~ "$.version: only version 1 is supported"
+    end
+  end
 end
