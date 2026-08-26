@@ -6,6 +6,8 @@ defmodule Sacrum.Orchestrator.PersistenceOptions do
   output contract remains on `WorkflowStep.output_schema`.
   """
 
+  alias Sacrum.Orchestrator.OutputValidator
+
   @schema %{
     "type" => "object",
     "properties" => %{
@@ -27,9 +29,6 @@ defmodule Sacrum.Orchestrator.PersistenceOptions do
 
   @resolved_schema ExJsonSchema.Schema.resolve(@schema)
 
-  @spec schema() :: map()
-  def schema, do: @schema
-
   @spec validate(term()) :: :ok | {:error, String.t()}
   def validate(nil), do: :ok
 
@@ -47,11 +46,7 @@ defmodule Sacrum.Orchestrator.PersistenceOptions do
 
   def validate(_options), do: {:error, "must be a map or null"}
 
-  @spec artifact_configured?(term()) :: boolean()
-  def artifact_configured?(options) when is_map(options), do: Map.has_key?(options, "artifact")
-  def artifact_configured?(_options), do: false
-
-  @spec artifact_logical_name(map()) :: String.t() | nil
+  @spec artifact_logical_name(term()) :: String.t() | nil
   def artifact_logical_name(%{"artifact" => %{"logical_name" => logical_name}}),
     do: logical_name
 
@@ -72,11 +67,6 @@ defmodule Sacrum.Orchestrator.PersistenceOptions do
   end
 
   defp format_errors(errors) do
-    Enum.map_join(errors, ", ", &format_error/1)
+    Enum.map_join(errors, ", ", &OutputValidator.format_error/1)
   end
-
-  defp format_error({message, path}) when is_binary(message) and is_binary(path),
-    do: "#{path}: #{message}"
-
-  defp format_error(error), do: inspect(error)
 end

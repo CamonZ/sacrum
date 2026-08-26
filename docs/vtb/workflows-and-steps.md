@@ -90,10 +90,18 @@ both `output_schema` and the following step configuration:
 ```
 
 The orchestrator decodes and validates the completed output, serializes it as
-canonical JSON, and creates one `.json` artifact attached to the task under
-the configured logical name before advancing the workflow. Persistence
-configuration is separate from the daemon's prompt and `agent_config`; the
-daemon only produces the structured output.
+canonical JSON, and attaches one `.json` artifact to the task under the
+configured logical name before advancing the workflow. If the task already has
+an artifact with that logical name, the artifact is updated in place. This
+replacement behavior makes retries safe and keeps the task's logical name
+stable. Persistence configuration is separate from the daemon's prompt and
+`agent_config`; the daemon only produces the structured output.
+
+Artifact persistence is supported for `execute`, `evaluate`, `route`,
+`wait_children`, and `human_input` steps. `wait_children` persists its
+machine-readable child-state snapshot, and `human_input` persists the
+validated response. It is rejected for `finish` and `stop` steps because those
+steps do not produce a structured output execution.
 
 ## Step Types
 

@@ -76,15 +76,30 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
 
     case PersistenceOptions.validate(persistence_options) do
       :ok ->
-        validate_persistence_output_schema(changeset, persistence_options)
+        changeset
+        |> validate_persistence_step_type(persistence_options)
+        |> validate_persistence_output_schema(persistence_options)
 
       {:error, reason} ->
         add_error(changeset, :persistence_options, reason)
     end
   end
 
+  defp validate_persistence_step_type(changeset, persistence_options) do
+    if not is_nil(PersistenceOptions.artifact_logical_name(persistence_options)) and
+         get_field(changeset, :step_type) in [:finish, :stop] do
+      add_error(
+        changeset,
+        :persistence_options,
+        "artifact persistence is not supported for #{get_field(changeset, :step_type)} steps"
+      )
+    else
+      changeset
+    end
+  end
+
   defp validate_persistence_output_schema(changeset, persistence_options) do
-    if PersistenceOptions.artifact_configured?(persistence_options) and
+    if not is_nil(PersistenceOptions.artifact_logical_name(persistence_options)) and
          is_nil(get_field(changeset, :output_schema)) do
       add_error(
         changeset,

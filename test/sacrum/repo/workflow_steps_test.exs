@@ -377,6 +377,24 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       assert persistence_options == %{"artifact" => %{"logical_name" => "step_result"}}
     end
 
+    test "rejects artifact persistence on finish and stop steps" do
+      workflow = create_workflow()
+
+      for step_type <- ["finish", "stop"] do
+        attrs =
+          Map.merge(@valid_attrs, %{
+            step_type: step_type,
+            output_schema: @structured_output_schema,
+            persistence_options: %{"artifact" => %{"logical_name" => "step_result"}}
+          })
+
+        assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
+
+        assert %{persistence_options: [message | _]} = errors_on(changeset)
+        assert message == "artifact persistence is not supported for #{step_type} steps"
+      end
+    end
+
     test "requires an output schema when artifact persistence is configured" do
       workflow = create_workflow()
 
