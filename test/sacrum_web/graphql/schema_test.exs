@@ -2979,6 +2979,90 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["stepOrder"] == 1
     end
 
+    test "creates and updates artifact persistence options", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+
+      output_schema =
+        ~S|{\"type\":\"object\",\"properties\":{\"result\":{\"type\":\"string\"}},\"required\":[\"result\"],\"additionalProperties\":false}|
+
+      persistence_options = ~S|{\"artifact\":{\"logical_name\":\"step_result\"}}|
+
+      create_result =
+        conn
+        |> authenticate(user)
+        |> graphql(~s"""
+          mutation {
+            createWorkflowStep(
+              workflowId: "#{wf.id}"
+              name: "Persisted step"
+              outputSchema: "#{output_schema}"
+              persistenceOptions: "#{persistence_options}"
+            ) { id outputSchema persistenceOptions }
+          }
+        """)
+        |> json_response(200)
+
+      assert create_result["errors"] == nil
+      step_data = create_result["data"]["createWorkflowStep"]
+      assert step_data["outputSchema"]["required"] == ["result"]
+
+      assert step_data["persistenceOptions"] == %{
+               "artifact" => %{"logical_name" => "step_result"}
+             }
+
+      updated_options = ~S|{\"artifact\":{\"logical_name\":\"step_result_v2\"}}|
+
+      update_result =
+        conn
+        |> recycle()
+        |> authenticate(user)
+        |> graphql(~s"""
+          mutation {
+            updateWorkflowStep(
+              id: "#{step_data["id"]}"
+              persistenceOptions: "#{updated_options}"
+            ) { id persistenceOptions }
+          }
+        """)
+        |> json_response(200)
+
+      assert update_result["errors"] == nil
+
+      assert update_result["data"]["updateWorkflowStep"]["persistenceOptions"] ==
+               %{"artifact" => %{"logical_name" => "step_result_v2"}}
+    end
+
+    test "rejects artifact persistence options without an output schema", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+      persistence_options = ~S|{\"artifact\":{\"logical_name\":\"step_result\"}}|
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql(~s"""
+          mutation {
+            createWorkflowStep(
+              workflowId: "#{wf.id}"
+              name: "Invalid persisted step"
+              persistenceOptions: "#{persistence_options}"
+            ) { id }
+          }
+        """)
+        |> json_response(200)
+
+      assert Enum.any?(result["errors"], fn error ->
+               error["message"] =~ "persistence_options"
+             end)
+    end
+
     test "updates a workflow step", %{conn: conn, user: user, project: project} do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
       {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "Original"})

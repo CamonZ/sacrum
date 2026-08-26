@@ -380,6 +380,107 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
   end
 
   describe "multi-step prompted continuation workflow" do
+    test "persists configured structured output before advancing" do
+      %{user: user, project: project, steps: [s1, s2, _s3], task: task} =
+        setup_linear_workflow(step_count: 3)
+
+      output_schema = %{
+        "type" => "object",
+        "properties" => %{"result" => %{"type" => "string"}},
+        "required" => ["result"],
+        "additionalProperties" => false
+      }
+
+      assert {:ok, _updated_step} =
+               Accounts.WorkflowSteps.update(s1, %{
+                 output_schema: output_schema,
+                 persistence_options: %{"artifact" => %{"logical_name" => "step_result"}}
+               })
+
+      pid = start_orchestrator(task, user)
+      wait_for_state(pid, :executing)
+
+      simulate_daemon_completion(task.id, project.id, "```json\n{\"result\":\"ready\"}\n```")
+
+      wait_for_state(pid, :executing)
+      assert reload_task(task).current_step_id == s2.id
+
+      assert [
+               %{
+                 filename: "step_result.json",
+                 body: ~s({"result":"ready"}),
+                 logical_name: "step_result"
+               }
+             ] =
+               Accounts.Artifacts.list_for_subject(user.id, project.id, "task", task.id)
+
+      :gen_statem.stop(pid)
+    end
+
+    test "fails without advancing when configured structured output cannot be persisted" do
+      %{user: user, project: _project, steps: [s1, _s2], task: task} =
+        setup_linear_workflow(step_count: 2, finish_last_step: false)
+
+      output_schema = %{
+        "type" => "object",
+        "properties" => %{"result" => %{"type" => "string"}},
+        "required" => ["result"],
+        "additionalProperties" => false
+      }
+
+      assert {:ok, _updated_step} =
+               Accounts.WorkflowSteps.update(s1, %{
+                 output_schema: output_schema,
+                 persistence_options: %{"artifact" => %{"logical_name" => "step_result"}}
+               })
+
+      pid = start_orchestrator(task, user)
+      wait_for_state(pid, :executing)
+      simulate_daemon_completion(task.id, task.project_id, "not json")
+      wait_for_exit(pid)
+
+      assert reload_task(task).current_step_id == s1.id
+      assert latest_task_run(task.id).status == :failed
+      assert [] = Accounts.Artifacts.list_for_subject(user.id, task.project_id, "task", task.id)
+    end
+
+    test "fails without advancing when the task logical name already exists" do
+      %{user: user, project: project, steps: [s1, _s2], task: task} =
+        setup_linear_workflow(step_count: 2, finish_last_step: false)
+
+      output_schema = %{
+        "type" => "object",
+        "properties" => %{"result" => %{"type" => "string"}},
+        "required" => ["result"],
+        "additionalProperties" => false
+      }
+
+      assert {:ok, _updated_step} =
+               Accounts.WorkflowSteps.update(s1, %{
+                 output_schema: output_schema,
+                 persistence_options: %{"artifact" => %{"logical_name" => "step_result"}}
+               })
+
+      assert {:ok, _existing} =
+               Accounts.Artifacts.create_and_link(
+                 user.id,
+                 project.id,
+                 %{filename: "existing.json", body: ~s({"result":"existing"})},
+                 %{subject_type: "task", subject_id: task.id, logical_name: "step_result"}
+               )
+
+      pid = start_orchestrator(task, user)
+      wait_for_state(pid, :executing)
+      simulate_daemon_completion(task.id, project.id, ~s({"result":"ready"}))
+      wait_for_exit(pid)
+
+      assert reload_task(task).current_step_id == s1.id
+      assert latest_task_run(task.id).status == :failed
+
+      assert [%{logical_name: "step_result", filename: "existing.json"}] =
+               Accounts.Artifacts.list_for_subject(user.id, project.id, "task", task.id)
+    end
+
     test "advances through all steps to completion" do
       %{user: user, project: project, steps: [s1, s2, s3], task: task} =
         setup_linear_workflow(step_count: 3)

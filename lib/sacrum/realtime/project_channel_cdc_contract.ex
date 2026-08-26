@@ -69,7 +69,7 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
   @workflow_event_payload_keys [:schema_version | @workflow_payload_keys]
 
   @step_payload_keys ~w(
-    id name goal agents skills agent_config step_order step_type prompt output_schema
+    id name goal agents skills agent_config step_order step_type prompt output_schema persistence_options
     verbose_daemon_logging workflow_id project_id inserted_at updated_at
   )a
 

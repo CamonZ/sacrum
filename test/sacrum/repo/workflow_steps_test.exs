@@ -25,6 +25,13 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
     step_order: 1
   }
 
+  @structured_output_schema %{
+    "type" => "object",
+    "properties" => %{"result" => %{"type" => "string"}},
+    "required" => ["result"],
+    "additionalProperties" => false
+  }
+
   defp create_workflow do
     {:ok, user} = Users.insert(@valid_user_attrs)
     {:ok, project} = Projects.insert(user, %{name: "My Project"})
@@ -353,6 +360,77 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
 
       attrs = Map.merge(@valid_attrs, %{output_schema: nil})
       assert {:ok, %WorkflowStep{output_schema: nil}} = WorkflowSteps.insert(workflow, attrs)
+    end
+
+    test "accepts artifact persistence options with an output schema" do
+      workflow = create_workflow()
+
+      attrs =
+        Map.merge(@valid_attrs, %{
+          output_schema: @structured_output_schema,
+          persistence_options: %{"artifact" => %{"logical_name" => "step_result"}}
+        })
+
+      assert {:ok, %WorkflowStep{persistence_options: persistence_options}} =
+               WorkflowSteps.insert(workflow, attrs)
+
+      assert persistence_options == %{"artifact" => %{"logical_name" => "step_result"}}
+    end
+
+    test "requires an output schema when artifact persistence is configured" do
+      workflow = create_workflow()
+
+      attrs =
+        Map.put(@valid_attrs, :persistence_options, %{
+          "artifact" => %{"logical_name" => "step_result"}
+        })
+
+      assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
+
+      assert %{persistence_options: ["artifact persistence requires output_schema"]} =
+               errors_on(changeset)
+    end
+
+    test "rejects unknown persistence options" do
+      workflow = create_workflow()
+
+      attrs =
+        Map.merge(@valid_attrs, %{
+          output_schema: @structured_output_schema,
+          persistence_options: %{"unknown" => true}
+        })
+
+      assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
+      assert %{persistence_options: [_error | _]} = errors_on(changeset)
+    end
+
+    test "requires a nonblank artifact logical name" do
+      workflow = create_workflow()
+
+      attrs =
+        Map.merge(@valid_attrs, %{
+          output_schema: @structured_output_schema,
+          persistence_options: %{"artifact" => %{"logical_name" => "   "}}
+        })
+
+      assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
+      assert %{persistence_options: [_error | _]} = errors_on(changeset)
+    end
+
+    test "prevents clearing output_schema while artifact persistence is configured" do
+      workflow = create_workflow()
+
+      {:ok, step} =
+        WorkflowSteps.insert(workflow, %{
+          name: "Persisted step",
+          output_schema: @structured_output_schema,
+          persistence_options: %{"artifact" => %{"logical_name" => "step_result"}}
+        })
+
+      assert {:error, changeset} = WorkflowSteps.update(step, %{output_schema: nil})
+
+      assert %{persistence_options: ["artifact persistence requires output_schema"]} =
+               errors_on(changeset)
     end
 
     test "preserves output_schema on update for evaluate steps" do

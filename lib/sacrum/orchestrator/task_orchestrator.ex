@@ -26,6 +26,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     ExecutionDispatcher,
     ExecutionPool,
     FSMData,
+    OutputArtifact,
     PromptRenderer,
     Retry,
     Scheduler,
@@ -605,11 +606,21 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   defp handle_execution_status_changed(execution_id, "completed", data) do
     {:ok, step} = WorkflowGraph.get_current_step(data)
 
-    Logger.info(
-      "[TaskOrchestrator:#{data.task.id}] Execution #{execution_id} completed step_type=#{step.step_type}"
-    )
+    case persist_completed_output(data, step, execution_id) do
+      :ok ->
+        Logger.info(
+          "[TaskOrchestrator:#{data.task.id}] Execution #{execution_id} completed step_type=#{step.step_type}"
+        )
 
-    {:next_state, :transitioning, %{data | run_retry_attempt: 0}}
+        {:next_state, :transitioning, %{data | run_retry_attempt: 0}}
+
+      {:error, reason} ->
+        Logger.error(
+          "[TaskOrchestrator:#{data.task.id}] Failed to persist output for execution=#{execution_id}: #{inspect(reason)}"
+        )
+
+        {:next_state, :failed, data}
+    end
   end
 
   defp handle_execution_status_changed(execution_id, "failed", data) do
@@ -617,6 +628,18 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   end
 
   defp handle_execution_status_changed(_execution_id, _status, _data), do: :keep_state_and_data
+
+  defp persist_completed_output(data, step, execution_id) do
+    case Repo.get_by(StepExecution,
+           id: execution_id,
+           task_id: data.task.id,
+           user_id: data.user_id,
+           project_id: data.project_id
+         ) do
+      %StepExecution{} = execution -> OutputArtifact.persist(data, step, execution)
+      nil -> {:error, :completed_execution_not_found}
+    end
+  end
 
   @spec reload_task(binary()) :: {:ok, Task.t()} | {:error, :task_not_found}
   defp reload_task(task_id) do

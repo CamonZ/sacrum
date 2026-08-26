@@ -167,8 +167,8 @@ The `Project.artifacts(limit: 50, offset: 0)` field returns the caller's project
 **`workflow_step_type.ex`** — 4 mutations (all via `Accounts.WorkflowSteps`)
 | Mutation | Arguments | Returns |
 |----------|-----------|---------|
-| `createWorkflowStep` | `workflow_id!`, `name!`, `goal`, `agents`, `skills`, `agent_config`, `step_order` | `:workflow_step` |
-| `updateWorkflowStep` | `id!`, `name`, `goal`, `agents`, `skills`, `agent_config`, `step_order` | `:workflow_step` |
+| `createWorkflowStep` | `workflow_id!`, `name!`, `goal`, `agents`, `skills`, `agent_config`, `step_order`, `prompt`, `output_schema`, `persistence_options` | `:workflow_step` |
+| `updateWorkflowStep` | `id!`, `name`, `goal`, `agents`, `skills`, `agent_config`, `step_order`, `prompt`, `output_schema`, `persistence_options` | `:workflow_step` |
 | `deleteWorkflowStep` | `id!` | `:workflow_step` |
 | `syncStepTransitions` | `id!`, `transitions!` (list of `StepTransitionInput`) | `:workflow_step` |
 

@@ -76,6 +76,24 @@ vtb step delete <id>
 | `transition-to` | Restrict which steps can follow |
 | `step-type` | `execute`, `evaluate`, `route`, `wait_children`, `human_input`, or `stop` |
 | `output-schema` | JSON Schema for structured output |
+| `persistence-options` | JSON configuration for orchestrator-owned persistence of structured output |
+
+To attach a step's structured result to the current task automatically, set
+both `output_schema` and the following step configuration:
+
+```json
+{
+  "artifact": {
+    "logical_name": "evaluation_result"
+  }
+}
+```
+
+The orchestrator decodes and validates the completed output, serializes it as
+canonical JSON, and creates one `.json` artifact attached to the task under
+the configured logical name before advancing the workflow. Persistence
+configuration is separate from the daemon's prompt and `agent_config`; the
+daemon only produces the structured output.
 
 ## Step Types
 
