@@ -56,15 +56,20 @@ defmodule Sacrum.Orchestrator.OutputValidator do
     {:error, {:invalid_output_type, "routing contract output must be a map"}}
   end
 
-  defp format_error({message, path}) when is_binary(message) and is_binary(path) do
+  @doc """
+  Formats an ExJsonSchema validation error for use in API and changeset
+  messages.
+  """
+  @spec format_error(term()) :: String.t()
+  def format_error({message, path}) when is_binary(message) and is_binary(path) do
     "#{path}: #{message}"
   end
 
-  defp format_error({message, path}) when is_binary(message) do
+  def format_error({message, path}) when is_binary(message) do
     "#{inspect(path)}: #{message}"
   end
 
-  defp format_error(error) do
+  def format_error(error) do
     "#{inspect(error)}"
   end
 end

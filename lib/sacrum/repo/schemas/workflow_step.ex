@@ -4,6 +4,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
   require Logger
 
   alias Sacrum.JsonSchema.Strict
+  alias Sacrum.Orchestrator.PersistenceOptions
   alias Sacrum.Routing.{Contract, RouteConfig}
 
   @type t :: %__MODULE__{}
@@ -21,6 +22,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     field :step_type, Ecto.Enum, values: @step_types, default: :execute
     field :prompt, :string
     field :output_schema, :map
+    field :persistence_options, :map
     field :route_config, :map
     field :verbose_daemon_logging, :boolean, default: false
 
@@ -33,8 +35,8 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     timestamps(type: :utc_datetime_usec)
   end
 
-  @create_fields ~w(name goal agents skills agent_config step_order step_type prompt output_schema route_config)a
-  @update_fields ~w(name goal agents skills agent_config step_order step_type prompt output_schema route_config)a
+  @create_fields ~w(name goal agents skills agent_config step_order step_type prompt output_schema persistence_options route_config)a
+  @update_fields ~w(name goal agents skills agent_config step_order step_type prompt output_schema persistence_options route_config)a
 
   @spec step_types() :: [atom()]
   def step_types, do: @step_types
@@ -53,6 +55,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     |> validate_finish_step_prompt()
     |> validate_output_schema()
     |> validate_route_step()
+    |> validate_persistence_options()
     |> foreign_key_constraint(:workflow_id)
     |> foreign_key_constraint(:project_id)
   end
@@ -65,6 +68,47 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     |> validate_finish_step_prompt()
     |> validate_output_schema()
     |> validate_route_step()
+    |> validate_persistence_options()
+  end
+
+  defp validate_persistence_options(changeset) do
+    persistence_options = get_field(changeset, :persistence_options)
+
+    case PersistenceOptions.validate(persistence_options) do
+      :ok ->
+        changeset
+        |> validate_persistence_step_type(persistence_options)
+        |> validate_persistence_output_schema(persistence_options)
+
+      {:error, reason} ->
+        add_error(changeset, :persistence_options, reason)
+    end
+  end
+
+  defp validate_persistence_step_type(changeset, persistence_options) do
+    if not is_nil(PersistenceOptions.artifact_logical_name(persistence_options)) and
+         get_field(changeset, :step_type) in [:finish, :stop] do
+      add_error(
+        changeset,
+        :persistence_options,
+        "artifact persistence is not supported for #{get_field(changeset, :step_type)} steps"
+      )
+    else
+      changeset
+    end
+  end
+
+  defp validate_persistence_output_schema(changeset, persistence_options) do
+    if not is_nil(PersistenceOptions.artifact_logical_name(persistence_options)) and
+         is_nil(get_field(changeset, :output_schema)) do
+      add_error(
+        changeset,
+        :persistence_options,
+        "artifact persistence requires output_schema"
+      )
+    else
+      changeset
+    end
   end
 
   defp validate_finish_step_prompt(changeset) do

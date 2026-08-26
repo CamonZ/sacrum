@@ -659,6 +659,7 @@ defmodule SacrumWeb.ProjectChannelTest do
         project
         |> build_workflow_step()
         |> Map.put(:output_schema, output_schema)
+        |> Map.put(:persistence_options, %{"artifact" => %{"logical_name" => "step_result"}})
         |> Map.put(:verbose_daemon_logging, true)
 
       SacrumWeb.ProjectChannel.broadcast_step_updated(project.id, step)
@@ -668,6 +669,7 @@ defmodule SacrumWeb.ProjectChannelTest do
       assert payload.project_id == project.id
       assert payload.prompt == step.prompt
       assert payload.output_schema == output_schema
+      assert payload.persistence_options == step.persistence_options
       assert payload.verbose_daemon_logging == true
     end
 
@@ -867,6 +869,7 @@ defmodule SacrumWeb.ProjectChannelTest do
       refute Map.has_key?(payload, :goal)
       refute Map.has_key?(payload, :auto_advance)
       refute Map.has_key?(payload, :transitions)
+      refute Map.has_key?(payload, :persistence_options)
     end
 
     test "run_step payload includes output_schema when present" do
@@ -1209,6 +1212,7 @@ defmodule SacrumWeb.ProjectChannelTest do
       project_id: project.id,
       prompt: "Execute the test step",
       output_schema: nil,
+      persistence_options: nil,
       verbose_daemon_logging: false,
       inserted_at: now,
       updated_at: now

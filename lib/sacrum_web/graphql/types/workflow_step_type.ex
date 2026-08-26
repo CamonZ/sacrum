@@ -31,6 +31,7 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
 
     field :prompt, :string
     field :output_schema, :json
+    field :persistence_options, :json
     field :verbose_daemon_logging, :boolean
     field :inserted_at, :datetime
     field :updated_at, :datetime
@@ -161,6 +162,7 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
       arg(:step_type, :string)
       arg(:prompt, :string)
       arg(:output_schema, :json)
+      arg(:persistence_options, :json)
 
       resolve(fn args, %{context: %{current_user: user}} ->
         workflow_id = Map.get(args, :workflow_id)
@@ -185,6 +187,7 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
       arg(:step_type, :string)
       arg(:prompt, :string)
       arg(:output_schema, :json)
+      arg(:persistence_options, :json)
       arg(:clear_output_schema, :boolean)
 
       resolve(fn %{id: id} = args, %{context: %{current_user: user}} ->

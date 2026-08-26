@@ -26,6 +26,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     ExecutionDispatcher,
     ExecutionPool,
     FSMData,
+    OutputArtifact,
     PromptRenderer,
     Retry,
     Scheduler,
@@ -283,20 +284,18 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     task_id = data.task.id
 
     case WorkflowGraph.get_current_step(data) do
-      {:ok, %{step_type: :route} = current_step} ->
-        RouteStep.handle_route_step_transition(data, current_step)
+      {:ok, current_step} ->
+        case persist_current_step_output(data, current_step) do
+          :ok ->
+            transition_current_step(data, current_step)
 
-      {:ok, %{step_type: type} = current_step}
-      when type in [:execute, :evaluate, :human_input] ->
-        handle_single_transition_step(data, current_step)
+          {:error, reason} ->
+            Logger.error(
+              "[TaskOrchestrator:#{task_id}] Failed to persist output for step=#{current_step.id}: #{inspect(reason)}"
+            )
 
-      {:ok, %{step_type: :wait_children} = current_step} ->
-        handle_wait_children_transition(data, current_step)
-
-      {:ok, %{step_type: other}} ->
-        Logger.error("[TaskOrchestrator:#{task_id}] Unknown step type: #{other}")
-        ExecutionPool.release_slot(data.slot_id)
-        {:next_state, :failed, %{data | slot_id: nil}}
+            {:next_state, :failed, data}
+        end
 
       {:error, reason} ->
         Logger.error("[TaskOrchestrator:#{task_id}] Error in :transitioning: #{inspect(reason)}")
@@ -354,6 +353,38 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
 
   # ===== TRANSITION HANDLERS =====
 
+  @spec persist_current_step_output(FSMData.t(), struct()) :: :ok | {:error, term()}
+  defp persist_current_step_output(_data, %{step_type: :wait_children}) do
+    # A waiting execution may still be open here. The finalized snapshot is
+    # persisted inside commit_wait_children_transition/3 after that execution
+    # is marked completed.
+    :ok
+  end
+
+  defp persist_current_step_output(data, current_step) do
+    OutputArtifact.persist(data, current_step)
+  end
+
+  @spec transition_current_step(FSMData.t(), struct()) :: fsm_transition()
+  defp transition_current_step(data, %{step_type: :route} = current_step) do
+    RouteStep.handle_route_step_transition(data, current_step)
+  end
+
+  defp transition_current_step(data, %{step_type: type} = current_step)
+       when type in [:execute, :evaluate, :human_input] do
+    handle_single_transition_step(data, current_step)
+  end
+
+  defp transition_current_step(data, %{step_type: :wait_children} = current_step) do
+    handle_wait_children_transition(data, current_step)
+  end
+
+  defp transition_current_step(data, %{step_type: other}) do
+    Logger.error("[TaskOrchestrator:#{data.task.id}] Unknown step type: #{other}")
+    ExecutionPool.release_slot(data.slot_id)
+    {:next_state, :failed, %{data | slot_id: nil}}
+  end
+
   @spec handle_wait_children_transition(FSMData.t(), struct()) :: fsm_transition()
   defp handle_wait_children_transition(data, current_step) do
     task_id = data.task.id
@@ -361,7 +392,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
 
     with {:ok, next_step_id} <- WorkflowGraph.select_single_transition(next_transitions),
          {:ok, %{task: updated_task}} <-
-           commit_wait_children_transition(data, next_step_id) do
+           commit_wait_children_transition(data, current_step, next_step_id) do
       ExecutionPool.release_slot(data.slot_id)
 
       continue_after_step_transition(next_step_id, %{
@@ -429,13 +460,15 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     end
   end
 
-  @spec commit_wait_children_transition(FSMData.t(), binary()) :: {:ok, map()} | {:error, term()}
-  defp commit_wait_children_transition(data, next_step_id) do
+  @spec commit_wait_children_transition(FSMData.t(), struct(), binary()) ::
+          {:ok, map()} | {:error, term()}
+  defp commit_wait_children_transition(data, current_step, next_step_id) do
     decision = TaskCompletion.next_state_decision(next_step_id, data)
 
     Repo.transaction(fn ->
       with :ok <- WorkflowGraph.validate_stop_destination(data, next_step_id),
            {:ok, changes} <- maybe_complete_waiting_execution(data, %{}),
+           :ok <- persist_wait_children_output(data, current_step, changes),
            {:ok, changes} <- advance_task_step(data, next_step_id, changes),
            {:ok, changes} <-
              TaskCompletion.maybe_mark_task_run_completed_for_decision(data, decision, changes) do
@@ -444,6 +477,14 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
         {:error, reason} -> Repo.rollback(reason)
       end
     end)
+  end
+
+  defp persist_wait_children_output(data, step, %{waiting_execution: %StepExecution{id: id}}) do
+    OutputArtifact.persist(data, step, id)
+  end
+
+  defp persist_wait_children_output(data, step, _changes) do
+    OutputArtifact.persist(data, step)
   end
 
   @spec commit_task_step_transition(FSMData.t(), binary()) :: {:ok, map()} | {:error, term()}

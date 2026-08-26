@@ -573,6 +573,7 @@ defmodule SacrumWeb.ProjectChannel do
       step_type: WorkflowStep.step_type_wire_value(step.step_type),
       prompt: step.prompt,
       output_schema: step.output_schema,
+      persistence_options: step.persistence_options,
       verbose_daemon_logging: step.verbose_daemon_logging,
       workflow_id: step.workflow_id,
       project_id: step.project_id,
