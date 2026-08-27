@@ -70,14 +70,16 @@ defmodule Sacrum.Routing.RoutePredecessors do
   Merges the result enum declarations from all legal incoming predecessors.
   """
   @spec derive_type_environment([map()]) :: {:ok, type_environment()} | {:error, error()}
+  def derive_type_environment([%{output_schema: _} | _] = predecessors) do
+    with {:ok, environments} <-
+           Traverse.map_while(predecessors, &validate_loaded_predecessor(&1, &2)) do
+      {:ok, merge_type_environments(environments)}
+    end
+  end
+
   def derive_type_environment(schemas) when is_list(schemas) and schemas != [] do
     with {:ok, environments} <- Traverse.map_while(schemas, &validate_schema(&1, &2)) do
-      result_values =
-        Enum.reduce(environments, MapSet.new(), fn %{result_values: values}, acc ->
-          MapSet.union(acc, values)
-        end)
-
-      {:ok, %{result_values: result_values}}
+      {:ok, merge_type_environments(environments)}
     end
   end
 
@@ -93,6 +95,30 @@ defmodule Sacrum.Routing.RoutePredecessors do
       {:error, %{path: path} = reason} ->
         {:error, %{reason | path: "$.predecessors[#{index}]#{drop_root(path)}"}}
     end
+  end
+
+  defp validate_loaded_predecessor(%{output_schema: schema} = predecessor, _index) do
+    case validate_predecessor_schema(schema) do
+      {:ok, environment} ->
+        {:ok, environment}
+
+      {:error, %{path: path} = reason} ->
+        {:error,
+         reason
+         |> Map.merge(
+           Map.take(predecessor, [:transition_id, :source_step_id, :destination_step_id])
+         )
+         |> Map.put(:path, "$.predecessors[#{predecessor.transition_id}]#{drop_root(path)}")}
+    end
+  end
+
+  defp merge_type_environments(environments) do
+    result_values =
+      Enum.reduce(environments, MapSet.new(), fn %{result_values: values}, acc ->
+        MapSet.union(acc, values)
+      end)
+
+    %{result_values: result_values}
   end
 
   defp validate_rules(rules, result_values) do
