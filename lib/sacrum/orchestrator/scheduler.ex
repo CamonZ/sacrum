@@ -104,7 +104,7 @@ defmodule Sacrum.Orchestrator.Scheduler do
          :ok <- validate_no_active_fsm(task_id),
          {:ok, task_run} <- Lookup.fetch(task_run_id),
          :ok <- validate_task_run_matches(task_run, task_record),
-         {:ok, task_run} <- Root.validate_dispatchable(task_run) do
+         {:ok, task_run} <- Root.validate_dispatchable(task_run, task_record) do
       Logger.info(
         "[Scheduler] Starting existing TaskRun task_id=#{task_id}, task_run_id=#{task_run.id}"
       )

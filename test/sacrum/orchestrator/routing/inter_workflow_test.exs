@@ -1,11 +1,13 @@
 defmodule Sacrum.Orchestrator.Routing.InterWorkflowTest do
   use Sacrum.DataCase
 
+  import Ecto.Query
   import Phoenix.ChannelTest
 
   alias Sacrum.Accounts
   alias Sacrum.Orchestrator.Routing.InterWorkflow
   alias Sacrum.Repo
+  alias Sacrum.Repo.Schemas.{Task, WorkflowStep}
 
   @endpoint SacrumWeb.Endpoint
 
@@ -81,6 +83,17 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflowTest do
 
     {:ok, transition} =
       Accounts.WorkflowTransitions.insert(user.id, Map.merge(default_attrs, attrs))
+
+    transition
+  end
+
+  defp create_step_transition(user, from_step, to_step) do
+    {:ok, transition} =
+      Accounts.StepTransitions.insert(user.id, %{
+        "from_step_id" => from_step.id,
+        "to_step_id" => to_step.id,
+        "project_id" => from_step.project_id
+      })
 
     transition
   end
@@ -435,6 +448,62 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflowTest do
 
       assert {:error, :destination_workflow_not_found} = result
     end
+
+    test "rejects an invalid configured destination workflow before moving the task" do
+      user = create_user()
+      project = create_project(user)
+      from_workflow = create_workflow(user, project, %{"name" => "From"})
+      to_workflow = create_workflow(user, project, %{"name" => "To"})
+
+      from_step = create_step(user, from_workflow, %{"name" => "from_step"})
+
+      predecessor =
+        create_step(user, to_workflow, %{
+          "name" => "predecessor",
+          "output_schema" => predecessor_schema(["approved"])
+        })
+
+      destination = create_step(user, to_workflow, %{"name" => "destination", "step_order" => 2})
+
+      route =
+        create_step(user, to_workflow, %{
+          "name" => "route",
+          "step_order" => 3,
+          "step_type" => "route"
+        })
+
+      create_step_transition(user, predecessor, route)
+      create_step_transition(user, route, destination)
+
+      {:ok, route} =
+        Accounts.WorkflowSteps.update(route, %{route_config: route_config(destination.id)})
+
+      create_workflow_transition(user, from_workflow, to_workflow, %{
+        "target_step_id" => predecessor.id
+      })
+
+      task = create_task(user, project, from_workflow)
+
+      {:ok, task} =
+        Repo.update(Ecto.Changeset.change(task, %{current_step_id: from_step.id}))
+
+      Repo.update_all(
+        from(step in WorkflowStep, where: step.id == ^predecessor.id),
+        set: [output_schema: nil]
+      )
+
+      assert {:error, %{route_step_id: route_id, path: "$.predecessors[" <> _}} =
+               InterWorkflow.handle_inter_workflow_routing(
+                 %{task: task, project_id: project.id, user_id: user.id},
+                 to_workflow.id,
+                 nil
+               )
+
+      assert route_id == route.id
+      unchanged_task = Repo.get!(Task, task.id)
+      assert unchanged_task.workflow_id == from_workflow.id
+      assert unchanged_task.current_step_id == from_step.id
+    end
   end
 
   describe "inter-workflow routing broadcasts" do
@@ -504,5 +573,50 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflowTest do
       refute_broadcast "task_updated", _
       refute_broadcast "step_execution_created", _
     end
+  end
+
+  defp route_config(destination_id) do
+    %{
+      "version" => 1,
+      "match_policy" => "exactly_one",
+      "rules" => [
+        %{
+          "id" => "approved",
+          "when" => %{
+            "ref" => "previous_output.route.result",
+            "op" => "eq",
+            "value" => "approved"
+          },
+          "transition" => %{"type" => "intra_workflow", "step_id" => destination_id}
+        }
+      ],
+      "default" => %{
+        "transition" => %{"type" => "intra_workflow", "step_id" => destination_id}
+      }
+    }
+  end
+
+  defp predecessor_schema(result_values) do
+    %{
+      "type" => "object",
+      "properties" => %{
+        "route" => %{
+          "type" => "object",
+          "additionalProperties" => false,
+          "required" => ["result", "handoff"],
+          "properties" => %{
+            "result" => %{"type" => "string", "enum" => result_values},
+            "handoff" => %{
+              "type" => "object",
+              "additionalProperties" => false,
+              "required" => [],
+              "properties" => %{}
+            }
+          }
+        }
+      },
+      "required" => ["route"],
+      "additionalProperties" => false
+    }
   end
 end

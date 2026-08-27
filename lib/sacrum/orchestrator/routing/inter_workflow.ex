@@ -18,6 +18,7 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflow do
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{Task, Workflow, WorkflowStep, WorkflowTransition}
   alias Sacrum.Repo.TaskWorkflows
+  alias Sacrum.Routing.RouteValidator
   alias Sacrum.Tasks.Status
 
   @doc """
@@ -30,6 +31,7 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflow do
 
     with {:ok, dest_workflow} <- validate_destination_workflow(data, dest_workflow_id),
          :ok <- validate_workflow_transition_exists(data.task.workflow_id, dest_workflow_id),
+         :ok <- RouteValidator.validate_workflow(data.user_id, data.project_id, dest_workflow.id),
          target_step_id <- get_target_step_for_workflow_transition(data, dest_workflow_id),
          {:ok, updated_task} <-
            assign_destination_workflow(data.task, dest_workflow, target_step_id, handoff) do

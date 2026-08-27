@@ -28,8 +28,8 @@ defmodule Sacrum.Routing.RouteModeTest do
              RouteMode.routing_mode(%{prompt: nil, route_config: nil})
   end
 
-  test "falls back to the prompt when configuration cannot compile" do
-    assert {:ok, {:legacy, "Choose a destination"}} =
+  test "does not fall back to the prompt when present configuration cannot compile" do
+    assert {:error, %{code: :route_config_version_unsupported, path: "$.version"}} =
              RouteMode.routing_mode(%{
                prompt: "Choose a destination",
                route_config: invalid_config()

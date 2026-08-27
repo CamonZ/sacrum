@@ -54,12 +54,30 @@ defmodule Sacrum.Routing.RouteValidator do
     route_ids
     |> Enum.uniq()
     |> configured_routes()
-    |> Enum.reduce_while(:ok, fn route_step, :ok ->
-      case validate(route_step) do
-        :ok -> {:cont, :ok}
-        {:error, _reason} = error -> {:halt, error}
-      end
-    end)
+    |> validate_routes()
+  end
+
+  @doc """
+  Validates every configured route before a workflow is entered.
+
+  This is the runtime safety net for new, resumed, and inter-workflow TaskRun
+  entry. It deliberately uses the same validator as persistence-time checks.
+  """
+  @spec validate_workflow(binary(), binary(), binary() | nil) :: :ok | {:error, error()}
+  def validate_workflow(_user_id, _project_id, nil), do: :ok
+
+  def validate_workflow(user_id, project_id, workflow_id) do
+    validate_routes(
+      Repo.all(
+        from(step in WorkflowStep,
+          where:
+            step.workflow_id == ^workflow_id and
+              step.user_id == ^user_id and
+              step.project_id == ^project_id and
+              not is_nil(step.route_config)
+        )
+      )
+    )
   end
 
   @doc """
@@ -166,6 +184,15 @@ defmodule Sacrum.Routing.RouteValidator do
         lock: "FOR UPDATE"
       )
     )
+  end
+
+  defp validate_routes(route_steps) do
+    Enum.reduce_while(route_steps, :ok, fn route_step, :ok ->
+      case validate(route_step) do
+        :ok -> {:cont, :ok}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
   end
 
   defp direct_route_ids(step_ids) do
