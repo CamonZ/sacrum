@@ -17,18 +17,19 @@ defmodule Sacrum.Routing.RouteValidatorTest do
     source = create_step(context, "source", 1, output_schema: predecessor_schema(["approved"]))
     destination = create_step(context, "destination", 2)
 
-    route =
-      create_step(context, "route", 3,
-        step_type: "route",
-        route_config:
-          route_config(
-            [result_rule("approved", intra_target(destination.id))],
-            intra_target(destination.id)
-          )
-      )
+    route = create_route(context, "route", 3)
 
     create_step_transition(context.user, source, route)
     create_step_transition(context.user, route, destination)
+
+    route =
+      configure_route(
+        route,
+        route_config(
+          [result_rule("approved", intra_target(destination.id))],
+          intra_target(destination.id)
+        )
+      )
 
     assert :ok = RouteValidator.validate(route)
   end
@@ -37,17 +38,18 @@ defmodule Sacrum.Routing.RouteValidatorTest do
     source = create_step(context, "source", 1, output_schema: predecessor_schema(["approved"]))
     disconnected = create_step(context, "disconnected", 2)
 
-    route =
-      create_step(context, "route", 3,
-        step_type: "route",
-        route_config:
-          route_config(
-            [result_rule("approved", intra_target(disconnected.id))],
-            intra_target(disconnected.id)
-          )
-      )
+    route = create_route(context, "route", 3)
 
     create_step_transition(context.user, source, route)
+
+    route =
+      persist_invalid_route_config(
+        route,
+        route_config(
+          [result_rule("approved", intra_target(disconnected.id))],
+          intra_target(disconnected.id)
+        )
+      )
 
     assert {:error, %{code: :route_target_invalid, path: "$.rules[0].transition.step_id"}} =
              RouteValidator.validate(route)
@@ -68,18 +70,19 @@ defmodule Sacrum.Routing.RouteValidatorTest do
     {:ok, destination_workflow} =
       Accounts.Workflows.update(destination_workflow, %{initial_step_id: destination.id})
 
-    route =
-      create_step(context, "route", 2,
-        step_type: "route",
-        route_config:
-          route_config(
-            [result_rule("approved", inter_target(destination_workflow.id))],
-            inter_target(destination_workflow.id)
-          )
-      )
+    route = create_route(context, "route", 2)
 
     create_step_transition(context.user, source, route)
     create_workflow_transition(context.user, context.workflow, destination_workflow)
+
+    route =
+      configure_route(
+        route,
+        route_config(
+          [result_rule("approved", inter_target(destination_workflow.id))],
+          inter_target(destination_workflow.id)
+        )
+      )
 
     assert :ok = RouteValidator.validate(route)
 
@@ -94,9 +97,7 @@ defmodule Sacrum.Routing.RouteValidatorTest do
       )
 
     assert {:ok, _transition} =
-             Repo.WorkflowTransitions.update(
-               Ecto.Changeset.change(transition, %{target_step_id: other_step.id})
-             )
+             Repo.update(Ecto.Changeset.change(transition, %{target_step_id: other_step.id}))
 
     assert {:error, %{code: :route_target_invalid, path: "$.rules[0].transition.workflow_id"}} =
              RouteValidator.validate(route)
@@ -110,14 +111,16 @@ defmodule Sacrum.Routing.RouteValidatorTest do
 
     destination = create_step(context, "destination", 2)
 
-    route =
-      create_step(context, "route", 3,
-        step_type: "route",
-        route_config: route_config([result_rule("approved", intra_target(destination.id))])
-      )
+    route = create_route(context, "route", 3)
 
     create_step_transition(context.user, source, route)
     create_step_transition(context.user, route, destination)
+
+    route =
+      persist_invalid_route_config(
+        route,
+        route_config([result_rule("approved", intra_target(destination.id))])
+      )
 
     assert {:error, %{code: :route_config_uncovered, path: "$.rules"}} =
              RouteValidator.validate(route)
@@ -127,21 +130,22 @@ defmodule Sacrum.Routing.RouteValidatorTest do
     source = create_step(context, "source", 1, output_schema: predecessor_schema(["approved"]))
     destination = create_step(context, "destination", 2)
 
-    route =
-      create_step(context, "route", 3,
-        step_type: "route",
-        route_config:
-          route_config(
-            [
-              level_rule("ticket", intra_target(destination.id)),
-              level_rule("ticket-again", intra_target(destination.id))
-            ],
-            intra_target(destination.id)
-          )
-      )
+    route = create_route(context, "route", 3)
 
     create_step_transition(context.user, source, route)
     create_step_transition(context.user, route, destination)
+
+    route =
+      persist_invalid_route_config(
+        route,
+        route_config(
+          [
+            level_rule("ticket", intra_target(destination.id)),
+            level_rule("ticket-again", intra_target(destination.id))
+          ],
+          intra_target(destination.id)
+        )
+      )
 
     assert {:error, %{code: :route_config_ambiguous, path: "$.rules[1].when"}} =
              RouteValidator.validate(route)
@@ -187,6 +191,23 @@ defmodule Sacrum.Routing.RouteValidatorTest do
 
     {:ok, step} = Accounts.WorkflowSteps.insert(user.id, attrs)
     step
+  end
+
+  defp create_route(context, name, order) do
+    create_step(context, name, order, step_type: "route")
+  end
+
+  defp configure_route(route, route_config) do
+    {:ok, route} = Accounts.WorkflowSteps.update(route, %{route_config: route_config})
+    route
+  end
+
+  # Validator unit tests deliberately persist invalid states through the raw
+  # Ecto repository so they can assert the validator's diagnostics. Production
+  # mutations go through the guarded repository APIs.
+  defp persist_invalid_route_config(route, route_config) do
+    {:ok, route} = Repo.update(Ecto.Changeset.change(route, %{route_config: route_config}))
+    route
   end
 
   defp create_step_transition(user, from_step, to_step) do

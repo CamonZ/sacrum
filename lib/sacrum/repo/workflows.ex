@@ -31,6 +31,7 @@ defmodule Sacrum.Repo.Workflows do
   alias Sacrum.Repo.Schemas.WorkflowTransition
   alias Sacrum.Repo.SyncHelper
   alias Sacrum.Repo.UuidPrefixResolver
+  alias Sacrum.Routing.RouteValidator
   alias Sacrum.TaskRuns.Status, as: TaskRunStatus
 
   @spec find_by_uuid_prefix(String.t(), String.t(), String.t()) ::
@@ -67,11 +68,28 @@ defmodule Sacrum.Repo.Workflows do
     |> Repo.insert()
   end
 
+  @spec update(Ecto.Changeset.t()) :: {:ok, Workflow.t()} | {:error, Ecto.Changeset.t()}
+  def update(%Ecto.Changeset{data: %Workflow{} = workflow} = changeset) do
+    result =
+      Repo.transaction(fn ->
+        with :ok <- RouteValidator.lock_project(workflow.project_id),
+             route_ids <- route_ids_for_workflow_update(workflow, changeset),
+             {:ok, updated_workflow} <- Repo.update(changeset),
+             :ok <- RouteValidator.revalidate_route_ids(route_ids) do
+          updated_workflow
+        else
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+
+    normalize_validation_error(result, changeset)
+  end
+
   @spec update(Workflow.t(), map()) :: {:ok, Workflow.t()} | {:error, Ecto.Changeset.t()}
   def update(%Workflow{} = workflow, attrs) do
     workflow
     |> Workflow.update_changeset(attrs)
-    |> Repo.update()
+    |> update()
   end
 
   @doc """
@@ -101,61 +119,123 @@ defmodule Sacrum.Repo.Workflows do
   end
 
   defp do_sync_transitions(workflow, transition_maps) do
-    existing =
-      Repo.WorkflowTransitions.all(
-        conditions: [from_workflow_id: workflow.id],
-        order_by: [asc: :inserted_at]
-      )
+    result =
+      Repo.transaction(fn ->
+        :ok = RouteValidator.lock_project(workflow.project_id)
 
-    SyncHelper.diff_and_sync(existing, transition_maps, %{
-      target_key: :to_workflow_id,
-      to_delete_fn: fn existing, incoming_target_ids ->
-        Enum.filter(existing, fn t ->
-          not MapSet.member?(incoming_target_ids, t.to_workflow_id)
-        end)
-      end,
-      to_insert_fn: fn incoming, existing_by_target ->
-        Enum.filter(incoming, fn m ->
-          not Map.has_key?(existing_by_target, m["to_workflow_id"])
-        end)
-      end,
-      to_update_fn: fn incoming, existing_by_target ->
-        incoming
-        |> Enum.filter(fn m ->
-          Map.has_key?(existing_by_target, m["to_workflow_id"])
-        end)
-        |> Enum.map(fn m -> {existing_by_target[m["to_workflow_id"]], m} end)
-        |> Enum.filter(fn {existing_rec, m} ->
-          existing_rec.label != m["label"] ||
-            existing_rec.target_step_id != m["target_step_id"]
-        end)
-      end,
-      build_changeset_fn: fn m ->
-        WorkflowTransition.create_changeset(
-          %WorkflowTransition{user_id: workflow.user_id, project_id: workflow.project_id},
-          Map.merge(m, %{"from_workflow_id" => workflow.id})
-        )
-      end,
-      build_update_changeset_fn: fn existing_rec, m ->
-        Ecto.Changeset.change(existing_rec, %{
-          label: m["label"],
-          target_step_id: m["target_step_id"]
-        })
-      end,
-      fetch_final_fn: fn ->
-        {:ok,
-         Repo.WorkflowTransitions.all(
-           conditions: [from_workflow_id: workflow.id],
-           order_by: [asc: :inserted_at]
-         )}
-      end
-    })
+        existing =
+          Repo.WorkflowTransitions.all(
+            conditions: [from_workflow_id: workflow.id],
+            order_by: [asc: :inserted_at]
+          )
+
+        route_ids =
+          RouteValidator.related_route_ids_for_workflows([
+            workflow.id
+            | Enum.map(existing, & &1.to_workflow_id) ++
+                Enum.map(transition_maps, &Map.fetch!(&1, "to_workflow_id"))
+          ])
+
+        case SyncHelper.diff_and_sync(existing, transition_maps, %{
+               target_key: :to_workflow_id,
+               to_delete_fn: fn existing, incoming_target_ids ->
+                 Enum.filter(existing, fn t ->
+                   not MapSet.member?(incoming_target_ids, t.to_workflow_id)
+                 end)
+               end,
+               to_insert_fn: fn incoming, existing_by_target ->
+                 Enum.filter(incoming, fn m ->
+                   not Map.has_key?(existing_by_target, m["to_workflow_id"])
+                 end)
+               end,
+               to_update_fn: fn incoming, existing_by_target ->
+                 incoming
+                 |> Enum.filter(fn m ->
+                   Map.has_key?(existing_by_target, m["to_workflow_id"])
+                 end)
+                 |> Enum.map(fn m -> {existing_by_target[m["to_workflow_id"]], m} end)
+                 |> Enum.filter(fn {existing_rec, m} ->
+                   existing_rec.label != m["label"] ||
+                     existing_rec.target_step_id != m["target_step_id"]
+                 end)
+               end,
+               build_changeset_fn: fn m ->
+                 WorkflowTransition.create_changeset(
+                   %WorkflowTransition{
+                     user_id: workflow.user_id,
+                     project_id: workflow.project_id
+                   },
+                   Map.merge(m, %{"from_workflow_id" => workflow.id})
+                 )
+               end,
+               build_update_changeset_fn: fn existing_rec, m ->
+                 Ecto.Changeset.change(existing_rec, %{
+                   label: m["label"],
+                   target_step_id: m["target_step_id"]
+                 })
+               end,
+               fetch_final_fn: fn ->
+                 {:ok,
+                  Repo.WorkflowTransitions.all(
+                    conditions: [from_workflow_id: workflow.id],
+                    order_by: [asc: :inserted_at]
+                  )}
+               end,
+               validate_fn: fn ->
+                 route_ids_after =
+                   RouteValidator.related_route_ids_for_workflows([
+                     workflow.id
+                     | Enum.map(existing, & &1.to_workflow_id) ++
+                         Enum.map(transition_maps, &Map.fetch!(&1, "to_workflow_id"))
+                   ])
+
+                 RouteValidator.revalidate_route_ids(route_ids ++ route_ids_after)
+               end,
+               validation_error_fn: &RouteValidator.error_changeset(workflow, &1)
+             }) do
+          {:ok, result} -> result
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+
+    normalize_validation_error(result, workflow)
   end
 
   @spec delete(Workflow.t()) :: {:ok, Workflow.t()} | {:error, Ecto.Changeset.t()}
   def delete(%Workflow{} = workflow) do
-    Repo.delete(workflow)
+    result =
+      Repo.transaction(fn ->
+        with :ok <- RouteValidator.lock_project(workflow.project_id),
+             route_ids <- RouteValidator.related_route_ids_for_workflows([workflow.id]),
+             {:ok, deleted_workflow} <- Repo.delete(workflow),
+             :ok <- RouteValidator.revalidate_route_ids(route_ids) do
+          deleted_workflow
+        else
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+
+    normalize_validation_error(result, workflow)
   end
+
+  defp route_ids_for_workflow_update(workflow, changeset) do
+    if Ecto.Changeset.get_change(changeset, :initial_step_id, :unchanged) == :unchanged do
+      []
+    else
+      RouteValidator.related_route_ids_for_workflows([workflow.id])
+    end
+  end
+
+  defp normalize_validation_error({:ok, result}, _record), do: {:ok, result}
+
+  defp normalize_validation_error({:error, %Ecto.Changeset{} = changeset}, _record),
+    do: {:error, changeset}
+
+  defp normalize_validation_error({:error, %{code: _code} = reason}, record) do
+    {:error, RouteValidator.error_changeset(record, reason)}
+  end
+
+  defp normalize_validation_error({:error, reason}, _record), do: {:error, reason}
 
   @doc """
   Returns all workflows in a project along with batched aggregates needed by the

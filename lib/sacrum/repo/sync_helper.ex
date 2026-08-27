@@ -79,10 +79,11 @@ defmodule Sacrum.Repo.SyncHelper do
       |> build_deletes(to_delete, name_fns.delete)
       |> build_inserts(to_insert, config[:build_changeset_fn], name_fns.insert)
       |> build_updates(to_update, config[:build_update_changeset_fn], name_fns.update)
+      |> maybe_validate(config)
 
     case Repo.transaction(multi) do
       {:ok, _} -> config[:fetch_final_fn].()
-      {:error, _name, changeset, _changes} -> {:error, changeset}
+      {:error, _name, reason, _changes} -> {:error, reason}
     end
   end
 
@@ -142,4 +143,20 @@ defmodule Sacrum.Repo.SyncHelper do
       Multi.update(acc, name_fn.(map), changeset)
     end)
   end
+
+  defp maybe_validate(multi, %{validate_fn: validate_fn} = config)
+       when is_function(validate_fn, 0) do
+    Multi.run(multi, :validate_routes, fn _repo, _changes ->
+      case validate_fn.() do
+        :ok ->
+          {:ok, :validated}
+
+        {:error, reason} ->
+          error_fn = Map.get(config, :validation_error_fn, & &1)
+          {:error, error_fn.(reason)}
+      end
+    end)
+  end
+
+  defp maybe_validate(multi, _config), do: multi
 end

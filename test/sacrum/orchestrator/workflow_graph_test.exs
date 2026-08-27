@@ -169,8 +169,7 @@ defmodule Sacrum.Orchestrator.WorkflowGraphTest do
         create_step(user, workflow, %{
           "name" => "route",
           "step_order" => 3,
-          "step_type" => "route",
-          "route_config" => route_config()
+          "step_type" => "route"
         })
 
       approved_transition = create_transition(user, approved, route)
@@ -201,8 +200,7 @@ defmodule Sacrum.Orchestrator.WorkflowGraphTest do
         create_step(user, workflow, %{
           "name" => "route",
           "step_order" => 2,
-          "step_type" => "route",
-          "route_config" => route_config()
+          "step_type" => "route"
         })
 
       transition = create_transition(user, source, route)
@@ -258,20 +256,6 @@ defmodule Sacrum.Orchestrator.WorkflowGraphTest do
       result = WorkflowGraph.select_single_transition(["step_2", "step_3"])
       assert result == {:error, :multiple_outgoing_transitions}
     end
-  end
-
-  defp route_config do
-    %{
-      "version" => 1,
-      "match_policy" => "exactly_one",
-      "rules" => [
-        %{
-          "id" => "ticket",
-          "when" => %{"ref" => "task.level", "op" => "eq", "value" => "ticket"},
-          "transition" => %{"type" => "intra_workflow", "step_id" => Ecto.UUID.generate()}
-        }
-      ]
-    }
   end
 
   defp predecessor_schema(result_values) do

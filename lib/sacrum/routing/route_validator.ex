@@ -11,7 +11,7 @@ defmodule Sacrum.Routing.RouteValidator do
 
   alias Sacrum.Orchestrator.WorkflowGraph
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.{StepTransition, Workflow, WorkflowStep, WorkflowTransition}
+  alias Sacrum.Repo.Schemas.{Project, StepTransition, Workflow, WorkflowStep, WorkflowTransition}
   alias Sacrum.Routing.{RouteConfig, RouteContext, RouteEvaluator, RoutePredecessors}
 
   @levels ["epic", "ticket", "task"]
@@ -44,6 +44,94 @@ defmodule Sacrum.Routing.RouteValidator do
   end
 
   @doc """
+  Revalidates configured routes after a proposed graph mutation.
+
+  Route rows are locked before their graph is read so concurrent mutations that
+  affect the same configuration serialize at the validation boundary.
+  """
+  @spec revalidate_route_ids([binary()]) :: :ok | {:error, error()}
+  def revalidate_route_ids(route_ids) do
+    route_ids
+    |> Enum.uniq()
+    |> configured_routes()
+    |> Enum.reduce_while(:ok, fn route_step, :ok ->
+      case validate(route_step) do
+        :ok -> {:cont, :ok}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  @doc """
+  Serializes graph writes within a project before route dependencies are read.
+
+  A route configuration and every topology mutation use the same project-row
+  lock, so neither can validate against a graph that another transaction later
+  changes before committing.
+  """
+  @spec lock_project(binary() | nil) :: :ok
+  def lock_project(nil), do: :ok
+
+  def lock_project(project_id) do
+    Repo.one(from(project in Project, where: project.id == ^project_id, lock: "FOR UPDATE"))
+    :ok
+  end
+
+  @doc """
+  Returns configured routes that directly depend on the supplied workflow steps
+  as predecessors or intra-workflow destinations.
+  """
+  @spec related_route_ids_for_steps([binary()]) :: [binary()]
+  def related_route_ids_for_steps([]), do: []
+
+  def related_route_ids_for_steps(step_ids) do
+    step_ids = step_ids |> Enum.filter(&is_binary/1) |> Enum.uniq()
+
+    route_ids =
+      direct_route_ids(step_ids) ++
+        route_ids_with_transitions(:from, step_ids) ++
+        route_ids_with_transitions(:to, step_ids)
+
+    Enum.uniq(route_ids)
+  end
+
+  @doc """
+  Returns configured routes that depend on a workflow as an inter-workflow
+  destination or are defined in that workflow.
+  """
+  @spec related_route_ids_for_workflows([binary()]) :: [binary()]
+  def related_route_ids_for_workflows([]), do: []
+
+  def related_route_ids_for_workflows(workflow_ids) do
+    workflow_ids = workflow_ids |> Enum.filter(&is_binary/1) |> Enum.uniq()
+
+    source_workflow_ids =
+      Repo.all(
+        from(transition in WorkflowTransition,
+          where: transition.to_workflow_id in ^workflow_ids,
+          select: transition.from_workflow_id
+        )
+      )
+
+    direct_route_ids_for_workflows(workflow_ids ++ source_workflow_ids)
+  end
+
+  @doc """
+  Converts a route-validation error into a changeset error for the mutation
+  caller while preserving its stable, path-aware explanation.
+  """
+  @spec error_changeset(Ecto.Changeset.t() | struct(), error()) :: Ecto.Changeset.t()
+  def error_changeset(%Ecto.Changeset{} = changeset, reason) do
+    Ecto.Changeset.add_error(changeset, :route_config, error_message(reason))
+  end
+
+  def error_changeset(record, reason) do
+    record
+    |> Ecto.Changeset.change()
+    |> Ecto.Changeset.add_error(:route_config, error_message(reason))
+  end
+
+  @doc """
   Validates one persisted route step against a previously loaded predecessor
   context. This allows callers validating a stable graph snapshot to reuse the
   same context without reloading predecessor schemas.
@@ -67,6 +155,57 @@ defmodule Sacrum.Routing.RouteValidator do
 
   defp validate_route_step(_route_step) do
     {:error, error(:route_config_invalid, "$.route_config", "is only supported for route steps")}
+  end
+
+  defp configured_routes([]), do: []
+
+  defp configured_routes(route_ids) do
+    Repo.all(
+      from(step in WorkflowStep,
+        where: step.id in ^route_ids and not is_nil(step.route_config),
+        lock: "FOR UPDATE"
+      )
+    )
+  end
+
+  defp direct_route_ids(step_ids) do
+    Repo.all(
+      from(step in WorkflowStep,
+        where: step.id in ^step_ids and not is_nil(step.route_config),
+        select: step.id
+      )
+    )
+  end
+
+  defp route_ids_with_transitions(:from, step_ids) do
+    Repo.all(
+      from(transition in StepTransition,
+        join: route_step in WorkflowStep,
+        on: route_step.id == transition.to_step_id,
+        where: transition.from_step_id in ^step_ids and not is_nil(route_step.route_config),
+        select: route_step.id
+      )
+    )
+  end
+
+  defp route_ids_with_transitions(:to, step_ids) do
+    Repo.all(
+      from(transition in StepTransition,
+        join: route_step in WorkflowStep,
+        on: route_step.id == transition.from_step_id,
+        where: transition.to_step_id in ^step_ids and not is_nil(route_step.route_config),
+        select: route_step.id
+      )
+    )
+  end
+
+  defp direct_route_ids_for_workflows(workflow_ids) do
+    Repo.all(
+      from(step in WorkflowStep,
+        where: step.workflow_id in ^workflow_ids and not is_nil(step.route_config),
+        select: step.id
+      )
+    )
   end
 
   defp validate_finite_domain(program, result_values) do
@@ -304,4 +443,6 @@ defmodule Sacrum.Routing.RouteValidator do
   end
 
   defp error(code, path, message), do: %{code: code, path: path, message: message}
+
+  defp error_message(%{path: path, message: message}), do: "#{path}: #{message}"
 end
