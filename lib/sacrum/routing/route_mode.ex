@@ -16,25 +16,15 @@ defmodule Sacrum.Routing.RouteMode do
     select(Map.get(step, :route_config), Map.get(step, :prompt))
   end
 
-  defp select(route_config, prompt) do
-    case decode_config(route_config) do
+  defp select(nil, prompt), do: legacy_or_unconfigured(prompt, :route_not_configured)
+
+  defp select(route_config, _prompt) do
+    case RouteConfig.decode(route_config) do
       {:ok, program} ->
         {:ok, {:deterministic, program}}
 
-      :absent ->
-        legacy_or_unconfigured(prompt, :route_not_configured)
-
       {:error, reason} ->
         {:error, reason}
-    end
-  end
-
-  defp decode_config(nil), do: :absent
-
-  defp decode_config(route_config) do
-    case RouteConfig.decode(route_config) do
-      {:ok, program} -> {:ok, program}
-      {:error, reason} -> {:error, reason}
     end
   end
 
