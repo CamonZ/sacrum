@@ -16,7 +16,11 @@ defmodule Sacrum.Routing.RoutePredecessors do
   @doc """
   Validates predecessor-result predicates against incoming result enums.
   """
-  @spec validate(RouteConfig.t(), [map()]) :: :ok | {:error, error()}
+  @spec validate(RouteConfig.t(), [map()] | type_environment()) :: :ok | {:error, error()}
+  def validate(%{rules: rules}, %{result_values: result_values}) when is_list(rules) do
+    validate_rules(rules, result_values)
+  end
+
   def validate(%{rules: rules}, schemas) when is_list(rules) do
     with {:ok, %{result_values: result_values}} <- derive_type_environment(schemas) do
       validate_rules(rules, result_values)
