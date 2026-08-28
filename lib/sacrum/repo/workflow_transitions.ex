@@ -21,9 +21,9 @@ defmodule Sacrum.Repo.WorkflowTransitions do
 
   import Ecto.Query
   alias Sacrum.Repo
+  alias Sacrum.Repo.RouteValidation
   alias Sacrum.Repo.Schemas.Workflow
   alias Sacrum.Repo.Schemas.WorkflowTransition
-  alias Sacrum.Routing.RouteValidator
 
   @spec list_for_project(String.t()) :: [WorkflowTransition.t()]
   @spec list_for_project(String.t(), String.t()) :: [WorkflowTransition.t()]
@@ -62,29 +62,16 @@ defmodule Sacrum.Repo.WorkflowTransitions do
   @spec insert(String.t(), map()) ::
           {:ok, WorkflowTransition.t()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
   def insert(%Ecto.Changeset{data: %WorkflowTransition{}} = changeset) do
-    from_workflow_id = Ecto.Changeset.get_field(changeset, :from_workflow_id)
-    to_workflow_id = Ecto.Changeset.get_field(changeset, :to_workflow_id)
-    project_id = Ecto.Changeset.get_field(changeset, :project_id)
+    affected =
+      Enum.filter(
+        [
+          Ecto.Changeset.get_field(changeset, :from_workflow_id),
+          Ecto.Changeset.get_field(changeset, :to_workflow_id)
+        ],
+        &is_binary/1
+      )
 
-    result =
-      Repo.transaction(fn ->
-        with :ok <- RouteValidator.lock_project(project_id),
-             route_ids_before <-
-               RouteValidator.related_route_ids_for_workflows([from_workflow_id, to_workflow_id]),
-             {:ok, transition} <- Repo.insert(changeset),
-             route_ids_after <-
-               RouteValidator.related_route_ids_for_workflows([
-                 transition.from_workflow_id,
-                 transition.to_workflow_id
-               ]),
-             :ok <- RouteValidator.revalidate_route_ids(route_ids_before ++ route_ids_after) do
-          transition
-        else
-          {:error, reason} -> Repo.rollback(reason)
-        end
-      end)
-
-    normalize_validation_error(result, changeset)
+    RouteValidation.mutate(affected, changeset, fn -> Repo.insert(changeset) end)
   end
 
   def insert(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
@@ -111,63 +98,25 @@ defmodule Sacrum.Repo.WorkflowTransitions do
   @spec update(Ecto.Changeset.t()) ::
           {:ok, WorkflowTransition.t()} | {:error, Ecto.Changeset.t()}
   def update(%Ecto.Changeset{data: %WorkflowTransition{} = transition} = changeset) do
-    updated_from_workflow_id = Ecto.Changeset.get_field(changeset, :from_workflow_id)
-    updated_to_workflow_id = Ecto.Changeset.get_field(changeset, :to_workflow_id)
+    affected =
+      Enum.filter(
+        [
+          transition.from_workflow_id,
+          transition.to_workflow_id,
+          Ecto.Changeset.get_field(changeset, :from_workflow_id),
+          Ecto.Changeset.get_field(changeset, :to_workflow_id)
+        ],
+        &is_binary/1
+      )
 
-    result =
-      Repo.transaction(fn ->
-        with :ok <- RouteValidator.lock_project(transition.project_id),
-             route_ids_before <-
-               RouteValidator.related_route_ids_for_workflows([
-                 transition.from_workflow_id,
-                 transition.to_workflow_id
-               ]),
-             {:ok, updated_transition} <- Repo.update(changeset),
-             route_ids_after <-
-               RouteValidator.related_route_ids_for_workflows([
-                 updated_from_workflow_id,
-                 updated_to_workflow_id
-               ]),
-             :ok <- RouteValidator.revalidate_route_ids(route_ids_before ++ route_ids_after) do
-          updated_transition
-        else
-          {:error, reason} -> Repo.rollback(reason)
-        end
-      end)
-
-    normalize_validation_error(result, changeset)
+    RouteValidation.mutate(affected, changeset, fn -> Repo.update(changeset) end)
   end
 
   @spec delete(WorkflowTransition.t()) ::
           {:ok, WorkflowTransition.t()} | {:error, Ecto.Changeset.t()}
   def delete(%WorkflowTransition{} = transition) do
-    result =
-      Repo.transaction(fn ->
-        with :ok <- RouteValidator.lock_project(transition.project_id),
-             route_ids <-
-               RouteValidator.related_route_ids_for_workflows([
-                 transition.from_workflow_id,
-                 transition.to_workflow_id
-               ]),
-             {:ok, deleted_transition} <- Repo.delete(transition),
-             :ok <- RouteValidator.revalidate_route_ids(route_ids) do
-          deleted_transition
-        else
-          {:error, reason} -> Repo.rollback(reason)
-        end
-      end)
+    affected = [transition.from_workflow_id, transition.to_workflow_id]
 
-    normalize_validation_error(result, transition)
+    RouteValidation.mutate(affected, transition, fn -> Repo.delete(transition) end)
   end
-
-  defp normalize_validation_error({:ok, result}, _record), do: {:ok, result}
-
-  defp normalize_validation_error({:error, %Ecto.Changeset{} = changeset}, _record),
-    do: {:error, changeset}
-
-  defp normalize_validation_error({:error, %{code: _code} = reason}, record) do
-    {:error, RouteValidator.error_changeset(record, reason)}
-  end
-
-  defp normalize_validation_error({:error, reason}, _record), do: {:error, reason}
 end

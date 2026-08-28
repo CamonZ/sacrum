@@ -81,7 +81,7 @@ defmodule Sacrum.Orchestrator.WorkflowGraphTest do
 
   # ===== Tests =====
 
-  describe "load_workflow_and_graph/2" do
+  describe "load_validated_workflow_and_graph/2" do
     test "returns ok with workflow and step/transition maps on success" do
       user = create_user()
       project = create_project(user)
@@ -94,7 +94,7 @@ defmodule Sacrum.Orchestrator.WorkflowGraphTest do
       task = create_task(user, project, workflow)
 
       {:ok, loaded_workflow, steps, transitions} =
-        WorkflowGraph.load_workflow_and_graph(user.id, task)
+        WorkflowGraph.load_validated_workflow_and_graph(user.id, task)
 
       assert loaded_workflow.id == workflow.id
       assert Map.has_key?(steps, step1.id)
@@ -102,6 +102,71 @@ defmodule Sacrum.Orchestrator.WorkflowGraphTest do
       assert Map.has_key?(transitions, step1.id)
       assert transitions[step1.id] == [step2.id]
       assert transitions[step2.id] == []
+    end
+
+    test "rejects a workflow whose configured route no longer matches the graph" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project)
+
+      source =
+        create_step(user, workflow, %{
+          "name" => "source",
+          "output_schema" => predecessor_schema(["approved"])
+        })
+
+      route =
+        create_step(user, workflow, %{
+          "name" => "route",
+          "step_order" => 2,
+          "step_type" => "route"
+        })
+
+      destination =
+        create_step(user, workflow, %{
+          "name" => "destination",
+          "step_order" => 3
+        })
+
+      create_transition(user, source, route)
+      route_transition = create_transition(user, route, destination)
+
+      # Persist a valid configuration, then break the graph behind the
+      # guarded write API: the route's only outgoing edge disappears, so its
+      # configured target is illegal.
+      {:ok, _route} =
+        Repo.update(
+          Ecto.Changeset.change(route, %{
+            route_config: %{
+              "version" => 1,
+              "match_policy" => "exactly_one",
+              "rules" => [
+                %{
+                  "id" => "approved",
+                  "when" => %{
+                    "ref" => "previous_output.route.result",
+                    "op" => "eq",
+                    "value" => "approved"
+                  },
+                  "transition" => %{
+                    "type" => "intra_workflow",
+                    "step_id" => destination.id
+                  }
+                }
+              ],
+              "default" => %{
+                "transition" => %{"type" => "intra_workflow", "step_id" => destination.id}
+              }
+            }
+          })
+        )
+
+      Repo.delete(route_transition)
+
+      task = create_task(user, project, workflow)
+
+      assert {:error, %{code: :route_target_invalid}} =
+               WorkflowGraph.load_validated_workflow_and_graph(user.id, task)
     end
   end
 
@@ -146,7 +211,7 @@ defmodule Sacrum.Orchestrator.WorkflowGraphTest do
     end
   end
 
-  describe "validate_route_predecessors/1" do
+  describe "RouteValidation.load_snapshot/1" do
     test "keeps every incoming edge identity and unions its result domains" do
       user = create_user()
       project = create_project(user)
@@ -175,49 +240,24 @@ defmodule Sacrum.Orchestrator.WorkflowGraphTest do
       approved_transition = create_transition(user, approved, route)
       rejected_transition = create_transition(user, rejected, route)
 
-      assert {:ok, %{predecessors: predecessors, type_environment: type_environment}} =
-               WorkflowGraph.validate_route_predecessors(route)
+      assert {:ok, snapshot} = Sacrum.Repo.RouteValidation.load_snapshot(workflow.id)
 
-      assert type_environment.result_values == MapSet.new(["approved", "rejected", "retry"])
+      predecessors = Sacrum.Routing.RouteValidator.predecessor_schemas(route, snapshot)
 
-      assert Enum.map(
-               predecessors,
-               &{&1.transition_id, &1.source_step_id, &1.destination_step_id}
-             ) ==
-               [
-                 {approved_transition.id, approved.id, route.id},
-                 {rejected_transition.id, rejected.id, route.id}
-               ]
+      assert Enum.map(predecessors, & &1.transition_id) |> Enum.sort() ==
+               Enum.sort([approved_transition.id, rejected_transition.id])
+
+      schemas = Enum.map(predecessors, & &1.output_schema)
+
+      {:ok, %{result_values: result_values}} =
+        Sacrum.Routing.RoutePredecessors.derive_type_environment(schemas)
+
+      assert result_values == MapSet.new(["approved", "rejected", "retry"])
     end
 
-    test "reports the source step and exact edge for an invalid predecessor contract" do
-      user = create_user()
-      project = create_project(user)
-      workflow = create_workflow(user, project)
-      source = create_step(user, workflow, %{"output_schema" => nil})
-
-      route =
-        create_step(user, workflow, %{
-          "name" => "route",
-          "step_order" => 2,
-          "step_type" => "route"
-        })
-
-      transition = create_transition(user, source, route)
-
-      assert {:error,
-              %{
-                code: :route_input_invalid,
-                transition_id: transition_id,
-                source_step_id: source_step_id,
-                destination_step_id: destination_step_id,
-                path: path
-              }} = WorkflowGraph.validate_route_predecessors(route)
-
-      assert transition_id == transition.id
-      assert source_step_id == source.id
-      assert destination_step_id == route.id
-      assert path == "$.predecessors[#{transition.id}]"
+    test "returns an error for an unknown workflow" do
+      assert {:error, :workflow_not_found} =
+               Sacrum.Repo.RouteValidation.load_snapshot(Ecto.UUID.generate())
     end
   end
 

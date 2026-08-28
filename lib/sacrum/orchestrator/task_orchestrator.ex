@@ -42,7 +42,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   alias Sacrum.Repo.Schemas.{StepExecution, Task}
   alias Sacrum.Repo.TaskHierarchy
   alias Sacrum.Repo.TaskWorkflows
-  alias Sacrum.Routing.RouteValidator
 
   @typep fsm_transition ::
            :keep_state_and_data
@@ -230,16 +229,15 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   def handle_event(:state_timeout, :run, :initializing, data) do
     task_id = data.task.id
 
-    with {:ok, workflow, steps, transitions} <-
-           WorkflowGraph.load_workflow_and_graph(data.user_id, data.task),
-         :ok <- RouteValidator.validate_workflow(data.user_id, data.project_id, workflow.id) do
-      Logger.info(
-        "[TaskOrchestrator:#{task_id}] Loaded workflow #{workflow.id} with #{map_size(steps)} steps"
-      )
+    case WorkflowGraph.load_validated_workflow_and_graph(data.user_id, data.task) do
+      {:ok, workflow, steps, transitions} ->
+        Logger.info(
+          "[TaskOrchestrator:#{task_id}] Loaded workflow #{workflow.id} with #{map_size(steps)} steps"
+        )
 
-      {:next_state, :awaiting_execution,
-       %{data | workflow: workflow, steps: steps, transitions: transitions}}
-    else
+        {:next_state, :awaiting_execution,
+         %{data | workflow: workflow, steps: steps, transitions: transitions}}
+
       {:error, reason} ->
         Logger.error("[TaskOrchestrator:#{task_id}] Failed to enter workflow: #{inspect(reason)}")
         {:next_state, :failed, data}

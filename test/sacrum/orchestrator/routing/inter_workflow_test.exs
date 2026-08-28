@@ -7,7 +7,7 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflowTest do
   alias Sacrum.Accounts
   alias Sacrum.Orchestrator.Routing.InterWorkflow
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.{Task, WorkflowStep}
+  alias Sacrum.Repo.Schemas.WorkflowStep
 
   @endpoint SacrumWeb.Endpoint
 
@@ -449,7 +449,7 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflowTest do
       assert {:error, :destination_workflow_not_found} = result
     end
 
-    test "rejects an invalid configured destination workflow before moving the task" do
+    test "moves the task and fails the continuation when the destination graph is invalid" do
       user = create_user()
       project = create_project(user)
       from_workflow = create_workflow(user, project, %{"name" => "From"})
@@ -475,7 +475,7 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflowTest do
       create_step_transition(user, predecessor, route)
       create_step_transition(user, route, destination)
 
-      {:ok, route} =
+      {:ok, _route} =
         Accounts.WorkflowSteps.update(route, %{route_config: route_config(destination.id)})
 
       create_workflow_transition(user, from_workflow, to_workflow, %{
@@ -492,17 +492,28 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflowTest do
         set: [output_schema: nil]
       )
 
-      assert {:error, %{route_step_id: route_id, path: "$.predecessors[" <> _}} =
-               InterWorkflow.handle_inter_workflow_routing(
-                 %{task: task, project_id: project.id, user_id: user.id},
-                 to_workflow.id,
-                 nil
-               )
+      data = %{task: task, project_id: project.id, user_id: user.id}
 
-      assert route_id == route.id
-      unchanged_task = Repo.get!(Task, task.id)
-      assert unchanged_task.workflow_id == from_workflow.id
-      assert unchanged_task.current_step_id == from_step.id
+      # The move itself is a task-row update; graph validity is enforced by
+      # the validated snapshot load in the continuation, which fails the run
+      # before any execution happens in the destination workflow.
+      assert {:ok, moved_task} =
+               InterWorkflow.handle_inter_workflow_routing(data, to_workflow.id, nil)
+
+      assert moved_task.workflow_id == to_workflow.id
+
+      fsm_data = %Sacrum.Orchestrator.FSMData{
+        user_id: user.id,
+        project_id: project.id,
+        task: moved_task
+      }
+
+      assert {:next_state, :failed, _failed_data} =
+               InterWorkflow.handle_inter_route_continuation(
+                 fsm_data,
+                 task.id,
+                 moved_task
+               )
     end
   end
 

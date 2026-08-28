@@ -30,13 +30,13 @@ defmodule Sacrum.Repo.WorkflowSteps do
 
   import Ecto.Query
   alias Sacrum.Repo
+  alias Sacrum.Repo.RouteValidation
   alias Sacrum.Repo.Schemas.StepTransition
   alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.Schemas.Workflow
   alias Sacrum.Repo.Schemas.WorkflowStep
   alias Sacrum.Repo.SyncHelper
   alias Sacrum.Repo.UuidPrefixResolver
-  alias Sacrum.Routing.RouteValidator
 
   @spec find_by_uuid_prefix(String.t(), String.t(), String.t(), String.t()) ::
           {:ok, WorkflowStep.t()}
@@ -61,18 +61,11 @@ defmodule Sacrum.Repo.WorkflowSteps do
   @spec insert(Workflow.t(), map()) :: {:ok, WorkflowStep.t()} | {:error, Ecto.Changeset.t()}
   @spec insert(String.t(), map()) :: {:ok, WorkflowStep.t()} | {:error, Ecto.Changeset.t()}
   def insert(%Ecto.Changeset{} = changeset) do
-    result =
-      Repo.transaction(fn ->
-        with :ok <- RouteValidator.lock_project(Ecto.Changeset.get_field(changeset, :project_id)),
-             {:ok, step} <- Repo.insert(changeset),
-             :ok <- RouteValidator.revalidate_route_ids([step.id]) do
-          step
-        else
-          {:error, reason} -> Repo.rollback(reason)
-        end
-      end)
-
-    normalize_validation_error(result, changeset)
+    RouteValidation.mutate(
+      [Ecto.Changeset.get_field(changeset, :workflow_id)],
+      changeset,
+      fn -> Repo.insert(changeset) end
+    )
   end
 
   def insert(%Workflow{id: workflow_id, project_id: project_id, user_id: user_id}, attrs)
@@ -114,19 +107,9 @@ defmodule Sacrum.Repo.WorkflowSteps do
 
   @spec update(Ecto.Changeset.t()) :: {:ok, WorkflowStep.t()} | {:error, Ecto.Changeset.t()}
   def update(%Ecto.Changeset{data: %WorkflowStep{} = step} = changeset) do
-    result =
-      Repo.transaction(fn ->
-        with :ok <- RouteValidator.lock_project(step.project_id),
-             route_ids <- RouteValidator.related_route_ids_for_steps([step.id]),
-             {:ok, updated_step} <- Repo.update(changeset),
-             :ok <- RouteValidator.revalidate_route_ids([updated_step.id | route_ids]) do
-          updated_step
-        else
-          {:error, reason} -> Repo.rollback(reason)
-        end
-      end)
+    affected = Enum.uniq([step.workflow_id, Ecto.Changeset.get_field(changeset, :workflow_id)])
 
-    normalize_validation_error(result, changeset)
+    RouteValidation.mutate(affected, changeset, fn -> Repo.update(changeset) end)
   end
 
   @spec update(WorkflowStep.t(), map()) :: {:ok, WorkflowStep.t()} | {:error, Ecto.Changeset.t()}
@@ -157,80 +140,58 @@ defmodule Sacrum.Repo.WorkflowSteps do
   end
 
   defp do_sync_transitions(step, transitions) do
-    result =
-      Repo.transaction(fn ->
-        :ok = RouteValidator.lock_project(step.project_id)
+    RouteValidation.mutate([step.workflow_id], step, fn ->
+      existing = Repo.all(from(t in StepTransition, where: t.from_step_id == ^step.id))
 
-        existing =
-          Repo.all(from(t in StepTransition, where: t.from_step_id == ^step.id))
-
-        route_ids =
-          RouteValidator.related_route_ids_for_steps([
-            step.id | Enum.map(existing, & &1.to_step_id) ++ Enum.map(transitions, &to_step_id/1)
-          ])
-
-        case SyncHelper.diff_and_sync(existing, transitions, %{
-               target_key: :to_step_id,
-               to_delete_fn: fn existing, incoming_target_ids ->
-                 Enum.filter(existing, fn t ->
-                   not MapSet.member?(incoming_target_ids, t.to_step_id)
-                 end)
-               end,
-               to_insert_fn: fn incoming, existing_by_target ->
-                 Enum.filter(incoming, fn t ->
-                   to_id = to_step_id(t)
-                   not Map.has_key?(existing_by_target, to_id)
-                 end)
-               end,
-               to_update_fn: fn _incoming, _existing_by_target ->
-                 # No updates for step transitions - they're created with just from/to, no other mutable fields
-                 []
-               end,
-               build_changeset_fn: fn t ->
+      case SyncHelper.diff_and_sync(existing, transitions, %{
+             target_key: :to_step_id,
+             to_delete_fn: fn existing, incoming_target_ids ->
+               Enum.filter(existing, fn t ->
+                 not MapSet.member?(incoming_target_ids, t.to_step_id)
+               end)
+             end,
+             to_insert_fn: fn incoming, existing_by_target ->
+               Enum.filter(incoming, fn t ->
                  to_id = to_step_id(t)
+                 not Map.has_key?(existing_by_target, to_id)
+               end)
+             end,
+             to_update_fn: fn _incoming, _existing_by_target ->
+               # No updates for step transitions - they're created with just from/to, no other mutable fields
+               []
+             end,
+             build_changeset_fn: fn t ->
+               to_id = to_step_id(t)
 
-                 StepTransition.create_changeset(
-                   %StepTransition{user_id: step.user_id, project_id: step.project_id},
-                   %{
-                     from_step_id: step.id,
-                     to_step_id: to_id,
-                     label: label_for(t)
-                   }
-                 )
-               end,
-               build_update_changeset_fn: fn _existing, _map ->
-                 # No-op for step transitions
-                 nil
-               end,
-               fetch_final_fn: fn ->
-                 updated =
-                   Repo.all(
-                     from(t in StepTransition,
-                       where: t.from_step_id == ^step.id,
-                       order_by: [asc: t.inserted_at]
-                     )
+               StepTransition.create_changeset(
+                 %StepTransition{user_id: step.user_id, project_id: step.project_id},
+                 %{
+                   from_step_id: step.id,
+                   to_step_id: to_id,
+                   label: label_for(t)
+                 }
+               )
+             end,
+             build_update_changeset_fn: fn _existing, _map ->
+               # No-op for step transitions
+               nil
+             end,
+             fetch_final_fn: fn ->
+               updated =
+                 Repo.all(
+                   from(t in StepTransition,
+                     where: t.from_step_id == ^step.id,
+                     order_by: [asc: t.inserted_at]
                    )
+                 )
 
-                 {:ok, updated}
-               end,
-               validate_fn: fn ->
-                 route_ids_after =
-                   RouteValidator.related_route_ids_for_steps([
-                     step.id
-                     | Enum.map(existing, & &1.to_step_id) ++
-                         Enum.map(transitions, &to_step_id/1)
-                   ])
-
-                 RouteValidator.revalidate_route_ids(route_ids ++ route_ids_after)
-               end,
-               validation_error_fn: &RouteValidator.error_changeset(step, &1)
-             }) do
-          {:ok, result} -> result
-          {:error, reason} -> Repo.rollback(reason)
-        end
-      end)
-
-    normalize_validation_error(result, step)
+               {:ok, updated}
+             end
+           }) do
+        {:ok, result} -> {:ok, result}
+        {:error, reason} -> {:error, reason}
+      end
+    end)
   end
 
   # sync_transitions helpers
@@ -297,31 +258,8 @@ defmodule Sacrum.Repo.WorkflowSteps do
   end
 
   defp delete_unassigned_step(step) do
-    result =
-      Repo.transaction(fn ->
-        with :ok <- RouteValidator.lock_project(step.project_id),
-             route_ids <- RouteValidator.related_route_ids_for_steps([step.id]),
-             {:ok, deleted_step} <- Repo.delete(step),
-             :ok <- RouteValidator.revalidate_route_ids(route_ids) do
-          deleted_step
-        else
-          {:error, reason} -> Repo.rollback(reason)
-        end
-      end)
-
-    normalize_validation_error(result, step)
+    RouteValidation.mutate([step.workflow_id], step, fn -> Repo.delete(step) end)
   end
-
-  defp normalize_validation_error({:ok, result}, _changeset), do: {:ok, result}
-
-  defp normalize_validation_error({:error, %Ecto.Changeset{} = changeset}, _original),
-    do: {:error, changeset}
-
-  defp normalize_validation_error({:error, %{code: _code} = reason}, original) do
-    {:error, RouteValidator.error_changeset(original, reason)}
-  end
-
-  defp normalize_validation_error({:error, reason}, _original), do: {:error, reason}
 
   @doc """
   Diagnostic-only setter that bypasses the public @update_fields allowlist.

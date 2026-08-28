@@ -14,20 +14,17 @@ defmodule Sacrum.Routing.RoutePredecessors do
   @type error :: %{code: atom(), path: String.t(), message: String.t()}
 
   @doc """
-  Validates predecessor-result predicates against incoming result enums.
+  Validates predecessor-result predicates against a derived result-enum union.
+
+  Callers holding raw schemas derive the environment first with
+  `derive_type_environment/1`.
   """
-  @spec validate(RouteConfig.t(), [map()] | type_environment()) :: :ok | {:error, error()}
+  @spec validate(RouteConfig.t(), type_environment()) :: :ok | {:error, error()}
   def validate(%{rules: rules}, %{result_values: result_values}) when is_list(rules) do
     validate_rules(rules, result_values)
   end
 
-  def validate(%{rules: rules}, schemas) when is_list(rules) do
-    with {:ok, %{result_values: result_values}} <- derive_type_environment(schemas) do
-      validate_rules(rules, result_values)
-    end
-  end
-
-  def validate(_program, _schemas),
+  def validate(_program, _type_environment),
     do: {:error, error(:route_config_invalid, "$", "must be a decoded route program")}
 
   @doc """

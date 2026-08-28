@@ -24,7 +24,6 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.StepExecution
   alias Sacrum.Repo.TaskWorkflows
-  alias Sacrum.Routing.RouteValidator
 
   @typep fsm_transition ::
            {:next_state, atom(), FSMData.t()}
@@ -95,7 +94,6 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
   defp prepare_route_plan(data, dest_id, "inter_workflow", handoff) do
     with {:ok, dest_workflow} <- InterWorkflow.validate_destination_workflow(data, dest_id),
          :ok <- InterWorkflow.validate_workflow_transition_exists(data.task.workflow_id, dest_id),
-         :ok <- RouteValidator.validate_workflow(data.user_id, data.project_id, dest_workflow.id),
          {:ok, %{changeset: changeset, target_step: _target_step}} <-
            InterWorkflow.assign_destination_workflow_plan(
              data.task,
@@ -140,7 +138,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
           {:ok, tuple()} | {:error, term()}
   defp inter_workflow_next_state_decision(data, preview_task) do
     with {:ok, workflow, steps, transitions} <-
-           WorkflowGraph.load_workflow_and_graph(data.user_id, preview_task) do
+           WorkflowGraph.load_validated_workflow_and_graph(data.user_id, preview_task) do
       decision_data = %{
         data
         | task: preview_task,

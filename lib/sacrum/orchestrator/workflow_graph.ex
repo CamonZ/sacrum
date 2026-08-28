@@ -5,36 +5,28 @@ defmodule Sacrum.Orchestrator.WorkflowGraph do
 
   alias Sacrum.Accounts
   alias Sacrum.Orchestrator.FSMData
-  import Ecto.Query
-
-  alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.{StepTransition, Task, WorkflowStep}
-  alias Sacrum.Routing.RoutePredecessors
-
-  @type route_predecessor :: %{
-          transition_id: binary(),
-          source_step_id: binary(),
-          destination_step_id: binary(),
-          user_id: binary(),
-          project_id: binary(),
-          workflow_id: binary(),
-          output_schema: map() | nil
-        }
+  alias Sacrum.Repo.RouteValidation
+  alias Sacrum.Repo.Schemas.Task
+  alias Sacrum.Repo.Schemas.WorkflowStep
+  alias Sacrum.Routing.RouteValidator
 
   @doc """
-  Load a workflow and build step/transition lookup maps.
+  Load a workflow, build step/transition lookup maps, and validate every
+  configured route against the same snapshot the lookup maps come from.
 
-  Returns `{:ok, workflow, steps, transitions}` where `steps` maps
-  `step_id -> WorkflowStep` and `transitions` maps `step_id -> [to_step_ids]`.
+  This is the single load/validate boundary for TaskRun entry (new, resumed,
+  and inter-workflow): callers either get a validated graph or an error.
   """
-  @spec load_workflow_and_graph(binary(), Task.t()) ::
+  @spec load_validated_workflow_and_graph(binary(), Task.t()) ::
           {:ok, any(), map(), map()} | {:error, term()}
-  def load_workflow_and_graph(user_id, task) do
+  def load_validated_workflow_and_graph(user_id, task) do
     with {:ok, workflow} <-
            Accounts.Workflows.get_by(user_id,
              conditions: [id: task.workflow_id],
              preloads: [workflow_steps: :transitions]
-           ) do
+           ),
+         {:ok, snapshot} <- RouteValidation.load_snapshot(task.workflow_id),
+         :ok <- RouteValidator.validate_snapshot(snapshot) do
       steps = Map.new(workflow.workflow_steps, &{&1.id, &1})
 
       transitions =
@@ -43,61 +35,6 @@ defmodule Sacrum.Orchestrator.WorkflowGraph do
         end)
 
       {:ok, workflow, steps, transitions}
-    end
-  end
-
-  @doc """
-  Loads persisted incoming step edges for a route step in its ownership scope.
-
-  Each result keeps the edge and source-step identities so a predecessor
-  contract error can identify the configuration that must be repaired.
-  """
-  @spec load_route_predecessors(WorkflowStep.t()) :: {:ok, [route_predecessor()]}
-  def load_route_predecessors(%WorkflowStep{} = route_step) do
-    predecessors =
-      Repo.all(
-        from(transition in StepTransition,
-          join: source_step in WorkflowStep,
-          on: source_step.id == transition.from_step_id,
-          join: destination_step in WorkflowStep,
-          on: destination_step.id == transition.to_step_id,
-          where:
-            transition.to_step_id == ^route_step.id and
-              transition.user_id == ^route_step.user_id and
-              transition.project_id == ^route_step.project_id and
-              source_step.user_id == ^route_step.user_id and
-              source_step.project_id == ^route_step.project_id and
-              source_step.workflow_id == ^route_step.workflow_id and
-              destination_step.user_id == ^route_step.user_id and
-              destination_step.project_id == ^route_step.project_id and
-              destination_step.workflow_id == ^route_step.workflow_id,
-          order_by: [asc: transition.inserted_at, asc: transition.id],
-          select: %{
-            transition_id: transition.id,
-            source_step_id: source_step.id,
-            destination_step_id: destination_step.id,
-            user_id: transition.user_id,
-            project_id: transition.project_id,
-            workflow_id: source_step.workflow_id,
-            output_schema: source_step.output_schema
-          }
-        )
-      )
-
-    {:ok, predecessors}
-  end
-
-  @doc """
-  Validates all incoming predecessor envelopes and returns their combined
-  route-result domain alongside the source-aware edge list.
-  """
-  @spec validate_route_predecessors(WorkflowStep.t()) ::
-          {:ok, %{predecessors: [route_predecessor()], type_environment: map()}}
-          | {:error, RoutePredecessors.error()}
-  def validate_route_predecessors(%WorkflowStep{} = route_step) do
-    with {:ok, predecessors} <- load_route_predecessors(route_step),
-         {:ok, type_environment} <- RoutePredecessors.derive_type_environment(predecessors) do
-      {:ok, %{predecessors: predecessors, type_environment: type_environment}}
     end
   end
 

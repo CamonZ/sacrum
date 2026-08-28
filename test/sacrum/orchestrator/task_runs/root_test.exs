@@ -70,31 +70,15 @@ defmodule Sacrum.Orchestrator.TaskRuns.RootTest do
     assert new_run.status == :queued
   end
 
-  test "rejects an invalid configured workflow before creating a root run" do
-    %{route: route, source: source, task: task} = configured_route_task()
+  test "get_or_create creates a queued run even when the graph is invalid" do
+    %{task: task, source: source} = configured_route_task()
     invalidate_source_schema(source)
 
-    assert {:error, %{route_step_id: route_id, path: "$.predecessors[" <> _}} =
-             Root.get_or_create(task)
-
-    assert route_id == route.id
-    assert {:error, :not_found} = TaskRuns.get_active_for_task(task.user_id, task.id)
-  end
-
-  test "rejects a resumed root run when its workflow becomes invalid" do
-    %{route: route, source: source, task: task} = configured_route_task()
-
-    {:ok, active_run} =
-      TaskRuns.insert(task.user_id, task.project_id, task.id, %{status: :executing})
-
-    invalidate_source_schema(source)
-
-    assert {:error, %{route_step_id: route_id, path: "$.predecessors[" <> _}} =
-             Root.get_or_create(task)
-
-    assert route_id == route.id
-    assert {:ok, resumed_run} = TaskRuns.get_active_for_task(task.user_id, task.id)
-    assert resumed_run.id == active_run.id
+    # Root is a TaskRun acquisition boundary only. An invalid graph is
+    # rejected when the FSM loads its validated snapshot in :initializing,
+    # not before the TaskRun row exists.
+    assert {:ok, task_run} = Root.get_or_create(task)
+    assert task_run.status == :queued
   end
 
   defp create_user do

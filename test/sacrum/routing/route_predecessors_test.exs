@@ -53,8 +53,11 @@ defmodule Sacrum.Routing.RoutePredecessorsTest do
         ]
       })
 
+    {:ok, type_environment} =
+      RoutePredecessors.derive_type_environment([predecessor_schema(["approved"])])
+
     assert {:error, %{code: :route_config_invalid, path: "$.rules[0].when.value"}} =
-             RoutePredecessors.validate(program, [predecessor_schema(["approved"])])
+             RoutePredecessors.validate(program, type_environment)
   end
 
   defp predecessor_schema(result_values) do

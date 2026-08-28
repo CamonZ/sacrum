@@ -18,7 +18,6 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflow do
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{Task, Workflow, WorkflowStep, WorkflowTransition}
   alias Sacrum.Repo.TaskWorkflows
-  alias Sacrum.Routing.RouteValidator
   alias Sacrum.Tasks.Status
 
   @doc """
@@ -31,7 +30,6 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflow do
 
     with {:ok, dest_workflow} <- validate_destination_workflow(data, dest_workflow_id),
          :ok <- validate_workflow_transition_exists(data.task.workflow_id, dest_workflow_id),
-         :ok <- RouteValidator.validate_workflow(data.user_id, data.project_id, dest_workflow.id),
          target_step_id <- get_target_step_for_workflow_transition(data, dest_workflow_id),
          {:ok, updated_task} <-
            assign_destination_workflow(data.task, dest_workflow, target_step_id, handoff) do
@@ -57,7 +55,7 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflow do
   @spec handle_inter_route_continuation(FSMData.t(), String.t(), struct()) ::
           {:next_state, atom(), FSMData.t()} | {:stop, atom(), FSMData.t()}
   def handle_inter_route_continuation(data, task_id, updated_task) do
-    case WorkflowGraph.load_workflow_and_graph(data.user_id, updated_task) do
+    case WorkflowGraph.load_validated_workflow_and_graph(data.user_id, updated_task) do
       {:ok, workflow, steps, transitions} ->
         TaskCompletion.determine_next_state(updated_task.current_step_id, %{
           data

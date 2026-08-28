@@ -5,22 +5,14 @@ defmodule Sacrum.Orchestrator.TaskRuns.Root do
 
   alias Sacrum.Accounts.TaskRuns
   alias Sacrum.Repo.Schemas.{Task, TaskRun}
-  alias Sacrum.Routing.RouteValidator
   alias Sacrum.TaskRuns.Status, as: TaskRunStatus
 
   @spec get_or_create(Task.t(), keyword()) :: {:ok, TaskRun.t()} | {:error, term()}
   def get_or_create(%Task{} = task, opts \\ []) when is_list(opts) do
-    with :ok <- validate_workflow(task) do
-      case TaskRuns.get_active_for_task(task.user_id, task.id) do
-        {:ok, %TaskRun{} = task_run} -> validate_dispatchable(task_run)
-        {:error, :not_found} -> create(task, opts)
-      end
+    case TaskRuns.get_active_for_task(task.user_id, task.id) do
+      {:ok, %TaskRun{} = task_run} -> validate_dispatchable(task_run)
+      {:error, :not_found} -> create(task, opts)
     end
-  end
-
-  @spec validate_dispatchable(TaskRun.t(), Task.t()) :: {:ok, TaskRun.t()} | {:error, term()}
-  def validate_dispatchable(%TaskRun{} = task_run, %Task{} = task) do
-    with :ok <- validate_workflow(task), do: validate_dispatchable(task_run)
   end
 
   @spec validate_dispatchable(TaskRun.t()) :: {:ok, TaskRun.t()} | {:error, term()}
@@ -36,9 +28,5 @@ defmodule Sacrum.Orchestrator.TaskRuns.Root do
       status: :queued,
       max_concurrency: Keyword.get(opts, :max_concurrency)
     })
-  end
-
-  defp validate_workflow(%Task{} = task) do
-    RouteValidator.validate_workflow(task.user_id, task.project_id, task.workflow_id)
   end
 end

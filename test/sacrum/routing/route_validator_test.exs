@@ -31,7 +31,7 @@ defmodule Sacrum.Routing.RouteValidatorTest do
         )
       )
 
-    assert :ok = RouteValidator.validate(route)
+    assert :ok = validate(route)
   end
 
   test "rejects an existing but unconnected intra-workflow destination", context do
@@ -52,7 +52,7 @@ defmodule Sacrum.Routing.RouteValidatorTest do
       )
 
     assert {:error, %{code: :route_target_invalid, path: "$.rules[0].transition.step_id"}} =
-             RouteValidator.validate(route)
+             validate(route)
   end
 
   test "validates inter-workflow transition targets and destination entry configuration",
@@ -84,7 +84,7 @@ defmodule Sacrum.Routing.RouteValidatorTest do
         )
       )
 
-    assert :ok = RouteValidator.validate(route)
+    assert :ok = validate(route)
 
     other_step = create_step(context, "other", 3)
 
@@ -100,7 +100,7 @@ defmodule Sacrum.Routing.RouteValidatorTest do
              Repo.update(Ecto.Changeset.change(transition, %{target_step_id: other_step.id}))
 
     assert {:error, %{code: :route_target_invalid, path: "$.rules[0].transition.workflow_id"}} =
-             RouteValidator.validate(route)
+             validate(route)
   end
 
   test "rejects uncovered finite result and task-level combinations", context do
@@ -123,7 +123,7 @@ defmodule Sacrum.Routing.RouteValidatorTest do
       )
 
     assert {:error, %{code: :route_config_uncovered, path: "$.rules"}} =
-             RouteValidator.validate(route)
+             validate(route)
   end
 
   test "rejects statically overlapping closed-domain rules", context do
@@ -148,7 +148,7 @@ defmodule Sacrum.Routing.RouteValidatorTest do
       )
 
     assert {:error, %{code: :route_config_ambiguous, path: "$.rules[1].when"}} =
-             RouteValidator.validate(route)
+             validate(route)
   end
 
   defp create_user do
@@ -208,6 +208,11 @@ defmodule Sacrum.Routing.RouteValidatorTest do
   defp persist_invalid_route_config(route, route_config) do
     {:ok, route} = Repo.update(Ecto.Changeset.change(route, %{route_config: route_config}))
     route
+  end
+
+  defp validate(route) do
+    {:ok, snapshot} = Sacrum.Repo.RouteValidation.load_snapshot(route.workflow_id)
+    RouteValidator.validate(route, snapshot)
   end
 
   defp create_step_transition(user, from_step, to_step) do
