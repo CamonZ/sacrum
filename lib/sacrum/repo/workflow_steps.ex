@@ -143,54 +143,51 @@ defmodule Sacrum.Repo.WorkflowSteps do
     RouteValidation.mutate([step.workflow_id], step, fn ->
       existing = Repo.all(from(t in StepTransition, where: t.from_step_id == ^step.id))
 
-      case SyncHelper.diff_and_sync(existing, transitions, %{
-             target_key: :to_step_id,
-             to_delete_fn: fn existing, incoming_target_ids ->
-               Enum.filter(existing, fn t ->
-                 not MapSet.member?(incoming_target_ids, t.to_step_id)
-               end)
-             end,
-             to_insert_fn: fn incoming, existing_by_target ->
-               Enum.filter(incoming, fn t ->
-                 to_id = to_step_id(t)
-                 not Map.has_key?(existing_by_target, to_id)
-               end)
-             end,
-             to_update_fn: fn _incoming, _existing_by_target ->
-               # No updates for step transitions - they're created with just from/to, no other mutable fields
-               []
-             end,
-             build_changeset_fn: fn t ->
-               to_id = to_step_id(t)
+      SyncHelper.diff_and_sync(existing, transitions, %{
+        target_key: :to_step_id,
+        to_delete_fn: fn existing, incoming_target_ids ->
+          Enum.filter(existing, fn t ->
+            not MapSet.member?(incoming_target_ids, t.to_step_id)
+          end)
+        end,
+        to_insert_fn: fn incoming, existing_by_target ->
+          Enum.filter(incoming, fn t ->
+            to_id = to_step_id(t)
+            not Map.has_key?(existing_by_target, to_id)
+          end)
+        end,
+        to_update_fn: fn _incoming, _existing_by_target ->
+          # No updates for step transitions - they're created with just from/to, no other mutable fields
+          []
+        end,
+        build_changeset_fn: fn t ->
+          to_id = to_step_id(t)
 
-               StepTransition.create_changeset(
-                 %StepTransition{user_id: step.user_id, project_id: step.project_id},
-                 %{
-                   from_step_id: step.id,
-                   to_step_id: to_id,
-                   label: label_for(t)
-                 }
-               )
-             end,
-             build_update_changeset_fn: fn _existing, _map ->
-               # No-op for step transitions
-               nil
-             end,
-             fetch_final_fn: fn ->
-               updated =
-                 Repo.all(
-                   from(t in StepTransition,
-                     where: t.from_step_id == ^step.id,
-                     order_by: [asc: t.inserted_at]
-                   )
-                 )
+          StepTransition.create_changeset(
+            %StepTransition{user_id: step.user_id, project_id: step.project_id},
+            %{
+              from_step_id: step.id,
+              to_step_id: to_id,
+              label: label_for(t)
+            }
+          )
+        end,
+        build_update_changeset_fn: fn _existing, _map ->
+          # No-op for step transitions
+          nil
+        end,
+        fetch_final_fn: fn ->
+          updated =
+            Repo.all(
+              from(t in StepTransition,
+                where: t.from_step_id == ^step.id,
+                order_by: [asc: t.inserted_at]
+              )
+            )
 
-               {:ok, updated}
-             end
-           }) do
-        {:ok, result} -> {:ok, result}
-        {:error, reason} -> {:error, reason}
-      end
+          {:ok, updated}
+        end
+      })
     end)
   end
 

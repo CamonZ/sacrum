@@ -118,55 +118,52 @@ defmodule Sacrum.Repo.Workflows do
           order_by: [asc: :inserted_at]
         )
 
-      case SyncHelper.diff_and_sync(existing, transition_maps, %{
-             target_key: :to_workflow_id,
-             to_delete_fn: fn existing, incoming_target_ids ->
-               Enum.filter(existing, fn t ->
-                 not MapSet.member?(incoming_target_ids, t.to_workflow_id)
-               end)
-             end,
-             to_insert_fn: fn incoming, existing_by_target ->
-               Enum.filter(incoming, fn m ->
-                 not Map.has_key?(existing_by_target, m["to_workflow_id"])
-               end)
-             end,
-             to_update_fn: fn incoming, existing_by_target ->
-               incoming
-               |> Enum.filter(fn m ->
-                 Map.has_key?(existing_by_target, m["to_workflow_id"])
-               end)
-               |> Enum.map(fn m -> {existing_by_target[m["to_workflow_id"]], m} end)
-               |> Enum.filter(fn {existing_rec, m} ->
-                 existing_rec.label != m["label"] ||
-                   existing_rec.target_step_id != m["target_step_id"]
-               end)
-             end,
-             build_changeset_fn: fn m ->
-               WorkflowTransition.create_changeset(
-                 %WorkflowTransition{
-                   user_id: workflow.user_id,
-                   project_id: workflow.project_id
-                 },
-                 Map.merge(m, %{"from_workflow_id" => workflow.id})
-               )
-             end,
-             build_update_changeset_fn: fn existing_rec, m ->
-               Ecto.Changeset.change(existing_rec, %{
-                 label: m["label"],
-                 target_step_id: m["target_step_id"]
-               })
-             end,
-             fetch_final_fn: fn ->
-               {:ok,
-                Repo.WorkflowTransitions.all(
-                  conditions: [from_workflow_id: workflow.id],
-                  order_by: [asc: :inserted_at]
-                )}
-             end
-           }) do
-        {:ok, result} -> {:ok, result}
-        {:error, reason} -> {:error, reason}
-      end
+      SyncHelper.diff_and_sync(existing, transition_maps, %{
+        target_key: :to_workflow_id,
+        to_delete_fn: fn existing, incoming_target_ids ->
+          Enum.filter(existing, fn t ->
+            not MapSet.member?(incoming_target_ids, t.to_workflow_id)
+          end)
+        end,
+        to_insert_fn: fn incoming, existing_by_target ->
+          Enum.filter(incoming, fn m ->
+            not Map.has_key?(existing_by_target, m["to_workflow_id"])
+          end)
+        end,
+        to_update_fn: fn incoming, existing_by_target ->
+          incoming
+          |> Enum.filter(fn m ->
+            Map.has_key?(existing_by_target, m["to_workflow_id"])
+          end)
+          |> Enum.map(fn m -> {existing_by_target[m["to_workflow_id"]], m} end)
+          |> Enum.filter(fn {existing_rec, m} ->
+            existing_rec.label != m["label"] ||
+              existing_rec.target_step_id != m["target_step_id"]
+          end)
+        end,
+        build_changeset_fn: fn m ->
+          WorkflowTransition.create_changeset(
+            %WorkflowTransition{
+              user_id: workflow.user_id,
+              project_id: workflow.project_id
+            },
+            Map.merge(m, %{"from_workflow_id" => workflow.id})
+          )
+        end,
+        build_update_changeset_fn: fn existing_rec, m ->
+          Ecto.Changeset.change(existing_rec, %{
+            label: m["label"],
+            target_step_id: m["target_step_id"]
+          })
+        end,
+        fetch_final_fn: fn ->
+          {:ok,
+           Repo.WorkflowTransitions.all(
+             conditions: [from_workflow_id: workflow.id],
+             order_by: [asc: :inserted_at]
+           )}
+        end
+      })
     end)
   end
 

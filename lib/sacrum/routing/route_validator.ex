@@ -4,8 +4,9 @@ defmodule Sacrum.Routing.RouteValidator do
 
   A present `route_config` must be valid against every incoming predecessor
   contract and every persisted destination edge, read from an in-memory
-  snapshot of the affected workflows (steps, step edges, and workflow edges).
-  Prompt routing is outside this module: it is eligible only when
+  snapshot. Callers name the owner workflows whose routes to prove; the
+  snapshot also holds support data (outgoing destinations) that those routes
+  read. Prompt routing is outside this module: it is eligible only when
   configuration is absent.
 
   Loading snapshots and revalidating inside write transactions belongs to
@@ -15,7 +16,11 @@ defmodule Sacrum.Routing.RouteValidator do
   alias Sacrum.Repo.Schemas.WorkflowStep
   alias Sacrum.Routing.{RouteConfig, RouteContext, RouteEvaluator, RoutePredecessors}
 
-  @type step_edge :: %{transition_id: binary(), to_step_id: binary()}
+  @type step_edge :: %{
+          transition_id: binary(),
+          from_step_id: binary(),
+          to_step_id: binary()
+        }
 
   @type workflow_edge :: %{
           target_step_id: binary() | nil,
@@ -26,6 +31,7 @@ defmodule Sacrum.Routing.RouteValidator do
   @type snapshot :: %{
           steps: %{optional(binary()) => WorkflowStep.t()},
           step_edges: %{optional(binary()) => [step_edge()]},
+          incoming_edges: %{optional(binary()) => [step_edge()]},
           workflow_edges: %{optional({binary(), binary()}) => workflow_edge()}
         }
 
@@ -37,12 +43,20 @@ defmodule Sacrum.Routing.RouteValidator do
         }
 
   @doc """
-  Validates every configured route step in the snapshot against it.
+  Validates configured route steps that belong to `owner_ids`.
+
+  Destination workflows appear in the snapshot as support data so target
+  checks can see their entry steps; their own routes are not subjects of
+  this check.
   """
-  @spec validate_snapshot(snapshot()) :: :ok | {:error, error()}
-  def validate_snapshot(%{} = snapshot) do
+  @spec validate_snapshot(snapshot(), [binary()]) :: :ok | {:error, error()}
+  def validate_snapshot(%{} = snapshot, owner_ids) when is_list(owner_ids) do
+    owners = MapSet.new(owner_ids)
+
     snapshot.steps
-    |> Enum.filter(fn {_id, step} -> step.route_config end)
+    |> Enum.filter(fn {_id, step} ->
+      step.route_config && MapSet.member?(owners, step.workflow_id)
+    end)
     |> Enum.reduce_while(:ok, fn {_id, step}, :ok ->
       case validate(step, snapshot) do
         :ok -> {:cont, :ok}
@@ -86,18 +100,17 @@ defmodule Sacrum.Routing.RouteValidator do
   """
   @spec predecessor_schemas(WorkflowStep.t(), snapshot()) :: [map()]
   def predecessor_schemas(route_step, snapshot) do
-    Enum.flat_map(snapshot.steps, fn {source_id, step} ->
-      snapshot.step_edges
-      |> Map.get(source_id, [])
-      |> Enum.filter(fn edge -> edge.to_step_id == route_step.id end)
-      |> Enum.map(fn edge ->
-        %{
-          transition_id: edge.transition_id,
-          source_step_id: source_id,
-          destination_step_id: route_step.id,
-          output_schema: step.output_schema
-        }
-      end)
+    snapshot.incoming_edges
+    |> Map.get(route_step.id, [])
+    |> Enum.map(fn edge ->
+      source = Map.get(snapshot.steps, edge.from_step_id)
+
+      %{
+        transition_id: edge.transition_id,
+        source_step_id: edge.from_step_id,
+        destination_step_id: route_step.id,
+        output_schema: source && source.output_schema
+      }
     end)
   end
 

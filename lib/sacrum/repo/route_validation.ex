@@ -2,14 +2,15 @@ defmodule Sacrum.Repo.RouteValidation do
   @moduledoc """
   Persistence boundary for graph-aware route validation.
 
-  - `load_snapshot/1` loads the affected-workflow component (steps, step
-    edges, workflow edges) that route validation reads. The Orchestrator uses
-    the same loader, so persist-time revalidation and runtime snapshots agree.
-  - `mutate/3` is the single authoring save path: resolve and lock the
-    connected component's workflow rows (`FOR UPDATE`, acquired in id order),
-    apply the write, reload the component inside the transaction, and
-    revalidate every configured route against it. Rollback restores the
-    pre-mutation graph.
+  A mutation or runtime load names the **owner** workflows whose routes must
+  be proved. The snapshot is the **support** graph those routes read: the
+  owners plus their outgoing destinations. Destination steps are data, not
+  additional routes to validate.
+
+  - `load_snapshot/1` loads support for the given owner workflow.
+  - `mutate/3` locks the pre-write support rows (`FOR UPDATE`, id order),
+    applies the write, reloads support for the still-existing owners, and
+    revalidates only those owners' routes.
 
   The pure validation semantics live in `Sacrum.Routing.RouteValidator`.
   """
@@ -23,34 +24,32 @@ defmodule Sacrum.Repo.RouteValidation do
   @type snapshot :: RouteValidator.snapshot()
 
   @doc """
-  Loads a validation snapshot for the workflows connected to `workflow_id`.
+  Loads the support snapshot for proving `workflow_id`'s routes.
 
-  The component is the workflow itself, every workflow directly reachable
-  from it, and every workflow that can reach it — the set whose configured
-  routes a mutation on this workflow can invalidate.
+  Support is that workflow plus every workflow it can reach in one
+  workflow-transition hop — the destinations its configured routes read.
+  Incoming neighbors are not owners at runtime and are not loaded here.
   """
   @spec load_snapshot(binary()) :: {:ok, snapshot()} | {:error, :workflow_not_found}
-  def load_snapshot(workflow_id) do
-    component_ids = connected_workflows([workflow_id])
+  def load_snapshot(workflow_id) when is_binary(workflow_id) do
+    case existing_workflow_ids([workflow_id]) do
+      [] ->
+        {:error, :workflow_not_found}
 
-    if component_ids == [] do
-      {:error, :workflow_not_found}
-    else
-      {:ok, build_snapshot(component_ids)}
+      owners ->
+        {:ok, build_snapshot(support_ids(owners))}
     end
   end
 
   @doc """
   The single authoring save path for graph mutations.
 
-  `affected_workflow_ids` lists the workflows whose routes this mutation can
-  affect. The connected component is resolved and its workflow rows locked
-  **before** the write — for deletes, the anchor workflow and its edges
-  disappear with the row, so post-write resolution would silently skip
-  validation. The component is reloaded inside the transaction after the
-  write and every configured route is revalidated against it. Callers never
-  compute before/after route-id sets; insert and delete timings are handled
-  by construction.
+  `affected_workflow_ids` is the seed: workflows whose rows this mutation
+  touches. Owners are that seed plus incoming neighbors — the routes a
+  mutation here can invalidate. Support is owners plus their outgoing
+  destinations. Owners and support are resolved **before** the write so a
+  delete cannot drop the rows we need to lock; after the write, remaining
+  owners are revalidated against the post-write support graph.
   """
   @spec mutate([binary()], Ecto.Changeset.t() | struct(), (-> {:ok, term()} | {:error, term()})) ::
           {:ok, term()} | {:error, Ecto.Changeset.t() | term()}
@@ -59,11 +58,11 @@ defmodule Sacrum.Repo.RouteValidation do
 
     result =
       Repo.transaction(fn ->
-        component_ids = connected_workflows(affected)
-        lock_workflows(component_ids)
+        graph = resolve_graph(affected)
+        lock_workflows(graph.support)
 
         case mutation_fn.() do
-          {:ok, result} -> revalidate_component(component_ids, result)
+          {:ok, result} -> revalidate_owners(graph.owners, result)
           {:error, reason} -> Repo.rollback(reason)
         end
       end)
@@ -72,36 +71,53 @@ defmodule Sacrum.Repo.RouteValidation do
   end
 
   #
-  # Component resolution and snapshot construction
+  # Owner / support resolution and snapshot construction
   #
 
-  defp connected_workflows(seed_ids) do
-    ids = seed_ids |> Enum.filter(&is_binary/1) |> Enum.uniq()
+  defp resolve_graph(seed_ids) do
+    seed = existing_workflow_ids(seed_ids)
+    owners = Enum.uniq(seed ++ incoming_ids(seed))
+    %{owners: owners, support: support_ids(owners)}
+  end
 
-    edges =
-      Repo.all(
-        from(t in WorkflowTransition,
-          where: t.from_workflow_id in ^ids or t.to_workflow_id in ^ids,
-          select: {t.from_workflow_id, t.to_workflow_id}
-        )
+  defp support_ids(owners), do: Enum.uniq(owners ++ outgoing_ids(owners))
+
+  defp existing_workflow_ids(ids) do
+    ids = ids |> Enum.filter(&is_binary/1) |> Enum.uniq()
+
+    case ids do
+      [] -> []
+      ids -> Repo.all(from(w in Workflow, where: w.id in ^ids, select: w.id))
+    end
+  end
+
+  defp incoming_ids([]), do: []
+
+  defp incoming_ids(ids) do
+    Repo.all(
+      from(t in WorkflowTransition,
+        where: t.to_workflow_id in ^ids,
+        select: t.from_workflow_id
       )
-
-    neighbor_ids = edges |> Enum.flat_map(&Tuple.to_list/1) |> Enum.uniq()
-
-    (ids ++ neighbor_ids)
-    |> Enum.uniq()
-    |> Enum.filter(&workflow_exists?/1)
+    )
   end
 
-  defp workflow_exists?(workflow_id) do
-    Repo.exists?(from(w in Workflow, where: w.id == ^workflow_id))
+  defp outgoing_ids([]), do: []
+
+  defp outgoing_ids(ids) do
+    Repo.all(
+      from(t in WorkflowTransition,
+        where: t.from_workflow_id in ^ids,
+        select: t.to_workflow_id
+      )
+    )
   end
 
-  defp build_snapshot(component_ids) do
+  defp build_snapshot(support_ids) do
     steps =
       Repo.all(
         from(step in WorkflowStep,
-          where: step.workflow_id in ^component_ids,
+          where: step.workflow_id in ^support_ids,
           order_by: [asc: step.inserted_at, asc: step.id]
         )
       )
@@ -113,14 +129,19 @@ defmodule Sacrum.Repo.RouteValidation do
         from(t in StepTransition,
           join: source in WorkflowStep,
           on: source.id == t.from_step_id,
-          where: source.workflow_id in ^component_ids,
+          where: source.workflow_id in ^support_ids,
           select: %{id: t.id, from_step_id: t.from_step_id, to_step_id: t.to_step_id}
         )
       )
 
     step_edges =
       Enum.group_by(raw_step_edges, & &1.from_step_id, fn edge ->
-        %{transition_id: edge.id, to_step_id: edge.to_step_id}
+        step_edge(edge)
+      end)
+
+    incoming_edges =
+      Enum.group_by(raw_step_edges, & &1.to_step_id, fn edge ->
+        step_edge(edge)
       end)
 
     raw_workflow_edges =
@@ -128,7 +149,7 @@ defmodule Sacrum.Repo.RouteValidation do
         from(t in WorkflowTransition,
           join: destination in Workflow,
           on: destination.id == t.to_workflow_id,
-          where: t.from_workflow_id in ^component_ids,
+          where: t.from_workflow_id in ^support_ids,
           select: %{
             from_workflow_id: t.from_workflow_id,
             to_workflow_id: t.to_workflow_id,
@@ -148,20 +169,31 @@ defmodule Sacrum.Repo.RouteValidation do
          }}
       end)
 
-    %{steps: steps_by_id, step_edges: step_edges, workflow_edges: workflow_edges}
+    %{
+      steps: steps_by_id,
+      step_edges: step_edges,
+      incoming_edges: incoming_edges,
+      workflow_edges: workflow_edges
+    }
+  end
+
+  defp step_edge(edge) do
+    %{transition_id: edge.id, from_step_id: edge.from_step_id, to_step_id: edge.to_step_id}
   end
 
   #
   # Revalidation, locking, and error translation
   #
 
-  defp revalidate_component(component_ids, result) do
-    case component_ids do
+  defp revalidate_owners(owners, result) do
+    case existing_workflow_ids(owners) do
       [] ->
         result
 
-      ids ->
-        case RouteValidator.validate_snapshot(build_snapshot(ids)) do
+      remaining ->
+        snapshot = build_snapshot(support_ids(remaining))
+
+        case RouteValidator.validate_snapshot(snapshot, remaining) do
           :ok -> result
           {:error, reason} -> Repo.rollback(reason)
         end
@@ -169,13 +201,21 @@ defmodule Sacrum.Repo.RouteValidation do
   end
 
   # Locks are acquired in id order so concurrent mutations touching
-  # overlapping components serialize deterministically and cannot deadlock.
+  # overlapping support sets serialize deterministically and cannot deadlock.
+  defp lock_workflows([]), do: :ok
+
   defp lock_workflows(ids) do
-    ids
-    |> Enum.sort()
-    |> Enum.each(fn id ->
-      Repo.one(from(w in Workflow, where: w.id == ^id, lock: "FOR UPDATE"))
-    end)
+    sorted = ids |> Enum.uniq() |> Enum.sort()
+
+    Repo.all(
+      from(w in Workflow,
+        where: w.id in ^sorted,
+        order_by: [asc: w.id],
+        lock: "FOR UPDATE"
+      )
+    )
+
+    :ok
   end
 
   defp normalize({:ok, result}, _original), do: {:ok, result}

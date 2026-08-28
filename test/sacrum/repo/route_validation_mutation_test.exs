@@ -177,6 +177,80 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
     end
   end
 
+  test "mutating an upstream workflow does not reject a valid downstream inter-route" do
+    user = create_user()
+    project = create_project(user)
+    workflow_a = create_workflow(user, project, "A")
+    workflow_b = create_workflow(user, project, "B")
+    workflow_c = create_workflow(user, project, "C")
+
+    _step_a = create_step(workflow_a, "a-step", 1)
+
+    source_b =
+      create_step(workflow_b, "b-source", 1, output_schema: predecessor_schema(["approved"]))
+
+    route_b = create_step(workflow_b, "b-route", 2, step_type: "route")
+    dest_c = create_step(workflow_c, "c-dest", 1)
+
+    {:ok, workflow_c} = Accounts.Workflows.update(workflow_c, %{initial_step_id: dest_c.id})
+    create_step_transition(source_b, route_b)
+    create_workflow_transition(workflow_a, workflow_b)
+    create_workflow_transition(workflow_b, workflow_c)
+
+    {:ok, _route_b} =
+      Accounts.WorkflowSteps.update(route_b, %{
+        route_config: inter_route_config(workflow_c.id)
+      })
+
+    assert {:ok, _step} =
+             Accounts.WorkflowSteps.insert(user.id, %{
+               name: "harmless",
+               prompt: "Prompt",
+               step_order: 2,
+               workflow_id: workflow_a.id,
+               project_id: project.id
+             })
+
+    assert {:error, changeset} = Accounts.Workflows.delete(workflow_c)
+    assert %{route_config: [message]} = errors_on(changeset)
+    assert message =~ "$.rules[0].transition.workflow_id"
+    assert Repo.get!(Workflow, workflow_c.id).id == workflow_c.id
+  end
+
+  test "mutating one fan-out destination does not reject a sibling route" do
+    user = create_user()
+    project = create_project(user)
+    workflow_i = create_workflow(user, project, "I")
+    workflow_a = create_workflow(user, project, "A")
+    workflow_z = create_workflow(user, project, "Z")
+
+    source_i =
+      create_step(workflow_i, "i-source", 1, output_schema: predecessor_schema(["approved"]))
+
+    route_i = create_step(workflow_i, "i-route", 2, step_type: "route")
+    _step_a = create_step(workflow_a, "a-step", 1)
+    dest_z = create_step(workflow_z, "z-dest", 1)
+
+    {:ok, _workflow_z} = Accounts.Workflows.update(workflow_z, %{initial_step_id: dest_z.id})
+    create_step_transition(source_i, route_i)
+    create_workflow_transition(workflow_i, workflow_a)
+    create_workflow_transition(workflow_i, workflow_z)
+
+    {:ok, _route_i} =
+      Accounts.WorkflowSteps.update(route_i, %{
+        route_config: inter_route_config(workflow_z.id)
+      })
+
+    assert {:ok, _step} =
+             Accounts.WorkflowSteps.insert(user.id, %{
+               name: "harmless",
+               prompt: "Prompt",
+               step_order: 2,
+               workflow_id: workflow_a.id,
+               project_id: project.id
+             })
+  end
+
   defp configured_intra_route do
     route_data = unconfigured_intra_route()
 

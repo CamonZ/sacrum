@@ -66,6 +66,17 @@ defmodule Sacrum.Orchestrator.WorkflowGraphTest do
     transition
   end
 
+  defp create_workflow_transition(user, from_workflow, to_workflow) do
+    {:ok, transition} =
+      Accounts.WorkflowTransitions.insert(user.id, %{
+        "from_workflow_id" => from_workflow.id,
+        "to_workflow_id" => to_workflow.id,
+        "project_id" => from_workflow.project_id
+      })
+
+    transition
+  end
+
   defp create_task(user, project, workflow) do
     {:ok, task} =
       Accounts.Tasks.insert(user.id, project.id, %{
@@ -168,6 +179,49 @@ defmodule Sacrum.Orchestrator.WorkflowGraphTest do
       assert {:error, %{code: :route_target_invalid}} =
                WorkflowGraph.load_validated_workflow_and_graph(user.id, task)
     end
+
+    test "enters an upstream workflow without proving a neighbor's farther route" do
+      user = create_user()
+      project = create_project(user)
+      workflow_a = create_workflow(user, project)
+      workflow_b = create_workflow(user, project)
+      workflow_c = create_workflow(user, project)
+
+      create_step(user, workflow_a, %{"name" => "a-step"})
+
+      source_b =
+        create_step(user, workflow_b, %{
+          "name" => "b-source",
+          "output_schema" => predecessor_schema(["approved"])
+        })
+
+      route_b =
+        create_step(user, workflow_b, %{
+          "name" => "b-route",
+          "step_order" => 2,
+          "step_type" => "route"
+        })
+
+      dest_c = create_step(user, workflow_c, %{"name" => "c-dest"})
+
+      create_transition(user, source_b, route_b)
+      create_workflow_transition(user, workflow_a, workflow_b)
+      create_workflow_transition(user, workflow_b, workflow_c)
+      {:ok, _workflow_c} = Accounts.Workflows.update(workflow_c, %{initial_step_id: dest_c.id})
+
+      {:ok, _route_b} =
+        Accounts.WorkflowSteps.update(route_b, %{
+          route_config: inter_route_config(workflow_c.id)
+        })
+
+      task = create_task(user, project, workflow_a)
+
+      assert {:ok, loaded, steps, _transitions} =
+               WorkflowGraph.load_validated_workflow_and_graph(user.id, task)
+
+      assert loaded.id == workflow_a.id
+      refute Map.has_key?(steps, route_b.id)
+    end
   end
 
   describe "get_current_step/1" do
@@ -244,13 +298,13 @@ defmodule Sacrum.Orchestrator.WorkflowGraphTest do
 
       predecessors = Sacrum.Routing.RouteValidator.predecessor_schemas(route, snapshot)
 
+      assert Map.has_key?(snapshot.incoming_edges, route.id)
+
       assert Enum.map(predecessors, & &1.transition_id) |> Enum.sort() ==
                Enum.sort([approved_transition.id, rejected_transition.id])
 
-      schemas = Enum.map(predecessors, & &1.output_schema)
-
       {:ok, %{result_values: result_values}} =
-        Sacrum.Routing.RoutePredecessors.derive_type_environment(schemas)
+        Sacrum.Routing.RoutePredecessors.derive_type_environment(predecessors)
 
       assert result_values == MapSet.new(["approved", "rejected", "retry"])
     end
@@ -296,6 +350,27 @@ defmodule Sacrum.Orchestrator.WorkflowGraphTest do
       result = WorkflowGraph.select_single_transition(["step_2", "step_3"])
       assert result == {:error, :multiple_outgoing_transitions}
     end
+  end
+
+  defp inter_route_config(workflow_id) do
+    %{
+      "version" => 1,
+      "match_policy" => "exactly_one",
+      "rules" => [
+        %{
+          "id" => "approved",
+          "when" => %{
+            "ref" => "previous_output.route.result",
+            "op" => "eq",
+            "value" => "approved"
+          },
+          "transition" => %{"type" => "inter_workflow", "workflow_id" => workflow_id}
+        }
+      ],
+      "default" => %{
+        "transition" => %{"type" => "inter_workflow", "workflow_id" => workflow_id}
+      }
+    }
   end
 
   defp predecessor_schema(result_values) do
