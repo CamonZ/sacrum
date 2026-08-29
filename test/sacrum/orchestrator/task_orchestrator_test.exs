@@ -2157,6 +2157,95 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
   end
 
   describe "configured workflow validation at TaskRun entry" do
+    test "executes a configured route locally before it can acquire a daemon slot" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project)
+
+      source =
+        create_step(user, workflow, %{
+          name: "source",
+          step_order: 1,
+          output_schema: predecessor_schema(["approved"])
+        })
+
+      route =
+        create_step(user, workflow, %{
+          name: "configured route",
+          step_order: 2,
+          step_type: "route",
+          prompt: "This prompt must not be rendered"
+        })
+
+      destination =
+        create_step(user, workflow, %{
+          name: "finish",
+          step_order: 3,
+          step_type: "finish",
+          prompt: nil
+        })
+
+      create_transition(user, source, route)
+      create_transition(user, route, destination)
+
+      {:ok, _route} =
+        Accounts.WorkflowSteps.update(route, %{route_config: intra_route_config(destination.id)})
+
+      {:ok, _workflow} = Accounts.Workflows.update(workflow, %{initial_step_id: source.id})
+
+      task = create_task(user, project) |> assign_workflow_to_task(workflow)
+      pid = start_orchestrator(task, user)
+      wait_for_state(pid, :executing)
+
+      simulate_daemon_completion(
+        task.id,
+        project.id,
+        Jason.encode!(%{"route" => %{"result" => "approved", "handoff" => %{}}})
+      )
+
+      wait_for_exit(pid)
+
+      assert reload_task(task).current_step_id == destination.id
+      assert latest_task_run(task.id).status == :completed
+
+      assert [source_execution, route_execution] = get_all_executions(task.id)
+      assert source_execution.step_id == source.id
+      assert source_execution.status == "completed"
+
+      assert %StepExecution{
+               id: route_execution_id,
+               step_id: route_step_id,
+               status: "completed",
+               task_run_id: route_run_id,
+               handoff: %{},
+               context: %{
+                 "route" => %{
+                   "mode" => "deterministic",
+                   "source_execution_id" => source_execution_id,
+                   "config_version" => 1,
+                   "matched_rule_id" => "approved",
+                   "used_default" => false,
+                   "context" => %{
+                     "execution" => %{"step_visit_count" => 1},
+                     "previous_output" => %{
+                       "route" => %{"result" => "approved", "handoff" => %{}}
+                     }
+                   }
+                 }
+               }
+             } = route_execution
+
+      assert source_execution_id == source_execution.id
+      assert route_step_id == route.id
+      assert route_run_id == latest_task_run(task.id).id
+      assert latest_task_run(task.id).latest_step_execution_id == route_execution_id
+
+      refute Map.has_key?(
+               ExecutionPool.pool_status().in_use_by_scope,
+               latest_task_run(task.id).id
+             )
+    end
+
     test "fails a drifted invalid graph before slot allocation or step execution" do
       user = create_user()
       project = create_project(user)

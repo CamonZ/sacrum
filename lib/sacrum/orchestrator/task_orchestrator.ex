@@ -36,12 +36,13 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
 
   alias Sacrum.Accounts.TaskRuns
   alias Sacrum.Orchestrator.ExecutionEvents
-  alias Sacrum.Orchestrator.Routing.{HumanInput, RouteStep, WaitChildren}
+  alias Sacrum.Orchestrator.Routing.{HumanInput, RouteRecovery, RouteStep, WaitChildren}
   alias Sacrum.Orchestrator.TaskRuns.{Failure, Lookup, Root}
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{StepExecution, Task}
   alias Sacrum.Repo.TaskHierarchy
   alias Sacrum.Repo.TaskWorkflows
+  alias Sacrum.Routing.RouteMode
 
   @typep fsm_transition ::
            :keep_state_and_data
@@ -245,39 +246,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   end
 
   def handle_event(:state_timeout, :run, :awaiting_execution, data) do
-    task_id = data.task.id
-
-    case WorkflowGraph.get_current_step(data) do
-      {:ok, %{step_type: :finish}} ->
-        complete_finish_step(data)
-
-      {:ok, %{step_type: :stop}} ->
-        bypass_stop_step(data)
-
-      _ ->
-        case resume_reason(data) do
-          :wait_children ->
-            Logger.info(
-              "[TaskOrchestrator:#{task_id}] Resuming from wait_children, transitioning directly"
-            )
-
-            {:next_state, :transitioning, data}
-
-          :human_input_completed ->
-            Logger.info(
-              "[TaskOrchestrator:#{task_id}] Resuming from human_input, transitioning directly"
-            )
-
-            {:next_state, :transitioning, data}
-
-          :human_input_waiting ->
-            Logger.info("[TaskOrchestrator:#{task_id}] human_input is still waiting, stopping")
-            {:stop, :normal, data}
-
-          :fresh ->
-            request_execution_slot(task_id, data)
-        end
-    end
+    handle_awaiting_execution(data)
   end
 
   def handle_event(:state_timeout, :run, :transitioning, data) do
@@ -713,6 +682,84 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
         )
 
         {:next_state, :failed, data}
+    end
+  end
+
+  @spec enter_route_step(FSMData.t(), struct()) :: fsm_transition()
+  defp enter_route_step(data, route_step) do
+    case RouteMode.routing_mode(route_step) do
+      {:ok, {:deterministic, program}} ->
+        RouteStep.handle_deterministic_route_step(data, route_step, program)
+
+      {:ok, {:legacy, _prompt}} ->
+        continue_awaiting_execution(data.task.id, data)
+
+      {:error, reason} ->
+        Logger.error(
+          "[TaskOrchestrator:#{data.task.id}] Route step is not configured for dispatch: #{inspect(reason)}"
+        )
+
+        {:next_state, :failed, data}
+    end
+  end
+
+  @spec handle_awaiting_execution(FSMData.t()) :: fsm_transition()
+  defp handle_awaiting_execution(data) do
+    task_id = data.task.id
+
+    case WorkflowGraph.get_current_step(data) do
+      {:ok, %{step_type: :finish}} ->
+        complete_finish_step(data)
+
+      {:ok, %{step_type: :stop}} ->
+        bypass_stop_step(data)
+
+      {:ok, %{step_type: :route} = route_step} ->
+        enter_route_step(data, route_step)
+
+      _ ->
+        continue_awaiting_execution(task_id, data)
+    end
+  end
+
+  @spec continue_awaiting_execution(binary(), FSMData.t()) :: fsm_transition()
+  defp continue_awaiting_execution(task_id, data) do
+    case RouteRecovery.restore(data) do
+      {:ok, recovered} ->
+        resume_awaiting_execution(task_id, recovered)
+
+      {:error, :route_recovery_inconsistent} ->
+        Logger.error(
+          "[TaskOrchestrator:#{task_id}] Failed deterministic route recovery: :route_recovery_inconsistent"
+        )
+
+        {:next_state, :failed, data}
+    end
+  end
+
+  @spec resume_awaiting_execution(binary(), FSMData.t()) :: fsm_transition()
+  defp resume_awaiting_execution(task_id, data) do
+    case resume_reason(data) do
+      :wait_children ->
+        Logger.info(
+          "[TaskOrchestrator:#{task_id}] Resuming from wait_children, transitioning directly"
+        )
+
+        {:next_state, :transitioning, data}
+
+      :human_input_completed ->
+        Logger.info(
+          "[TaskOrchestrator:#{task_id}] Resuming from human_input, transitioning directly"
+        )
+
+        {:next_state, :transitioning, data}
+
+      :human_input_waiting ->
+        Logger.info("[TaskOrchestrator:#{task_id}] human_input is still waiting, stopping")
+        {:stop, :normal, data}
+
+      :fresh ->
+        request_execution_slot(task_id, data)
     end
   end
 

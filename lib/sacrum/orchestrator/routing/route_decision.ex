@@ -87,6 +87,15 @@ defmodule Sacrum.Orchestrator.Routing.RouteDecision do
   end
 
   @doc """
+  Encodes the stable target record shared by legacy route completions and
+  deterministic local route audits.
+  """
+  @spec transition_result(String.t(), String.t()) :: String.t()
+  def transition_result(dest_id, transition_type) do
+    Jason.encode!(%{"dest_id" => dest_id, "transition_type" => transition_type})
+  end
+
+  @doc """
   Logs the route decision for forensic purposes, including handoff keys (not values).
   """
   @spec log_route_decision(String.t(), String.t(), String.t(), String.t(), map() | nil) :: :ok
@@ -103,8 +112,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteDecision do
 
   defp route_decision_attrs(dest_id, transition_type) do
     %{
-      transition_result:
-        Jason.encode!(%{"dest_id" => dest_id, "transition_type" => transition_type})
+      transition_result: transition_result(dest_id, transition_type)
     }
   end
 end
