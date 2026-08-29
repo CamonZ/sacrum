@@ -24,6 +24,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   alias Sacrum.Realtime.CommandBroadcaster
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{StepExecution, Task, TaskRun, WorkflowStep}
+  alias Sacrum.Routing.RouteMode
   alias Sacrum.TaskRuns.Status, as: TaskRunStatus
   alias Sacrum.Tasks.Status
 
@@ -91,6 +92,17 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
 
   defp validate_dispatchable_step(%WorkflowStep{step_type: :stop}),
     do: {:error, :stop_step_not_dispatchable}
+
+  defp validate_dispatchable_step(%WorkflowStep{step_type: :route, route_config: route_config})
+       when not is_nil(route_config),
+       do: {:error, :configured_route_not_dispatchable}
+
+  defp validate_dispatchable_step(%WorkflowStep{step_type: :route} = step) do
+    case RouteMode.routing_mode(step) do
+      {:ok, {:legacy, _prompt}} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
   defp validate_dispatchable_step(_step), do: :ok
 
@@ -265,6 +277,10 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   defp mark_dispatch_failure(_task_run_or_id, {:task_run_not_dispatchable, _status}), do: :ok
 
   defp mark_dispatch_failure(_task_run_or_id, :stop_step_not_dispatchable), do: :ok
+
+  defp mark_dispatch_failure(_task_run_or_id, :configured_route_not_dispatchable), do: :ok
+
+  defp mark_dispatch_failure(_task_run_or_id, :route_not_configured), do: :ok
 
   defp mark_dispatch_failure(task_run_or_id, reason) do
     case fetch_task_run_for_failure(task_run_or_id) do

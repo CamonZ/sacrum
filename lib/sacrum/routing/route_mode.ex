@@ -2,9 +2,10 @@ defmodule Sacrum.Routing.RouteMode do
   @moduledoc """
   Selects deterministic or legacy routing from persisted route-step data.
 
-  A compiled `route_config` wins. Otherwise a present prompt uses the legacy
-  model path. Invalid configuration is rejected at persist time; at runtime it
-  falls back to the prompt only when one is present.
+  A present `route_config` always selects deterministic routing. Otherwise a
+  present prompt uses the legacy model path. Invalid configuration is rejected
+  at persist time; a drifted row still fails closed at runtime rather than
+  falling back to its prompt.
   """
 
   alias Sacrum.Routing.RouteConfig
@@ -26,7 +27,7 @@ defmodule Sacrum.Routing.RouteMode do
         legacy_or_unconfigured(prompt, :route_not_configured)
 
       {:error, reason} ->
-        legacy_or_unconfigured(prompt, reason)
+        {:error, reason}
     end
   end
 

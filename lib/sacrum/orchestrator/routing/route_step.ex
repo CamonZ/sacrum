@@ -16,14 +16,16 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
     FSMData,
     OutputValidator,
     Scheduler,
+    StructuredOutput,
     TaskCompletion,
     WorkflowGraph
   }
 
-  alias Sacrum.Orchestrator.Routing.{InterWorkflow, IntraWorkflow, RouteDecision}
+  alias Sacrum.Orchestrator.Routing.{InterWorkflow, IntraWorkflow, RouteDecision, RouteProvenance}
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.StepExecution
   alias Sacrum.Repo.TaskWorkflows
+  alias Sacrum.Routing.{RouteContext, RouteEvaluator}
 
   @typep fsm_transition ::
            {:next_state, atom(), FSMData.t()}
@@ -68,6 +70,74 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
         {:next_state, :failed, %{data | slot_id: nil}}
     end
   end
+
+  @doc """
+  Evaluates a configured route locally. This path is entered directly from
+  `:awaiting_execution`, before any execution-pool allocation or daemon work.
+  """
+  @spec handle_deterministic_route_step(FSMData.t(), struct(), map()) :: fsm_transition()
+  def handle_deterministic_route_step(data, current_step, program) do
+    task_id = data.task.id
+
+    with {:ok, provenance} <- RouteProvenance.resolve(data, current_step),
+         {:ok, previous_output} <- validated_predecessor_output(provenance),
+         {:ok, context} <- build_route_context(data.task, previous_output),
+         {:ok, result} <- RouteEvaluator.evaluate(program, context),
+         {:ok, {dest_id, transition_type}} <- destination(result.transition),
+         {:ok, route_plan} <- prepare_route_plan(data, dest_id, transition_type, result.handoff),
+         {:ok, %{task: updated_task}} <-
+           commit_route_transition(
+             data,
+             provenance.source_execution,
+             dest_id,
+             transition_type,
+             route_plan
+           ) do
+      RouteDecision.log_route_decision(
+        task_id,
+        provenance.source_execution.id,
+        dest_id,
+        transition_type,
+        result.handoff
+      )
+
+      new_data = %{data | pending_handoff: result.handoff}
+      handle_route_continuation(new_data, task_id, updated_task, transition_type, route_plan)
+    else
+      {:error, reason} ->
+        Logger.error(
+          "[TaskOrchestrator:#{task_id}] Error in deterministic route transition: #{inspect(reason)}"
+        )
+
+        {:next_state, :failed, data}
+    end
+  end
+
+  defp validated_predecessor_output(%{source_execution: execution, source_step: source_step}) do
+    with {:ok, output} <- decode_predecessor_output(execution.output),
+         :ok <- OutputValidator.validate_output(output, source_step.output_schema) do
+      {:ok, output}
+    end
+  end
+
+  defp decode_predecessor_output(output) when is_binary(output),
+    do: StructuredOutput.decode(output)
+
+  defp decode_predecessor_output(_output), do: {:error, :route_predecessor_output_missing}
+
+  defp build_route_context(task, previous_output) do
+    RouteContext.build(
+      previous_output,
+      %{"level" => task.level, "tags" => task.tags || []},
+      1
+    )
+  end
+
+  defp destination(%{type: :intra_workflow, step_id: step_id}),
+    do: {:ok, {step_id, "intra_workflow"}}
+
+  defp destination(%{type: :inter_workflow, workflow_id: workflow_id}),
+    do: {:ok, {workflow_id, "inter_workflow"}}
 
   @spec prepare_route_plan(FSMData.t(), binary(), String.t(), map() | nil) ::
           {:ok, map()} | {:error, term()}
