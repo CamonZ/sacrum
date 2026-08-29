@@ -12,6 +12,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
   import Ecto.Query
 
   alias Sacrum.Orchestrator.{
+    ExecutionHistory,
     ExecutionPool,
     FSMData,
     OutputValidator,
@@ -81,7 +82,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
 
     with {:ok, provenance} <- RouteProvenance.resolve(data, current_step),
          {:ok, previous_output} <- validated_predecessor_output(provenance),
-         {:ok, context} <- build_route_context(data.task, previous_output),
+         {:ok, context} <- build_route_context(data.task, current_step.id, previous_output),
          {:ok, result} <- RouteEvaluator.evaluate(program, context),
          {:ok, {dest_id, transition_type}} <- destination(result.transition),
          {:ok, route_plan} <- prepare_route_plan(data, dest_id, transition_type, result.handoff),
@@ -125,11 +126,11 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
 
   defp decode_predecessor_output(_output), do: {:error, :route_predecessor_output_missing}
 
-  defp build_route_context(task, previous_output) do
+  defp build_route_context(task, route_step_id, previous_output) do
     RouteContext.build(
       previous_output,
       %{"level" => task.level, "tags" => task.tags || []},
-      1
+      ExecutionHistory.deterministic_route_visit_count(task, route_step_id)
     )
   end
 
