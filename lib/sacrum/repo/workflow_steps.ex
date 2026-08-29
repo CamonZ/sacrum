@@ -30,6 +30,7 @@ defmodule Sacrum.Repo.WorkflowSteps do
 
   import Ecto.Query
   alias Sacrum.Repo
+  alias Sacrum.Repo.RouteValidation
   alias Sacrum.Repo.Schemas.StepTransition
   alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.Schemas.Workflow
@@ -56,8 +57,17 @@ defmodule Sacrum.Repo.WorkflowSteps do
   @doc """
   Insert a new workflow step. Accepts Workflow struct (with or without user_id).
   """
+  @spec insert(Ecto.Changeset.t()) :: {:ok, WorkflowStep.t()} | {:error, Ecto.Changeset.t()}
   @spec insert(Workflow.t(), map()) :: {:ok, WorkflowStep.t()} | {:error, Ecto.Changeset.t()}
   @spec insert(String.t(), map()) :: {:ok, WorkflowStep.t()} | {:error, Ecto.Changeset.t()}
+  def insert(%Ecto.Changeset{} = changeset) do
+    RouteValidation.mutate(
+      [Ecto.Changeset.get_field(changeset, :workflow_id)],
+      changeset,
+      fn -> Repo.insert(changeset) end
+    )
+  end
+
   def insert(%Workflow{id: workflow_id, project_id: project_id, user_id: user_id}, attrs)
       when is_binary(user_id) do
     insert(workflow_id, project_id, user_id, attrs)
@@ -66,13 +76,13 @@ defmodule Sacrum.Repo.WorkflowSteps do
   def insert(%Workflow{id: workflow_id, project_id: project_id}, attrs) do
     %WorkflowStep{workflow_id: workflow_id, project_id: project_id}
     |> WorkflowStep.create_changeset(attrs)
-    |> Repo.insert()
+    |> insert()
   end
 
   def insert(workflow_id, attrs) when is_binary(workflow_id) and is_map(attrs) do
     %WorkflowStep{workflow_id: workflow_id}
     |> WorkflowStep.create_changeset(attrs)
-    |> Repo.insert()
+    |> insert()
   end
 
   defoverridable insert: 2
@@ -83,7 +93,7 @@ defmodule Sacrum.Repo.WorkflowSteps do
       when is_binary(workflow_id) and is_binary(user_id) and is_map(attrs) do
     %WorkflowStep{workflow_id: workflow_id, user_id: user_id}
     |> WorkflowStep.create_changeset(attrs)
-    |> Repo.insert()
+    |> insert()
   end
 
   @spec insert(String.t(), String.t(), String.t(), map()) ::
@@ -92,14 +102,21 @@ defmodule Sacrum.Repo.WorkflowSteps do
       when is_binary(workflow_id) and is_binary(project_id) and is_binary(user_id) do
     %WorkflowStep{workflow_id: workflow_id, project_id: project_id, user_id: user_id}
     |> WorkflowStep.create_changeset(attrs)
-    |> Repo.insert()
+    |> insert()
+  end
+
+  @spec update(Ecto.Changeset.t()) :: {:ok, WorkflowStep.t()} | {:error, Ecto.Changeset.t()}
+  def update(%Ecto.Changeset{data: %WorkflowStep{} = step} = changeset) do
+    affected = Enum.uniq([step.workflow_id, Ecto.Changeset.get_field(changeset, :workflow_id)])
+
+    RouteValidation.mutate(affected, changeset, fn -> Repo.update(changeset) end)
   end
 
   @spec update(WorkflowStep.t(), map()) :: {:ok, WorkflowStep.t()} | {:error, Ecto.Changeset.t()}
   def update(%WorkflowStep{} = step, attrs) do
     step
     |> WorkflowStep.update_changeset(attrs)
-    |> Repo.update()
+    |> update()
   end
 
   @doc """
@@ -118,13 +135,20 @@ defmodule Sacrum.Repo.WorkflowSteps do
          :ok <- validate_stop_step(step, transitions),
          :ok <- validate_no_duplicate_targets(transitions),
          :ok <- validate_same_workflow(step, transitions) do
-      existing =
-        Repo.all(from(t in StepTransition, where: t.from_step_id == ^step.id))
+      do_sync_transitions(step, transitions)
+    end
+  end
+
+  defp do_sync_transitions(step, transitions) do
+    RouteValidation.mutate([step.workflow_id], step, fn ->
+      existing = Repo.all(from(t in StepTransition, where: t.from_step_id == ^step.id))
 
       SyncHelper.diff_and_sync(existing, transitions, %{
         target_key: :to_step_id,
         to_delete_fn: fn existing, incoming_target_ids ->
-          Enum.filter(existing, fn t -> not MapSet.member?(incoming_target_ids, t.to_step_id) end)
+          Enum.filter(existing, fn t ->
+            not MapSet.member?(incoming_target_ids, t.to_step_id)
+          end)
         end,
         to_insert_fn: fn incoming, existing_by_target ->
           Enum.filter(incoming, fn t ->
@@ -164,7 +188,7 @@ defmodule Sacrum.Repo.WorkflowSteps do
           {:ok, updated}
         end
       })
-    end
+    end)
   end
 
   # sync_transitions helpers
@@ -226,8 +250,12 @@ defmodule Sacrum.Repo.WorkflowSteps do
     if Repo.exists?(from(t in Task, where: t.current_step_id == ^step.id)) do
       {:error, :assigned_tasks}
     else
-      Repo.delete(step)
+      delete_unassigned_step(step)
     end
+  end
+
+  defp delete_unassigned_step(step) do
+    RouteValidation.mutate([step.workflow_id], step, fn -> Repo.delete(step) end)
   end
 
   @doc """

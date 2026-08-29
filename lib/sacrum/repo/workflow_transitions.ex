@@ -21,6 +21,7 @@ defmodule Sacrum.Repo.WorkflowTransitions do
 
   import Ecto.Query
   alias Sacrum.Repo
+  alias Sacrum.Repo.RouteValidation
   alias Sacrum.Repo.Schemas.Workflow
   alias Sacrum.Repo.Schemas.WorkflowTransition
 
@@ -56,22 +57,66 @@ defmodule Sacrum.Repo.WorkflowTransitions do
 
   ## Validations
   """
+  @spec insert(Ecto.Changeset.t()) ::
+          {:ok, WorkflowTransition.t()} | {:error, Ecto.Changeset.t()}
   @spec insert(String.t(), map()) ::
           {:ok, WorkflowTransition.t()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
+  def insert(%Ecto.Changeset{data: %WorkflowTransition{}} = changeset) do
+    affected =
+      Enum.filter(
+        [
+          Ecto.Changeset.get_field(changeset, :from_workflow_id),
+          Ecto.Changeset.get_field(changeset, :to_workflow_id)
+        ],
+        &is_binary/1
+      )
+
+    RouteValidation.mutate(affected, changeset, fn -> Repo.insert(changeset) end)
+  end
+
   def insert(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
     from_workflow_id = Map.get(attrs, "from_workflow_id") || Map.get(attrs, :from_workflow_id)
     to_workflow_id = Map.get(attrs, "to_workflow_id") || Map.get(attrs, :to_workflow_id)
     project_id = Map.get(attrs, "project_id") || Map.get(attrs, :project_id)
 
-    %WorkflowTransition{
-      user_id: user_id,
-      from_workflow_id: from_workflow_id,
-      to_workflow_id: to_workflow_id,
-      project_id: project_id
-    }
-    |> WorkflowTransition.create_changeset(attrs)
-    |> Repo.insert()
+    changeset =
+      WorkflowTransition.create_changeset(
+        %WorkflowTransition{
+          user_id: user_id,
+          from_workflow_id: from_workflow_id,
+          to_workflow_id: to_workflow_id,
+          project_id: project_id
+        },
+        attrs
+      )
+
+    insert(changeset)
   end
 
   defoverridable insert: 2
+
+  @spec update(Ecto.Changeset.t()) ::
+          {:ok, WorkflowTransition.t()} | {:error, Ecto.Changeset.t()}
+  def update(%Ecto.Changeset{data: %WorkflowTransition{} = transition} = changeset) do
+    affected =
+      Enum.filter(
+        [
+          transition.from_workflow_id,
+          transition.to_workflow_id,
+          Ecto.Changeset.get_field(changeset, :from_workflow_id),
+          Ecto.Changeset.get_field(changeset, :to_workflow_id)
+        ],
+        &is_binary/1
+      )
+
+    RouteValidation.mutate(affected, changeset, fn -> Repo.update(changeset) end)
+  end
+
+  @spec delete(WorkflowTransition.t()) ::
+          {:ok, WorkflowTransition.t()} | {:error, Ecto.Changeset.t()}
+  def delete(%WorkflowTransition{} = transition) do
+    affected = [transition.from_workflow_id, transition.to_workflow_id]
+
+    RouteValidation.mutate(affected, transition, fn -> Repo.delete(transition) end)
+  end
 end

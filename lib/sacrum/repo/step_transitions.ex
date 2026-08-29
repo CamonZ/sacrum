@@ -27,6 +27,7 @@ defmodule Sacrum.Repo.StepTransitions do
 
   import Ecto.Query
   alias Sacrum.Repo
+  alias Sacrum.Repo.RouteValidation
   alias Sacrum.Repo.Schemas.StepTransition
   alias Sacrum.Repo.Schemas.WorkflowStep
 
@@ -34,8 +35,18 @@ defmodule Sacrum.Repo.StepTransitions do
   Insert a new step transition with user_id.
   Extracts from_step_id, to_step_id, and project_id from attrs.
   """
+  @spec insert(Ecto.Changeset.t()) :: {:ok, StepTransition.t()} | {:error, Ecto.Changeset.t()}
   @spec insert(String.t(), map()) ::
           {:ok, StepTransition.t()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
+  def insert(%Ecto.Changeset{data: %StepTransition{}} = changeset) do
+    affected =
+      changeset.data
+      |> step_workflow_ids()
+      |> Enum.concat(step_workflow_ids_after(changeset))
+
+    RouteValidation.mutate(affected, changeset, fn -> Repo.insert(changeset) end)
+  end
+
   def insert(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
     from_step_id = Map.get(attrs, "from_step_id") || Map.get(attrs, :from_step_id)
     to_step_id = Map.get(attrs, "to_step_id") || Map.get(attrs, :to_step_id)
@@ -44,18 +55,32 @@ defmodule Sacrum.Repo.StepTransitions do
     with :ok <- validate_same_workflow(attrs),
          :ok <- validate_from_step_type(attrs),
          :ok <- validate_stop_step_cardinality(attrs) do
-      %StepTransition{
-        user_id: user_id,
-        from_step_id: from_step_id,
-        to_step_id: to_step_id,
-        project_id: project_id
-      }
-      |> StepTransition.create_changeset(attrs)
-      |> Repo.insert()
+      changeset =
+        StepTransition.create_changeset(
+          %StepTransition{
+            user_id: user_id,
+            from_step_id: from_step_id,
+            to_step_id: to_step_id,
+            project_id: project_id
+          },
+          attrs
+        )
+
+      insert(changeset)
     end
   end
 
   defoverridable insert: 2
+
+  @spec update(Ecto.Changeset.t()) :: {:ok, StepTransition.t()} | {:error, Ecto.Changeset.t()}
+  def update(%Ecto.Changeset{data: %StepTransition{} = transition} = changeset) do
+    affected =
+      transition
+      |> step_workflow_ids()
+      |> Enum.concat(step_workflow_ids_after(changeset))
+
+    RouteValidation.mutate(affected, changeset, fn -> Repo.update(changeset) end)
+  end
 
   defp validate_same_workflow(attrs) do
     from_id = attrs[:from_step_id] || attrs["from_step_id"]
@@ -108,6 +133,35 @@ defmodule Sacrum.Repo.StepTransitions do
       is_nil(from_step) or is_nil(to_step) -> :ok
       from_step.workflow_id == to_step.workflow_id -> :ok
       true -> {:error, :different_workflows}
+    end
+  end
+
+  @spec delete(StepTransition.t()) :: {:ok, StepTransition.t()} | {:error, Ecto.Changeset.t()}
+  def delete(%StepTransition{} = transition) do
+    RouteValidation.mutate(step_workflow_ids(transition), transition, fn ->
+      Repo.delete(transition)
+    end)
+  end
+
+  # Workflows whose configured routes a mutation of this transition can affect.
+  defp step_workflow_ids(%StepTransition{from_step_id: from, to_step_id: to}) do
+    from
+    |> List.wrap()
+    |> Enum.concat(List.wrap(to))
+    |> workflow_ids_for_steps()
+  end
+
+  defp step_workflow_ids_after(changeset) do
+    workflow_ids_for_steps([
+      Ecto.Changeset.get_field(changeset, :from_step_id),
+      Ecto.Changeset.get_field(changeset, :to_step_id)
+    ])
+  end
+
+  defp workflow_ids_for_steps(step_ids) do
+    case Enum.filter(step_ids, &is_binary/1) do
+      [] -> []
+      ids -> Repo.all(from(s in WorkflowStep, where: s.id in ^ids, select: s.workflow_id))
     end
   end
 end

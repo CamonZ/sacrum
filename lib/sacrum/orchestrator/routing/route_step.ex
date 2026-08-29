@@ -138,7 +138,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
           {:ok, tuple()} | {:error, term()}
   defp inter_workflow_next_state_decision(data, preview_task) do
     with {:ok, workflow, steps, transitions} <-
-           WorkflowGraph.load_workflow_and_graph(data.user_id, preview_task) do
+           WorkflowGraph.load_validated_workflow_and_graph(data.user_id, preview_task) do
       decision_data = %{
         data
         | task: preview_task,

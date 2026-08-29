@@ -82,7 +82,7 @@ defmodule Sacrum.Repo.SyncHelper do
 
     case Repo.transaction(multi) do
       {:ok, _} -> config[:fetch_final_fn].()
-      {:error, _name, changeset, _changes} -> {:error, changeset}
+      {:error, _name, reason, _changes} -> {:error, reason}
     end
   end
 

@@ -229,7 +229,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   def handle_event(:state_timeout, :run, :initializing, data) do
     task_id = data.task.id
 
-    case WorkflowGraph.load_workflow_and_graph(data.user_id, data.task) do
+    case WorkflowGraph.load_validated_workflow_and_graph(data.user_id, data.task) do
       {:ok, workflow, steps, transitions} ->
         Logger.info(
           "[TaskOrchestrator:#{task_id}] Loaded workflow #{workflow.id} with #{map_size(steps)} steps"
@@ -239,7 +239,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
          %{data | workflow: workflow, steps: steps, transitions: transitions}}
 
       {:error, reason} ->
-        Logger.error("[TaskOrchestrator:#{task_id}] Failed to load workflow: #{inspect(reason)}")
+        Logger.error("[TaskOrchestrator:#{task_id}] Failed to enter workflow: #{inspect(reason)}")
         {:next_state, :failed, data}
     end
   end

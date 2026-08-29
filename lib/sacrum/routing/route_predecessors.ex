@@ -14,16 +14,17 @@ defmodule Sacrum.Routing.RoutePredecessors do
   @type error :: %{code: atom(), path: String.t(), message: String.t()}
 
   @doc """
-  Validates predecessor-result predicates against incoming result enums.
+  Validates predecessor-result predicates against a derived result-enum union.
+
+  Callers holding raw schemas derive the environment first with
+  `derive_type_environment/1`.
   """
-  @spec validate(RouteConfig.t(), [map()]) :: :ok | {:error, error()}
-  def validate(%{rules: rules}, schemas) when is_list(rules) do
-    with {:ok, %{result_values: result_values}} <- derive_type_environment(schemas) do
-      validate_rules(rules, result_values)
-    end
+  @spec validate(RouteConfig.t(), type_environment()) :: :ok | {:error, error()}
+  def validate(%{rules: rules}, %{result_values: result_values}) when is_list(rules) do
+    validate_rules(rules, result_values)
   end
 
-  def validate(_program, _schemas),
+  def validate(_program, _type_environment),
     do: {:error, error(:route_config_invalid, "$", "must be a decoded route program")}
 
   @doc """
@@ -70,29 +71,45 @@ defmodule Sacrum.Routing.RoutePredecessors do
   Merges the result enum declarations from all legal incoming predecessors.
   """
   @spec derive_type_environment([map()]) :: {:ok, type_environment()} | {:error, error()}
-  def derive_type_environment(schemas) when is_list(schemas) and schemas != [] do
-    with {:ok, environments} <- Traverse.map_while(schemas, &validate_schema(&1, &2)) do
-      result_values =
-        Enum.reduce(environments, MapSet.new(), fn %{result_values: values}, acc ->
-          MapSet.union(acc, values)
-        end)
-
-      {:ok, %{result_values: result_values}}
+  def derive_type_environment(predecessors) when is_list(predecessors) and predecessors != [] do
+    with {:ok, environments} <- Traverse.map_while(predecessors, &validate_predecessor(&1, &2)) do
+      {:ok, merge_type_environments(environments)}
     end
   end
 
-  def derive_type_environment(_schemas),
+  def derive_type_environment(_predecessors),
     do:
       {:error, error(:route_input_invalid, "$.predecessors", "must contain at least one schema")}
 
-  defp validate_schema(schema, index) do
+  defp validate_predecessor(%{output_schema: schema} = predecessor, index) do
     case validate_predecessor_schema(schema) do
       {:ok, environment} ->
         {:ok, environment}
 
       {:error, %{path: path} = reason} ->
-        {:error, %{reason | path: "$.predecessors[#{index}]#{drop_root(path)}"}}
+        id = Map.get(predecessor, :transition_id) || index
+
+        {:error,
+         reason
+         |> Map.merge(
+           Map.take(predecessor, [:transition_id, :source_step_id, :destination_step_id])
+         )
+         |> Map.put(:path, "$.predecessors[#{id}]#{drop_root(path)}")}
     end
+  end
+
+  defp validate_predecessor(_predecessor, index) do
+    {:error,
+     error(:route_input_invalid, "$.predecessors[#{index}]", "must include output_schema")}
+  end
+
+  defp merge_type_environments(environments) do
+    result_values =
+      Enum.reduce(environments, MapSet.new(), fn %{result_values: values}, acc ->
+        MapSet.union(acc, values)
+      end)
+
+    %{result_values: result_values}
   end
 
   defp validate_rules(rules, result_values) do

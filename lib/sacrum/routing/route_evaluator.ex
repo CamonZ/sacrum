@@ -29,6 +29,20 @@ defmodule Sacrum.Routing.RouteEvaluator do
     end
   end
 
+  @doc """
+  Returns every matching rule ID without applying the exactly-one policy.
+
+  Static validation uses this shared predicate evaluator to prove ambiguity for
+  finite domains. Runtime route selection remains owned by `evaluate/2`.
+  """
+  @spec matching_rule_ids(RouteConfig.t(), RouteContext.t()) ::
+          {:ok, [String.t()]} | {:error, error()}
+  def matching_rule_ids(%{rules: rules}, context) do
+    with {:ok, matching_rules} <- matching_rules(rules, context) do
+      {:ok, for(%{id: id} <- matching_rules, do: id)}
+    end
+  end
+
   defp matching_rules(rules, context) do
     case Traverse.map_while(rules, &match_rule(&1, context, &2)) do
       {:ok, matches} -> {:ok, for({true, rule} <- matches, do: rule)}

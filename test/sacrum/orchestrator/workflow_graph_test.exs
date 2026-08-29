@@ -55,13 +55,26 @@ defmodule Sacrum.Orchestrator.WorkflowGraphTest do
   end
 
   defp create_transition(user, from_step, to_step) do
-    {:ok, _transition} =
+    {:ok, transition} =
       Accounts.StepTransitions.insert(user.id, %{
         "from_step_id" => from_step.id,
         "to_step_id" => to_step.id,
         "project_id" => from_step.project_id,
         "label" => "next"
       })
+
+    transition
+  end
+
+  defp create_workflow_transition(user, from_workflow, to_workflow) do
+    {:ok, transition} =
+      Accounts.WorkflowTransitions.insert(user.id, %{
+        "from_workflow_id" => from_workflow.id,
+        "to_workflow_id" => to_workflow.id,
+        "project_id" => from_workflow.project_id
+      })
+
+    transition
   end
 
   defp create_task(user, project, workflow) do
@@ -79,7 +92,7 @@ defmodule Sacrum.Orchestrator.WorkflowGraphTest do
 
   # ===== Tests =====
 
-  describe "load_workflow_and_graph/2" do
+  describe "load_validated_workflow_and_graph/2" do
     test "returns ok with workflow and step/transition maps on success" do
       user = create_user()
       project = create_project(user)
@@ -92,7 +105,7 @@ defmodule Sacrum.Orchestrator.WorkflowGraphTest do
       task = create_task(user, project, workflow)
 
       {:ok, loaded_workflow, steps, transitions} =
-        WorkflowGraph.load_workflow_and_graph(user.id, task)
+        WorkflowGraph.load_validated_workflow_and_graph(user.id, task)
 
       assert loaded_workflow.id == workflow.id
       assert Map.has_key?(steps, step1.id)
@@ -100,6 +113,114 @@ defmodule Sacrum.Orchestrator.WorkflowGraphTest do
       assert Map.has_key?(transitions, step1.id)
       assert transitions[step1.id] == [step2.id]
       assert transitions[step2.id] == []
+    end
+
+    test "rejects a workflow whose configured route no longer matches the graph" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project)
+
+      source =
+        create_step(user, workflow, %{
+          "name" => "source",
+          "output_schema" => predecessor_schema(["approved"])
+        })
+
+      route =
+        create_step(user, workflow, %{
+          "name" => "route",
+          "step_order" => 2,
+          "step_type" => "route"
+        })
+
+      destination =
+        create_step(user, workflow, %{
+          "name" => "destination",
+          "step_order" => 3
+        })
+
+      create_transition(user, source, route)
+      route_transition = create_transition(user, route, destination)
+
+      # Persist a valid configuration, then break the graph behind the
+      # guarded write API: the route's only outgoing edge disappears, so its
+      # configured target is illegal.
+      {:ok, _route} =
+        Repo.update(
+          Ecto.Changeset.change(route, %{
+            route_config: %{
+              "version" => 1,
+              "match_policy" => "exactly_one",
+              "rules" => [
+                %{
+                  "id" => "approved",
+                  "when" => %{
+                    "ref" => "previous_output.route.result",
+                    "op" => "eq",
+                    "value" => "approved"
+                  },
+                  "transition" => %{
+                    "type" => "intra_workflow",
+                    "step_id" => destination.id
+                  }
+                }
+              ],
+              "default" => %{
+                "transition" => %{"type" => "intra_workflow", "step_id" => destination.id}
+              }
+            }
+          })
+        )
+
+      Repo.delete(route_transition)
+
+      task = create_task(user, project, workflow)
+
+      assert {:error, %{code: :route_target_invalid}} =
+               WorkflowGraph.load_validated_workflow_and_graph(user.id, task)
+    end
+
+    test "enters an upstream workflow without proving a neighbor's farther route" do
+      user = create_user()
+      project = create_project(user)
+      workflow_a = create_workflow(user, project)
+      workflow_b = create_workflow(user, project)
+      workflow_c = create_workflow(user, project)
+
+      create_step(user, workflow_a, %{"name" => "a-step"})
+
+      source_b =
+        create_step(user, workflow_b, %{
+          "name" => "b-source",
+          "output_schema" => predecessor_schema(["approved"])
+        })
+
+      route_b =
+        create_step(user, workflow_b, %{
+          "name" => "b-route",
+          "step_order" => 2,
+          "step_type" => "route"
+        })
+
+      dest_c = create_step(user, workflow_c, %{"name" => "c-dest"})
+
+      create_transition(user, source_b, route_b)
+      create_workflow_transition(user, workflow_a, workflow_b)
+      create_workflow_transition(user, workflow_b, workflow_c)
+      {:ok, _workflow_c} = Accounts.Workflows.update(workflow_c, %{initial_step_id: dest_c.id})
+
+      {:ok, _route_b} =
+        Accounts.WorkflowSteps.update(route_b, %{
+          route_config: inter_route_config(workflow_c.id)
+        })
+
+      task = create_task(user, project, workflow_a)
+
+      assert {:ok, loaded, steps, _transitions} =
+               WorkflowGraph.load_validated_workflow_and_graph(user.id, task)
+
+      assert loaded.id == workflow_a.id
+      refute Map.has_key?(steps, route_b.id)
     end
   end
 
@@ -144,6 +265,56 @@ defmodule Sacrum.Orchestrator.WorkflowGraphTest do
     end
   end
 
+  describe "RouteValidation.load_snapshot/1" do
+    test "keeps every incoming edge identity and unions its result domains" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project)
+
+      approved =
+        create_step(user, workflow, %{
+          "name" => "approved",
+          "output_schema" => predecessor_schema(["approved"])
+        })
+
+      rejected =
+        create_step(user, workflow, %{
+          "name" => "rejected",
+          "step_order" => 2,
+          "output_schema" => predecessor_schema(["rejected", "retry"])
+        })
+
+      route =
+        create_step(user, workflow, %{
+          "name" => "route",
+          "step_order" => 3,
+          "step_type" => "route"
+        })
+
+      approved_transition = create_transition(user, approved, route)
+      rejected_transition = create_transition(user, rejected, route)
+
+      assert {:ok, snapshot} = Sacrum.Repo.RouteValidation.load_snapshot(workflow.id)
+
+      predecessors = Sacrum.Routing.RouteValidator.predecessor_schemas(route, snapshot)
+
+      assert Map.has_key?(snapshot.incoming_edges, route.id)
+
+      assert Enum.map(predecessors, & &1.transition_id) |> Enum.sort() ==
+               Enum.sort([approved_transition.id, rejected_transition.id])
+
+      {:ok, %{result_values: result_values}} =
+        Sacrum.Routing.RoutePredecessors.derive_type_environment(predecessors)
+
+      assert result_values == MapSet.new(["approved", "rejected", "retry"])
+    end
+
+    test "returns an error for an unknown workflow" do
+      assert {:error, :workflow_not_found} =
+               Sacrum.Repo.RouteValidation.load_snapshot(Ecto.UUID.generate())
+    end
+  end
+
   describe "get_outgoing_transitions/2" do
     test "returns empty list when no transitions exist" do
       data = %{transitions: %{"step_1" => []}}
@@ -179,5 +350,50 @@ defmodule Sacrum.Orchestrator.WorkflowGraphTest do
       result = WorkflowGraph.select_single_transition(["step_2", "step_3"])
       assert result == {:error, :multiple_outgoing_transitions}
     end
+  end
+
+  defp inter_route_config(workflow_id) do
+    %{
+      "version" => 1,
+      "match_policy" => "exactly_one",
+      "rules" => [
+        %{
+          "id" => "approved",
+          "when" => %{
+            "ref" => "previous_output.route.result",
+            "op" => "eq",
+            "value" => "approved"
+          },
+          "transition" => %{"type" => "inter_workflow", "workflow_id" => workflow_id}
+        }
+      ],
+      "default" => %{
+        "transition" => %{"type" => "inter_workflow", "workflow_id" => workflow_id}
+      }
+    }
+  end
+
+  defp predecessor_schema(result_values) do
+    %{
+      "type" => "object",
+      "properties" => %{
+        "route" => %{
+          "type" => "object",
+          "additionalProperties" => false,
+          "required" => ["result", "handoff"],
+          "properties" => %{
+            "result" => %{"type" => "string", "enum" => result_values},
+            "handoff" => %{
+              "type" => "object",
+              "additionalProperties" => false,
+              "required" => ["note"],
+              "properties" => %{"note" => %{"type" => "string"}}
+            }
+          }
+        }
+      },
+      "required" => ["route"],
+      "additionalProperties" => false
+    }
   end
 end

@@ -307,11 +307,11 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
       end
     end
 
-    test "allows a promptless configured route" do
+    test "requires graph prerequisites for a promptless configured route" do
       user = create_user()
       {_project, workflow} = create_workflow(user)
 
-      assert {:ok, route} =
+      assert {:error, changeset} =
                WorkflowSteps.insert(workflow, %{
                  name: "Route",
                  step_type: "route",
@@ -324,7 +324,8 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
                    })
                })
 
-      assert route.prompt == nil
+      assert %{route_config: [message]} = errors_on(changeset)
+      assert message =~ "$.predecessors"
     end
 
     test "allows a promptless unconfigured route as an authoring draft" do

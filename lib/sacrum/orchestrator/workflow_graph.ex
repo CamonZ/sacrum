@@ -1,33 +1,34 @@
 defmodule Sacrum.Orchestrator.WorkflowGraph do
   @moduledoc """
-  Pure helpers for loading and querying workflow graph structure.
+  Load and query the workflow graph a TaskRun walks.
+
+  `load_validated_workflow_and_graph/2` is the single load/validate boundary
+  for TaskRun entry (new, resumed, and inter-workflow hops): authorize the
+  workflow, load one support snapshot, prove that workflow's routes against
+  it, and derive the FSM lookup maps from the same snapshot.
   """
 
   alias Sacrum.Accounts
   alias Sacrum.Orchestrator.FSMData
-  alias Sacrum.Repo.Schemas.{Task, WorkflowStep}
+  alias Sacrum.Repo.RouteValidation
+  alias Sacrum.Repo.Schemas.Task
+  alias Sacrum.Repo.Schemas.WorkflowStep
+  alias Sacrum.Routing.RouteValidator
 
   @doc """
-  Load a workflow and build step/transition lookup maps.
+  Load a workflow and the step/transition maps the FSM walks.
 
-  Returns `{:ok, workflow, steps, transitions}` where `steps` maps
-  `step_id -> WorkflowStep` and `transitions` maps `step_id -> [to_step_ids]`.
+  The maps come from the snapshot that was just validated, not from a
+  second topology load. A hop to a different workflow is a new call.
   """
-  @spec load_workflow_and_graph(binary(), Task.t()) ::
+  @spec load_validated_workflow_and_graph(binary(), Task.t()) ::
           {:ok, any(), map(), map()} | {:error, term()}
-  def load_workflow_and_graph(user_id, task) do
+  def load_validated_workflow_and_graph(user_id, task) do
     with {:ok, workflow} <-
-           Accounts.Workflows.get_by(user_id,
-             conditions: [id: task.workflow_id],
-             preloads: [workflow_steps: :transitions]
-           ) do
-      steps = Map.new(workflow.workflow_steps, &{&1.id, &1})
-
-      transitions =
-        Map.new(workflow.workflow_steps, fn step ->
-          {step.id, Enum.map(step.transitions, & &1.to_step_id)}
-        end)
-
+           Accounts.Workflows.get_by(user_id, conditions: [id: task.workflow_id]),
+         {:ok, snapshot} <- RouteValidation.load_snapshot(workflow.id),
+         :ok <- RouteValidator.validate_snapshot(snapshot, [workflow.id]) do
+      {steps, transitions} = owner_graph(snapshot, workflow.id)
       {:ok, workflow, steps, transitions}
     end
   end
@@ -88,5 +89,19 @@ defmodule Sacrum.Orchestrator.WorkflowGraph do
       _step ->
         :ok
     end
+  end
+
+  defp owner_graph(snapshot, owner_id) do
+    steps =
+      snapshot.steps
+      |> Enum.filter(fn {_id, step} -> step.workflow_id == owner_id end)
+      |> Map.new()
+
+    transitions =
+      Map.new(steps, fn {id, _step} ->
+        {id, Enum.map(Map.get(snapshot.step_edges, id, []), & &1.to_step_id)}
+      end)
+
+    {steps, transitions}
   end
 end

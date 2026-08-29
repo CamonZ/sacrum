@@ -84,6 +84,15 @@ defmodule Sacrum.Routing.RouteConfig do
   @rule_id ~r/^[A-Za-z0-9][A-Za-z0-9._-]*$/
 
   @doc """
+  The closed set of task levels routable by rule predicates.
+
+  Shared with static validation so coverage analysis enumerates exactly the
+  levels `task.level` predicates can observe.
+  """
+  @spec levels() :: [String.t()]
+  def levels, do: Enum.sort(@levels)
+
+  @doc """
   Decodes a V1 route configuration into a normalized, inert AST.
   """
   @spec decode(term()) :: {:ok, t()} | {:error, error()}

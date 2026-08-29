@@ -10,7 +10,10 @@ defmodule Sacrum.Routing.RoutePredecessorsTest do
     rejected_schema = predecessor_schema(["rejected", "retry"])
 
     assert {:ok, %{result_values: result_values}} =
-             RoutePredecessors.derive_type_environment([approved_schema, rejected_schema])
+             RoutePredecessors.derive_type_environment([
+               envelope(approved_schema, "approved"),
+               envelope(rejected_schema, "rejected")
+             ])
 
     assert result_values == MapSet.new(["approved", "rejected", "retry"])
   end
@@ -53,8 +56,15 @@ defmodule Sacrum.Routing.RoutePredecessorsTest do
         ]
       })
 
+    {:ok, type_environment} =
+      RoutePredecessors.derive_type_environment([envelope(predecessor_schema(["approved"]))])
+
     assert {:error, %{code: :route_config_invalid, path: "$.rules[0].when.value"}} =
-             RoutePredecessors.validate(program, [predecessor_schema(["approved"])])
+             RoutePredecessors.validate(program, type_environment)
+  end
+
+  defp envelope(schema, id \\ "pred") do
+    %{output_schema: schema, transition_id: id}
   end
 
   defp predecessor_schema(result_values) do

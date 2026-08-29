@@ -32,11 +32,11 @@ defmodule Sacrum.Repo.WorkflowStepRoutingTest do
     assert step.output_schema == Contract.output_schema()
   end
 
-  test "persists nested staged route_config unchanged" do
+  test "rejects a route_config until its graph prerequisites exist" do
     workflow = create_workflow()
     route_config = route_config()
 
-    assert {:ok, step} =
+    assert {:error, changeset} =
              WorkflowSteps.insert(
                workflow,
                Map.merge(@valid_attrs, %{
@@ -46,32 +46,26 @@ defmodule Sacrum.Repo.WorkflowStepRoutingTest do
                })
              )
 
-    assert step.route_config == route_config
-    assert step.output_schema == nil
-
-    assert {:ok, reloaded} = WorkflowSteps.get(step.id)
-    assert reloaded.route_config == route_config
+    assert %{route_config: [message]} = errors_on(changeset)
+    assert message =~ "$.predecessors"
   end
 
-  test "keeps a compiled route_config when the leftover prompt is cleared" do
+  test "does not use a leftover prompt to accept an invalid route_config" do
     workflow = create_workflow()
     route_config = route_config()
 
-    {:ok, staged} =
-      WorkflowSteps.insert(
-        workflow,
-        Map.merge(@valid_attrs, %{
-          step_type: "route",
-          prompt: "Choose a destination",
-          route_config: route_config
-        })
-      )
+    assert {:error, changeset} =
+             WorkflowSteps.insert(
+               workflow,
+               Map.merge(@valid_attrs, %{
+                 step_type: "route",
+                 prompt: "Choose a destination",
+                 route_config: route_config
+               })
+             )
 
-    assert {:ok, deterministic} = WorkflowSteps.update(staged, %{prompt: nil})
-
-    assert deterministic.prompt == nil
-    assert deterministic.output_schema == nil
-    assert deterministic.route_config == route_config
+    assert %{route_config: [message]} = errors_on(changeset)
+    assert message =~ "$.predecessors"
   end
 
   test "persists a promptless unconfigured route as an authoring draft" do
@@ -115,11 +109,11 @@ defmodule Sacrum.Repo.WorkflowStepRoutingTest do
     assert route.output_schema == nil
   end
 
-  test "allows a leftover routing contract on a compiled route" do
+  test "does not let a legacy route output contract bypass route validation" do
     workflow = create_workflow()
     route_config = route_config()
 
-    assert {:ok, step} =
+    assert {:error, changeset} =
              WorkflowSteps.insert(
                workflow,
                Map.merge(@valid_attrs, %{
@@ -130,8 +124,8 @@ defmodule Sacrum.Repo.WorkflowStepRoutingTest do
                })
              )
 
-    assert step.output_schema == Contract.output_schema()
-    assert step.route_config == route_config
+    assert %{route_config: [message]} = errors_on(changeset)
+    assert message =~ "$.predecessors"
   end
 
   test "requires explicit route_config clearing before changing to a non-route step" do
@@ -140,10 +134,12 @@ defmodule Sacrum.Repo.WorkflowStepRoutingTest do
     {:ok, step} =
       WorkflowSteps.insert(
         workflow,
-        Map.merge(@valid_attrs, %{step_type: "route", route_config: route_config()})
+        Map.merge(@valid_attrs, %{step_type: "route"})
       )
 
-    assert {:error, changeset} = WorkflowSteps.update(step, %{step_type: "evaluate"})
+    assert {:error, changeset} =
+             WorkflowSteps.update(step, %{step_type: "evaluate", route_config: route_config()})
+
     assert %{route_config: ["is only supported for route steps"]} = errors_on(changeset)
 
     assert {:ok, updated} =
