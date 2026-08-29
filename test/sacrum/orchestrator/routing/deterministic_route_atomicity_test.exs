@@ -36,6 +36,8 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
                    "mode" => "deterministic",
                    "source_execution_id" => source_execution_id,
                    "config_version" => 1,
+                   "matched_rule_id" => "approved",
+                   "used_default" => false,
                    "context" => %{
                      "execution" => %{"step_visit_count" => 1},
                      "previous_output" => %{
@@ -47,7 +49,6 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
                    }
                  }
                },
-               output: output,
                transition_result: transition_result
              } = deterministic_audit(fixture.task.id, fixture.route.id)
 
@@ -56,13 +57,6 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
       assert source_execution_id == fixture.source_execution.id
       assert handoff == fixture.handoff
       assert context_handoff == fixture.handoff
-
-      assert Jason.decode!(output) == %{
-               "matched_rule_id" => "approved",
-               "source_execution_id" => fixture.source_execution.id,
-               "target" => %{"step_id" => fixture.destination.id, "type" => "intra_workflow"},
-               "used_default" => false
-             }
 
       assert Jason.decode!(transition_result) == %{
                "dest_id" => fixture.destination.id,
@@ -105,22 +99,19 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
                id: audit_id,
                workflow_id: source_workflow_id,
                handoff: handoff,
-               output: output,
+               context: %{
+                 "route" => %{
+                   "matched_rule_id" => "approved",
+                   "source_execution_id" => source_execution_id,
+                   "used_default" => false
+                 }
+               },
                transition_result: transition_result
              } = deterministic_audit(fixture.task.id, fixture.route.id)
 
       assert source_workflow_id == fixture.workflow.id
+      assert source_execution_id == fixture.source_execution.id
       assert handoff == fixture.handoff
-
-      assert Jason.decode!(output) == %{
-               "matched_rule_id" => "approved",
-               "source_execution_id" => fixture.source_execution.id,
-               "target" => %{
-                 "type" => "inter_workflow",
-                 "workflow_id" => fixture.destination_workflow.id
-               },
-               "used_default" => false
-             }
 
       assert Jason.decode!(transition_result) == %{
                "dest_id" => fixture.destination_workflow.id,

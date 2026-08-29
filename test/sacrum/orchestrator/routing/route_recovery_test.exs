@@ -32,6 +32,46 @@ defmodule Sacrum.Orchestrator.Routing.RouteRecoveryTest do
     assert recovered.pending_handoff == nil
   end
 
+  test "does not fail closed when the TaskRun cannot be loaded" do
+    %{user: user, project: project, task: task} = fixture()
+    data = fsm_data(user, project, task, %{id: Ecto.UUID.generate()})
+
+    assert {:ok, recovered} = RouteRecovery.restore(data)
+    assert recovered.pending_handoff == nil
+  end
+
+  test "restores an inter-workflow audit after the task has left the source workflow" do
+    %{user: user, project: project, task: task, route: route} = fixture()
+    destination_workflow = create_workflow(user, project)
+
+    destination =
+      create_step(user, destination_workflow, %{
+        name: "next",
+        step_order: 1,
+        step_type: :execute
+      })
+
+    task_run = create_task_run(user, task)
+
+    route_execution =
+      create_route_execution(user, task, route, task_run, destination_workflow.id, %{}, %{
+        "transition_type" => "inter_workflow"
+      })
+
+    {:ok, task} =
+      Repo.update(
+        Ecto.Changeset.change(task, %{
+          current_step_id: destination.id,
+          workflow_id: destination_workflow.id
+        })
+      )
+
+    task_run = update_cursor(task_run, route_execution.id)
+
+    assert {:ok, recovered} = RouteRecovery.restore(fsm_data(user, project, task, task_run))
+    assert recovered.pending_handoff == %{}
+  end
+
   test "rejects a deterministic route record whose destination disagrees with the task" do
     %{user: user, project: project, task: task, route: route, destination: destination} =
       fixture()
@@ -59,7 +99,9 @@ defmodule Sacrum.Orchestrator.Routing.RouteRecoveryTest do
     %{user: user, project: project, task: task, route: route, destination: destination}
   end
 
-  defp create_route_execution(user, task, route, task_run, destination_id, handoff) do
+  defp create_route_execution(user, task, route, task_run, destination_id, handoff, opts \\ %{}) do
+    transition_type = Map.get(opts, "transition_type", "intra_workflow")
+
     {:ok, execution} =
       Accounts.StepExecutions.insert(user.id, %{
         task_id: task.id,
@@ -75,7 +117,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteRecoveryTest do
           "route" => %{"mode" => "deterministic", "source_execution_id" => Ecto.UUID.generate()}
         },
         transition_result:
-          Jason.encode!(%{"dest_id" => destination_id, "transition_type" => "intra_workflow"})
+          Jason.encode!(%{"dest_id" => destination_id, "transition_type" => transition_type})
       })
 
     execution

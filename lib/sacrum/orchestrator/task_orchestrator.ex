@@ -246,17 +246,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   end
 
   def handle_event(:state_timeout, :run, :awaiting_execution, data) do
-    case RouteRecovery.restore(data) do
-      {:ok, recovered_data} ->
-        handle_awaiting_execution(recovered_data)
-
-      {:error, reason} ->
-        Logger.error(
-          "[TaskOrchestrator:#{data.task.id}] Failed deterministic route recovery: #{inspect(reason)}"
-        )
-
-        {:next_state, :failed, data}
-    end
+    handle_awaiting_execution(data)
   end
 
   def handle_event(:state_timeout, :run, :transitioning, data) do
@@ -734,6 +724,21 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
 
   @spec continue_awaiting_execution(binary(), FSMData.t()) :: fsm_transition()
   defp continue_awaiting_execution(task_id, data) do
+    case RouteRecovery.restore(data) do
+      {:ok, recovered} ->
+        resume_awaiting_execution(task_id, recovered)
+
+      {:error, :route_recovery_inconsistent} ->
+        Logger.error(
+          "[TaskOrchestrator:#{task_id}] Failed deterministic route recovery: :route_recovery_inconsistent"
+        )
+
+        {:next_state, :failed, data}
+    end
+  end
+
+  @spec resume_awaiting_execution(binary(), FSMData.t()) :: fsm_transition()
+  defp resume_awaiting_execution(task_id, data) do
     case resume_reason(data) do
       :wait_children ->
         Logger.info(

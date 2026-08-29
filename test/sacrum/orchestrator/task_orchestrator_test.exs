@@ -2223,6 +2223,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
                    "mode" => "deterministic",
                    "source_execution_id" => source_execution_id,
                    "config_version" => 1,
+                   "matched_rule_id" => "approved",
+                   "used_default" => false,
                    "context" => %{
                      "execution" => %{"step_visit_count" => 1},
                      "previous_output" => %{
@@ -2230,21 +2232,13 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
                      }
                    }
                  }
-               },
-               output: audit_output
+               }
              } = route_execution
 
       assert source_execution_id == source_execution.id
       assert route_step_id == route.id
       assert route_run_id == latest_task_run(task.id).id
       assert latest_task_run(task.id).latest_step_execution_id == route_execution_id
-
-      assert Jason.decode!(audit_output) == %{
-               "matched_rule_id" => "approved",
-               "source_execution_id" => source_execution_id,
-               "target" => %{"step_id" => destination.id, "type" => "intra_workflow"},
-               "used_default" => false
-             }
 
       refute Map.has_key?(
                ExecutionPool.pool_status().in_use_by_scope,

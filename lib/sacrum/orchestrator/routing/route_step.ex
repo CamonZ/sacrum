@@ -1,10 +1,11 @@
 defmodule Sacrum.Orchestrator.Routing.RouteStep do
   @moduledoc """
-  Top-level orchestrator for route step transitions.
+  Route-step orchestration for both local deterministic evaluation and the
+  isolated prompt-driven fallback.
 
-  The FSM's `:transitioning` handler calls `handle_route_step_transition/2` which
-  parses the route output, persists the decision, advances the task to the
-  selected destination (intra- or inter-workflow), and returns the next FSM state.
+  Configured routes are entered from `:awaiting_execution` before any
+  execution-pool allocation. Unconfigured routes still complete through the
+  daemon path, then share the same plan/commit/continue spine.
   """
 
   require Logger
@@ -12,7 +13,6 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
   import Ecto.Query
 
   alias Sacrum.Orchestrator.{
-    ExecutionHistory,
     ExecutionPool,
     FSMData,
     OutputValidator,
@@ -22,7 +22,14 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
     WorkflowGraph
   }
 
-  alias Sacrum.Orchestrator.Routing.{InterWorkflow, IntraWorkflow, RouteDecision, RouteProvenance}
+  alias Sacrum.Orchestrator.Routing.{
+    InterWorkflow,
+    IntraWorkflow,
+    RouteAudit,
+    RouteDecision,
+    RouteProvenance
+  }
+
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{StepExecution, TaskRun}
   alias Sacrum.Repo.TaskWorkflows
@@ -34,86 +41,65 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
            | {:stop, atom(), FSMData.t()}
 
   @doc """
-  Main entry point for handling a route step transition. Returns a gen_statem
-  state transition tuple.
+  Completes a prompt-driven route after daemon execution.
   """
   @spec handle_route_step_transition(FSMData.t(), struct()) :: fsm_transition()
   def handle_route_step_transition(data, current_step) do
-    task_id = data.task.id
-
-    with {:ok, execution} <- get_latest_completed_execution(task_id),
+    with {:ok, execution} <- get_latest_completed_execution(data.task.id),
          {:ok, decoded} <- RouteDecision.parse_route_output(execution.output),
          :ok <- OutputValidator.validate_routing_contract(decoded, current_step.output_schema),
          {:ok, %{dest_id: dest_id, transition_type: transition_type, handoff: handoff}} <-
            RouteDecision.extract_routing_data(decoded),
          {:ok, route_plan} <- prepare_route_plan(data, dest_id, transition_type, handoff),
-         {:ok, %{task: updated_task}} <-
-           commit_legacy_route_transition(data, execution, dest_id, transition_type, route_plan) do
-      RouteDecision.log_route_decision(
-        task_id,
-        execution.id,
-        dest_id,
-        transition_type,
-        handoff
-      )
-
-      ExecutionPool.release_slot(data.slot_id)
-      new_data = %{data | slot_id: nil, pending_handoff: handoff}
-
-      handle_route_continuation(new_data, task_id, updated_task, transition_type, route_plan)
+         {:ok, committed} <-
+           commit_route_transition(
+             data,
+             route_plan,
+             {:update,
+              RouteDecision.route_decision_changeset(execution, dest_id, transition_type)}
+           ) do
+      complete_committed_route(data, committed, dest_id, transition_type, handoff, route_plan)
     else
-      {:error, reason} ->
-        Logger.error(
-          "[TaskOrchestrator:#{task_id}] Error in route transition: #{inspect(reason)}"
-        )
-
-        ExecutionPool.release_slot(data.slot_id)
-        {:next_state, :failed, %{data | slot_id: nil}}
+      {:error, reason} -> fail_route(data, reason, "Error in route transition")
     end
   end
 
   @doc """
-  Evaluates a configured route locally. This path is entered directly from
-  `:awaiting_execution`, before any execution-pool allocation or daemon work.
+  Evaluates a configured route locally before any execution-pool allocation.
   """
   @spec handle_deterministic_route_step(FSMData.t(), struct(), map()) :: fsm_transition()
   def handle_deterministic_route_step(data, current_step, program) do
-    task_id = data.task.id
-
     with {:ok, provenance} <- RouteProvenance.resolve(data, current_step),
          {:ok, previous_output} <- validated_predecessor_output(provenance),
          {:ok, context} <- build_route_context(data.task, current_step.id, previous_output),
          {:ok, result} <- RouteEvaluator.evaluate(program, context),
          {:ok, {dest_id, transition_type}} <- destination(result.transition),
          {:ok, route_plan} <- prepare_route_plan(data, dest_id, transition_type, result.handoff),
-         {:ok, %{task: updated_task}} <-
-           commit_deterministic_route_transition(
+         {:ok, committed} <-
+           commit_route_transition(
              data,
-             provenance,
-             program,
-             context,
-             result,
-             dest_id,
-             transition_type,
-             route_plan
+             route_plan,
+             {:insert,
+              local_route_execution_changeset(
+                data,
+                provenance,
+                program,
+                context,
+                result,
+                dest_id,
+                transition_type
+              ), provenance.task_run}
            ) do
-      RouteDecision.log_route_decision(
-        task_id,
-        provenance.source_execution.id,
+      complete_committed_route(
+        data,
+        committed,
         dest_id,
         transition_type,
-        result.handoff
+        result.handoff,
+        route_plan
       )
-
-      new_data = %{data | pending_handoff: result.handoff}
-      handle_route_continuation(new_data, task_id, updated_task, transition_type, route_plan)
     else
-      {:error, reason} ->
-        Logger.error(
-          "[TaskOrchestrator:#{task_id}] Error in deterministic route transition: #{inspect(reason)}"
-        )
-
-        {:next_state, :failed, data}
+      {:error, reason} -> fail_route(data, reason, "Error in deterministic route transition")
     end
   end
 
@@ -133,7 +119,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
     RouteContext.build(
       previous_output,
       %{"level" => task.level, "tags" => task.tags || []},
-      ExecutionHistory.deterministic_route_visit_count(task, route_step_id)
+      RouteAudit.visit_count(task, route_step_id)
     )
   end
 
@@ -231,26 +217,17 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
     end
   end
 
-  @spec commit_legacy_route_transition(
-          FSMData.t(),
-          StepExecution.t(),
-          binary(),
-          String.t(),
-          map()
-        ) ::
-          {:ok, map()} | {:error, term()}
-  defp commit_legacy_route_transition(data, execution, dest_id, transition_type, route_plan) do
+  defp commit_route_transition(data, route_plan, persist) do
     Repo.transaction(fn ->
-      with {:ok, route_execution} <-
-             execution
-             |> RouteDecision.route_decision_changeset(dest_id, transition_type)
-             |> Repo.update(),
+      with {:ok, acc} <- persist_route_execution(persist),
            {:ok, updated_task} <- Repo.update(route_plan.task_changeset),
            {:ok, changes} <-
-             maybe_finish_route_task_and_run(data, updated_task, route_plan, %{
-               route_execution: route_execution,
-               task: updated_task
-             }) do
+             maybe_finish_route_task_and_run(
+               data,
+               updated_task,
+               route_plan,
+               Map.put(acc, :task, updated_task)
+             ) do
         changes
       else
         {:error, reason} -> Repo.rollback(reason)
@@ -258,55 +235,20 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
     end)
   end
 
-  @spec commit_deterministic_route_transition(
-          FSMData.t(),
-          map(),
-          map(),
-          map(),
-          map(),
-          binary(),
-          String.t(),
-          map()
-        ) :: {:ok, map()} | {:error, term()}
-  defp commit_deterministic_route_transition(
-         data,
-         provenance,
-         program,
-         context,
-         result,
-         dest_id,
-         transition_type,
-         route_plan
-       ) do
-    Repo.transaction(fn ->
-      with {:ok, route_execution} <-
-             Repo.insert(
-               deterministic_route_execution_changeset(
-                 data,
-                 provenance,
-                 program,
-                 context,
-                 result,
-                 dest_id,
-                 transition_type
-               )
-             ),
-           {:ok, task_run} <- update_route_cursor(provenance.task_run, route_execution.id),
-           {:ok, updated_task} <- Repo.update(route_plan.task_changeset),
-           {:ok, changes} <-
-             maybe_finish_route_task_and_run(data, updated_task, route_plan, %{
-               route_execution: route_execution,
-               task: updated_task,
-               task_run: task_run
-             }) do
-        changes
-      else
-        {:error, reason} -> Repo.rollback(reason)
-      end
-    end)
+  defp persist_route_execution({:update, changeset}) do
+    with {:ok, route_execution} <- Repo.update(changeset) do
+      {:ok, %{route_execution: route_execution}}
+    end
   end
 
-  defp deterministic_route_execution_changeset(
+  defp persist_route_execution({:insert, changeset, task_run}) do
+    with {:ok, route_execution} <- Repo.insert(changeset),
+         {:ok, task_run} <- update_route_cursor(task_run, route_execution.id) do
+      {:ok, %{route_execution: route_execution, task_run: task_run}}
+    end
+  end
+
+  defp local_route_execution_changeset(
          data,
          provenance,
          program,
@@ -327,65 +269,52 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
         step_name: step.name,
         step_type: :route,
         status: "completed",
-        context: deterministic_audit_context(provenance, program, context),
-        output: deterministic_audit_output(provenance, result),
+        context: RouteAudit.context(provenance, program, context, result),
         transition_result: RouteDecision.transition_result(dest_id, transition_type),
         handoff: result.handoff
       }
     )
   end
 
-  defp deterministic_audit_context(provenance, program, context) do
-    %{
-      "route" => %{
-        "mode" => "deterministic",
-        "source_execution_id" => provenance.source_execution.id,
-        "config_version" => program.version,
-        "context" => route_context_snapshot(context)
-      }
-    }
-  end
-
-  defp route_context_snapshot(context) do
-    %{
-      "previous_output" => %{
-        "route" => %{
-          "result" => get_in(context, [:previous_output, :route, :result]),
-          "handoff" => get_in(context, [:previous_output, :route, :handoff])
-        }
-      },
-      "task" => %{
-        "level" => get_in(context, [:task, :level]),
-        "tags" => get_in(context, [:task, :tags])
-      },
-      "execution" => %{
-        "step_visit_count" => get_in(context, [:execution, :step_visit_count])
-      }
-    }
-  end
-
-  defp deterministic_audit_output(provenance, result) do
-    Jason.encode!(%{
-      "source_execution_id" => provenance.source_execution.id,
-      "matched_rule_id" => result.matched_rule_id,
-      "used_default" => result.used_default,
-      "target" => serialize_target(result.transition)
-    })
-  end
-
-  defp serialize_target(%{type: :intra_workflow, step_id: step_id}),
-    do: %{"type" => "intra_workflow", "step_id" => step_id}
-
-  defp serialize_target(%{type: :inter_workflow, workflow_id: workflow_id}),
-    do: %{"type" => "inter_workflow", "workflow_id" => workflow_id}
-
   defp update_route_cursor(task_run, route_execution_id) do
     task_run
-    |> TaskRun.update_changeset(%{
-      status: :executing,
-      latest_step_execution_id: route_execution_id
-    })
+    |> TaskRun.update_changeset(%{latest_step_execution_id: route_execution_id})
     |> Repo.update()
+  end
+
+  defp complete_committed_route(
+         data,
+         %{task: updated_task, route_execution: route_execution},
+         dest_id,
+         transition_type,
+         handoff,
+         route_plan
+       ) do
+    RouteDecision.log_route_decision(
+      data.task.id,
+      route_execution.id,
+      dest_id,
+      transition_type,
+      handoff
+    )
+
+    if data.slot_id, do: ExecutionPool.release_slot(data.slot_id)
+
+    handle_route_continuation(
+      %{data | slot_id: nil, pending_handoff: handoff},
+      data.task.id,
+      updated_task,
+      transition_type,
+      route_plan
+    )
+  end
+
+  defp fail_route(data, reason, message) do
+    Logger.error("[TaskOrchestrator:#{data.task.id}] #{message}: #{inspect(reason)}")
+
+    if data.slot_id, do: ExecutionPool.release_slot(data.slot_id)
+
+    {:next_state, :failed, %{data | slot_id: nil}}
   end
 
   @spec maybe_finish_route_task_and_run(FSMData.t(), struct(), map(), map()) ::

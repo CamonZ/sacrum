@@ -28,6 +28,24 @@ defmodule Sacrum.Orchestrator.Routing.RouteProvenance do
           | :route_provenance_no_incoming_transition
 
   @doc """
+  Loads the active TaskRun and its completed cursor execution.
+
+  The cursor is scoped to the task and run, not the task's current workflow,
+  so restart recovery can still see a route audit after an inter-workflow hop.
+  """
+  @spec fetch_completed_cursor(map()) ::
+          {:ok, {Sacrum.Repo.Schemas.TaskRun.t(), StepExecution.t()}} | {:error, error()}
+  def fetch_completed_cursor(%{task_run_id: nil}),
+    do: {:error, :route_provenance_missing_task_run}
+
+  def fetch_completed_cursor(data) do
+    with {:ok, task_run} <- fetch_task_run(data),
+         {:ok, execution} <- fetch_cursor_execution(task_run, data) do
+      {:ok, {task_run, execution}}
+    end
+  end
+
+  @doc """
   Resolves the active TaskRun's completed cursor and proves that its source
   step is an incoming edge to `route_step` in the already loaded graph.
 
@@ -35,11 +53,8 @@ defmodule Sacrum.Orchestrator.Routing.RouteProvenance do
   atomic route commit so neither phase can independently choose another input.
   """
   @spec resolve(map(), WorkflowStep.t()) :: {:ok, provenance()} | {:error, error()}
-  def resolve(%{task_run_id: nil}, _route_step), do: {:error, :route_provenance_missing_task_run}
-
   def resolve(data, %WorkflowStep{} = route_step) do
-    with {:ok, task_run} <- fetch_task_run(data),
-         {:ok, source_execution} <- fetch_cursor_execution(task_run, data),
+    with {:ok, {task_run, source_execution}} <- fetch_completed_cursor(data),
          {:ok, source_step} <- fetch_source_step(source_execution, data),
          :ok <- validate_incoming_edge(data, source_step.id, route_step.id) do
       {:ok,
@@ -67,7 +82,6 @@ defmodule Sacrum.Orchestrator.Routing.RouteProvenance do
         project_id: data.project_id,
         task_id: data.task.id,
         task_run_id: task_run.id,
-        workflow_id: data.task.workflow_id,
         status: "completed"
       )
 

@@ -1,67 +1,49 @@
 defmodule Sacrum.Orchestrator.Routing.RouteRecovery do
   @moduledoc """
-  Restores the handoff from an already committed deterministic route decision.
+  Restores `pending_handoff` from a committed deterministic route audit.
 
-  Recovery reads the TaskRun cursor rather than reevaluating a route from the
-  task's mutable position. A deterministic route execution is only useful when
-  its recorded destination still agrees with the task position reached by the
-  same transaction.
+  Recovery is opportunistic: a missing run or a non-route cursor leaves FSM
+  data unchanged. It fails only when a deterministic audit's recorded
+  destination disagrees with the task position from the same transaction.
   """
 
-  alias Sacrum.Orchestrator.TaskRuns.Lookup
-  alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.StepExecution
+  alias Sacrum.Orchestrator.Routing.{RouteAudit, RouteProvenance}
 
-  @type error :: :route_recovery_inconsistent | :task_run_not_found
+  @type error :: :route_recovery_inconsistent
 
   @doc """
-  Returns FSM data with the deterministic route's persisted handoff when the
-  current TaskRun cursor is a committed local route decision. Non-route cursors
-  are ordinary executions and leave the FSM data unchanged.
+  Returns FSM data with the persisted handoff when the TaskRun cursor is a
+  committed local route decision. Ordinary cursors are left unchanged.
   """
   @spec restore(map()) :: {:ok, map()} | {:error, error()}
   def restore(%{task_run_id: nil} = data), do: {:ok, data}
 
   def restore(data) do
-    with {:ok, task_run} <-
-           Lookup.fetch_for_task(data.user_id, data.project_id, data.task.id, data.task_run_id),
-         {:ok, route_execution} <- fetch_deterministic_cursor(task_run, data),
-         :ok <- validate_destination(route_execution, data.task),
-         handoff when is_map(handoff) <- route_execution.handoff do
-      {:ok, %{data | pending_handoff: handoff}}
-    else
-      :not_deterministic_route -> {:ok, data}
-      _ -> {:error, :route_recovery_inconsistent}
+    case load_deterministic_cursor(data) do
+      {:ok, execution} -> restore_deterministic(data, execution)
+      :none -> {:ok, data}
     end
   end
 
-  defp fetch_deterministic_cursor(%{latest_step_execution_id: nil}, _data),
-    do: :not_deterministic_route
+  defp load_deterministic_cursor(data) do
+    case RouteProvenance.fetch_completed_cursor(data) do
+      {:ok, {_task_run, execution}} ->
+        if RouteAudit.deterministic?(execution), do: {:ok, execution}, else: :none
 
-  defp fetch_deterministic_cursor(task_run, data) do
-    execution =
-      Repo.get_by(StepExecution,
-        id: task_run.latest_step_execution_id,
-        user_id: data.user_id,
-        project_id: data.project_id,
-        task_id: data.task.id,
-        task_run_id: task_run.id,
-        step_type: :route,
-        status: "completed"
-      )
-
-    if deterministic_route_execution?(execution),
-      do: {:ok, execution},
-      else: :not_deterministic_route
+      {:error, _reason} ->
+        :none
+    end
   end
 
-  defp deterministic_route_execution?(%StepExecution{
-         context: %{"route" => %{"mode" => "deterministic", "source_execution_id" => source_id}}
-       })
-       when is_binary(source_id),
-       do: true
+  defp restore_deterministic(data, execution) do
+    with :ok <- validate_destination(execution, data.task),
+         {:ok, handoff} <- fetch_handoff(execution) do
+      {:ok, %{data | pending_handoff: handoff}}
+    end
+  end
 
-  defp deterministic_route_execution?(_execution), do: false
+  defp fetch_handoff(%{handoff: handoff}) when is_map(handoff), do: {:ok, handoff}
+  defp fetch_handoff(_execution), do: {:error, :route_recovery_inconsistent}
 
   defp validate_destination(execution, task) do
     with {:ok, %{"dest_id" => destination, "transition_type" => transition_type}} <-

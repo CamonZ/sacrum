@@ -142,32 +142,6 @@ defmodule Sacrum.Orchestrator.ExecutionHistory do
     |> Map.put(:run_count, completed + failed)
   end
 
-  @doc """
-  Returns the current-inclusive number of deterministic visits to one route
-  step across every TaskRun for a task.
-
-  Only completed local route audits count. Failed attempts, legacy daemon route
-  executions, and rolled-back inserts do not become visits. The first local
-  decision is therefore visit `1`.
-  """
-  @spec deterministic_route_visit_count(Sacrum.Repo.Schemas.Task.t(), String.t()) :: pos_integer()
-  def deterministic_route_visit_count(task, route_step_id)
-      when is_binary(route_step_id) do
-    completed_count =
-      Repo.one(
-        from(e in StepExecution,
-          where:
-            e.user_id == ^task.user_id and e.project_id == ^task.project_id and
-              e.task_id == ^task.id and e.step_id == ^route_step_id and
-              e.status == "completed" and
-              fragment("?->'route'->>'mode' = 'deterministic'", e.context),
-          select: count(e.id)
-        )
-      )
-
-    completed_count + 1
-  end
-
   defp list_prior_executions(task, dispatched_execution, task_run) do
     task.user_id
     |> TaskRuns.list_step_executions_for_run(task.project_id, task.id, task_run.id)
