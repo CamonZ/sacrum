@@ -62,16 +62,18 @@ defmodule Sacrum.Repo.WorkflowTransitions do
   @spec insert(String.t(), map()) ::
           {:ok, WorkflowTransition.t()} | {:error, Ecto.Changeset.t()} | {:error, atom()}
   def insert(%Ecto.Changeset{data: %WorkflowTransition{}} = changeset) do
-    affected =
-      Enum.filter(
-        [
-          Ecto.Changeset.get_field(changeset, :from_workflow_id),
-          Ecto.Changeset.get_field(changeset, :to_workflow_id)
-        ],
-        &is_binary/1
-      )
+    with :ok <- validate_scope(changeset) do
+      affected =
+        Enum.filter(
+          [
+            Ecto.Changeset.get_field(changeset, :from_workflow_id),
+            Ecto.Changeset.get_field(changeset, :to_workflow_id)
+          ],
+          &is_binary/1
+        )
 
-    RouteValidation.mutate(affected, changeset, fn -> Repo.insert(changeset) end)
+      RouteValidation.mutate(affected, changeset, fn -> Repo.insert(changeset) end)
+    end
   end
 
   def insert(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
@@ -98,18 +100,20 @@ defmodule Sacrum.Repo.WorkflowTransitions do
   @spec update(Ecto.Changeset.t()) ::
           {:ok, WorkflowTransition.t()} | {:error, Ecto.Changeset.t()}
   def update(%Ecto.Changeset{data: %WorkflowTransition{} = transition} = changeset) do
-    affected =
-      Enum.filter(
-        [
-          transition.from_workflow_id,
-          transition.to_workflow_id,
-          Ecto.Changeset.get_field(changeset, :from_workflow_id),
-          Ecto.Changeset.get_field(changeset, :to_workflow_id)
-        ],
-        &is_binary/1
-      )
+    with :ok <- validate_scope(changeset) do
+      affected =
+        Enum.filter(
+          [
+            transition.from_workflow_id,
+            transition.to_workflow_id,
+            Ecto.Changeset.get_field(changeset, :from_workflow_id),
+            Ecto.Changeset.get_field(changeset, :to_workflow_id)
+          ],
+          &is_binary/1
+        )
 
-    RouteValidation.mutate(affected, changeset, fn -> Repo.update(changeset) end)
+      RouteValidation.mutate(affected, changeset, fn -> Repo.update(changeset) end)
+    end
   end
 
   @spec delete(WorkflowTransition.t()) ::
@@ -118,5 +122,77 @@ defmodule Sacrum.Repo.WorkflowTransitions do
     affected = [transition.from_workflow_id, transition.to_workflow_id]
 
     RouteValidation.mutate(affected, transition, fn -> Repo.delete(transition) end)
+  end
+
+  defp validate_scope(changeset) do
+    from_workflow_id = Ecto.Changeset.get_field(changeset, :from_workflow_id)
+    to_workflow_id = Ecto.Changeset.get_field(changeset, :to_workflow_id)
+    user_id = Ecto.Changeset.get_field(changeset, :user_id)
+    project_id = Ecto.Changeset.get_field(changeset, :project_id)
+
+    case {from_workflow_id, to_workflow_id} do
+      {from_workflow_id, to_workflow_id}
+      when is_binary(from_workflow_id) and is_binary(to_workflow_id) ->
+        validate_known_scope(
+          changeset,
+          from_workflow_id,
+          to_workflow_id,
+          user_id,
+          project_id
+        )
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp validate_known_scope(changeset, from_workflow_id, to_workflow_id, user_id, project_id) do
+    case {Repo.get(Workflow, from_workflow_id), Repo.get(Workflow, to_workflow_id)} do
+      {%Workflow{} = from_workflow, %Workflow{} = to_workflow} ->
+        case validate_workflow_scope(changeset, from_workflow, to_workflow) do
+          :ok -> validate_caller_scope(changeset, from_workflow, user_id, project_id)
+          {:error, _reason} = error -> error
+        end
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp validate_workflow_scope(changeset, from_workflow, to_workflow) do
+    if from_workflow.project_id == to_workflow.project_id and
+         from_workflow.user_id == to_workflow.user_id do
+      :ok
+    else
+      {:error,
+       Ecto.Changeset.add_error(
+         changeset,
+         :to_workflow_id,
+         "must belong to the same project and user as from_workflow_id"
+       )}
+    end
+  end
+
+  defp validate_caller_scope(changeset, from_workflow, user_id, project_id) do
+    cond do
+      is_binary(user_id) and from_workflow.user_id != user_id ->
+        {:error,
+         Ecto.Changeset.add_error(
+           changeset,
+           :from_workflow_id,
+           "is not accessible to the current user"
+         )}
+
+      is_binary(project_id) and from_workflow.project_id != project_id ->
+        {:error,
+         Ecto.Changeset.add_error(
+           changeset,
+           :project_id,
+           "must match the source workflow project"
+         )}
+
+      true ->
+        :ok
+    end
   end
 end

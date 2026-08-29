@@ -72,6 +72,24 @@ defmodule Sacrum.Repo.WorkflowTransitionsTest do
                  to_workflow_id: target.id
                })
     end
+
+    test "rejects workflow transitions across projects" do
+      {:ok, user} = Users.insert(@valid_user_attrs)
+      {:ok, source_project} = Projects.insert(user, %{name: "Source Project"})
+      {:ok, destination_project} = Projects.insert(user, %{name: "Destination Project"})
+      {:ok, source} = Workflows.insert(source_project, %{name: "Source"})
+      {:ok, destination} = Workflows.insert(destination_project, %{name: "Destination"})
+
+      assert {:error, changeset} =
+               WorkflowTransitions.insert(source.user_id, %{
+                 project_id: source_project.id,
+                 from_workflow_id: source.id,
+                 to_workflow_id: destination.id
+               })
+
+      assert %{to_workflow_id: ["must belong to the same project and user as from_workflow_id"]} =
+               errors_on(changeset)
+    end
   end
 
   describe "all/1" do

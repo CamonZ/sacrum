@@ -5600,6 +5600,37 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert saved.project_id == project.id
     end
 
+    test "rejects a workflow transition to another project", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, source} = Accounts.Workflows.insert(user.id, project.id, %{name: "Source"})
+      {:ok, other_project} = Accounts.Projects.insert(user.id, %{name: "Other Project"})
+
+      {:ok, destination} =
+        Accounts.Workflows.insert(user.id, other_project.id, %{name: "Destination"})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createWorkflowTransition(
+              fromWorkflowId: "#{source.id}",
+              toWorkflowId: "#{destination.id}"
+            ) { id }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["createWorkflowTransition"] == nil
+
+      assert Enum.any?(result["errors"], fn error ->
+               error["message"] =~ "same project and user"
+             end)
+    end
+
     test "creates a step transition with correct project_id", %{
       conn: conn,
       user: user,
