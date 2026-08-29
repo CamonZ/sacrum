@@ -429,6 +429,21 @@ continue to use the existing global-only path.
 
 Never derive permanent task or run failure from the latest `StepExecution.status` alone. Retry gaps, cancellations, waiting states, and orchestrator crashes make that ambiguous; `TaskRun.status` is the durable run-level answer.
 
+### Deterministic route provenance
+
+A completed local deterministic route keeps its canonical audit in
+`StepExecution.context.route`. The record contains `mode`,
+`source_execution_id`, `config_version`, `matched_rule_id`, `used_default`, and
+the evaluated `context` snapshot. The destination remains the JSON string in
+`transition_result` (`dest_id` and `transition_type`), and the carried payload
+remains `handoff`.
+
+GraphQL exposes these existing fields as `context`, `transitionResult`, and
+`handoff`; the channel sends the same values as snake_case keys. `output` is not
+an audit document and must not be used for route provenance. Non-route
+executions do not receive fabricated `context.route`, target, or matched-rule
+values.
+
 ### SessionLog
 
 `SessionLog` entries are content records attached to a `StepExecution`. They do not have state or status, and they should not drive task status, run status, retry policy, or active-run detection.

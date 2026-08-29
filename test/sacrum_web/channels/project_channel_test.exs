@@ -693,6 +693,70 @@ defmodule SacrumWeb.ProjectChannelTest do
       assert payload.handoff == execution.handoff
       assert payload.status == "waiting"
     end
+
+    test "step execution payload preserves the complete deterministic route audit" do
+      {_user, project, socket} = setup_socket()
+      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}", %{})
+
+      route_context = %{
+        "route" => %{
+          "mode" => "deterministic",
+          "source_execution_id" => Ecto.UUID.generate(),
+          "config_version" => 1,
+          "matched_rule_id" => "approved",
+          "used_default" => false,
+          "context" => %{
+            "execution" => %{"step_visit_count" => 1},
+            "previous_output" => %{
+              "route" => %{"result" => "approved", "handoff" => %{"review" => "needed"}}
+            }
+          }
+        }
+      }
+
+      transition_result =
+        Jason.encode!(%{"dest_id" => Ecto.UUID.generate(), "transition_type" => "intra_workflow"})
+
+      handoff = %{"review" => "needed"}
+
+      execution =
+        project
+        |> build_step_execution()
+        |> Map.merge(%{
+          step_type: "route",
+          status: "completed",
+          context: route_context,
+          transition_result: transition_result,
+          handoff: handoff,
+          output: "ordinary route output"
+        })
+
+      SacrumWeb.ProjectChannel.broadcast_step_execution_status_changed(project.id, execution)
+
+      assert_push "step_execution_status_changed", payload
+      assert payload.context == route_context
+      assert payload.transition_result == transition_result
+      assert Jason.decode!(payload.transition_result) == Jason.decode!(transition_result)
+      assert payload.handoff == handoff
+      assert payload.output == "ordinary route output"
+      refute Map.has_key?(payload, :matched_rule_id)
+      refute Map.has_key?(payload, :dest_id)
+    end
+
+    test "step execution payload leaves deterministic provenance absent for non-route executions" do
+      {_user, project, socket} = setup_socket()
+      {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}", %{})
+
+      execution = build_step_execution(project)
+      SacrumWeb.ProjectChannel.broadcast_step_execution_status_changed(project.id, execution)
+
+      assert_push "step_execution_status_changed", payload
+      assert payload.context == nil
+      assert payload.transition_result == nil
+      assert payload.handoff == nil
+      refute Map.has_key?(payload, :route)
+      refute Map.has_key?(payload, :matched_rule_id)
+    end
   end
 
   describe "client_type filtering - default client" do

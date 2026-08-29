@@ -358,7 +358,9 @@ query TaskRunTrace($rootTaskRunId: Uuid4!) {
       workflowId
       stepName
       status
+      stepType
       output
+      context
       transitionResult
       handoff
       sessionInputTokens
@@ -389,6 +391,16 @@ query TaskRunTrace($rootTaskRunId: Uuid4!) {
   }
 }
 ```
+
+For a completed local deterministic route, read the audit from the same
+`StepExecution` row: `context.route` contains the mode, source execution ID,
+configuration version, matched rule ID, default-use flag, and evaluated context
+snapshot. Parse `transitionResult` for the canonical `{ dest_id,
+transition_type }` target and read `handoff` for the carried payload. The
+`output` field is ordinary step output, not a route-audit substitute. A
+non-route execution leaves `context.route` absent and its route-specific
+`transitionResult`/`handoff` values null unless independently populated by the
+existing execution contract.
 
 ## WebSocket Contract
 
