@@ -70,7 +70,7 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
 
   @step_payload_keys ~w(
     id name goal agents skills agent_config step_order step_type prompt output_schema persistence_options
-    verbose_daemon_logging workflow_id project_id inserted_at updated_at
+    route_config verbose_daemon_logging workflow_id project_id inserted_at updated_at
   )a
 
   @step_event_payload_keys [:schema_version | @step_payload_keys]
@@ -371,7 +371,7 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
       payload_keys: @step_event_payload_keys,
       schema_version: @schema_version,
       completeness:
-        "Complete workflow step projection, including prompt/schema fields needed by workflow editors and human-input displays."
+        "Complete workflow step projection, including route_config plus prompt/schema fields needed by workflow editors and human-input displays."
     },
     %{
       event: "step_updated",
@@ -386,7 +386,8 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
       ],
       payload_keys: @step_event_payload_keys,
       schema_version: @schema_version,
-      completeness: "Complete workflow step projection for in-place graph/editor updates."
+      completeness:
+        "Complete workflow step projection, including route_config, for in-place graph/editor updates."
     },
     %{
       event: "step_deleted",
@@ -474,7 +475,7 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
       payload_keys: @step_execution_event_payload_keys,
       schema_version: @schema_version,
       completeness:
-        "Complete attempt projection for execution history and latest-attempt UI; not a pipeline movement signal."
+        "Complete attempt projection, including canonical route audit fields in context, transition_result, and handoff, for execution history and latest-attempt UI; not a pipeline movement signal."
     },
     %{
       event: "step_execution_status_changed",
@@ -490,7 +491,7 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
       payload_keys: @step_execution_event_payload_keys,
       schema_version: @schema_version,
       completeness:
-        "Complete attempt status projection; clients update execution history without inferring TaskRun terminal state."
+        "Complete attempt status projection, including canonical route audit fields in context, transition_result, and handoff; clients update execution history without inferring TaskRun terminal state."
     },
     %{
       event: "task_run_created",

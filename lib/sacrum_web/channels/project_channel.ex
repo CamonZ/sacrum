@@ -574,6 +574,7 @@ defmodule SacrumWeb.ProjectChannel do
       prompt: step.prompt,
       output_schema: step.output_schema,
       persistence_options: step.persistence_options,
+      route_config: step.route_config,
       verbose_daemon_logging: step.verbose_daemon_logging,
       workflow_id: step.workflow_id,
       project_id: step.project_id,

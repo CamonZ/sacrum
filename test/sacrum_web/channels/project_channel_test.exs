@@ -655,11 +655,28 @@ defmodule SacrumWeb.ProjectChannelTest do
         "required" => ["approved"]
       }
 
+      route_config = %{
+        "version" => 1,
+        "match_policy" => "exactly_one",
+        "rules" => [
+          %{
+            "id" => "approved",
+            "when" => %{"ref" => "output.status", "eq" => "approved"},
+            "transition" => %{
+              "type" => "intra_workflow",
+              "step_id" => Ecto.UUID.generate()
+            }
+          }
+        ],
+        "default" => nil
+      }
+
       step =
         project
         |> build_workflow_step()
         |> Map.put(:output_schema, output_schema)
         |> Map.put(:persistence_options, %{"artifact" => %{"logical_name" => "step_result"}})
+        |> Map.put(:route_config, route_config)
         |> Map.put(:verbose_daemon_logging, true)
 
       SacrumWeb.ProjectChannel.broadcast_step_updated(project.id, step)
@@ -670,6 +687,7 @@ defmodule SacrumWeb.ProjectChannelTest do
       assert payload.prompt == step.prompt
       assert payload.output_schema == output_schema
       assert payload.persistence_options == step.persistence_options
+      assert payload.route_config == route_config
       assert payload.verbose_daemon_logging == true
     end
 
@@ -1277,6 +1295,7 @@ defmodule SacrumWeb.ProjectChannelTest do
       prompt: "Execute the test step",
       output_schema: nil,
       persistence_options: nil,
+      route_config: nil,
       verbose_daemon_logging: false,
       inserted_at: now,
       updated_at: now
