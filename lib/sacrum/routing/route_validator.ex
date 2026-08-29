@@ -122,49 +122,36 @@ defmodule Sacrum.Routing.RouteValidator do
 
   defp validate_finite_domain(program, result_values) do
     closed_rules = Enum.filter(program.rules, &closed_rule?/1)
-
-    analysis = %{
-      program: program,
-      closed_rules: closed_rules,
-      default: program.default
-    }
-
     combinations = for result <- result_values, level <- RouteConfig.levels(), do: {result, level}
 
     combinations
-    |> analyze_combinations(analysis, {:ok, nil, nil})
+    |> Enum.reduce_while({:ok, nil, nil}, &analyze_combination(&1, &2, program, closed_rules))
     |> report_analysis(program)
   end
 
-  defp analyze_combinations([], _analysis, acc), do: {:done, acc}
-
-  defp analyze_combinations([{result, level} | rest], analysis, {:ok, overlap, gap} = acc) do
-    case matches_for(analysis.program, analysis.closed_rules, result, level) do
+  defp analyze_combination({result, level}, {_, overlap, gap} = acc, program, closed_rules) do
+    case matches_for(program, closed_rules, result, level) do
       {:ok, ids} when length(ids) > 1 and is_nil(overlap) ->
-        conflict = %{rule_id: Enum.at(ids, 1), result: result, level: level}
-        analyze_combinations(rest, analysis, {:ok, conflict, gap})
+        {:cont, {:ok, %{rule_id: Enum.at(ids, 1), result: result, level: level}, gap}}
 
-      {:ok, []} when gap == nil and analysis.default == nil ->
-        if all_closed?(analysis) do
-          analyze_combinations(rest, analysis, {:ok, overlap, %{result: result, level: level}})
+      {:ok, []} when is_nil(gap) and is_nil(program.default) ->
+        if length(closed_rules) == length(program.rules) do
+          {:cont, {:ok, overlap, %{result: result, level: level}}}
         else
-          analyze_combinations(rest, analysis, acc)
+          {:cont, acc}
         end
 
       {:ok, _ids} ->
-        analyze_combinations(rest, analysis, acc)
+        {:cont, acc}
 
       {:error, _reason} = error ->
-        error
+        {:halt, error}
     end
   end
 
-  defp all_closed?(analysis),
-    do: length(analysis.closed_rules) == length(analysis.program.rules)
+  defp report_analysis({:ok, nil, nil}, _program), do: :ok
 
-  defp report_analysis({:done, {:ok, nil, nil}}, _program), do: :ok
-
-  defp report_analysis({:done, {:ok, nil, %{result: result, level: level}}}, _program) do
+  defp report_analysis({:ok, nil, %{result: result, level: level}}, _program) do
     {:error,
      error(
        :route_config_uncovered,
@@ -174,7 +161,7 @@ defmodule Sacrum.Routing.RouteValidator do
   end
 
   defp report_analysis(
-         {:done, {:ok, %{rule_id: rule_id, result: result, level: level}, _gap}},
+         {:ok, %{rule_id: rule_id, result: result, level: level}, _gap},
          program
        ) do
     {:error,

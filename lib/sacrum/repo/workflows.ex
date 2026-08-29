@@ -70,11 +70,7 @@ defmodule Sacrum.Repo.Workflows do
 
   @spec update(Ecto.Changeset.t()) :: {:ok, Workflow.t()} | {:error, Ecto.Changeset.t()}
   def update(%Ecto.Changeset{data: %Workflow{} = workflow} = changeset) do
-    if Ecto.Changeset.get_change(changeset, :initial_step_id, :unchanged) == :unchanged do
-      Repo.update(changeset)
-    else
-      RouteValidation.mutate([workflow.id], changeset, fn -> Repo.update(changeset) end)
-    end
+    RouteValidation.mutate([workflow.id], changeset, fn -> Repo.update(changeset) end)
   end
 
   @spec update(Workflow.t(), map()) :: {:ok, Workflow.t()} | {:error, Ecto.Changeset.t()}

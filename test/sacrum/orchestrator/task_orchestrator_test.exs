@@ -90,6 +90,51 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     updated_task
   end
 
+  defp intra_route_config(destination_id) do
+    %{
+      "version" => 1,
+      "match_policy" => "exactly_one",
+      "rules" => [
+        %{
+          "id" => "approved",
+          "when" => %{
+            "ref" => "previous_output.route.result",
+            "op" => "eq",
+            "value" => "approved"
+          },
+          "transition" => %{"type" => "intra_workflow", "step_id" => destination_id}
+        }
+      ],
+      "default" => %{
+        "transition" => %{"type" => "intra_workflow", "step_id" => destination_id}
+      }
+    }
+  end
+
+  defp predecessor_schema(result_values) do
+    %{
+      "type" => "object",
+      "properties" => %{
+        "route" => %{
+          "type" => "object",
+          "additionalProperties" => false,
+          "required" => ["result", "handoff"],
+          "properties" => %{
+            "result" => %{"type" => "string", "enum" => result_values},
+            "handoff" => %{
+              "type" => "object",
+              "additionalProperties" => false,
+              "required" => [],
+              "properties" => %{}
+            }
+          }
+        }
+      },
+      "required" => ["route"],
+      "additionalProperties" => false
+    }
+  end
+
   defp setup_linear_workflow(opts) do
     step_count = Keyword.get(opts, :step_count, 3)
     finish_last_step = Keyword.get(opts, :finish_last_step, true)
@@ -2108,6 +2153,61 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       {:ok, decoded} = Jason.decode(route_exec.transition_result)
       assert decoded["dest_id"] == workflow2.id
       assert decoded["transition_type"] == "inter_workflow"
+    end
+  end
+
+  describe "configured workflow validation at TaskRun entry" do
+    test "fails a drifted invalid graph before slot allocation or step execution" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project)
+
+      source =
+        create_step(user, workflow, %{
+          name: "source",
+          step_order: 1,
+          output_schema: predecessor_schema(["approved"])
+        })
+
+      destination =
+        create_step(user, workflow, %{
+          name: "destination",
+          step_order: 2,
+          step_type: "finish",
+          prompt: nil
+        })
+
+      route =
+        create_step(user, workflow, %{
+          name: "route",
+          step_order: 3,
+          step_type: "route"
+        })
+
+      create_transition(user, source, route)
+      outgoing = create_transition(user, route, destination)
+
+      {:ok, _route} =
+        Accounts.WorkflowSteps.update(route, %{
+          route_config: intra_route_config(destination.id)
+        })
+
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: source.id})
+
+      task = create_task(user, project)
+      task = assign_workflow_to_task(task, workflow)
+      assert task.current_step_id == source.id
+
+      Repo.delete(outgoing)
+
+      pid = start_orchestrator(task, user)
+      wait_for_exit(pid)
+
+      task_run = latest_task_run(task.id)
+      assert task_run.status == :failed
+      assert reload_task(task).current_step_id == source.id
+      assert get_all_executions(task.id) == []
+      refute Map.has_key?(ExecutionPool.pool_status().in_use_by_scope, task_run.id)
     end
   end
 
