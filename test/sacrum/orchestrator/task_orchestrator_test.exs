@@ -2208,10 +2208,43 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       assert reload_task(task).current_step_id == destination.id
       assert latest_task_run(task.id).status == :completed
 
-      assert [%StepExecution{step_id: source_step_id, status: "completed"}] =
-               get_all_executions(task.id)
+      assert [source_execution, route_execution] = get_all_executions(task.id)
+      assert source_execution.step_id == source.id
+      assert source_execution.status == "completed"
 
-      assert source_step_id == source.id
+      assert %StepExecution{
+               id: route_execution_id,
+               step_id: route_step_id,
+               status: "completed",
+               task_run_id: route_run_id,
+               handoff: %{},
+               context: %{
+                 "route" => %{
+                   "mode" => "deterministic",
+                   "source_execution_id" => source_execution_id,
+                   "config_version" => 1,
+                   "context" => %{
+                     "execution" => %{"step_visit_count" => 1},
+                     "previous_output" => %{
+                       "route" => %{"result" => "approved", "handoff" => %{}}
+                     }
+                   }
+                 }
+               },
+               output: audit_output
+             } = route_execution
+
+      assert source_execution_id == source_execution.id
+      assert route_step_id == route.id
+      assert route_run_id == latest_task_run(task.id).id
+      assert latest_task_run(task.id).latest_step_execution_id == route_execution_id
+
+      assert Jason.decode!(audit_output) == %{
+               "matched_rule_id" => "approved",
+               "source_execution_id" => source_execution_id,
+               "target" => %{"step_id" => destination.id, "type" => "intra_workflow"},
+               "used_default" => false
+             }
 
       refute Map.has_key?(
                ExecutionPool.pool_status().in_use_by_scope,

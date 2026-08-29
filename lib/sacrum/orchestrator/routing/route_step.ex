@@ -24,7 +24,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
 
   alias Sacrum.Orchestrator.Routing.{InterWorkflow, IntraWorkflow, RouteDecision, RouteProvenance}
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.StepExecution
+  alias Sacrum.Repo.Schemas.{StepExecution, TaskRun}
   alias Sacrum.Repo.TaskWorkflows
   alias Sacrum.Routing.{RouteContext, RouteEvaluator}
 
@@ -48,7 +48,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
            RouteDecision.extract_routing_data(decoded),
          {:ok, route_plan} <- prepare_route_plan(data, dest_id, transition_type, handoff),
          {:ok, %{task: updated_task}} <-
-           commit_route_transition(data, execution, dest_id, transition_type, route_plan) do
+           commit_legacy_route_transition(data, execution, dest_id, transition_type, route_plan) do
       RouteDecision.log_route_decision(
         task_id,
         execution.id,
@@ -87,9 +87,12 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
          {:ok, {dest_id, transition_type}} <- destination(result.transition),
          {:ok, route_plan} <- prepare_route_plan(data, dest_id, transition_type, result.handoff),
          {:ok, %{task: updated_task}} <-
-           commit_route_transition(
+           commit_deterministic_route_transition(
              data,
-             provenance.source_execution,
+             provenance,
+             program,
+             context,
+             result,
              dest_id,
              transition_type,
              route_plan
@@ -228,9 +231,15 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
     end
   end
 
-  @spec commit_route_transition(FSMData.t(), StepExecution.t(), binary(), String.t(), map()) ::
+  @spec commit_legacy_route_transition(
+          FSMData.t(),
+          StepExecution.t(),
+          binary(),
+          String.t(),
+          map()
+        ) ::
           {:ok, map()} | {:error, term()}
-  defp commit_route_transition(data, execution, dest_id, transition_type, route_plan) do
+  defp commit_legacy_route_transition(data, execution, dest_id, transition_type, route_plan) do
     Repo.transaction(fn ->
       with {:ok, route_execution} <-
              execution
@@ -247,6 +256,136 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
         {:error, reason} -> Repo.rollback(reason)
       end
     end)
+  end
+
+  @spec commit_deterministic_route_transition(
+          FSMData.t(),
+          map(),
+          map(),
+          map(),
+          map(),
+          binary(),
+          String.t(),
+          map()
+        ) :: {:ok, map()} | {:error, term()}
+  defp commit_deterministic_route_transition(
+         data,
+         provenance,
+         program,
+         context,
+         result,
+         dest_id,
+         transition_type,
+         route_plan
+       ) do
+    Repo.transaction(fn ->
+      with {:ok, route_execution} <-
+             Repo.insert(
+               deterministic_route_execution_changeset(
+                 data,
+                 provenance,
+                 program,
+                 context,
+                 result,
+                 dest_id,
+                 transition_type
+               )
+             ),
+           {:ok, task_run} <- update_route_cursor(provenance.task_run, route_execution.id),
+           {:ok, updated_task} <- Repo.update(route_plan.task_changeset),
+           {:ok, changes} <-
+             maybe_finish_route_task_and_run(data, updated_task, route_plan, %{
+               route_execution: route_execution,
+               task: updated_task,
+               task_run: task_run
+             }) do
+        changes
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp deterministic_route_execution_changeset(
+         data,
+         provenance,
+         program,
+         context,
+         result,
+         dest_id,
+         transition_type
+       ) do
+    step = provenance.route_step
+
+    StepExecution.create_changeset(
+      %StepExecution{user_id: data.user_id, project_id: data.project_id},
+      %{
+        task_id: data.task.id,
+        task_run_id: provenance.task_run.id,
+        workflow_id: data.task.workflow_id,
+        step_id: step.id,
+        step_name: step.name,
+        step_type: :route,
+        status: "completed",
+        context: deterministic_audit_context(provenance, program, context),
+        output: deterministic_audit_output(provenance, result),
+        transition_result: RouteDecision.transition_result(dest_id, transition_type),
+        handoff: result.handoff
+      }
+    )
+  end
+
+  defp deterministic_audit_context(provenance, program, context) do
+    %{
+      "route" => %{
+        "mode" => "deterministic",
+        "source_execution_id" => provenance.source_execution.id,
+        "config_version" => program.version,
+        "context" => route_context_snapshot(context)
+      }
+    }
+  end
+
+  defp route_context_snapshot(context) do
+    %{
+      "previous_output" => %{
+        "route" => %{
+          "result" => get_in(context, [:previous_output, :route, :result]),
+          "handoff" => get_in(context, [:previous_output, :route, :handoff])
+        }
+      },
+      "task" => %{
+        "level" => get_in(context, [:task, :level]),
+        "tags" => get_in(context, [:task, :tags])
+      },
+      "execution" => %{
+        "step_visit_count" => get_in(context, [:execution, :step_visit_count])
+      }
+    }
+  end
+
+  defp deterministic_audit_output(provenance, result) do
+    Jason.encode!(%{
+      "source_execution_id" => provenance.source_execution.id,
+      "matched_rule_id" => result.matched_rule_id,
+      "used_default" => result.used_default,
+      "target" => serialize_target(result.transition)
+    })
+  end
+
+  defp serialize_target(%{type: :intra_workflow, step_id: step_id}),
+    do: %{"type" => "intra_workflow", "step_id" => step_id}
+
+  defp serialize_target(%{type: :inter_workflow, workflow_id: workflow_id}),
+    do: %{"type" => "inter_workflow", "workflow_id" => workflow_id}
+
+  defp update_route_cursor(task_run, route_execution_id) do
+    task_run
+    |> TaskRun.update_changeset(%{
+      status: :executing,
+      latest_step_execution_id: route_execution_id
+    })
+    |> Repo.update()
   end
 
   @spec maybe_finish_route_task_and_run(FSMData.t(), struct(), map(), map()) ::
