@@ -36,7 +36,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
 
   alias Sacrum.Accounts.TaskRuns
   alias Sacrum.Orchestrator.ExecutionEvents
-  alias Sacrum.Orchestrator.Routing.{HumanInput, RouteStep, WaitChildren}
+  alias Sacrum.Orchestrator.Routing.{HumanInput, RouteRecovery, RouteStep, WaitChildren}
   alias Sacrum.Orchestrator.TaskRuns.{Failure, Lookup, Root}
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{StepExecution, Task}
@@ -246,20 +246,16 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   end
 
   def handle_event(:state_timeout, :run, :awaiting_execution, data) do
-    task_id = data.task.id
+    case RouteRecovery.restore(data) do
+      {:ok, recovered_data} ->
+        handle_awaiting_execution(recovered_data)
 
-    case WorkflowGraph.get_current_step(data) do
-      {:ok, %{step_type: :finish}} ->
-        complete_finish_step(data)
+      {:error, reason} ->
+        Logger.error(
+          "[TaskOrchestrator:#{data.task.id}] Failed deterministic route recovery: #{inspect(reason)}"
+        )
 
-      {:ok, %{step_type: :stop}} ->
-        bypass_stop_step(data)
-
-      {:ok, %{step_type: :route} = route_step} ->
-        enter_route_step(data, route_step)
-
-      _ ->
-        continue_awaiting_execution(task_id, data)
+        {:next_state, :failed, data}
     end
   end
 
@@ -714,6 +710,25 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
         )
 
         {:next_state, :failed, data}
+    end
+  end
+
+  @spec handle_awaiting_execution(FSMData.t()) :: fsm_transition()
+  defp handle_awaiting_execution(data) do
+    task_id = data.task.id
+
+    case WorkflowGraph.get_current_step(data) do
+      {:ok, %{step_type: :finish}} ->
+        complete_finish_step(data)
+
+      {:ok, %{step_type: :stop}} ->
+        bypass_stop_step(data)
+
+      {:ok, %{step_type: :route} = route_step} ->
+        enter_route_step(data, route_step)
+
+      _ ->
+        continue_awaiting_execution(task_id, data)
     end
   end
 
