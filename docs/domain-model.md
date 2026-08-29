@@ -167,8 +167,8 @@ The `Project.artifacts(limit: 50, offset: 0)` field returns the caller's project
 **`workflow_step_type.ex`** — 4 mutations (all via `Accounts.WorkflowSteps`)
 | Mutation | Arguments | Returns |
 |----------|-----------|---------|
-| `createWorkflowStep` | `workflow_id!`, `name!`, `goal`, `agents`, `skills`, `agent_config`, `step_order`, `prompt`, `output_schema`, `persistence_options` | `:workflow_step` |
-| `updateWorkflowStep` | `id!`, `name`, `goal`, `agents`, `skills`, `agent_config`, `step_order`, `prompt`, `output_schema`, `persistence_options` | `:workflow_step` |
+| `createWorkflowStep` | `workflow_id!`, `name!`, `goal`, `agents`, `skills`, `agent_config`, `step_order`, `prompt`, `output_schema`, `persistence_options`, `route_config` | `:workflow_step` |
+| `updateWorkflowStep` | `id!`, `name`, `goal`, `agents`, `skills`, `agent_config`, `step_order`, `prompt`, `output_schema`, `persistence_options`, `route_config` | `:workflow_step` |
 | `deleteWorkflowStep` | `id!` | `:workflow_step` |
 | `syncStepTransitions` | `id!`, `transitions!` (list of `StepTransitionInput`) | `:workflow_step` |
 
@@ -213,6 +213,13 @@ The `Project.artifacts(limit: 50, offset: 0)` field returns the caller's project
 | `cancelStepExecution` | `step_execution_id!` | `:step_execution` |
 
 > **Implementation:** See `lib/sacrum_web/graphql/schema.ex` for the root schema and `lib/sacrum_web/graphql/types/*.ex` for type definitions. `!` denotes required arguments.
+
+`WorkflowStep.routeConfig` is inert, versioned JSON validated by the existing
+workflow-step changeset and route graph write path. Its presence selects
+deterministic routing; `prompt` remains an independent nullable fallback and is
+used only when `routeConfig` is absent. On updates, omitted fields are left
+unchanged, while `prompt: null`, `prompt: ""`, and a non-null prompt are distinct
+wire values. `routeConfig: null` explicitly clears the configuration.
 
 ## Tech Stack
 
