@@ -243,17 +243,20 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContractTest do
       :updated_at
     ])
 
-    assert_payload_includes("step_updated", [
-      :schema_version,
-      :id,
-      :workflow_id,
-      :project_id,
-      :step_type,
-      :prompt,
-      :output_schema,
-      :verbose_daemon_logging,
-      :updated_at
-    ])
+    for event <- ["step_created", "step_updated"] do
+      assert_payload_includes(event, [
+        :schema_version,
+        :id,
+        :workflow_id,
+        :project_id,
+        :step_type,
+        :prompt,
+        :output_schema,
+        :route_config,
+        :verbose_daemon_logging,
+        :updated_at
+      ])
+    end
 
     assert_payload_includes("step_transition_deleted", [
       :schema_version,
@@ -284,10 +287,22 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContractTest do
       :step_id,
       :project_id,
       :step_type,
+      :context,
+      :transition_result,
       :status,
       :handoff,
       :updated_at
     ])
+
+    assert_payload_excludes("step_execution_status_changed", [:matched_rule_id, :dest_id])
+
+    assert {:ok, step_contract} = ProjectChannelCdcContract.contract_for("step_updated")
+    assert :route_config in source_change(step_contract, "workflow_steps").after_image_fields
+
+    assert {:ok, execution_contract} =
+             ProjectChannelCdcContract.contract_for("step_execution_status_changed")
+
+    assert execution_contract.completeness =~ "canonical route audit"
 
     session_log_payload_keys = [
       :schema_version,

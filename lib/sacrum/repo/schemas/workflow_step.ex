@@ -49,7 +49,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
   @spec create_changeset(t(), map()) :: Ecto.Changeset.t()
   def create_changeset(step, attrs) do
     step
-    |> cast(attrs, @create_fields)
+    |> cast(attrs, @create_fields, empty_values: [])
     |> validate_required([:name])
     |> validate_length(:name, min: 1, max: 255)
     |> validate_finish_step_prompt()
@@ -63,7 +63,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
   @spec update_changeset(t(), map()) :: Ecto.Changeset.t()
   def update_changeset(step, attrs) do
     step
-    |> cast(attrs, @update_fields)
+    |> cast(attrs, @update_fields, empty_values: [])
     |> validate_length(:name, min: 1, max: 255)
     |> validate_finish_step_prompt()
     |> validate_output_schema()

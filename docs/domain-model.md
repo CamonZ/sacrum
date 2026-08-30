@@ -167,8 +167,8 @@ The `Project.artifacts(limit: 50, offset: 0)` field returns the caller's project
 **`workflow_step_type.ex`** — 4 mutations (all via `Accounts.WorkflowSteps`)
 | Mutation | Arguments | Returns |
 |----------|-----------|---------|
-| `createWorkflowStep` | `workflow_id!`, `name!`, `goal`, `agents`, `skills`, `agent_config`, `step_order`, `prompt`, `output_schema`, `persistence_options` | `:workflow_step` |
-| `updateWorkflowStep` | `id!`, `name`, `goal`, `agents`, `skills`, `agent_config`, `step_order`, `prompt`, `output_schema`, `persistence_options` | `:workflow_step` |
+| `createWorkflowStep` | `workflow_id!`, `name!`, `goal`, `agents`, `skills`, `agent_config`, `step_order`, `prompt`, `output_schema`, `persistence_options`, `route_config` | `:workflow_step` |
+| `updateWorkflowStep` | `id!`, `name`, `goal`, `agents`, `skills`, `agent_config`, `step_order`, `prompt`, `output_schema`, `persistence_options`, `route_config` | `:workflow_step` |
 | `deleteWorkflowStep` | `id!` | `:workflow_step` |
 | `syncStepTransitions` | `id!`, `transitions!` (list of `StepTransitionInput`) | `:workflow_step` |
 
@@ -214,6 +214,13 @@ The `Project.artifacts(limit: 50, offset: 0)` field returns the caller's project
 
 > **Implementation:** See `lib/sacrum_web/graphql/schema.ex` for the root schema and `lib/sacrum_web/graphql/types/*.ex` for type definitions. `!` denotes required arguments.
 
+`WorkflowStep.routeConfig` is inert, versioned JSON validated by the existing
+workflow-step changeset and route graph write path. Its presence selects
+deterministic routing; `prompt` remains an independent nullable fallback and is
+used only when `routeConfig` is absent. On updates, omitted fields are left
+unchanged, while `prompt: null`, `prompt: ""`, and a non-null prompt are distinct
+wire values. `routeConfig: null` explicitly clears the configuration.
+
 ## Tech Stack
 
 | Layer | Technology |
@@ -247,10 +254,10 @@ rules are defined in
 | `task_parent_changed` | `{schema_version, task_id, project_id, from_parent_id, to_parent_id, level}` | Explicit task hierarchy move for tree UIs |
 | `task_dependency_created` / `task_dependency_deleted` | Dependency edge fields: `id`, `task_id`, `depends_on_id`, `project_id`, timestamps | Blocker/dependency relation changes |
 | `workflow_created` / `workflow_updated` / `workflow_deleted` | Workflow fields | Workflow lifecycle |
-| `step_created` / `step_updated` / `step_deleted` | Step fields | WorkflowStep lifecycle |
+| `step_created` / `step_updated` / `step_deleted` | Step fields including lossless `route_config` | WorkflowStep lifecycle |
 | `step_transition_created` / `step_transition_deleted` | Transition fields | Step-to-step edges |
 | `step_execution_created` | Execution fields | New execution started |
-| `step_execution_status_changed` | Execution fields | Status update (entered, completed, etc.) |
+| `step_execution_status_changed` | Execution fields including `context.route`, `transition_result`, and `handoff` | Status update (entered, completed, etc.) |
 | `task_run_created` / `task_run_updated` | TaskRun fields | TaskRun lifecycle changes |
 | `task_run_step_changed` | `{schema_version, task_run_id, task_id, from_step_id, to_step_id, status, level}` | Emitted at root or child run start, whenever a task's `current_step_id` changes while a TaskRun exists, and at run-end paths (`to_step_id` is `nil`). Lets pipeline views decrement the source step bucket and increment the destination bucket without refetching. |
 | `task_step_changed` | `{schema_version, task_id, from_step_id, to_step_id, workflow_id, level}` | Emitted when `current_step_id` changes outside orchestrator execution (`assign_workflow`, `advance_to_step`, `move_to_step`). Mirrors `task_run_step_changed` for the manual-move case where no TaskRun exists; only fires when `from != to`. |
@@ -421,6 +428,21 @@ continue to use the existing global-only path.
 `StepExecution.status` is attempt-level state. It can record values such as `"started"`, `"in_progress"`, `"waiting"`, `"completed"`, `"failed"`, `"cancelled"`, or `"invalidated"` for a single attempt. Use it for historical execution rows, retry counts, handoff payloads, prompts, output, and telemetry.
 
 Never derive permanent task or run failure from the latest `StepExecution.status` alone. Retry gaps, cancellations, waiting states, and orchestrator crashes make that ambiguous; `TaskRun.status` is the durable run-level answer.
+
+### Deterministic route provenance
+
+A completed local deterministic route keeps its canonical audit in
+`StepExecution.context.route`. The record contains `mode`,
+`source_execution_id`, `config_version`, `matched_rule_id`, `used_default`, and
+the evaluated `context` snapshot. The destination remains the JSON string in
+`transition_result` (`dest_id` and `transition_type`), and the carried payload
+remains `handoff`.
+
+GraphQL exposes these existing fields as `context`, `transitionResult`, and
+`handoff`; the channel sends the same values as snake_case keys. `output` is not
+an audit document and must not be used for route provenance. Non-route
+executions do not receive fabricated `context.route`, target, or matched-rule
+values.
 
 ### SessionLog
 

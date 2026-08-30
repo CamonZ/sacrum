@@ -3186,6 +3186,201 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["prompt"] == "Updated prompt"
     end
 
+    test "round-trips route_config and keeps prompt mutations independent", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "Routing WF"})
+
+      {:ok, source} =
+        Accounts.WorkflowSteps.insert(wf, %{
+          name: "Source",
+          step_order: 1,
+          output_schema: routing_predecessor_schema()
+        })
+
+      {:ok, destination} =
+        Accounts.WorkflowSteps.insert(wf, %{
+          name: "Destination",
+          step_order: 3,
+          step_type: "finish",
+          prompt: nil
+        })
+
+      create_result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createWorkflowStep(
+              workflowId: "#{wf.id}"
+              name: "Route"
+              stepType: "route"
+              prompt: "Legacy fallback"
+              stepOrder: 2
+            ) { id prompt routeConfig }
+          }
+        """)
+        |> json_response(200)
+
+      assert create_result["errors"] == nil
+
+      assert %{"id" => route_id, "prompt" => "Legacy fallback", "routeConfig" => nil} =
+               create_result["data"]["createWorkflowStep"]
+
+      {:ok, route} = Accounts.WorkflowSteps.get_by(user.id, conditions: [id: route_id])
+
+      assert {:ok, _} =
+               Accounts.StepTransitions.insert(user.id, %{
+                 from_step_id: source.id,
+                 to_step_id: route.id,
+                 project_id: project.id
+               })
+
+      assert {:ok, _} =
+               Accounts.StepTransitions.insert(user.id, %{
+                 from_step_id: route.id,
+                 to_step_id: destination.id,
+                 project_id: project.id
+               })
+
+      route_config = routing_config(destination.id)
+      route_config_input = Jason.encode!(Jason.encode!(route_config))
+
+      update_result =
+        conn
+        |> recycle()
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            updateWorkflowStep(
+              id: "#{route.id}"
+              routeConfig: #{route_config_input}
+            ) { id prompt routeConfig }
+          }
+        """)
+        |> json_response(200)
+
+      assert update_result["errors"] == nil
+
+      assert update_result["data"]["updateWorkflowStep"] == %{
+               "id" => route.id,
+               "prompt" => "Legacy fallback",
+               "routeConfig" => route_config
+             }
+
+      query_result =
+        conn
+        |> recycle()
+        |> authenticate(user)
+        |> graphql(~s|{ workflowStep(id: "#{route.id}") { prompt routeConfig } }|)
+        |> json_response(200)
+
+      assert query_result["data"]["workflowStep"] == %{
+               "prompt" => "Legacy fallback",
+               "routeConfig" => route_config
+             }
+
+      null_prompt_result =
+        conn
+        |> recycle()
+        |> authenticate(user)
+        |> graphql(
+          ~s|mutation { updateWorkflowStep(id: "#{route.id}", prompt: null) { prompt routeConfig } }|
+        )
+        |> json_response(200)
+
+      assert null_prompt_result["errors"] == nil
+
+      assert null_prompt_result["data"]["updateWorkflowStep"] == %{
+               "prompt" => nil,
+               "routeConfig" => route_config
+             }
+
+      empty_prompt_result =
+        conn
+        |> recycle()
+        |> authenticate(user)
+        |> graphql(
+          ~s|mutation { updateWorkflowStep(id: "#{route.id}", prompt: "") { prompt routeConfig } }|
+        )
+        |> json_response(200)
+
+      assert empty_prompt_result["errors"] == nil
+
+      assert empty_prompt_result["data"]["updateWorkflowStep"] == %{
+               "prompt" => "",
+               "routeConfig" => route_config
+             }
+
+      clear_config_result =
+        conn
+        |> recycle()
+        |> authenticate(user)
+        |> graphql(
+          ~s|mutation { updateWorkflowStep(id: "#{route.id}", routeConfig: null) { prompt routeConfig } }|
+        )
+        |> json_response(200)
+
+      assert clear_config_result["errors"] == nil
+
+      assert clear_config_result["data"]["updateWorkflowStep"] == %{
+               "prompt" => "",
+               "routeConfig" => nil
+             }
+    end
+
+    test "returns the route_config validation path without using the prompt fallback", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "Invalid Routing WF"})
+
+      {:ok, route} =
+        Accounts.WorkflowSteps.insert(wf, %{
+          name: "Route",
+          step_type: "route",
+          prompt: "Keep this fallback"
+        })
+
+      invalid_config = %{
+        "version" => 1,
+        "match_policy" => "exactly_one",
+        "rules" => [
+          %{
+            "id" => "broken",
+            "when" => %{"ref" => "task.unknown", "op" => "eq", "value" => "x"},
+            "transition" => %{"type" => "intra_workflow", "step_id" => Ecto.UUID.generate()}
+          }
+        ]
+      }
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            updateWorkflowStep(
+              id: "#{route.id}"
+              routeConfig: #{Jason.encode!(Jason.encode!(invalid_config))}
+            ) { id prompt routeConfig }
+          }
+        """)
+        |> json_response(200)
+
+      assert Enum.any?(result["errors"], fn error ->
+               error["message"] =~ "route_config" and
+                 error["message"] =~ "$.rules[0].when.ref"
+             end)
+
+      assert result["data"]["updateWorkflowStep"] == nil
+      assert {:ok, unchanged} = Accounts.WorkflowSteps.get_by(user.id, conditions: [id: route.id])
+      assert unchanged.route_config == nil
+      assert unchanged.prompt == "Keep this fallback"
+    end
+
     test "createWorkflowStep returns formatted error message on invalid output_schema", %{
       conn: conn,
       user: user,
@@ -3452,6 +3647,112 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
       assert result["data"]["stepExecution"]["id"] == exec.id
       assert result["data"]["stepExecution"]["taskId"] == task.id
+    end
+
+    test "reads the complete deterministic route audit from its canonical fields", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Route task"})
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "Routing WF"})
+
+      route_context = %{
+        "route" => %{
+          "mode" => "deterministic",
+          "source_execution_id" => Ecto.UUID.generate(),
+          "config_version" => 1,
+          "matched_rule_id" => "approved",
+          "used_default" => false,
+          "context" => %{
+            "execution" => %{"step_visit_count" => 1},
+            "previous_output" => %{
+              "route" => %{"result" => "approved", "handoff" => %{"review" => "needed"}}
+            }
+          }
+        }
+      }
+
+      transition_result =
+        Jason.encode!(%{"dest_id" => Ecto.UUID.generate(), "transition_type" => "intra_workflow"})
+
+      handoff = %{"review" => "needed"}
+
+      {:ok, exec} =
+        Accounts.StepExecutions.insert(user.id, %{
+          task_id: task.id,
+          workflow_id: wf.id,
+          project_id: project.id,
+          step_name: "Route",
+          step_type: "route",
+          status: "completed",
+          context: route_context,
+          transition_result: transition_result,
+          handoff: handoff,
+          output: "ordinary route output"
+        })
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          {
+            stepExecution(id: "#{exec.id}") {
+              context
+              transitionResult
+              handoff
+              output
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] == nil
+
+      assert result["data"]["stepExecution"] == %{
+               "context" => route_context,
+               "transitionResult" => transition_result,
+               "handoff" => handoff,
+               "output" => "ordinary route output"
+             }
+
+      assert Jason.decode!(result["data"]["stepExecution"]["transitionResult"]) ==
+               Jason.decode!(transition_result)
+    end
+
+    test "does not fabricate deterministic route provenance for non-route executions", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Ordinary task"})
+      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
+
+      {:ok, exec} =
+        Accounts.StepExecutions.insert(user.id, %{
+          task_id: task.id,
+          workflow_id: wf.id,
+          project_id: project.id,
+          step_name: "Execute",
+          step_type: "execute",
+          status: "completed"
+        })
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql(~s|{ stepExecution(id: "#{exec.id}") { context transitionResult handoff } }|)
+        |> json_response(200)
+
+      assert result["errors"] == nil
+
+      assert result["data"]["stepExecution"] == %{
+               "context" => %{},
+               "transitionResult" => nil,
+               "handoff" => nil
+             }
+
+      refute Map.has_key?(result["data"]["stepExecution"]["context"], "route")
     end
   end
 
@@ -5297,6 +5598,37 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         Accounts.WorkflowTransitions.get_by(user.id, conditions: [id: transition["id"]])
 
       assert saved.project_id == project.id
+    end
+
+    test "rejects a workflow transition to another project", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, source} = Accounts.Workflows.insert(user.id, project.id, %{name: "Source"})
+      {:ok, other_project} = Accounts.Projects.insert(user.id, %{name: "Other Project"})
+
+      {:ok, destination} =
+        Accounts.Workflows.insert(user.id, other_project.id, %{name: "Destination"})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createWorkflowTransition(
+              fromWorkflowId: "#{source.id}",
+              toWorkflowId: "#{destination.id}"
+            ) { id }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["createWorkflowTransition"] == nil
+
+      assert Enum.any?(result["errors"], fn error ->
+               error["message"] =~ "same project and user"
+             end)
     end
 
     test "creates a step transition with correct project_id", %{
@@ -8158,5 +8490,50 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert result["errors"] != nil
       assert Enum.any?(result["errors"], &String.contains?(&1["message"], "active orchestrator"))
     end
+  end
+
+  defp routing_config(destination_id) do
+    %{
+      "version" => 1,
+      "match_policy" => "exactly_one",
+      "rules" => [
+        %{
+          "id" => "approved",
+          "when" => %{
+            "ref" => "previous_output.route.result",
+            "op" => "eq",
+            "value" => "approved"
+          },
+          "transition" => %{"type" => "intra_workflow", "step_id" => destination_id}
+        }
+      ],
+      "default" => %{
+        "transition" => %{"type" => "intra_workflow", "step_id" => destination_id}
+      }
+    }
+  end
+
+  defp routing_predecessor_schema do
+    %{
+      "type" => "object",
+      "properties" => %{
+        "route" => %{
+          "type" => "object",
+          "additionalProperties" => false,
+          "required" => ["result", "handoff"],
+          "properties" => %{
+            "result" => %{"type" => "string", "enum" => ["approved"]},
+            "handoff" => %{
+              "type" => "object",
+              "additionalProperties" => false,
+              "required" => [],
+              "properties" => %{}
+            }
+          }
+        }
+      },
+      "required" => ["route"],
+      "additionalProperties" => false
+    }
   end
 end

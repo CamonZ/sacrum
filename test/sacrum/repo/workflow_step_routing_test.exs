@@ -82,7 +82,7 @@ defmodule Sacrum.Repo.WorkflowStepRoutingTest do
     assert draft.output_schema == nil
   end
 
-  test "treats an empty prompt as a cleared draft prompt" do
+  test "preserves an empty prompt as distinct from a cleared draft prompt" do
     workflow = create_workflow()
     string_attrs = Map.new(@valid_attrs, fn {key, value} -> {to_string(key), value} end)
 
@@ -91,12 +91,12 @@ defmodule Sacrum.Repo.WorkflowStepRoutingTest do
           Map.merge(string_attrs, %{"step_type" => "route", "prompt" => ""})
         ] do
       assert {:ok, step} = WorkflowSteps.insert(workflow, attrs)
-      assert step.prompt == nil
-      assert step.output_schema == nil
+      assert step.prompt == ""
+      assert step.output_schema == Contract.output_schema()
     end
   end
 
-  test "treats a whitespace prompt as a cleared draft prompt" do
+  test "preserves a whitespace prompt as a non-null draft prompt" do
     workflow = create_workflow()
 
     assert {:ok, route} =
@@ -105,8 +105,8 @@ defmodule Sacrum.Repo.WorkflowStepRoutingTest do
                Map.merge(@valid_attrs, %{step_type: "route", prompt: "   "})
              )
 
-    assert route.prompt == nil
-    assert route.output_schema == nil
+    assert route.prompt == "   "
+    assert route.output_schema == Contract.output_schema()
   end
 
   test "does not let a legacy route output contract bypass route validation" do
