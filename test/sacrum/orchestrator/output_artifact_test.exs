@@ -48,7 +48,7 @@ defmodule Sacrum.Orchestrator.OutputArtifactTest do
              OutputArtifact.persist(
                data,
                step(),
-               execution("preamble\n```json\n{\"result\":\"ready\"}\n```\n")
+               execution(~s({"result":"ready"}))
              )
 
     assert [
@@ -59,6 +59,20 @@ defmodule Sacrum.Orchestrator.OutputArtifactTest do
              }
            ] =
              Artifacts.list_for_subject(user.id, project.id, "task", task.id)
+  end
+
+  test "preserves Markdown fence text in a valid nested JSON string" do
+    %{user: user, project: project, task: task} = create_scope()
+    data = %FSMData{user_id: user.id, project_id: project.id, task: task}
+    fence_text = "```json\n{\"nested\":true}\n```"
+    output = Jason.encode!(%{"result" => fence_text})
+
+    assert :ok = OutputArtifact.persist(data, step(), execution(output))
+
+    assert [%{body: body}] =
+             Artifacts.list_for_subject(user.id, project.id, "task", task.id)
+
+    assert Jason.decode!(body) == %{"result" => fence_text}
   end
 
   test "does not create an artifact when structured output is invalid" do

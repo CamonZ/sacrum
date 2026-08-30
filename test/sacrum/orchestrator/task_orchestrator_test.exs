@@ -445,7 +445,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       pid = start_orchestrator(task, user)
       wait_for_state(pid, :executing)
 
-      simulate_daemon_completion(task.id, project.id, "```json\n{\"result\":\"ready\"}\n```")
+      simulate_daemon_completion(task.id, project.id, ~s({"result":"ready"}))
 
       wait_for_state(pid, :executing)
       assert reload_task(task).current_step_id == s2.id
@@ -1591,7 +1591,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       assert task.current_step_id == dest_step.id
     end
 
-    test "fenced JSON route output is properly decoded and routed" do
+    test "JSON route output with handoff is properly decoded and routed" do
       user = create_user()
       project = create_project(user)
 
@@ -1622,20 +1622,16 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       pid = start_orchestrator(task, user)
       wait_for_state(pid, :executing)
 
-      # Simulate CLI wrapping output in markdown code fences
       json_output = %{
         "transition_to" => dest_step.id,
         "transition_type" => "intra_workflow",
         "handoff" => %{"data" => "context"}
       }
 
-      fenced_output = "```json\n#{Jason.encode!(json_output)}\n```"
-
-      simulate_daemon_completion(task.id, project.id, fenced_output)
+      simulate_daemon_completion(task.id, project.id, Jason.encode!(json_output))
 
       wait_for_exit(pid)
 
-      # Task should advance to destination step even with fenced output
       task = reload_task(task)
       assert task.current_step_id == dest_step.id
     end
