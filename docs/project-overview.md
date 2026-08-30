@@ -77,7 +77,6 @@ Bearer token auth via `Authorization: Bearer sac_...` header. Tokens are generat
 | [Domain Model](domain-model.md) | GraphQL API, entities, real-time events |
 | [GUI/CLI TaskRun Contract](client-taskrun-contract.md) | Client-facing run-state guidance |
 | [WalEx CDC GUI Projection Contract](walex-cdc-gui-projection-contract.md) | ProjectChannel CDC mapping, payload completeness, snapshots, recovery |
-| [Project Data Contract](project-data-contract.md) | Versioned JSON import/export boundary for workflow steps and execution audit |
 | [Phoenix Guidelines](phoenix-guidelines.md) | Elixir, Ecto, Mix, test, router conventions |
 | [Vertebrae Guide](vertebrae-guide.md) | `vtb` CLI for task management |
 
