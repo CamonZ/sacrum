@@ -49,7 +49,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
   @spec create_changeset(t(), map()) :: Ecto.Changeset.t()
   def create_changeset(step, attrs) do
     step
-    |> cast(attrs, @create_fields, empty_values: [])
+    |> cast_step(attrs, @create_fields)
     |> validate_required([:name])
     |> validate_length(:name, min: 1, max: 255)
     |> validate_finish_step_prompt()
@@ -63,12 +63,20 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
   @spec update_changeset(t(), map()) :: Ecto.Changeset.t()
   def update_changeset(step, attrs) do
     step
-    |> cast(attrs, @update_fields, empty_values: [])
+    |> cast_step(attrs, @update_fields)
     |> validate_length(:name, min: 1, max: 255)
     |> validate_finish_step_prompt()
     |> validate_output_schema()
     |> validate_route_step()
     |> validate_persistence_options()
+  end
+
+  # Keep omit / null / "" distinct for prompt without changing empty-value
+  # handling for the rest of the schema.
+  defp cast_step(step, attrs, fields) do
+    step
+    |> cast(attrs, fields -- [:prompt])
+    |> cast(attrs, [:prompt], empty_values: [])
   end
 
   defp validate_persistence_options(changeset) do

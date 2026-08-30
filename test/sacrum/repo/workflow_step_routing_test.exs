@@ -109,6 +109,15 @@ defmodule Sacrum.Repo.WorkflowStepRoutingTest do
     assert route.output_schema == Contract.output_schema()
   end
 
+  test "still treats a whitespace goal as empty" do
+    workflow = create_workflow()
+
+    assert {:ok, step} =
+             WorkflowSteps.insert(workflow, Map.merge(@valid_attrs, %{goal: "   "}))
+
+    assert step.goal == nil
+  end
+
   test "does not let a legacy route output contract bypass route validation" do
     workflow = create_workflow()
     route_config = route_config()

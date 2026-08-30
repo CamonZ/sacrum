@@ -131,6 +131,22 @@ defmodule Sacrum.Repo.WorkflowTransitionsTest do
   end
 
   describe "sync_transitions/2" do
+    test "rejects a synced transition to another project" do
+      {:ok, user} = Users.insert(@valid_user_attrs)
+      {:ok, source_project} = Projects.insert(user, %{name: "Source Project"})
+      {:ok, destination_project} = Projects.insert(user, %{name: "Destination Project"})
+      {:ok, source} = Workflows.insert(source_project, %{name: "Source"})
+      {:ok, destination} = Workflows.insert(destination_project, %{name: "Destination"})
+
+      assert {:error, changeset} =
+               Workflows.sync_transitions(source, [
+                 %{"to_workflow_id" => destination.id, "label" => "cross"}
+               ])
+
+      assert %{to_workflow_id: ["must belong to the same project and user as from_workflow_id"]} =
+               errors_on(changeset)
+    end
+
     test "adds new transitions" do
       {_project, w1, w2} = create_workflows()
 

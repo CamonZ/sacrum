@@ -4,9 +4,12 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
   import Sacrum.CdcAssertions
 
   alias Ecto.Adapters.SQL.Sandbox
-  alias Sacrum.Orchestrator.{ExecutionDispatcher, PromptRenderer}
+  alias Sacrum.Accounts
+  alias Sacrum.Orchestrator.{ExecutionDispatcher, FSMData, PromptRenderer}
+  alias Sacrum.Orchestrator.Routing.RouteStep
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.{CodeRef, StepExecution, Task}
+  alias Sacrum.Repo.Schemas.{CodeRef, StepExecution, Task, TaskRun}
+  alias Sacrum.Routing.RouteConfig
 
   alias Sacrum.Repo.{
     CodeRefs,
@@ -445,32 +448,7 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
 
   test "committed workflow step inserts and updates are projected" do
     with_project(fn user, project ->
-      {workflow, first_step, second_step} = create_workflow_with_steps(user, project)
-
-      {:ok, first_step} =
-        WorkflowSteps.update(first_step, %{
-          output_schema: %{
-            "type" => "object",
-            "properties" => %{
-              "route" => %{
-                "type" => "object",
-                "additionalProperties" => false,
-                "required" => ["result", "handoff"],
-                "properties" => %{
-                  "result" => %{"type" => "string", "enum" => ["approved"]},
-                  "handoff" => %{
-                    "type" => "object",
-                    "additionalProperties" => false,
-                    "required" => [],
-                    "properties" => %{}
-                  }
-                }
-              }
-            },
-            "required" => ["route"],
-            "additionalProperties" => false
-          }
-        })
+      {workflow, _first_step, _second_step} = create_workflow_with_steps(user, project)
 
       :ok = subscribe_project(project.id)
 
@@ -478,7 +456,7 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
         WorkflowSteps.insert(workflow, %{
           name: "CDC created step",
           step_order: 3,
-          step_type: "route"
+          step_type: "execute"
         })
 
       _created_payload =
@@ -493,53 +471,7 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
           1_000
         )
 
-      {:ok, _incoming_transition} =
-        StepTransitions.insert(user.id, %{
-          from_step_id: first_step.id,
-          to_step_id: step.id,
-          project_id: project.id,
-          label: "route"
-        })
-
-      assert_project_broadcast(
-        "step_transition_created",
-        %{from_step_id: first_step.id, to_step_id: step.id, project_id: project.id},
-        1_000
-      )
-
-      {:ok, _outgoing_transition} =
-        StepTransitions.insert(user.id, %{
-          from_step_id: step.id,
-          to_step_id: second_step.id,
-          project_id: project.id,
-          label: "approved"
-        })
-
-      assert_project_broadcast(
-        "step_transition_created",
-        %{from_step_id: step.id, to_step_id: second_step.id, project_id: project.id},
-        1_000
-      )
-
-      route_config = %{
-        "version" => 1,
-        "match_policy" => "exactly_one",
-        "rules" => [
-          %{
-            "id" => "approved",
-            "when" => %{
-              "ref" => "previous_output.route.result",
-              "op" => "eq",
-              "value" => "approved"
-            },
-            "transition" => %{"type" => "intra_workflow", "step_id" => second_step.id}
-          }
-        ],
-        "default" => nil
-      }
-
-      {:ok, _updated_step} =
-        WorkflowSteps.update(step, %{name: "CDC updated step", route_config: route_config})
+      {:ok, _updated_step} = WorkflowSteps.update(step, %{name: "CDC updated step"})
 
       _updated_payload =
         assert_project_broadcast(
@@ -547,12 +479,58 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
           %{
             id: step.id,
             name: "CDC updated step",
-            route_config: route_config,
             workflow_id: workflow.id,
             project_id: project.id
           },
           1_000
         )
+    end)
+  end
+
+  test "committed route_config updates are projected losslessly" do
+    with_project(fn user, project ->
+      {workflow, first_step, second_step} = create_workflow_with_steps(user, project)
+
+      {:ok, first_step} =
+        WorkflowSteps.update(first_step, %{output_schema: cdc_predecessor_schema()})
+
+      {:ok, route} =
+        WorkflowSteps.insert(workflow, %{
+          name: "CDC route",
+          step_order: 3,
+          step_type: "route",
+          prompt: nil
+        })
+
+      {:ok, _} =
+        StepTransitions.insert(user.id, %{
+          from_step_id: first_step.id,
+          to_step_id: route.id,
+          project_id: project.id
+        })
+
+      {:ok, _} =
+        StepTransitions.insert(user.id, %{
+          from_step_id: route.id,
+          to_step_id: second_step.id,
+          project_id: project.id
+        })
+
+      route_config = cdc_route_config(second_step.id)
+      :ok = subscribe_project(project.id)
+
+      {:ok, _updated_step} = WorkflowSteps.update(route, %{route_config: route_config})
+
+      assert_project_broadcast(
+        "step_updated",
+        %{
+          id: route.id,
+          route_config: route_config,
+          workflow_id: workflow.id,
+          project_id: project.id
+        },
+        1_000
+      )
     end)
   end
 
@@ -968,22 +946,6 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
 
       :ok = subscribe_project(project.id)
 
-      route_context = %{
-        "route" => %{
-          "mode" => "deterministic",
-          "source_execution_id" => Ecto.UUID.generate(),
-          "config_version" => 1,
-          "matched_rule_id" => "approved",
-          "used_default" => false,
-          "context" => %{"output" => %{"status" => "approved"}}
-        }
-      }
-
-      transition_result =
-        Jason.encode!(%{"dest_id" => Ecto.UUID.generate(), "transition_type" => "intra_workflow"})
-
-      handoff = %{"review" => "needed"}
-
       {:ok, execution} =
         %StepExecution{user_id: user.id, task_id: task.id, project_id: project.id}
         |> StepExecution.create_changeset(%{
@@ -992,11 +954,7 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
           workflow_id: workflow.id,
           step_id: step.id,
           step_name: step.name,
-          step_type: "route",
-          status: "started",
-          context: route_context,
-          transition_result: transition_result,
-          handoff: handoff
+          status: "started"
         })
         |> Repo.insert()
 
@@ -1024,10 +982,28 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
           task_id: task.id,
           task_run_id: task_run.id,
           status: "completed",
+          project_id: project.id
+        },
+        1_000
+      )
+    end)
+  end
+
+  test "committed local route executions project the canonical RouteAudit" do
+    with_project(fn user, project ->
+      :ok = subscribe_project(project.id)
+      committed = commit_local_route(user, project)
+
+      assert_project_broadcast(
+        "step_execution_created",
+        %{
+          id: committed.execution.id,
+          task_id: committed.task.id,
           project_id: project.id,
-          context: route_context,
-          transition_result: transition_result,
-          handoff: handoff
+          status: "completed",
+          context: committed.execution.context,
+          transition_result: committed.execution.transition_result,
+          handoff: committed.handoff
         },
         1_000
       )
@@ -1195,6 +1171,135 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
         cleanup_user(user.id)
       end
     end)
+  end
+
+  defp cdc_predecessor_schema do
+    %{
+      "type" => "object",
+      "properties" => %{
+        "route" => %{
+          "type" => "object",
+          "additionalProperties" => false,
+          "required" => ["result", "handoff"],
+          "properties" => %{
+            "result" => %{"type" => "string", "enum" => ["approved"]},
+            "handoff" => %{
+              "type" => "object",
+              "additionalProperties" => false,
+              "required" => ["review"],
+              "properties" => %{"review" => %{"type" => "string"}}
+            }
+          }
+        }
+      },
+      "required" => ["route"],
+      "additionalProperties" => false
+    }
+  end
+
+  defp cdc_route_config(destination_id) do
+    %{
+      "version" => 1,
+      "match_policy" => "exactly_one",
+      "rules" => [
+        %{
+          "id" => "approved",
+          "when" => %{
+            "ref" => "previous_output.route.result",
+            "op" => "eq",
+            "value" => "approved"
+          },
+          "transition" => %{"type" => "intra_workflow", "step_id" => destination_id}
+        }
+      ],
+      "default" => %{
+        "transition" => %{"type" => "intra_workflow", "step_id" => destination_id}
+      }
+    }
+  end
+
+  defp commit_local_route(user, project) do
+    {workflow, source, destination} = create_workflow_with_steps(user, project)
+
+    {:ok, source} = WorkflowSteps.update(source, %{output_schema: cdc_predecessor_schema()})
+
+    {:ok, route} =
+      WorkflowSteps.insert(workflow, %{
+        name: "CDC local route",
+        step_order: 3,
+        step_type: "route",
+        prompt: nil
+      })
+
+    {:ok, _} =
+      StepTransitions.insert(user.id, %{
+        from_step_id: source.id,
+        to_step_id: route.id,
+        project_id: project.id
+      })
+
+    {:ok, _} =
+      StepTransitions.insert(user.id, %{
+        from_step_id: route.id,
+        to_step_id: destination.id,
+        project_id: project.id
+      })
+
+    {:ok, route} = WorkflowSteps.update(route, %{route_config: cdc_route_config(destination.id)})
+    {:ok, _} = Workflows.update(workflow, %{initial_step_id: source.id})
+
+    task = create_task(project, "CDC local route task", %{workflow_id: workflow.id})
+    {:ok, task} = Repo.update(Ecto.Changeset.change(task, current_step_id: route.id))
+    {:ok, task_run} = TaskRuns.insert(user.id, project.id, task.id, %{status: :executing})
+    handoff = %{"review" => "needed"}
+
+    {:ok, source_execution} =
+      Accounts.StepExecutions.insert(user.id, %{
+        task_id: task.id,
+        project_id: project.id,
+        workflow_id: workflow.id,
+        task_run_id: task_run.id,
+        step_id: source.id,
+        step_name: source.name,
+        step_type: :execute,
+        status: "completed",
+        output: Jason.encode!(%{"route" => %{"result" => "approved", "handoff" => handoff}})
+      })
+
+    {:ok, task_run} =
+      task_run
+      |> TaskRun.update_changeset(%{latest_step_execution_id: source_execution.id})
+      |> Repo.update()
+
+    {:ok, program} = RouteConfig.decode(route.route_config)
+
+    data = %FSMData{
+      user_id: user.id,
+      project_id: project.id,
+      task: task,
+      task_run_id: task_run.id,
+      workflow: workflow,
+      steps: %{source.id => source, route.id => route, destination.id => destination},
+      transitions: %{source.id => [route.id], route.id => [destination.id]}
+    }
+
+    result = RouteStep.handle_deterministic_route_step(data, route, program)
+    assert elem(result, 0) in [:next_state, :stop]
+
+    execution =
+      Repo.get_by!(StepExecution,
+        task_id: task.id,
+        step_id: route.id,
+        status: "completed"
+      )
+
+    %{
+      destination: destination,
+      execution: execution,
+      handoff: handoff,
+      source_execution: source_execution,
+      task: task
+    }
   end
 
   defp create_workflow_with_steps(user, project) do
