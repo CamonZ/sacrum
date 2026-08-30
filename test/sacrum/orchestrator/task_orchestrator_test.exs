@@ -2213,7 +2213,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
                step_id: route_step_id,
                status: "completed",
                task_run_id: route_run_id,
-               handoff: %{},
+               handoff: nil,
                context: %{
                  "route" => %{
                    "mode" => "deterministic",

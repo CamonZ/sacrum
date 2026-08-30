@@ -4,13 +4,14 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
   import Ecto.Query
 
   alias Sacrum.Accounts
+  alias Sacrum.Orchestrator.ExecutionDispatcher
   alias Sacrum.Orchestrator.Routing.RouteStep
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{StepExecution, Task, TaskRun}
   alias Sacrum.Routing.RouteConfig
 
   describe "handle_deterministic_route_step/3" do
-    test "atomically persists an intra-workflow audit, handoff, task movement, and TaskRun cursor" do
+    test "atomically persists a rendered handoff without transition metadata and dispatches it to the destination" do
       fixture = configured_intra_fixture()
 
       assert {:next_state, :awaiting_execution, returned_data} =
@@ -56,7 +57,10 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
       assert task_run_id == fixture.task_run.id
       assert source_execution_id == fixture.source_execution.id
       assert handoff == fixture.handoff
-      assert context_handoff == fixture.handoff
+      assert context_handoff == fixture.source_handoff
+      refute Map.has_key?(handoff, "type")
+      refute Map.has_key?(handoff, "step_id")
+      refute Map.has_key?(handoff, "workflow_id")
 
       assert Jason.decode!(transition_result) == %{
                "dest_id" => fixture.destination.id,
@@ -70,6 +74,23 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
              } = Repo.get!(TaskRun, fixture.task_run.id)
 
       assert Repo.get!(StepExecution, fixture.source_execution.id).transition_result == nil
+
+      updated_task =
+        Task
+        |> Repo.get!(fixture.task.id)
+        |> Sacrum.Orchestrator.PromptRenderer.preload_for_rendering()
+
+      assert {:ok, destination_execution} =
+               ExecutionDispatcher.create_and_dispatch(
+                 fixture.data.user_id,
+                 updated_task,
+                 fixture.destination.id,
+                 fixture.task_run.id,
+                 returned_data.pending_handoff
+               )
+
+      assert destination_execution.handoff == fixture.handoff
+      assert Repo.get!(StepExecution, destination_execution.id).handoff == fixture.handoff
     end
 
     test "atomically persists an inter-workflow audit with the terminal TaskRun outcome" do
@@ -165,9 +186,58 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
         remove_failure_trigger(trigger)
       end
     end
+
+    test "omitted and empty handoff templates do not persist or dispatch a handoff" do
+      Enum.each([nil, %{}], fn handoff_template ->
+        fixture = configured_intra_fixture(handoff_template)
+
+        assert {:next_state, :awaiting_execution, returned_data} =
+                 RouteStep.handle_deterministic_route_step(
+                   fixture.data,
+                   fixture.route,
+                   fixture.program
+                 )
+
+        assert returned_data.pending_handoff == nil
+        assert deterministic_audit(fixture.task.id, fixture.route.id).handoff == nil
+
+        updated_task =
+          Task
+          |> Repo.get!(fixture.task.id)
+          |> Sacrum.Orchestrator.PromptRenderer.preload_for_rendering()
+
+        assert {:ok, destination_execution} =
+                 ExecutionDispatcher.create_and_dispatch(
+                   fixture.data.user_id,
+                   updated_task,
+                   fixture.destination.id,
+                   fixture.task_run.id,
+                   returned_data.pending_handoff
+                 )
+
+        assert destination_execution.handoff == nil
+        assert Repo.get!(StepExecution, destination_execution.id).handoff == nil
+      end)
+    end
+
+    test "fails before committing a route when a selected template reads a missing handoff value" do
+      fixture =
+        configured_intra_fixture(%{
+          "review" => "{{ previous_output.route.handoff.missing }}"
+        })
+
+      assert {:next_state, :failed, _failed_data} =
+               RouteStep.handle_deterministic_route_step(
+                 fixture.data,
+                 fixture.route,
+                 fixture.program
+               )
+
+      assert_no_partial_route_commit(fixture)
+    end
   end
 
-  defp configured_intra_fixture do
+  defp configured_intra_fixture(handoff_template \\ route_handoff_template()) do
     user = create_user()
     project = create_project(user)
     workflow = create_workflow(user, project, "Intra route workflow")
@@ -194,17 +264,22 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
 
     {:ok, route} =
       Accounts.WorkflowSteps.update(route, %{
-        route_config: route_config(%{"type" => "intra_workflow", "step_id" => destination.id})
+        route_config:
+          route_config(
+            %{"type" => "intra_workflow", "step_id" => destination.id},
+            handoff_template
+          )
       })
 
     {:ok, _workflow} = Accounts.Workflows.update(workflow, %{initial_step_id: source.id})
     task = create_task(user, project, workflow)
     {:ok, task} = Repo.update(Ecto.Changeset.change(task, current_step_id: route.id))
     task_run = create_task_run(user, task)
-    handoff = %{"review" => "needed"}
+    source_handoff = %{"review" => "needed"}
+    handoff = rendered_handoff(source_handoff)
 
     source_execution =
-      create_source_execution(user, task, workflow, source, task_run, handoff)
+      create_source_execution(user, task, workflow, source, task_run, source_handoff)
 
     task_run = update_cursor(task_run, source_execution.id)
 
@@ -217,6 +292,7 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
       program: program,
       route: route,
       source_execution: source_execution,
+      source_handoff: source_handoff,
       task: task,
       task_run: task_run,
       workflow: workflow
@@ -257,17 +333,21 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
     {:ok, route} =
       Accounts.WorkflowSteps.update(route, %{
         route_config:
-          route_config(%{"type" => "inter_workflow", "workflow_id" => destination_workflow.id})
+          route_config(
+            %{"type" => "inter_workflow", "workflow_id" => destination_workflow.id},
+            route_handoff_template()
+          )
       })
 
     {:ok, _workflow} = Accounts.Workflows.update(workflow, %{initial_step_id: source.id})
     task = create_task(user, project, workflow)
     {:ok, task} = Repo.update(Ecto.Changeset.change(task, current_step_id: route.id))
     task_run = create_task_run(user, task)
-    handoff = %{"review" => "needed"}
+    source_handoff = %{"review" => "needed"}
+    handoff = rendered_handoff(source_handoff)
 
     source_execution =
-      create_source_execution(user, task, workflow, source, task_run, handoff)
+      create_source_execution(user, task, workflow, source, task_run, source_handoff)
 
     task_run = update_cursor(task_run, source_execution.id)
 
@@ -281,6 +361,7 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
       program: program,
       route: route,
       source_execution: source_execution,
+      source_handoff: source_handoff,
       task: task,
       task_run: task_run,
       workflow: workflow
@@ -407,11 +488,9 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
     task_run
   end
 
-  defp route_config(transition) do
-    %{
-      "version" => 1,
-      "match_policy" => "exactly_one",
-      "rules" => [
+  defp route_config(transition, handoff_template) do
+    rule =
+      maybe_put_handoff(
         %{
           "id" => "approved",
           "when" => %{
@@ -420,11 +499,36 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
             "value" => "approved"
           },
           "transition" => transition
-        }
-      ],
+        },
+        handoff_template
+      )
+
+    %{
+      "version" => 1,
+      "match_policy" => "exactly_one",
+      "rules" => [rule],
       "default" => %{"transition" => transition}
     }
   end
+
+  defp route_handoff_template do
+    %{
+      "review" => "{{ previous_output.route.handoff.review }}",
+      "result" => "{{ previous_output.route.result }}",
+      "visit" => "{{ execution.step_visit_count }}"
+    }
+  end
+
+  defp rendered_handoff(source_handoff) do
+    %{
+      "review" => source_handoff["review"],
+      "result" => "approved",
+      "visit" => 1
+    }
+  end
+
+  defp maybe_put_handoff(decision, nil), do: decision
+  defp maybe_put_handoff(decision, handoff), do: Map.put(decision, "handoff", handoff)
 
   defp predecessor_schema(handoff_keys) do
     handoff_properties = Map.new(handoff_keys, &{&1, %{"type" => "string"}})

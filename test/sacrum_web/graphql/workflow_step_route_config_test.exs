@@ -91,7 +91,7 @@ defmodule SacrumWeb.Graphql.WorkflowStepRouteConfigTest do
       assert unchanged.route_config == graph.route.route_config
     end
 
-    test "returns path-aware errors for invalid versions, keys, operators, predecessors, and destinations",
+    test "returns path-aware errors for invalid versions, keys, operators, handoffs, predecessors, and destinations",
          %{conn: conn, user: user, project: project} do
       graph = unconfigured_route_graph(user, project)
       valid = routing_config(graph.destination.id)
@@ -117,6 +117,26 @@ defmodule SacrumWeb.Graphql.WorkflowStepRouteConfigTest do
         )
 
       assert_route_config_error(operator_result, "$.rules[0].when.op")
+
+      malformed_handoff_result =
+        update_route_config(
+          conn,
+          user,
+          graph.route.id,
+          put_in(valid, ["rules", Access.at(0), "handoff"], %{"note" => "{{ task.level"})
+        )
+
+      assert_route_config_error(malformed_handoff_result, "$.rules[0].handoff.note")
+
+      unknown_handoff_result =
+        update_route_config(
+          conn,
+          user,
+          graph.route.id,
+          put_in(valid, ["rules", Access.at(0), "handoff"], %{"note" => "{{ task.title }}"})
+        )
+
+      assert_route_config_error(unknown_handoff_result, "$.rules[0].handoff.note")
 
       predecessor_result = update_route_config(conn, user, graph.route.id, valid)
       assert_route_config_error(predecessor_result, "$.predecessors")
@@ -166,8 +186,12 @@ defmodule SacrumWeb.Graphql.WorkflowStepRouteConfigTest do
       assert route["matched_rule_id"] == "approved"
       assert route["used_default"] == false
       assert route["context"]["previous_output"]["route"]["result"] == "approved"
-      assert route["context"]["previous_output"]["route"]["handoff"] == committed.handoff
+      assert route["context"]["previous_output"]["route"]["handoff"] == committed.source_handoff
       assert data["handoff"] == committed.handoff
+      refute data["handoff"] == committed.source_handoff
+      refute Map.has_key?(data["handoff"], "type")
+      refute Map.has_key?(data["handoff"], "step_id")
+      refute Map.has_key?(data["handoff"], "workflow_id")
 
       assert Jason.decode!(data["transitionResult"]) == %{
                "dest_id" => committed.destination.id,
@@ -300,7 +324,8 @@ defmodule SacrumWeb.Graphql.WorkflowStepRouteConfigTest do
     {:ok, task_run} =
       Accounts.TaskRuns.insert(user.id, project.id, task.id, %{status: :executing})
 
-    handoff = %{"review" => "needed"}
+    source_handoff = %{"review" => "needed"}
+    handoff = rendered_route_handoff(source_handoff)
 
     {:ok, source_execution} =
       Accounts.StepExecutions.insert(user.id, %{
@@ -312,7 +337,8 @@ defmodule SacrumWeb.Graphql.WorkflowStepRouteConfigTest do
         step_name: graph.source.name,
         step_type: :execute,
         status: "completed",
-        output: Jason.encode!(%{"route" => %{"result" => "approved", "handoff" => handoff}})
+        output:
+          Jason.encode!(%{"route" => %{"result" => "approved", "handoff" => source_handoff}})
       })
 
     {:ok, task_run} =
@@ -354,6 +380,7 @@ defmodule SacrumWeb.Graphql.WorkflowStepRouteConfigTest do
       destination: graph.destination,
       execution: execution,
       handoff: handoff,
+      source_handoff: source_handoff,
       source_execution: source_execution
     }
   end
@@ -370,12 +397,30 @@ defmodule SacrumWeb.Graphql.WorkflowStepRouteConfigTest do
             "op" => "eq",
             "value" => "approved"
           },
-          "transition" => %{"type" => "intra_workflow", "step_id" => destination_id}
+          "transition" => %{"type" => "intra_workflow", "step_id" => destination_id},
+          "handoff" => route_handoff_template()
         }
       ],
       "default" => %{
-        "transition" => %{"type" => "intra_workflow", "step_id" => destination_id}
+        "transition" => %{"type" => "intra_workflow", "step_id" => destination_id},
+        "handoff" => route_handoff_template()
       }
+    }
+  end
+
+  defp route_handoff_template do
+    %{
+      "review" => "{{ previous_output.route.handoff.review }}",
+      "result" => "{{ previous_output.route.result }}",
+      "visit" => "{{ execution.step_visit_count }}"
+    }
+  end
+
+  defp rendered_route_handoff(source_handoff) do
+    %{
+      "review" => source_handoff["review"],
+      "result" => "approved",
+      "visit" => 1
     }
   end
 

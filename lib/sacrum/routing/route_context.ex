@@ -2,11 +2,14 @@ defmodule Sacrum.Routing.RouteContext do
   @moduledoc """
   Builds the closed runtime value used by deterministic routes.
 
-  It deliberately exposes only the four V1 route references and has no
-  database or schema-validation dependencies.
+  Predicate evaluation reads the four V1 route references. Handoff templates
+  read the same value as a string-keyed interpolation context, plus nested
+  keys under `previous_output.route.handoff`. There is no database or
+  schema-validation dependency, and no access to the wider prompt context.
   """
 
   @levels MapSet.new(["epic", "ticket", "task"])
+  @segment ~r/^[A-Za-z_][A-Za-z0-9_-]*$/
 
   @type t :: %{
           previous_output: %{route: %{result: String.t(), handoff: map()}},
@@ -55,6 +58,50 @@ defmodule Sacrum.Routing.RouteContext do
 
   def fetch(_context, reference),
     do: {:error, error(:route_reference_unknown, "$", "#{inspect(reference)} is not routable")}
+
+  @doc """
+  Returns the full closed, string-keyed context available to route handoff
+  templates.
+
+  The context deliberately contains only the deterministic route-step inputs:
+  predecessor route output, task level/tags, and the current route visit
+  count. It is not the wider prompt-rendering context.
+  """
+  @spec interpolation_context(t()) :: map()
+  def interpolation_context(%{
+        previous_output: %{route: %{result: result, handoff: handoff}},
+        task: %{level: level, tags: tags},
+        execution: %{step_visit_count: step_visit_count}
+      }) do
+    %{
+      "previous_output" => %{"route" => %{"result" => result, "handoff" => handoff}},
+      "task" => %{"level" => level, "tags" => tags},
+      "execution" => %{"step_visit_count" => step_visit_count}
+    }
+  end
+
+  @doc """
+  True when a dotted interpolation path is in the closed route-step context.
+
+  Nested keys under `previous_output.route.handoff` are checked for identifier
+  shape only. Whether those keys exist is a runtime concern.
+  """
+  @spec allowed_interpolation_path?(String.t()) :: boolean()
+  def allowed_interpolation_path?(reference) when is_binary(reference) do
+    allowed_interpolation_parts?(String.split(reference, "."))
+  end
+
+  defp allowed_interpolation_parts?(["previous_output", "route", "result"]), do: true
+
+  defp allowed_interpolation_parts?(["previous_output", "route", "handoff" | nested]),
+    do: Enum.all?(nested, &valid_interpolation_segment?/1)
+
+  defp allowed_interpolation_parts?(["task", "level"]), do: true
+  defp allowed_interpolation_parts?(["task", "tags"]), do: true
+  defp allowed_interpolation_parts?(["execution", "step_visit_count"]), do: true
+  defp allowed_interpolation_parts?(_parts), do: false
+
+  defp valid_interpolation_segment?(segment), do: Regex.match?(@segment, segment)
 
   defp decode_route_output(%{"route" => %{"result" => result, "handoff" => handoff}})
        when is_binary(result) and result != "" and is_map(handoff) do

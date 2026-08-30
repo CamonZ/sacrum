@@ -11,6 +11,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteAudit do
 
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.StepExecution
+  alias Sacrum.Routing.RouteContext
 
   @mode "deterministic"
 
@@ -26,7 +27,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteAudit do
         "config_version" => program.version,
         "matched_rule_id" => result.matched_rule_id,
         "used_default" => result.used_default,
-        "context" => snapshot(route_context)
+        "context" => RouteContext.interpolation_context(route_context)
       }
     }
   end
@@ -63,17 +64,5 @@ defmodule Sacrum.Orchestrator.Routing.RouteAudit do
       )
 
     completed_count + 1
-  end
-
-  defp snapshot(%{
-         previous_output: %{route: %{result: result, handoff: handoff}},
-         task: %{level: level, tags: tags},
-         execution: %{step_visit_count: visit_count}
-       }) do
-    %{
-      "previous_output" => %{"route" => %{"result" => result, "handoff" => handoff}},
-      "task" => %{"level" => level, "tags" => tags},
-      "execution" => %{"step_visit_count" => visit_count}
-    }
   end
 end

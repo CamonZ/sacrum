@@ -221,6 +221,43 @@ used only when `routeConfig` is absent. On updates, omitted fields are left
 unchanged, while `prompt: null`, `prompt: ""`, and a non-null prompt are distinct
 wire values. `routeConfig: null` explicitly clears the configuration.
 
+### Deterministic route handoff templates
+
+Each deterministic rule and the optional default decision may include a
+structured `handoff` object beside its `transition`. The selected decision is
+the only source of the destination handoff: an omitted `handoff` property and
+`handoff: {}` both mean that no `execution.handoff` is delivered or persisted
+for the destination. Transition control fields are never merged into the
+handoff.
+
+Template values use a closed `{{ dotted.path }}` interpolation syntax. The
+route-step context is limited to `previous_output.route.result`,
+`previous_output.route.handoff` (and its nested object keys), `task.level`,
+`task.tags`, and `execution.step_visit_count`. An interpolation that occupies
+the full string preserves its JSON type, including objects, arrays, numbers,
+booleans, and `null`; embedded interpolations are scalar string rendering.
+Unknown, missing, malformed, filtered, or code-like expressions fail the
+deterministic route before its transition is committed. Templates cannot access
+the broader prompt context or execute arbitrary code.
+
+For example:
+
+```json
+{
+  "id": "approved",
+  "when": {"ref": "previous_output.route.result", "op": "eq", "value": "approved"},
+  "transition": {"type": "intra_workflow", "step_id": "..."},
+  "handoff": {
+    "review": "{{ previous_output.route.handoff.review }}",
+    "tags": "{{ task.tags }}",
+    "route_visit": "{{ execution.step_visit_count }}"
+  }
+}
+```
+
+This extends the configuration language only; it does not migrate, backfill,
+or reinterpret existing workflow definitions.
+
 ## Tech Stack
 
 | Layer | Technology |

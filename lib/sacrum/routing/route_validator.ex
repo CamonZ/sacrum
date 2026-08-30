@@ -209,7 +209,7 @@ defmodule Sacrum.Routing.RouteValidator do
 
   defp validate_default_target(_route_step, nil, _snapshot), do: :ok
 
-  defp validate_default_target(route_step, target, snapshot) do
+  defp validate_default_target(route_step, %{transition: target}, snapshot) do
     validate_target(route_step, target, "$.default.transition", snapshot)
   end
 

@@ -402,6 +402,11 @@ non-route execution leaves `context.route` absent and its route-specific
 `transitionResult`/`handoff` values null unless independently populated by the
 existing execution contract.
 
+For configured deterministic routes, that carried payload is produced only by
+the selected rule/default `handoff` template. An omitted template or `{}` means
+no destination `execution.handoff`; transition target metadata remains only in
+`transitionResult`, never in the handoff object.
+
 ## WebSocket Contract
 
 For the complete WalEx CDC mapping, payload completeness rules, daemon-event

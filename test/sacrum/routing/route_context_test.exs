@@ -14,6 +14,19 @@ defmodule Sacrum.Routing.RouteContextTest do
     assert {:ok, 2} = RouteContext.fetch(context, :execution_step_visit_count)
 
     assert {:error, %{code: :route_reference_unknown}} = RouteContext.fetch(context, :task_title)
+
+    assert RouteContext.interpolation_context(context) == %{
+             "previous_output" => %{
+               "route" => %{"result" => "approved", "handoff" => %{"note" => "ready"}}
+             },
+             "task" => %{"level" => "ticket", "tags" => ["backend", "urgent"]},
+             "execution" => %{"step_visit_count" => 2}
+           }
+
+    assert RouteContext.allowed_interpolation_path?("previous_output.route.result")
+    assert RouteContext.allowed_interpolation_path?("previous_output.route.handoff.note")
+    refute RouteContext.allowed_interpolation_path?("task.title")
+    refute RouteContext.allowed_interpolation_path?("previous_output.route")
   end
 
   test "rejects malformed predecessor output and invalid task values" do
