@@ -225,9 +225,7 @@ defmodule Sacrum.Routing.HandoffTemplate do
   end
 
   defp validate_reference(reference, path) do
-    parts = String.split(reference, ".")
-
-    if valid_reference_parts?(parts) do
+    if RouteContext.allowed_interpolation_path?(reference) do
       :ok
     else
       {:error,
@@ -238,16 +236,6 @@ defmodule Sacrum.Routing.HandoffTemplate do
        )}
     end
   end
-
-  defp valid_reference_parts?(["previous_output", "route", "result"]), do: true
-
-  defp valid_reference_parts?(["previous_output", "route", "handoff" | nested]),
-    do: Enum.all?(nested, &valid_segment?/1)
-
-  defp valid_reference_parts?(["task", "level"]), do: true
-  defp valid_reference_parts?(["task", "tags"]), do: true
-  defp valid_reference_parts?(["execution", "step_visit_count"]), do: true
-  defp valid_reference_parts?(_parts), do: false
 
   defp valid_segment?(segment), do: Regex.match?(@segment, segment)
 

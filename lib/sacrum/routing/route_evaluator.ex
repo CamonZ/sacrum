@@ -59,22 +59,11 @@ defmodule Sacrum.Routing.RouteEvaluator do
     do: evaluate_expression(expression, context, "#{path}.when")
 
   defp select_result([{rule, index}], _default, context) do
-    with {:ok, handoff} <-
-           HandoffTemplate.render(rule.handoff, context, "$.rules[#{index}].handoff") do
-      {:ok,
-       %{
-         matched_rule_id: rule.id,
-         used_default: false,
-         transition: rule.transition,
-         handoff: handoff
-       }}
-    end
+    render_decision(rule, context, "$.rules[#{index}].handoff", rule.id, false)
   end
 
-  defp select_result([], %{transition: transition, handoff: template}, context) do
-    with {:ok, handoff} <- HandoffTemplate.render(template, context, "$.default.handoff") do
-      {:ok, %{matched_rule_id: nil, used_default: true, transition: transition, handoff: handoff}}
-    end
+  defp select_result([], %{transition: _, handoff: _} = decision, context) do
+    render_decision(decision, context, "$.default.handoff", nil, true)
   end
 
   defp select_result([], _default, _context),
@@ -84,6 +73,24 @@ defmodule Sacrum.Routing.RouteEvaluator do
 
   defp select_result(_matches, _default, _context) do
     {:error, error(:route_ambiguous_match, "$.rules", "more than one route rule matched")}
+  end
+
+  defp render_decision(
+         %{transition: transition, handoff: template},
+         context,
+         path,
+         matched_rule_id,
+         used_default
+       ) do
+    with {:ok, handoff} <- HandoffTemplate.render(template, context, path) do
+      {:ok,
+       %{
+         matched_rule_id: matched_rule_id,
+         used_default: used_default,
+         transition: transition,
+         handoff: handoff
+       }}
+    end
   end
 
   defp evaluate_expression(%{kind: kind, expressions: expressions}, context, path)

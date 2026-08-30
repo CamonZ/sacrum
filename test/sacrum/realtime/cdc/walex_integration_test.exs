@@ -994,6 +994,17 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
       :ok = subscribe_project(project.id)
       committed = commit_local_route(user, project)
 
+      assert get_in(committed.execution.context, [
+               "route",
+               "context",
+               "previous_output",
+               "route",
+               "handoff"
+             ]) == committed.source_handoff
+
+      assert committed.execution.handoff == committed.handoff
+      refute committed.handoff == committed.source_handoff
+
       assert_project_broadcast(
         "step_execution_created",
         %{
@@ -1210,12 +1221,12 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
             "value" => "approved"
           },
           "transition" => %{"type" => "intra_workflow", "step_id" => destination_id},
-          "handoff" => %{"review" => "{{ previous_output.route.handoff.review }}"}
+          "handoff" => cdc_route_handoff_template()
         }
       ],
       "default" => %{
         "transition" => %{"type" => "intra_workflow", "step_id" => destination_id},
-        "handoff" => %{"review" => "{{ previous_output.route.handoff.review }}"}
+        "handoff" => cdc_route_handoff_template()
       }
     }
   end
@@ -1253,7 +1264,8 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
     task = create_task(project, "CDC local route task", %{workflow_id: workflow.id})
     {:ok, task} = Repo.update(Ecto.Changeset.change(task, current_step_id: route.id))
     {:ok, task_run} = TaskRuns.insert(user.id, project.id, task.id, %{status: :executing})
-    handoff = %{"review" => "needed"}
+    source_handoff = %{"review" => "needed"}
+    handoff = cdc_rendered_route_handoff(source_handoff)
 
     {:ok, source_execution} =
       Accounts.StepExecutions.insert(user.id, %{
@@ -1265,7 +1277,8 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
         step_name: source.name,
         step_type: :execute,
         status: "completed",
-        output: Jason.encode!(%{"route" => %{"result" => "approved", "handoff" => handoff}})
+        output:
+          Jason.encode!(%{"route" => %{"result" => "approved", "handoff" => source_handoff}})
       })
 
     {:ok, task_run} =
@@ -1299,8 +1312,25 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
       destination: destination,
       execution: execution,
       handoff: handoff,
+      source_handoff: source_handoff,
       source_execution: source_execution,
       task: task
+    }
+  end
+
+  defp cdc_route_handoff_template do
+    %{
+      "review" => "{{ previous_output.route.handoff.review }}",
+      "result" => "{{ previous_output.route.result }}",
+      "visit" => "{{ execution.step_visit_count }}"
+    }
+  end
+
+  defp cdc_rendered_route_handoff(source_handoff) do
+    %{
+      "review" => source_handoff["review"],
+      "result" => "approved",
+      "visit" => 1
     }
   end
 
