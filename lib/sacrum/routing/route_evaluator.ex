@@ -6,26 +6,25 @@ defmodule Sacrum.Routing.RouteEvaluator do
   no repository, clock, prompt, daemon, or random dependencies.
   """
 
-  alias Sacrum.Routing.{RouteConfig, RouteContext, Traverse}
+  alias Sacrum.Routing.{HandoffTemplate, RouteConfig, RouteContext, Traverse}
 
   @type result :: %{
           matched_rule_id: String.t() | nil,
           used_default: boolean(),
           transition: map(),
-          handoff: map()
+          handoff: map() | nil
         }
 
   @type error :: %{code: atom(), path: String.t(), message: String.t()}
 
   @doc """
   Selects exactly one matching rule, or the explicit default when no rules
-  match, and returns the predecessor handoff unchanged.
+  match, then renders only that decision's handoff template.
   """
   @spec evaluate(RouteConfig.t(), RouteContext.t()) :: {:ok, result()} | {:error, error()}
   def evaluate(%{rules: rules, default: default}, context) do
-    with {:ok, handoff} <- fetch_handoff(context),
-         {:ok, matching_rules} <- matching_rules(rules, context) do
-      select_result(matching_rules, default, handoff)
+    with {:ok, matching_rules} <- matching_rules(rules, context) do
+      select_result(matching_rules, default, context)
     end
   end
 
@@ -39,40 +38,51 @@ defmodule Sacrum.Routing.RouteEvaluator do
           {:ok, [String.t()]} | {:error, error()}
   def matching_rule_ids(%{rules: rules}, context) do
     with {:ok, matching_rules} <- matching_rules(rules, context) do
-      {:ok, for(%{id: id} <- matching_rules, do: id)}
+      {:ok, for({%{id: id}, _index} <- matching_rules, do: id)}
     end
   end
 
   defp matching_rules(rules, context) do
     case Traverse.map_while(rules, &match_rule(&1, context, &2)) do
-      {:ok, matches} -> {:ok, for({true, rule} <- matches, do: rule)}
+      {:ok, matches} -> {:ok, for({true, rule, index} <- matches, do: {rule, index})}
       {:error, reason} -> {:error, reason}
     end
   end
 
   defp match_rule(rule, context, index) do
     with {:ok, matched?} <- rule_matches?(rule, context, "$.rules[#{index}]") do
-      {:ok, {matched?, rule}}
+      {:ok, {matched?, rule, index}}
     end
   end
 
   defp rule_matches?(%{when: expression}, context, path),
     do: evaluate_expression(expression, context, "#{path}.when")
 
-  defp select_result([%{id: id, transition: transition}], _default, handoff) do
-    {:ok, %{matched_rule_id: id, used_default: false, transition: transition, handoff: handoff}}
+  defp select_result([{rule, index}], _default, context) do
+    with {:ok, handoff} <-
+           HandoffTemplate.render(rule.handoff, context, "$.rules[#{index}].handoff") do
+      {:ok,
+       %{
+         matched_rule_id: rule.id,
+         used_default: false,
+         transition: rule.transition,
+         handoff: handoff
+       }}
+    end
   end
 
-  defp select_result([], default, handoff) when is_map(default) do
-    {:ok, %{matched_rule_id: nil, used_default: true, transition: default, handoff: handoff}}
+  defp select_result([], %{transition: transition, handoff: template}, context) do
+    with {:ok, handoff} <- HandoffTemplate.render(template, context, "$.default.handoff") do
+      {:ok, %{matched_rule_id: nil, used_default: true, transition: transition, handoff: handoff}}
+    end
   end
 
-  defp select_result([], _default, _handoff),
+  defp select_result([], _default, _context),
     do:
       {:error,
        error(:route_no_match, "$.rules", "no route rule matched and no default is configured")}
 
-  defp select_result(_matches, _default, _handoff) do
+  defp select_result(_matches, _default, _context) do
     {:error, error(:route_ambiguous_match, "$.rules", "more than one route rule matched")}
   end
 
@@ -98,17 +108,6 @@ defmodule Sacrum.Routing.RouteEvaluator do
        ) do
     with {:ok, actual} <- fetch_reference(context, reference, path) do
       {:ok, predicate(operator, actual, expected)}
-    end
-  end
-
-  defp fetch_handoff(context) do
-    case get_in(context, [:previous_output, :route, :handoff]) do
-      handoff when is_map(handoff) ->
-        {:ok, handoff}
-
-      _ ->
-        {:error,
-         error(:route_reference_missing, "$.previous_output.route.handoff", "is required")}
     end
   end
 

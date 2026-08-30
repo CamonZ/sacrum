@@ -36,19 +36,29 @@ defmodule Sacrum.Routing.RouteConfigTest do
               }
             ]
           },
-          "transition" => %{"type" => "intra_workflow", "step_id" => @intra_step_id}
+          "transition" => %{"type" => "intra_workflow", "step_id" => @intra_step_id},
+          "handoff" => %{"result" => "{{ previous_output.route.result }}"}
         }
       ],
       "default" => %{
-        "transition" => %{"type" => "inter_workflow", "workflow_id" => @inter_workflow_id}
+        "transition" => %{"type" => "inter_workflow", "workflow_id" => @inter_workflow_id},
+        "handoff" => %{}
       }
     }
 
     assert {:ok, decoded} = RouteConfig.decode(config)
     assert decoded.version == 1
     assert decoded.match_policy == :exactly_one
-    assert [%{id: "all-predicates", transition: %{type: :intra_workflow}}] = decoded.rules
-    assert decoded.default == %{type: :inter_workflow, workflow_id: @inter_workflow_id}
+
+    assert [%{id: "all-predicates", transition: %{type: :intra_workflow}, handoff: handoff}] =
+             decoded.rules
+
+    assert handoff == %{"result" => "{{ previous_output.route.result }}"}
+
+    assert decoded.default == %{
+             transition: %{type: :inter_workflow, workflow_id: @inter_workflow_id},
+             handoff: nil
+           }
   end
 
   test "keeps code-like strings as inert predicate values" do
@@ -126,6 +136,31 @@ defmodule Sacrum.Routing.RouteConfigTest do
       |> put_in(["rules", Access.at(0), "transition", "step_id"], "not-a-uuid")
 
     assert {:error, %{path: "$.rules[0].transition.step_id"}} = RouteConfig.decode(invalid_target)
+  end
+
+  test "rejects non-object and malformed handoff templates at their submitted paths" do
+    assert {:error, %{code: :route_handoff_template_invalid, path: "$.rules[0].handoff"}} =
+             RouteConfig.decode(put_in(base_config(), ["rules", Access.at(0), "handoff"], []))
+
+    assert {:error, %{code: :route_handoff_template_invalid, path: "$.rules[0].handoff.message"}} =
+             RouteConfig.decode(
+               put_in(
+                 base_config(),
+                 ["rules", Access.at(0), "handoff"],
+                 %{"message" => "{{ task.level"}
+               )
+             )
+
+    assert {:error, %{code: :route_handoff_template_invalid, path: "$.default.handoff.message"}} =
+             RouteConfig.decode(
+               Map.put(base_config(), "default", %{
+                 "transition" => %{
+                   "type" => "inter_workflow",
+                   "workflow_id" => @inter_workflow_id
+                 },
+                 "handoff" => %{"message" => "{{ task.title }}"}
+               })
+             )
   end
 
   defp base_config do

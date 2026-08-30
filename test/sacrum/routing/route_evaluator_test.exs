@@ -6,7 +6,7 @@ defmodule Sacrum.Routing.RouteEvaluatorTest do
   @step_id "00000000-0000-0000-0000-000000000001"
   @workflow_id "00000000-0000-0000-0000-000000000002"
 
-  test "selects a result and level rule with the original handoff" do
+  test "selects a result and level rule with no handoff when its decision omits one" do
     program =
       program([
         rule("approved-epic", %{
@@ -17,14 +17,52 @@ defmodule Sacrum.Routing.RouteEvaluatorTest do
         })
       ])
 
-    handoff = %{"note" => "evidence"}
-    context = context("approved", "epic", [], 1, handoff)
+    context = context("approved", "epic", [], 1, %{"note" => "evidence"})
 
     assert {:ok, result} = RouteEvaluator.evaluate(program, context)
     assert result.matched_rule_id == "approved-epic"
     refute result.used_default
     assert result.transition == %{type: :intra_workflow, step_id: @step_id}
-    assert result.handoff == handoff
+    assert result.handoff == nil
+  end
+
+  test "selects and renders a rule-specific handoff template" do
+    program =
+      program([
+        rule(
+          "approved",
+          predicate("previous_output.route.result", "eq", "approved"),
+          %{
+            "review" => "{{ previous_output.route.handoff.review }}",
+            "level" => "{{ task.level }}",
+            "visit" => "{{ execution.step_visit_count }}"
+          }
+        )
+      ])
+
+    assert {:ok, result} =
+             RouteEvaluator.evaluate(
+               program,
+               context("approved", "ticket", [], 3, %{"review" => "needed"})
+             )
+
+    assert result.matched_rule_id == "approved"
+    assert result.handoff == %{"review" => "needed", "level" => "ticket", "visit" => 3}
+  end
+
+  test "selects and renders the default handoff template" do
+    program =
+      program(
+        [rule("approved", predicate("previous_output.route.result", "eq", "approved"))],
+        default(%{"tags" => "{{ task.tags }}", "fallback" => true})
+      )
+
+    assert {:ok, result} =
+             RouteEvaluator.evaluate(program, context("rejected", "task", ["triage"], 1))
+
+    assert result.matched_rule_id == nil
+    assert result.used_default
+    assert result.handoff == %{"tags" => ["triage"], "fallback" => true}
   end
 
   test "evaluates tag and visit-count predicates with nested composition" do
@@ -132,19 +170,23 @@ defmodule Sacrum.Routing.RouteEvaluatorTest do
     decoded
   end
 
-  defp rule(id, when_expression) do
-    %{
+  defp rule(id, when_expression, handoff \\ nil) do
+    rule = %{
       "id" => id,
       "when" => when_expression,
       "transition" => %{"type" => "intra_workflow", "step_id" => @step_id}
     }
+
+    if is_nil(handoff), do: rule, else: Map.put(rule, "handoff", handoff)
   end
 
   defp predicate(reference, operator, value),
     do: %{"ref" => reference, "op" => operator, "value" => value}
 
-  defp default do
-    %{"transition" => %{"type" => "inter_workflow", "workflow_id" => @workflow_id}}
+  defp default(handoff \\ nil) do
+    decision = %{"transition" => %{"type" => "inter_workflow", "workflow_id" => @workflow_id}}
+
+    if is_nil(handoff), do: decision, else: Map.put(decision, "handoff", handoff)
   end
 
   defp context(result, level, tags, count, handoff \\ %{"note" => "ready"}) do

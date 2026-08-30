@@ -42,7 +42,9 @@ defmodule Sacrum.Orchestrator.Routing.RouteRecovery do
     end
   end
 
-  defp fetch_handoff(%{handoff: handoff}) when is_map(handoff), do: {:ok, handoff}
+  defp fetch_handoff(%{handoff: handoff}) when is_map(handoff) or is_nil(handoff),
+    do: {:ok, handoff}
+
   defp fetch_handoff(_execution), do: {:error, :route_recovery_inconsistent}
 
   defp validate_destination(execution, task) do

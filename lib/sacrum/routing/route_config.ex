@@ -6,7 +6,7 @@ defmodule Sacrum.Routing.RouteConfig do
   never resolves database entities or turns submitted strings into atoms.
   """
 
-  alias Sacrum.Routing.Traverse
+  alias Sacrum.Routing.{HandoffTemplate, Traverse}
 
   @type target ::
           %{type: :intra_workflow, step_id: String.t()}
@@ -36,8 +36,15 @@ defmodule Sacrum.Routing.RouteConfig do
               value: term()
             }
 
-  @type rule :: %{id: String.t(), when: expression(), transition: target()}
-  @type t :: %{version: 1, match_policy: :exactly_one, rules: [rule()], default: target() | nil}
+  @type handoff_template :: map() | nil
+  @type decision :: %{transition: target(), handoff: handoff_template()}
+  @type rule :: %{
+          id: String.t(),
+          when: expression(),
+          transition: target(),
+          handoff: handoff_template()
+        }
+  @type t :: %{version: 1, match_policy: :exactly_one, rules: [rule()], default: decision() | nil}
   @type error :: %{
           code:
             :route_config_invalid
@@ -133,11 +140,12 @@ defmodule Sacrum.Routing.RouteConfig do
   defp decode_rules(_rules), do: {:error, error("$.rules", "must be an array")}
 
   defp decode_rule(rule, path) when is_map(rule) do
-    with :ok <- validate_keys(rule, ["id", "when", "transition"], [], path),
+    with :ok <- validate_keys(rule, ["id", "when", "transition"], ["handoff"], path),
          {:ok, id} <- decode_rule_id(Map.fetch!(rule, "id"), "#{path}.id"),
          {:ok, condition} <- decode_expression(Map.fetch!(rule, "when"), "#{path}.when"),
-         {:ok, transition} <- decode_target(Map.fetch!(rule, "transition"), "#{path}.transition") do
-      {:ok, %{id: id, when: condition, transition: transition}}
+         {:ok, transition} <- decode_target(Map.fetch!(rule, "transition"), "#{path}.transition"),
+         {:ok, handoff} <- decode_handoff(rule, "#{path}.handoff") do
+      {:ok, %{id: id, when: condition, transition: transition, handoff: handoff}}
     end
   end
 
@@ -313,8 +321,11 @@ defmodule Sacrum.Routing.RouteConfig do
   defp decode_default(nil), do: {:ok, nil}
 
   defp decode_default(default) when is_map(default) do
-    with :ok <- validate_keys(default, ["transition"], [], "$.default") do
-      decode_target(Map.fetch!(default, "transition"), "$.default.transition")
+    with :ok <- validate_keys(default, ["transition"], ["handoff"], "$.default"),
+         {:ok, transition} <-
+           decode_target(Map.fetch!(default, "transition"), "$.default.transition"),
+         {:ok, handoff} <- decode_handoff(default, "$.default.handoff") do
+      {:ok, %{transition: transition, handoff: handoff}}
     end
   end
 
@@ -330,6 +341,13 @@ defmodule Sacrum.Routing.RouteConfig do
   end
 
   defp validate_default(_rules, _default), do: :ok
+
+  defp decode_handoff(decision, path) do
+    case Map.fetch(decision, "handoff") do
+      {:ok, handoff} -> HandoffTemplate.decode(handoff, path)
+      :error -> {:ok, nil}
+    end
+  end
 
   defp uses_open_domain?(%{when: condition}), do: uses_open_domain_expression?(condition)
 

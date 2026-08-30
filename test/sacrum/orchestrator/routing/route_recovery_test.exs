@@ -32,6 +32,21 @@ defmodule Sacrum.Orchestrator.Routing.RouteRecoveryTest do
     assert recovered.pending_handoff == nil
   end
 
+  test "restores a deterministic route without a handoff as no pending handoff" do
+    %{user: user, project: project, task: task, route: route, destination: destination} =
+      fixture()
+
+    task_run = create_task_run(user, task)
+
+    route_execution = create_route_execution(user, task, route, task_run, destination.id, nil)
+
+    {:ok, task} = Repo.update(Ecto.Changeset.change(task, current_step_id: destination.id))
+    task_run = update_cursor(task_run, route_execution.id)
+
+    assert {:ok, recovered} = RouteRecovery.restore(fsm_data(user, project, task, task_run))
+    assert recovered.pending_handoff == nil
+  end
+
   test "does not fail closed when the TaskRun cannot be loaded" do
     %{user: user, project: project, task: task} = fixture()
     data = fsm_data(user, project, task, %{id: Ecto.UUID.generate()})

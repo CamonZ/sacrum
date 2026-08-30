@@ -370,11 +370,13 @@ defmodule SacrumWeb.Graphql.WorkflowStepRouteConfigTest do
             "op" => "eq",
             "value" => "approved"
           },
-          "transition" => %{"type" => "intra_workflow", "step_id" => destination_id}
+          "transition" => %{"type" => "intra_workflow", "step_id" => destination_id},
+          "handoff" => %{"review" => "{{ previous_output.route.handoff.review }}"}
         }
       ],
       "default" => %{
-        "transition" => %{"type" => "intra_workflow", "step_id" => destination_id}
+        "transition" => %{"type" => "intra_workflow", "step_id" => destination_id},
+        "handoff" => %{"review" => "{{ previous_output.route.handoff.review }}"}
       }
     }
   end

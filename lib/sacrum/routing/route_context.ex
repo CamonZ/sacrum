@@ -56,6 +56,27 @@ defmodule Sacrum.Routing.RouteContext do
   def fetch(_context, reference),
     do: {:error, error(:route_reference_unknown, "$", "#{inspect(reference)} is not routable")}
 
+  @doc """
+  Returns the full closed, string-keyed context available to route handoff
+  templates.
+
+  The context deliberately contains only the deterministic route-step inputs:
+  predecessor route output, task level/tags, and the current route visit
+  count. It is not the wider prompt-rendering context.
+  """
+  @spec interpolation_context(t()) :: map()
+  def interpolation_context(%{
+        previous_output: %{route: %{result: result, handoff: handoff}},
+        task: %{level: level, tags: tags},
+        execution: %{step_visit_count: step_visit_count}
+      }) do
+    %{
+      "previous_output" => %{"route" => %{"result" => result, "handoff" => handoff}},
+      "task" => %{"level" => level, "tags" => tags},
+      "execution" => %{"step_visit_count" => step_visit_count}
+    }
+  end
+
   defp decode_route_output(%{"route" => %{"result" => result, "handoff" => handoff}})
        when is_binary(result) and result != "" and is_map(handoff) do
     {:ok, result, handoff}
