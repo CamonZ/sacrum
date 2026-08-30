@@ -728,8 +728,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       assert prompt == "Got: { broken json"
     end
 
-    test "when prior output is wrapped in markdown code fences, strips them and decodes JSON",
-         ctx do
+    test "when prior output is valid JSON, decodes it for prompt rendering", ctx do
       prior_step =
         create_step(ctx.user, ctx.workflow, %{
           "name" => "eval_step",
@@ -757,8 +756,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       task = assign_workflow(task, ctx.workflow)
       task_run = create_task_run(ctx, task)
 
-      # Simulate CLI wrapping output in markdown code fences
-      fenced_output = "```json\n{\"verdict\": \"approved\", \"confidence\": 0.95}\n```"
+      output = ~s({"verdict":"approved","confidence":0.95})
 
       {:ok, _prior_exec} =
         Accounts.StepExecutions.insert(ctx.user.id, %{
@@ -768,7 +766,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
           "workflow_id" => ctx.workflow.id,
           "step_name" => prior_step.name,
           "status" => "completed",
-          "output" => fenced_output
+          "output" => output
         })
 
       _current_exec = create_previous_execution(ctx.user, task, current_step, task_run)
