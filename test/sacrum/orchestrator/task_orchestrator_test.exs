@@ -111,6 +111,33 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     }
   end
 
+  defp inter_route_config(destination_workflow_id) do
+    %{
+      "version" => 1,
+      "match_policy" => "exactly_one",
+      "rules" => [
+        %{
+          "id" => "approved",
+          "when" => %{
+            "ref" => "previous_output.route.result",
+            "op" => "eq",
+            "value" => "approved"
+          },
+          "transition" => %{
+            "type" => "inter_workflow",
+            "workflow_id" => destination_workflow_id
+          }
+        }
+      ],
+      "default" => %{
+        "transition" => %{
+          "type" => "inter_workflow",
+          "workflow_id" => destination_workflow_id
+        }
+      }
+    }
+  end
+
   defp predecessor_schema(result_values) do
     %{
       "type" => "object",
@@ -2240,6 +2267,160 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
                ExecutionPool.pool_status().in_use_by_scope,
                latest_task_run(task.id).id
              )
+    end
+
+    test "resumes after a deterministic intra-workflow route to an executable step" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project)
+
+      source =
+        create_step(user, workflow, %{
+          name: "source",
+          step_order: 1,
+          output_schema: predecessor_schema(["approved"])
+        })
+
+      route =
+        create_step(user, workflow, %{
+          name: "configured route",
+          step_order: 2,
+          step_type: "route",
+          prompt: nil
+        })
+
+      destination =
+        create_step(user, workflow, %{
+          name: "destination",
+          step_order: 3,
+          step_type: "execute"
+        })
+
+      finish =
+        create_step(user, workflow, %{
+          name: "finish",
+          step_order: 4,
+          step_type: "finish",
+          prompt: nil
+        })
+
+      create_transition(user, source, route)
+      create_transition(user, route, destination)
+      create_transition(user, destination, finish)
+
+      {:ok, _route} =
+        Accounts.WorkflowSteps.update(route, %{route_config: intra_route_config(destination.id)})
+
+      {:ok, _workflow} = Accounts.Workflows.update(workflow, %{initial_step_id: source.id})
+
+      task = create_task(user, project) |> assign_workflow_to_task(workflow)
+      pid = start_orchestrator(task, user)
+      wait_for_state(pid, :executing)
+
+      simulate_daemon_completion(
+        task.id,
+        project.id,
+        Jason.encode!(%{"route" => %{"result" => "approved", "handoff" => %{}}})
+      )
+
+      wait_for_state(pid, :executing)
+
+      assert %{current_step_id: destination_id} = reload_task(task)
+
+      assert %StepExecution{status: "started", step_id: ^destination_id} =
+               Enum.find(get_all_executions(task.id), &(&1.step_id == destination.id))
+
+      simulate_daemon_completion(task.id, project.id, "destination complete")
+      wait_for_exit(pid)
+
+      assert %{current_step_id: finish_id} = reload_task(task)
+      assert finish_id == finish.id
+      assert latest_task_run(task.id).status == :completed
+    end
+
+    test "resumes after a deterministic inter-workflow route to an executable step" do
+      user = create_user()
+      project = create_project(user)
+      source_workflow = create_workflow(user, project, name: "Source Workflow")
+      destination_workflow = create_workflow(user, project, name: "Destination Workflow")
+
+      source =
+        create_step(user, source_workflow, %{
+          name: "source",
+          step_order: 1,
+          output_schema: predecessor_schema(["approved"])
+        })
+
+      route =
+        create_step(user, source_workflow, %{
+          name: "configured route",
+          step_order: 2,
+          step_type: "route",
+          prompt: nil
+        })
+
+      destination =
+        create_step(user, destination_workflow, %{
+          name: "destination",
+          step_order: 1,
+          step_type: "execute"
+        })
+
+      finish =
+        create_step(user, destination_workflow, %{
+          name: "finish",
+          step_order: 2,
+          step_type: "finish",
+          prompt: nil
+        })
+
+      create_transition(user, source, route)
+      create_transition(user, destination, finish)
+
+      {:ok, _workflow_transition} =
+        Accounts.WorkflowTransitions.insert(user.id, %{
+          from_workflow_id: source_workflow.id,
+          to_workflow_id: destination_workflow.id,
+          project_id: project.id,
+          target_step_id: destination.id
+        })
+
+      {:ok, _route} =
+        Accounts.WorkflowSteps.update(route, %{
+          route_config: inter_route_config(destination_workflow.id)
+        })
+
+      {:ok, _workflow} = Accounts.Workflows.update(source_workflow, %{initial_step_id: source.id})
+
+      {:ok, _workflow} =
+        Accounts.Workflows.update(destination_workflow, %{initial_step_id: destination.id})
+
+      task = create_task(user, project) |> assign_workflow_to_task(source_workflow)
+      pid = start_orchestrator(task, user)
+      wait_for_state(pid, :executing)
+
+      simulate_daemon_completion(
+        task.id,
+        project.id,
+        Jason.encode!(%{"route" => %{"result" => "approved", "handoff" => %{}}})
+      )
+
+      wait_for_state(pid, :executing)
+
+      assert %{workflow_id: destination_workflow_id, current_step_id: destination_id} =
+               reload_task(task)
+
+      assert destination_workflow_id == destination_workflow.id
+
+      assert %StepExecution{status: "started", step_id: ^destination_id} =
+               Enum.find(get_all_executions(task.id), &(&1.step_id == destination.id))
+
+      simulate_daemon_completion(task.id, project.id, "destination complete")
+      wait_for_exit(pid)
+
+      assert %{current_step_id: finish_id} = reload_task(task)
+      assert finish_id == finish.id
+      assert latest_task_run(task.id).status == :completed
     end
 
     test "fails a drifted invalid graph before slot allocation or step execution" do
