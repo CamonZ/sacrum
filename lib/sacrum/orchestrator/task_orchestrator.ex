@@ -689,7 +689,9 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   defp enter_route_step(data, route_step) do
     case RouteMode.routing_mode(route_step) do
       {:ok, {:deterministic, program}} ->
-        RouteStep.handle_deterministic_route_step(data, route_step, program)
+        data
+        |> RouteStep.handle_deterministic_route_step(route_step, program)
+        |> schedule_deterministic_route_continuation()
 
       {:ok, {:legacy, _prompt}} ->
         continue_awaiting_execution(data.task.id, data)
@@ -702,6 +704,12 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
         {:next_state, :failed, data}
     end
   end
+
+  defp schedule_deterministic_route_continuation({:next_state, :awaiting_execution, new_data}) do
+    {:keep_state, new_data, [{:state_timeout, 0, :run}]}
+  end
+
+  defp schedule_deterministic_route_continuation(transition), do: transition
 
   @spec handle_awaiting_execution(FSMData.t()) :: fsm_transition()
   defp handle_awaiting_execution(data) do
