@@ -4,6 +4,7 @@ defmodule SacrumWeb.UserSocket do
   alias Sacrum.Auth
 
   channel "project:*", SacrumWeb.ProjectChannel
+  channel "daemon:*", SacrumWeb.DaemonChannel
 
   @impl true
   def connect(%{"token" => token}, socket, _connect_info) do
