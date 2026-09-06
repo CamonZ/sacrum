@@ -242,6 +242,97 @@ defmodule Sacrum.Repo.DaemonExchangeConcurrencyTest do
       end)
     end
 
+    test "rotation racing pending unregister never leaves a removed daemon with live credentials",
+         ctx do
+      contenders = [
+        fn -> Daemons.rotate_bootstrap(ctx.daemon) end,
+        fn -> Daemons.unregister(ctx.daemon) end
+      ]
+
+      results = race_on_daemon_lock(ctx.daemon.id, contenders)
+
+      unregister = Enum.find(results, &match?({:ok, %{daemon: _}}, &1))
+      assert {:ok, %{daemon: %{status: "removed"}}} = unregister
+
+      rotate =
+        Enum.find(results, &match?({:ok, %{token: token}} when is_binary(token), &1))
+
+      committed(fn ->
+        daemon = Repo.get!(Daemon, ctx.daemon.id)
+        assert daemon.status == "removed"
+
+        # Terminal invariant: removal always ends with zero live credentials.
+        assert Repo.aggregate(
+                 from(c in DaemonCredential,
+                   where: c.daemon_id == ^daemon.id and c.status == "active"
+                 ),
+                 :count
+               ) == 0
+
+        # A winning rotation's token died with the tombstone either way.
+        assert {:error, :invalid_credentials} = Daemons.rotate_bootstrap(daemon)
+
+        if rotate do
+          token = rotate |> elem(1) |> Map.fetch!(:token)
+          assert {:error, :invalid_credentials} = Daemons.exchange_bootstrap(daemon.id, token)
+        else
+          # Rotation lost the race and failed closed against the tombstone.
+          assert {:error, :invalid_credentials} =
+                   Enum.find(results, &match?({:error, _}, &1))
+        end
+      end)
+    end
+
+    test "injected failure of the tombstone update rolls back credential invalidation", ctx do
+      suffix = System.unique_integer([:positive])
+      function = "fail_remove_#{suffix}"
+      trigger = "fail_remove_trigger_#{suffix}"
+
+      committed(fn ->
+        Repo.query!("""
+        CREATE FUNCTION #{function}() RETURNS trigger AS $$
+        BEGIN
+          RAISE EXCEPTION 'injected removal failure';
+        END;
+        $$ LANGUAGE plpgsql;
+        """)
+
+        Repo.query!("""
+        CREATE TRIGGER #{trigger} BEFORE UPDATE ON daemons
+        FOR EACH ROW WHEN (NEW.status = 'removed' AND NEW.id = '#{ctx.daemon.id}')
+        EXECUTE FUNCTION #{function}();
+        """)
+      end)
+
+      try do
+        committed(fn ->
+          assert_raise Postgrex.Error, ~r/injected removal failure/, fn ->
+            Daemons.unregister(ctx.daemon)
+          end
+
+          # Tombstone and credential invalidation rolled back together.
+          daemon = Repo.get!(Daemon, ctx.daemon.id)
+          assert daemon.status == "pending"
+          assert daemon.removed_at == nil
+
+          assert [%{status: "active"}] =
+                   Repo.all(
+                     from c in DaemonCredential,
+                       where: c.daemon_id == ^daemon.id and c.status == "active"
+                   )
+        end)
+      after
+        committed(fn ->
+          Repo.query!("DROP TRIGGER #{trigger} ON daemons")
+          Repo.query!("DROP FUNCTION #{function}()")
+        end)
+      end
+
+      committed(fn ->
+        assert {:ok, %{daemon: %{status: "removed"}}} = Daemons.unregister(ctx.daemon)
+      end)
+    end
+
     test "injected failure of the daemon status update rolls back credential invalidation", ctx do
       suffix = System.unique_integer([:positive])
       function = "fail_revoke_#{suffix}"
