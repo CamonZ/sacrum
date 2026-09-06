@@ -32,6 +32,7 @@ defmodule Sacrum.Repo.Daemons do
 
   def create_bootstrap(%Daemon{} = daemon, attrs) do
     token = new_token()
+    token_hash = Argon2.hash_pwd_salt(token)
     expires_at = DateTime.add(DateTime.utc_now(), Map.get(attrs, :ttl, @default_ttl), :second)
 
     multi =
@@ -41,7 +42,7 @@ defmodule Sacrum.Repo.Daemons do
         DaemonCredential.create_changeset(
           %DaemonCredential{daemon_id: daemon.id, credential_kind: "bootstrap"},
           %{
-            token_hash: Argon2.hash_pwd_salt(token),
+            token_hash: token_hash,
             expires_at: expires_at
           }
         )
@@ -192,10 +193,12 @@ defmodule Sacrum.Repo.Daemons do
 
       now = now(opts)
 
-      unless bootstrap && DaemonCredential.consumable?(bootstrap, now),
+      changeset = bootstrap && DaemonCredential.consume_changeset(bootstrap, now)
+
+      unless changeset && changeset.valid?,
         do: Repo.rollback(:invalid_credentials)
 
-      bootstrap |> Ecto.Changeset.change(consumed_at: now) |> Repo.update!()
+      Repo.update!(changeset)
 
       reconnect =
         insert_credential!(
@@ -210,13 +213,23 @@ defmodule Sacrum.Repo.Daemons do
   end
 
   defp matching_credential(daemon_id, token, kind, now) do
-    daemon_id
-    |> DaemonCredentials.list_active_for_daemon()
-    |> Enum.find(fn credential ->
-      credential.credential_kind == kind &&
-        DaemonCredential.valid_for_authentication?(credential, now) &&
-        Argon2.verify_pass(token, credential.token_hash)
-    end)
+    candidates =
+      daemon_id
+      |> DaemonCredentials.list_active_for_daemon()
+      |> Enum.filter(fn credential ->
+        credential.credential_kind == kind and
+          DaemonCredential.valid_for_authentication?(credential, now)
+      end)
+
+    case candidates do
+      [] ->
+        # Same Argon2 work as a mismatch so missing credentials are not a timing oracle.
+        Argon2.no_user_verify()
+        nil
+
+      _ ->
+        Enum.find(candidates, &Argon2.verify_pass(token, &1.token_hash))
+    end
   end
 
   defp lock_daemon!(daemon_id) do

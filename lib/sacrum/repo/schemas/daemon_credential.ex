@@ -55,6 +55,7 @@ defmodule Sacrum.Repo.Schemas.DaemonCredential do
     |> validate_inclusion(:credential_kind, @credential_kinds)
     |> foreign_key_constraint(:daemon_id)
     |> unique_constraint(:token_hash)
+    |> unique_constraint(:daemon_id, name: :daemon_credentials_one_live_bootstrap_index)
     |> check_constraint(:credential_kind, name: :daemon_credentials_credential_kind_check)
     |> check_constraint(:status, name: :daemon_credentials_status_check)
     |> check_constraint(:revoked_at, name: :daemon_credentials_revoked_at_check)
@@ -62,11 +63,12 @@ defmodule Sacrum.Repo.Schemas.DaemonCredential do
   end
 
   @spec consume_changeset(t()) :: Ecto.Changeset.t()
-  def consume_changeset(credential) do
+  @spec consume_changeset(t(), DateTime.t()) :: Ecto.Changeset.t()
+  def consume_changeset(credential, now \\ DateTime.utc_now()) do
     credential
-    |> change(consumed_at: DateTime.utc_now())
+    |> change(consumed_at: now)
     |> validate_change(:consumed_at, fn :consumed_at, _consumed_at ->
-      if consumable?(credential) do
+      if consumable?(credential, now) do
         []
       else
         [consumed_at: "credential is not consumable"]

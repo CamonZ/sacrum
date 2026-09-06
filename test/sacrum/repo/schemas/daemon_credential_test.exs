@@ -84,6 +84,11 @@ defmodule Sacrum.Repo.Schemas.DaemonCredentialTest do
     refute DaemonCredential.consume_changeset(%{bootstrap | expires_at: now}).valid?
     refute DaemonCredential.consume_changeset(%{bootstrap | status: "revoked"}).valid?
     refute DaemonCredential.consume_changeset(%{bootstrap | revoked_at: now}).valid?
+
+    consumption = DaemonCredential.consume_changeset(bootstrap, now)
+    assert consumption.valid?
+    assert Ecto.Changeset.get_field(consumption, :consumed_at) == now
+    refute DaemonCredential.consume_changeset(bootstrap, bootstrap.expires_at).valid?
   end
 
   test "authentication validity rejects consumed, revoked, and expired credentials" do
@@ -221,5 +226,55 @@ defmodule Sacrum.Repo.Schemas.DaemonCredentialTest do
       assert {:error, invalid} = Sacrum.Repo.insert(changeset, mode: :savepoint)
       assert errors_on(invalid)[field] == ["is invalid"]
     end
+  end
+
+  test "one live bootstrap per daemon; revoked or consumed rows do not block replacement" do
+    {:ok, user} =
+      Sacrum.Repo.Users.insert(%{
+        email: "live-bootstrap@example.com",
+        username: "livebootstrap",
+        password: "password123"
+      })
+
+    {:ok, daemon} = Sacrum.Repo.insert(%Sacrum.Repo.Schemas.Daemon{user_id: user.id})
+    expires_at = DateTime.add(DateTime.utc_now(), 60, :second)
+
+    {:ok, first} =
+      %DaemonCredential{daemon_id: daemon.id, credential_kind: "bootstrap"}
+      |> DaemonCredential.create_changeset(%{
+        token_hash: String.duplicate("a", 32),
+        expires_at: expires_at
+      })
+      |> Sacrum.Repo.insert()
+
+    assert {:error, invalid} =
+             %DaemonCredential{daemon_id: daemon.id, credential_kind: "bootstrap"}
+             |> DaemonCredential.create_changeset(%{
+               token_hash: String.duplicate("b", 32),
+               expires_at: expires_at
+             })
+             |> Sacrum.Repo.insert(mode: :savepoint)
+
+    assert errors_on(invalid).daemon_id == ["has already been taken"]
+
+    {:ok, _} = first |> DaemonCredential.revoke_changeset() |> Sacrum.Repo.update()
+
+    {:ok, replacement} =
+      %DaemonCredential{daemon_id: daemon.id, credential_kind: "bootstrap"}
+      |> DaemonCredential.create_changeset(%{
+        token_hash: String.duplicate("c", 32),
+        expires_at: expires_at
+      })
+      |> Sacrum.Repo.insert()
+
+    {:ok, _} = replacement |> DaemonCredential.consume_changeset() |> Sacrum.Repo.update()
+
+    assert {:ok, _} =
+             %DaemonCredential{daemon_id: daemon.id, credential_kind: "bootstrap"}
+             |> DaemonCredential.create_changeset(%{
+               token_hash: String.duplicate("d", 32),
+               expires_at: expires_at
+             })
+             |> Sacrum.Repo.insert()
   end
 end

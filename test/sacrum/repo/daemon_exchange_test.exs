@@ -30,6 +30,14 @@ defmodule Sacrum.Repo.DaemonExchangeTest do
     assert credential.expires_at == DateTime.add(now, 2_592_000)
     refute credential.token_hash == reconnect
     assert Argon2.verify_pass(reconnect, credential.token_hash)
+
+    bootstrap =
+      Repo.one!(
+        from c in DaemonCredential,
+          where: c.daemon_id == ^daemon.id and c.credential_kind == "bootstrap"
+      )
+
+    assert bootstrap.consumed_at == now
     assert {:ok, ^daemon} = Daemons.verify_token(daemon.id, reconnect, now: now)
     assert {:error, :invalid_credentials} = Daemons.verify_token(daemon.id, ctx.bootstrap)
     assert {:error, :invalid_credentials} = Daemons.exchange_bootstrap(daemon.id, ctx.bootstrap)

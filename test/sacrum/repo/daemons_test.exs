@@ -3,6 +3,7 @@ defmodule Sacrum.Repo.DaemonsTest do
 
   alias Sacrum.Repo.{Daemons, Users}
   alias Sacrum.Repo.DaemonCredentials
+  alias Sacrum.Repo.Schemas.DaemonCredential
 
   test "creates a daemon with a one-time credential and generic CRUD works" do
     {:ok, user} =
@@ -30,9 +31,15 @@ defmodule Sacrum.Repo.DaemonsTest do
       })
 
     {:ok, daemon, old_token} = Daemons.create(user.id)
+    [previous] = DaemonCredentials.list_active_for_daemon(daemon.id)
     assert {:ok, rotated, new_token} = Daemons.rotate(daemon)
     assert rotated.id == daemon.id
     assert {:error, :invalid_credentials} = Daemons.verify_token(daemon.id, old_token)
+
+    previous = Repo.get!(DaemonCredential, previous.id)
+    assert previous.status == "revoked"
+    assert previous.revoked_at
+
     assert {:ok, _, reconnect, _} = Daemons.exchange_bootstrap(daemon.id, new_token)
     assert {:ok, _} = Daemons.verify_token(daemon.id, reconnect)
 
