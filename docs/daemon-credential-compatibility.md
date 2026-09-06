@@ -72,3 +72,32 @@ calls `Accounts.Daemons.rotate(user_id, daemon_id)` and exchanges the newly issu
 bootstrap; rotation invalidates the lost reconnect. No plaintext recovery storage
 exists. Trusted tests can pass `now: datetime` to exchange or verification;
 production callers omit it, checking current UTC after acquiring locks.
+
+## Provisioning and HTTP transport
+
+Authenticated GraphQL `createDaemon` and `rotateDaemonCredentials` retain
+`daemon`, `enrollmentToken`, and `serverEndpoint` and add non-null `expiresAt`.
+Expiry is returned from the exact credential inserted in the issuance transaction,
+so concurrent rotation cannot substitute another credential's timestamp.
+
+`serverEndpoint` is the HTTP(S) base URL, including any nondefault port and reverse
+proxy prefix. Set runtime `DAEMON_EXTERNAL_URL`, for example
+`https://fleet.example:8443/sacrum`, when public routing differs from the listener.
+Without an override the trusted Phoenix endpoint URL supplies the base, including
+its configured listener port. Invalid explicit configuration fails closed; neither
+Host nor forwarded headers influence issuance. URLs with credentials, query,
+fragment, unsupported scheme, invalid port or parent path segments are rejected.
+The reverse proxy must strip the configured prefix before forwarding to Phoenix.
+
+Append `/api/daemon/exchange` to the base and POST a body containing exactly
+`daemon_id` and `bootstrap_token` (the GraphQL `enrollmentToken`). No account bearer
+token is needed. Success returns `daemon_id`, `reconnect_token`, `expires_at`,
+`server_endpoint`, and the complete `socket_endpoint` (`ws`/`wss`, matching public
+port and prefix, ending in `/socket/websocket`). Query credentials and extra body
+fields are rejected. Unrelated GraphQL operations remain account-authenticated.
+
+Malformed shape returns HTTP 400 `invalid_request`; invalid credentials return
+401 `invalid_credentials`; configuration/persistence validation failure returns
+503 `exchange_unavailable`. Responses use `Cache-Control: no-store`. Credential
+parameter names are filtered by Phoenix logging. Do not place credentials in URL
+paths or query strings; proxy/access logs can record URLs before Phoenix filtering.

@@ -28,6 +28,11 @@ defmodule SacrumWeb.Router do
     live "/", HomeLive
   end
 
+  scope "/api/daemon", SacrumWeb do
+    pipe_through :api
+    post "/exchange", DaemonExchangeController, :create
+  end
+
   scope "/graphql" do
     pipe_through :graphql
 

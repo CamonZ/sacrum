@@ -16,10 +16,21 @@ defmodule Sacrum.Repo.Daemons do
           {:ok, Daemon.t(), String.t()} | {:error, Ecto.Changeset.t()}
   @spec create(User.t() | String.t() | Daemon.t(), map()) ::
           {:ok, Daemon.t(), String.t()} | {:error, Ecto.Changeset.t()}
-  def create(user_or_daemon, attrs \\ %{})
-  def create(%User{id: user_id}, attrs), do: create(%Daemon{user_id: user_id}, attrs)
+  def create(user_or_daemon, attrs \\ %{}) do
+    case create_bootstrap(user_or_daemon, attrs) do
+      {:ok, daemon, token, _credential} -> {:ok, daemon, token}
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
-  def create(%Daemon{} = daemon, attrs) do
+  @spec create_bootstrap(User.t() | String.t() | Daemon.t(), map()) ::
+          {:ok, Daemon.t(), String.t(), DaemonCredential.t()} | {:error, Ecto.Changeset.t()}
+  def create_bootstrap(user_or_daemon, attrs \\ %{})
+
+  def create_bootstrap(%User{id: user_id}, attrs),
+    do: create_bootstrap(%Daemon{user_id: user_id}, attrs)
+
+  def create_bootstrap(%Daemon{} = daemon, attrs) do
     token = new_token()
     expires_at = DateTime.add(DateTime.utc_now(), Map.get(attrs, :ttl, @default_ttl), :second)
 
@@ -37,12 +48,13 @@ defmodule Sacrum.Repo.Daemons do
       end)
 
     case Repo.transaction(multi) do
-      {:ok, %{daemon: daemon}} -> {:ok, daemon, token}
+      {:ok, %{daemon: daemon, credential: credential}} -> {:ok, daemon, token, credential}
       {:error, _step, changeset, _changes} -> {:error, changeset}
     end
   end
 
-  def create(user_id, attrs) when is_binary(user_id), do: create(%Daemon{user_id: user_id}, attrs)
+  def create_bootstrap(user_id, attrs) when is_binary(user_id),
+    do: create_bootstrap(%Daemon{user_id: user_id}, attrs)
 
   @spec revoke(Daemon.t()) :: {:ok, Daemon.t()} | {:error, Ecto.Changeset.t()}
   def revoke(%Daemon{} = daemon) do
@@ -53,6 +65,16 @@ defmodule Sacrum.Repo.Daemons do
   @spec rotate(Daemon.t()) ::
           {:ok, Daemon.t(), String.t()} | {:error, :invalid_credentials | Ecto.Changeset.t()}
   def rotate(%Daemon{} = daemon) do
+    case rotate_bootstrap(daemon) do
+      {:ok, daemon, token, _credential} -> {:ok, daemon, token}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @spec rotate_bootstrap(Daemon.t()) ::
+          {:ok, Daemon.t(), String.t(), DaemonCredential.t()}
+          | {:error, :invalid_credentials | Ecto.Changeset.t()}
+  def rotate_bootstrap(%Daemon{} = daemon) do
     token = new_token()
     token_hash = Argon2.hash_pwd_salt(token)
 
@@ -66,12 +88,14 @@ defmodule Sacrum.Repo.Daemons do
           set: [status: "revoked", revoked_at: now, updated_at: now]
         )
 
-        insert_credential!(daemon.id, "bootstrap", token_hash, DateTime.add(now, @default_ttl))
-        daemon
+        credential =
+          insert_credential!(daemon.id, "bootstrap", token_hash, DateTime.add(now, @default_ttl))
+
+        {daemon, credential}
       end)
 
     case result do
-      {:ok, daemon} -> {:ok, daemon, token}
+      {:ok, {daemon, credential}} -> {:ok, daemon, token, credential}
       {:error, reason} -> {:error, reason}
     end
   end
