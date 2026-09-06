@@ -123,8 +123,11 @@ defmodule SacrumWeb.DaemonOperationPolicyTest do
   test "bootstrap and reconnect cannot authorize any account GraphQL operation", ctx do
     operations = [
       "{ projects { id } }",
+      "{ daemons { id } }",
       "mutation { createDaemon { daemon { id } } }",
+      "mutation { renameDaemon(id: \"#{ctx.other_daemon.id}\", name: \"stolen\") { id } }",
       "mutation { revokeDaemon(id: \"#{ctx.other_daemon.id}\") { id } }",
+      "mutation { unregisterDaemon(id: \"#{ctx.other_daemon.id}\") { id } }",
       "mutation { updateStepExecution(id: \"#{ctx.execution.id}\", status: \"completed\") { id } }",
       "mutation { createProject(name: \"Forbidden\") { id } }"
     ]
