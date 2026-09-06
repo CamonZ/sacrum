@@ -34,7 +34,8 @@ defmodule Sacrum.DaemonProvisioningSecurityTest do
     assert {:error, :invalid_credentials} = Daemons.verify_token(daemon.id, token)
     assert {:ok, daemon, current_token} = Accounts.Daemons.rotate(owner.id, daemon.id)
     assert {:error, :invalid_credentials} = Daemons.verify_token(daemon.id, token)
-    assert {:ok, ^daemon} = Daemons.verify_token(daemon.id, current_token)
+    assert {:ok, ^daemon, reconnect, _} = Daemons.exchange_bootstrap(daemon.id, current_token)
+    assert {:ok, ^daemon} = Daemons.verify_token(daemon.id, reconnect)
   end
 
   test "generic repo and resource provide daemon CRUD and user scoping" do

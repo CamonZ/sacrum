@@ -24,6 +24,9 @@ defmodule SacrumWeb.ProjectChannel do
   def intercepted_event_names, do: @default_events ++ @daemon_events
 
   @impl true
+  def join(_topic, _params, %{assigns: %{principal: %{type: :daemon}}}),
+    do: {:error, %{reason: "forbidden"}}
+
   def join("project:" <> project_id, params, socket) do
     user = socket.assigns.current_user
     client_type = validate_client_type(params)

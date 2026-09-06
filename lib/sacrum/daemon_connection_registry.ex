@@ -9,6 +9,7 @@ defmodule Sacrum.DaemonConnectionRegistry do
     end
   end
 
+  @doc "Releases only the calling process registration; other sessions cannot unregister its owner."
   @spec unregister(String.t()) :: :ok
   def unregister(daemon_id), do: Registry.unregister(__MODULE__, daemon_id)
 

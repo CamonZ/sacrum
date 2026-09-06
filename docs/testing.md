@@ -380,3 +380,47 @@ mix test test/path:42              # Run specific test by line number
 mix test --failed                  # Re-run previously failed tests
 mix precommit                      # Full check: compile, deps, format, test
 ```
+
+## Daemon enrollment validation
+
+Use the assigned worktree's private test environment, never the task-management
+control-plane connection. Set `SACRUM_TEST_ENV` to its private environment file path
+before these commands. Export its assignments; sourcing plain assignments alone does
+not make them visible to Mix. Do not print the file or environment values.
+
+```bash
+set -a
+source "$SACRUM_TEST_ENV"
+set +a
+export POOL_SIZE=48
+mix test test/sacrum/repo/schemas/daemon_credential_test.exs \
+  test/sacrum/repo/daemons_test.exs \
+  test/sacrum/repo/daemon_exchange_test.exs \
+  test/sacrum/repo/daemon_exchange_concurrency_test.exs \
+  test/sacrum/accounts/daemons_test.exs \
+  test/sacrum/daemon_provisioning_security_test.exs \
+  test/sacrum_web/graphql/daemon_bootstrap_test.exs \
+  test/sacrum_web/controllers/daemon_exchange_controller_test.exs \
+  test/sacrum_web/channels/user_socket_test.exs \
+  test/sacrum_web/channels/daemon_channel_test.exs \
+  test/sacrum_web/daemon_operation_policy_test.exs \
+  test/sacrum_web/daemon_enrollment_integration_test.exs
+mix precommit
+```
+
+The larger pool avoids connection starvation when the private `DATABASE_URL`
+overrides test configuration and the suite runs with 24 concurrent cases. The
+race tests serialize their fixtures, use separate committed database sessions,
+observe both contenders waiting on a held row lock, and clean up their records.
+Other tests use the existing SQL sandbox. `mix test` creates/migrates its configured
+database; `mix precommit` also formats code and unlocks unused dependencies, so
+review its diff before committing. Run full checks serially, not alongside another
+full suite using the same worktree/build directory.
+
+For application-restart acceptance, use the assigned private runtime, verify its
+working directory and database, then run the documented protocol with disposable
+fixtures. Keep generated credentials only in client memory, record booleans and
+sanitized error codes, disconnect before restarting the owned app, reconnect with
+the same daemon ID/credential, and delete the fixture owner afterward. This is a
+separate runtime check; the normal suite does not restart the application or call
+an installed external daemon CLI.
