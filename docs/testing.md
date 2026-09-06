@@ -383,12 +383,10 @@ mix precommit                      # Full check: compile, deps, format, test
 
 ## Daemon enrollment validation
 
-The protocol and acceptance matrix are in
-[Daemon Enrollment Protocol](daemon-credential-compatibility.md). Use the assigned
-worktree's private test environment, never the task-management control-plane
-connection. Set `SACRUM_TEST_ENV` to its private environment file path before these
-commands. Export its assignments; sourcing plain assignments alone does not make
-them visible to Mix. Do not print the file or environment values.
+Use the assigned worktree's private test environment, never the task-management
+control-plane connection. Set `SACRUM_TEST_ENV` to its private environment file path
+before these commands. Export its assignments; sourcing plain assignments alone does
+not make them visible to Mix. Do not print the file or environment values.
 
 ```bash
 set -a
