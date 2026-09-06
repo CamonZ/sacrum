@@ -82,6 +82,8 @@ defmodule SacrumWeb.DaemonOperationPolicyTest do
   end
 
   test "all standalone reporting and execution events are explicitly unsupported", ctx do
+    before = Repo.get!(Daemon, ctx.daemon.id)
+
     {:ok, socket} =
       Phoenix.ChannelTest.connect(UserSocket, %{
         "daemon_id" => ctx.daemon.id,
@@ -112,7 +114,10 @@ defmodule SacrumWeb.DaemonOperationPolicyTest do
 
     assert Repo.get!(StepExecution, ctx.execution.id).status == "running"
     assert Repo.get!(StepExecution, ctx.execution.id).output == nil
-    assert Repo.get!(Daemon, ctx.daemon.id).status == "pending"
+
+    after_events = Repo.get!(Daemon, ctx.daemon.id)
+    assert after_events.status == before.status
+    assert after_events.enrolled_at == before.enrolled_at
   end
 
   test "bootstrap and reconnect cannot authorize any account GraphQL operation", ctx do

@@ -21,6 +21,31 @@ defmodule Sacrum.Accounts.Daemons do
     end
   end
 
+  @doc """
+  Owner-scoped rename through the shared name policy. `nil`/omitted name
+  semantics follow `Sacrum.Repo.Schemas.Daemon.name_changeset/2`.
+  """
+  @spec rename(String.t(), String.t(), map()) ::
+          {:ok, Daemon.t()} | {:error, :not_found | Ecto.Changeset.t()}
+  def rename(user_id, daemon_id, attrs) do
+    with {:ok, daemon} <- get_by(user_id, conditions: [id: daemon_id]) do
+      DaemonsRepo.rename(daemon, attrs)
+    end
+  end
+
+  @doc """
+  Owner-scoped enrollment metadata. Exposes credential kind/expiry/status and
+  first-enrollment time without token material; unknown legacy enrollment
+  stays `nil` rather than being fabricated.
+  """
+  @spec enrollment(String.t(), String.t()) :: {:ok, map()} | {:error, :not_found}
+  def enrollment(user_id, daemon_id) do
+    case get_by(user_id, conditions: [id: daemon_id]) do
+      {:ok, daemon} -> {:ok, DaemonsRepo.enrollment_metadata(daemon)}
+      {:error, :not_found} = error -> error
+    end
+  end
+
   @spec rotate(String.t(), String.t()) ::
           {:ok, Daemon.t(), String.t()}
           | {:error, :not_found | :invalid_credentials | Ecto.Changeset.t()}

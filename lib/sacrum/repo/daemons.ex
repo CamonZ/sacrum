@@ -62,6 +62,47 @@ defmodule Sacrum.Repo.Daemons do
     Repo.update(Daemon.update_changeset(daemon, %{status: "revoked"}))
   end
 
+  @doc """
+  Renames (or clears) the display name through the shared validation policy.
+  Ownership, lifecycle status and credentials are untouched.
+  """
+  @spec rename(Daemon.t(), map()) :: {:ok, Daemon.t()} | {:error, Ecto.Changeset.t()}
+  def rename(%Daemon{} = daemon, attrs) do
+    Repo.update(Daemon.name_changeset(daemon, attrs))
+  end
+
+  @doc """
+  Safe enrollment metadata for a daemon: credential-enrollment status, first
+  observed enrollment time and per-credential kind/expiry/status projections.
+  Contains no token hashes or plaintext; raw credential rows are not exposed.
+  """
+  @spec enrollment_metadata(Daemon.t() | String.t()) :: %{
+          daemon_id: String.t(),
+          status: String.t(),
+          enrolled_at: DateTime.t() | nil,
+          credentials: [map()]
+        }
+  def enrollment_metadata(%Daemon{id: daemon_id}), do: enrollment_metadata(daemon_id)
+
+  def enrollment_metadata(daemon_id) when is_binary(daemon_id) do
+    daemon = Repo.get!(Daemon, daemon_id)
+
+    credentials =
+      Repo.all(
+        from c in DaemonCredential,
+          where: c.daemon_id == ^daemon_id,
+          order_by: [asc: c.inserted_at, asc: c.id],
+          preload: []
+      )
+
+    %{
+      daemon_id: daemon.id,
+      status: daemon.status,
+      enrolled_at: daemon.enrolled_at,
+      credentials: Enum.map(credentials, &DaemonCredential.safe_metadata/1)
+    }
+  end
+
   @doc "Revokes all prior credentials and issues a fresh bootstrap on the same identity."
   @spec rotate(Daemon.t()) ::
           {:ok, Daemon.t(), String.t()} | {:error, :invalid_credentials | Ecto.Changeset.t()}
@@ -208,8 +249,21 @@ defmodule Sacrum.Repo.Daemons do
           DateTime.add(now, @reconnect_ttl_seconds)
         )
 
+      daemon = record_enrollment!(daemon, now)
+
       {daemon, reconnect}
     end)
+  end
+
+  # First observed successful exchange is recorded atomically with bootstrap
+  # consumption; rotation later must not move the first-enrollment timestamp.
+  defp record_enrollment!(%Daemon{enrolled_at: %DateTime{}} = daemon, _now), do: daemon
+
+  defp record_enrollment!(%Daemon{} = daemon, now) do
+    case Repo.update(Daemon.enroll_changeset(daemon, now)) do
+      {:ok, daemon} -> daemon
+      {:error, changeset} -> Repo.rollback(changeset)
+    end
   end
 
   defp matching_credential(daemon_id, token, kind, now) do
