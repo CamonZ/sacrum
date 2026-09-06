@@ -15,8 +15,7 @@ The kind and identity come from trusted structs, while lifecycle functions set
 consumption and revocation timestamps. The create changeset retains the existing
 hash/expiry/status input contract. Creation with a daemon issues a bootstrap;
 rotation retains the daemon ID, revokes all old credentials, and issues a fresh
-bootstrap for owner-authorized recovery. These are
-persistence contracts; the exchange and socket authentication layers enforce
+bootstrap for owner-authorized recovery. These are persistence contracts; the exchange and socket authentication layers enforce
 which kind is accepted at each boundary.
 
 Existing rows become `reconnect`, retaining their exact expiry, active/revoked
@@ -48,7 +47,6 @@ Rolling back the kind migration loses classification and consumption history;
 an old application could accept a consumed bootstrap again. Never perform that
 rollback while issued bootstrap credentials remain usable. Prefer a forward fix;
 otherwise stop authentication and revoke affected credentials before rollback.
-
 
 ## Exchange and recovery service
 
@@ -99,8 +97,8 @@ fields are rejected. Unrelated GraphQL operations remain account-authenticated.
 Malformed shape returns HTTP 400 `invalid_request`; invalid credentials return
 401 `invalid_credentials`; configuration/persistence validation failure returns
 503 `exchange_unavailable`. Responses use `Cache-Control: no-store`. Credential
-parameter names are filtered by Phoenix logging. HTTP exchange credentials belong in the request body, never URL paths or query
-strings. Phoenix WebSocket connection parameters use the handshake query string;
+parameter names are filtered by Phoenix logging. HTTP exchange credentials belong
+in the request body, never URL paths or query strings. Phoenix WebSocket connection parameters use the handshake query string;
 reverse proxies and access loggers must omit or redact query strings on
 `/socket/websocket` (including any public prefix). Use HTTPS/WSS for remote
 connections. Phoenix parameter filtering cannot redact upstream access logs.
@@ -149,3 +147,54 @@ additional access. Project assignment and reporting require a separate design th
 checks server-owned current execution identity before supporting those operations.
 The legacy account project channel's `client_type=daemon` is delivery classification
 inside existing account authorization; it does not elevate a standalone principal.
+
+
+## Lifecycle handoff
+
+Follow-up ticket `dbde3dcf-d7ab-41f3-918d-13c96dfdb5df` owns live-session
+invalidation and lifecycle management. The current durable interfaces are:
+
+- `Accounts.Daemons.rotate/2` or GraphQL `rotateDaemonCredentials`: owner-authorized
+  revocation of every old credential plus a fresh bootstrap on the same daemon ID.
+- `Accounts.Daemons.revoke/2` or GraphQL `revokeDaemon`: marks the daemon revoked;
+  subsequent exchange, authentication, and joins reject it. Rotation cannot revive
+  a revoked daemon.
+- `Repo.Daemons.revalidate_reconnect/3`: checks daemon status, credential ownership,
+  kind, consumption, revocation, and exact expiry before admitting a new join.
+- `principal.credential_id`: an opaque credential-generation identity, not a
+  monotonic counter. The socket ID is
+  `daemon_socket:<daemon_id>:<credential_id>`; no plaintext is required to identify
+  an old credential's sessions.
+
+Already joined sessions are **not actively disconnected** when a credential
+expires, is rotated, or its daemon is revoked. The registration remains until that
+channel disconnects; it can temporarily cause `already_connected` for a replacement
+credential. There are no credential expiry timers or invalidation broadcasts in
+this ticket. No reporting/execution operation is authorized on those sessions.
+The follow-up must close old sessions, prevent stale cleanup from removing a new
+registration, and coordinate revocation with in-flight joins before claiming live
+invalidation. Registry uniqueness is local to one application node.
+
+## Acceptance evidence and boundaries
+
+The maintained tests distinguish layers instead of using helper-only checks:
+
+| Contract | Executable evidence |
+| --- | --- |
+| Required fields, kinds, references, legacy defaults, hash redaction | `test/sacrum/repo/schemas/daemon_credential_test.exs` |
+| Exact expiry, mismatched/revoked/replayed credentials, owner recovery | `test/sacrum/repo/daemon_exchange_test.exs` |
+| Two real database sessions contend; one winner; insertion failure rolls back consumption | `test/sacrum/repo/daemon_exchange_concurrency_test.exs` |
+| Exact GraphQL expiry and trusted URL | `test/sacrum_web/graphql/daemon_bootstrap_test.exs`, `test/sacrum_web/daemon_endpoints_test.exs` |
+| Account-free exchange, input rejection, actual request-log redaction | `test/sacrum_web/controllers/daemon_exchange_controller_test.exs` |
+| Restricted socket principal, duplicate ownership, reconnect, revalidation | `test/sacrum_web/channels/user_socket_test.exs`, `test/sacrum_web/channels/daemon_channel_test.exs` |
+| Account/project/execution policy and unchanged protected rows | `test/sacrum_web/daemon_operation_policy_test.exs` |
+| GraphQL to HTTP to socket; bootstrap expiry; lost response and GraphQL recovery | `test/sacrum_web/daemon_enrollment_integration_test.exs` |
+
+Integration tests use real Sacrum adapters with synthetic Phoenix test clients.
+Separate isolated-runtime verification used a Node WebSocket client against HTTP
+and WebSocket listeners and reconnected the same daemon after application restart.
+No companion Rust/TypeScript daemon or GUI repository was modified or tested.
+Production-scale migration lock timing, deployment of a release artifact, and
+multi-node registration behavior were not tested. Migration rehearsal and metadata
+inspection cover the isolated development/test databases, not production volume.
+See [Testing Guide](testing.md#daemon-enrollment-validation) for focused commands.
