@@ -2,6 +2,7 @@ defmodule Sacrum.Repo.DaemonsTest do
   use Sacrum.DataCase, async: true
 
   alias Sacrum.Repo.{Daemons, Users}
+  alias Sacrum.Repo.DaemonCredentials
 
   test "creates a daemon with a one-time credential and generic CRUD works" do
     {:ok, user} =
@@ -16,6 +17,9 @@ defmodule Sacrum.Repo.DaemonsTest do
     assert found.id == daemon.id
     assert {:ok, verified} = Daemons.verify_token(daemon.id, token)
     assert verified.id == daemon.id
+
+    assert [%{credential_kind: "bootstrap", consumed_at: nil}] =
+             DaemonCredentials.list_active_for_daemon(daemon.id)
   end
 
   test "rotation revokes existing credentials and preserves identity" do
@@ -31,5 +35,6 @@ defmodule Sacrum.Repo.DaemonsTest do
     assert rotated.id == daemon.id
     assert {:error, :invalid_credentials} = Daemons.verify_token(daemon.id, old_token)
     assert {:ok, _} = Daemons.verify_token(daemon.id, new_token)
+    assert [%{credential_kind: "reconnect"}] = DaemonCredentials.list_active_for_daemon(daemon.id)
   end
 end

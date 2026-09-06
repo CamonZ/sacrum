@@ -26,10 +26,13 @@ defmodule Sacrum.Repo.Daemons do
       Ecto.Multi.new()
       |> Ecto.Multi.insert(:daemon, Daemon.create_changeset(daemon, attrs))
       |> Ecto.Multi.insert(:credential, fn %{daemon: daemon} ->
-        DaemonCredential.create_changeset(%DaemonCredential{daemon_id: daemon.id}, %{
-          token_hash: Argon2.hash_pwd_salt(token),
-          expires_at: expires_at
-        })
+        DaemonCredential.create_changeset(
+          %DaemonCredential{daemon_id: daemon.id, credential_kind: "bootstrap"},
+          %{
+            token_hash: Argon2.hash_pwd_salt(token),
+            expires_at: expires_at
+          }
+        )
       end)
 
     case Repo.transaction(multi) do
@@ -58,10 +61,13 @@ defmodule Sacrum.Repo.Daemons do
         set: [status: "revoked", revoked_at: DateTime.utc_now()]
       )
       |> Ecto.Multi.insert(:credential, fn _ ->
-        DaemonCredential.create_changeset(%DaemonCredential{daemon_id: daemon.id}, %{
-          token_hash: Argon2.hash_pwd_salt(token),
-          expires_at: expires_at
-        })
+        DaemonCredential.create_changeset(
+          %DaemonCredential{daemon_id: daemon.id, credential_kind: "reconnect"},
+          %{
+            token_hash: Argon2.hash_pwd_salt(token),
+            expires_at: expires_at
+          }
+        )
       end)
 
     case Repo.transaction(multi) do
@@ -75,7 +81,7 @@ defmodule Sacrum.Repo.Daemons do
     credentials = DaemonCredentials.list_active_for_daemon(daemon_id)
 
     case Enum.find(credentials, fn c ->
-           DateTime.compare(c.expires_at, DateTime.utc_now()) == :gt &&
+           DaemonCredential.valid_for_authentication?(c) &&
              Argon2.verify_pass(token, c.token_hash)
          end) do
       nil -> {:error, :invalid_credentials}
