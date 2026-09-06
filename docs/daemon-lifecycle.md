@@ -61,9 +61,9 @@ and reconnect credentials authorize nothing on this surface.
 | Operation | Contract |
 |-----------|----------|
 | `createDaemon(name?)` | Omitted name stays compatible; returns `daemon`, one-time `enrollmentToken`, `expiresAt`. |
-| `renameDaemon(id, name)` | Shared name policy; `name: null` clears the name. |
-| `revokeDaemon(id)` | Terminal, idempotent. Kills the daemon's connected session post-commit. |
-| `rotateDaemonCredentials(id)` | New bootstrap; prior credentials (and the live session) invalidated. |
+| `renameDaemon(id, name)` | Shared name policy; omitted `name` leaves the current value unchanged, `name: null` clears the name. |
+| `revokeDaemon(id)` | Terminal, idempotent. Kills the daemon's connected session post-commit. Revoking a `removed` tombstone keeps status `removed` (does not resurrect it into the fleet). |
+| `rotateDaemonCredentials(id)` | New bootstrap; prior credentials (and the live session) invalidated. Unknown/foreign ids are `daemon not found`; terminal identities refuse with the terminal-state message. |
 | `unregisterDaemon(id)` | See refusal semantics below. Idempotent on already-removed rows. |
 | `daemons` | Active fleet: tombstones excluded after successful removal only. |
 | `daemon(id)` / `daemonEnrollmentMetadata(id)` | Owner-scoped reads; tombstones remain readable; foreign ids are indistinguishable from unknown ids. |

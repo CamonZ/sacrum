@@ -21,6 +21,16 @@ defmodule Sacrum.Repo.Schemas.DaemonTest do
     assert %{status: [_]} = errors_on(changeset)
   end
 
+  test "terminal identities cannot be rewritten into another status" do
+    removed = %Daemon{user_id: Ecto.UUID.generate(), status: "removed"}
+    changeset = Daemon.update_changeset(removed, %{status: "revoked"})
+    assert %{status: [_]} = errors_on(changeset)
+
+    revoked = %Daemon{user_id: Ecto.UUID.generate(), status: "revoked"}
+    assert %{status: [_]} = errors_on(Daemon.update_changeset(revoked, %{status: "active"}))
+    assert Daemon.update_changeset(revoked, %{status: "revoked"}).valid?
+  end
+
   describe "name policy shared by create and rename" do
     test "trims surrounding whitespace" do
       changeset =

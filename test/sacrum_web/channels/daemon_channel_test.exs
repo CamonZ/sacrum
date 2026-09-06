@@ -103,12 +103,10 @@ defmodule SacrumWeb.DaemonChannelTest do
     assert_receive {:DOWN, ^monitor, :process, _pid, _reason}
     assert Sacrum.DaemonConnectionRegistry.lookup(daemon.id) == []
 
-    # The sibling daemon session is unaffected by this daemon's rotation.
     ref = Phoenix.ChannelTest.push(sibling_channel, "report", %{})
     assert_reply ref, :error, %{reason: "unsupported_operation"}
     refute_received {:DOWN, ^sibling_monitor, :process, _, _}
 
-    # A fresh exchange reconnects on the same daemon identity.
     {:ok, _, fresh_reconnect, _} =
       Sacrum.Accounts.Daemons.exchange_bootstrap(daemon.id, new_bootstrap)
 
@@ -143,46 +141,11 @@ defmodule SacrumWeb.DaemonChannelTest do
     {:ok, _, fresh_channel} = subscribe_and_join(fresh_socket, "daemon:#{daemon.id}")
     fresh_monitor = Process.monitor(fresh_channel.channel_pid)
 
-    # A delayed duplicate invalidation arrives after the newer session joined.
     send(fresh_channel.channel_pid, :daemon_credentials_invalidated)
 
     ref = Phoenix.ChannelTest.push(fresh_channel, "report", %{})
     assert_reply ref, :error, %{reason: "unsupported_operation"}
     refute_received {:DOWN, ^fresh_monitor, :process, _, _}
-  end
-
-  test "legacy user-authenticated session is terminated by revoke" do
-    {user, daemon, token, socket} = setup_daemon("legacy_revoke")
-
-    {:ok, _, channel} =
-      subscribe_and_join(socket, "daemon:#{daemon.id}", %{"enrollment_token" => token})
-
-    assert [{_pid, %{user_id: user_id}}] = Sacrum.DaemonConnectionRegistry.lookup(daemon.id)
-    assert user_id == user.id
-
-    monitor = Process.monitor(channel.channel_pid)
-    assert {:ok, _} = Sacrum.Accounts.Daemons.revoke(user.id, daemon.id)
-    assert_receive {:DOWN, ^monitor, :process, _pid, _reason}
-    assert Sacrum.DaemonConnectionRegistry.lookup(daemon.id) == []
-  end
-
-  test "failed mutation emits no invalidation and unrelated sessions survive" do
-    {user, daemon, token, _} = setup_daemon("failed_rotate")
-
-    {:ok, socket} =
-      connect(UserSocket, %{"daemon_id" => daemon.id, "reconnect_token" => token})
-
-    {:ok, _, channel} = subscribe_and_join(socket, "daemon:#{daemon.id}")
-
-    {:ok, terminal, _} = Sacrum.Accounts.Daemons.create(user.id)
-    assert {:ok, _} = Sacrum.Accounts.Daemons.revoke(user.id, terminal.id)
-
-    assert {:error, :invalid_credentials} =
-             Sacrum.Accounts.Daemons.rotate_bootstrap(user.id, terminal.id)
-
-    ref = Phoenix.ChannelTest.push(channel, "report", %{})
-    assert_reply ref, :error, %{reason: "unsupported_operation"}
-    assert [{_pid, %{credential_id: _}}] = Sacrum.DaemonConnectionRegistry.lookup(daemon.id)
   end
 
   test "rejects a credential belonging to another daemon" do

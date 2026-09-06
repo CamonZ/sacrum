@@ -14,11 +14,8 @@ defmodule Sacrum.Accounts.Daemons do
   def create(user_id, attrs \\ %{}), do: DaemonsRepo.create(%Daemon{user_id: user_id}, attrs)
 
   @doc """
-  Owner-scoped revocation. The committed result's invalidated credential
-  identities drive post-commit session invalidation: already-connected
-  daemon sessions for this identity re-derive authorization from the
-  database and terminate. Delivery is best-effort local messaging; a
-  delivery failure never implies the database mutation rolled back.
+  Owner-scoped revocation. Session invalidation is post-commit and best-effort;
+  a delivery failure does not roll back the mutation. A tombstone stays removed.
   """
   @spec revoke(String.t(), String.t()) ::
           {:ok, Daemon.t()} | {:error, :not_found | Ecto.Changeset.t()}
@@ -35,52 +32,27 @@ defmodule Sacrum.Accounts.Daemons do
     end
   end
 
-  @doc """
-  Owner-scoped rename through the shared name policy. `nil`/omitted name
-  semantics follow `Sacrum.Repo.Schemas.Daemon.name_changeset/2`. Terminal
-  identities (revoked or removed) keep a stable name for audit and cannot be
-  renamed back into service.
-  """
+  @doc "Owner-scoped rename. Terminal identities cannot be renamed."
   @spec rename(String.t(), String.t(), map()) ::
           {:ok, Daemon.t()}
           | {:error, :not_found | :terminal_state | Ecto.Changeset.t()}
   def rename(user_id, daemon_id, attrs) do
     with {:ok, daemon} <- get_by(user_id, conditions: [id: daemon_id]) do
-      if Daemon.terminal?(daemon) do
-        {:error, :terminal_state}
-      else
-        DaemonsRepo.rename(daemon, attrs)
-      end
+      DaemonsRepo.rename(daemon, attrs)
     end
   end
 
   @doc """
-  Owner-scoped terminal unregister with conservative work guards.
-
-  Decision order:
-
-    * unknown or foreign daemon -> `{:error, :not_found}` (no disclosure)
-    * a currently connected session -> `{:error, :active_work}` (disconnect
-      alone does not make an enrolled daemon removable)
-    * any enrollment evidence (reconnect credential of any status, or a
-      consumed bootstrap) -> `{:error, :ownership_unknown}`, because
-      daemon-keyed work ownership does not exist yet and lack of execution
-      authority cannot be conclusively established
-    * never-enrolled provisioning -> terminal removal: credentials
-      invalidated, soft tombstone recorded, sessions invalidated post-commit,
-      history preserved
-
-  Already-removed daemons are removed again idempotently by the repository.
-  Removal serializes against exchange/rotation under the daemon row lock; a
-  denied removal leaves names, credentials and history unchanged.
+  Owner-scoped unregister. Connected sessions refuse with `:active_work`;
+  enrollment evidence refuses with `:ownership_unknown`. Never-enrolled
+  provisioning is tombstoned. Already-removed rows are idempotent.
   """
   @spec unregister(String.t(), String.t()) ::
           {:ok, Daemon.t()}
           | {:error, :not_found | :active_work | :ownership_unknown | Ecto.Changeset.t()}
   def unregister(user_id, daemon_id) do
-    with {:ok, daemon} <- get_by(user_id, conditions: [id: daemon_id]),
-         :ok <- refuse_connected_session(daemon) do
-      case DaemonsRepo.unregister(daemon) do
+    with {:ok, daemon} <- get_by(user_id, conditions: [id: daemon_id]) do
+      case DaemonsRepo.unregister(daemon, connected?: &session_connected?/1) do
         {:ok, %{daemon: removed}} ->
           Sacrum.DaemonConnectionRegistry.invalidate_sessions(removed.id)
           {:ok, removed}
@@ -91,24 +63,17 @@ defmodule Sacrum.Accounts.Daemons do
     end
   end
 
-  defp refuse_connected_session(%Daemon{} = daemon) do
-    if Sacrum.DaemonConnectionRegistry.lookup(daemon.id) == [],
-      do: :ok,
-      else: {:error, :active_work}
-  end
+  defp session_connected?(%Daemon{id: id}),
+    do: Sacrum.DaemonConnectionRegistry.lookup(id) != []
 
-  @doc """
-  The owner's active fleet: all daemons except removed tombstones.
-  Tombstones remain readable through `get_by/2`.
-  """
+  @doc "Owner's daemons excluding removed tombstones. Tombstones remain readable via `get_by/2`."
   @spec list_fleet(String.t()) :: [Daemon.t()]
   def list_fleet(user_id) when is_binary(user_id), do: DaemonsRepo.list_active_fleet(user_id)
 
-  @doc """
-  Owner-scoped enrollment metadata. Exposes credential kind/expiry/status and
-  first-enrollment time without token material; unknown legacy enrollment
-  stays `nil` rather than being fabricated.
-  """
+  @spec list_by(String.t()) :: [Daemon.t()]
+  def list_by(user_id) when is_binary(user_id), do: list_fleet(user_id)
+
+  @doc "Owner-scoped enrollment metadata without token material."
   @spec enrollment(String.t(), String.t()) :: {:ok, map()} | {:error, :not_found}
   def enrollment(user_id, daemon_id) do
     case get_by(user_id, conditions: [id: daemon_id]) do
@@ -119,7 +84,7 @@ defmodule Sacrum.Accounts.Daemons do
 
   @spec rotate(String.t(), String.t()) ::
           {:ok, Daemon.t(), String.t()}
-          | {:error, :not_found | :invalid_credentials | Ecto.Changeset.t()}
+          | {:error, :not_found | :invalid_credentials | :terminal_state | Ecto.Changeset.t()}
   def rotate(user_id, daemon_id) do
     case rotate_bootstrap(user_id, daemon_id) do
       {:ok, daemon, token, _credential} -> {:ok, daemon, token}
@@ -142,13 +107,11 @@ defmodule Sacrum.Accounts.Daemons do
 
   @spec rotate_bootstrap(String.t(), String.t()) ::
           {:ok, Daemon.t(), String.t(), Sacrum.Repo.Schemas.DaemonCredential.t()}
-          | {:error, :not_found | :invalid_credentials | Ecto.Changeset.t()}
+          | {:error, :not_found | :invalid_credentials | :terminal_state | Ecto.Changeset.t()}
   def rotate_bootstrap(user_id, daemon_id) do
     with {:ok, daemon} <- get_by(user_id, conditions: [id: daemon_id]) do
       case DaemonsRepo.rotate_bootstrap(daemon) do
         {:ok, %{daemon: daemon, token: token, credential: credential}} ->
-          # Rotation invalidates prior bootstrap/reconnect credentials; any
-          # live sessions authorized by them must re-derive and disconnect.
           Sacrum.DaemonConnectionRegistry.invalidate_sessions(daemon.id)
           {:ok, daemon, token, credential}
 

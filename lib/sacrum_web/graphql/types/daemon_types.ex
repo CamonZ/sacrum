@@ -1,13 +1,5 @@
 defmodule SacrumWeb.Graphql.Types.DaemonTypes do
-  @moduledoc """
-  Owner-authenticated daemon management surface.
-
-  Resolvers stay thin and delegate to Accounts; lifecycle mechanics live in
-  the repository layer. Responses carry only safe metadata: no token hashes,
-  plaintext credentials or raw credential records are ever serialized
-  (`DaemonCredential.safe_metadata/1` projection), and the removed
-  server-advertised endpoint fields stay absent.
-  """
+  @moduledoc "Owner-authenticated daemon management surface. No token material is serialized."
 
   use Absinthe.Schema.Notation
   alias Sacrum.Accounts.Daemons
@@ -16,7 +8,6 @@ defmodule SacrumWeb.Graphql.Types.DaemonTypes do
   object :daemon do
     field :id, non_null(:uuid4)
     field :status, non_null(:string)
-    # Nullable for legacy/unnamed rows; displayName is the non-null label.
     field :name, :string
 
     field :display_name, non_null(:string) do
@@ -57,8 +48,6 @@ defmodule SacrumWeb.Graphql.Types.DaemonTypes do
 
   object :daemon_queries do
     field :daemons, non_null(list_of(non_null(:daemon))) do
-      # Active fleet view: tombstones disappear from the list only after a
-      # successful unregister; they remain readable through daemon(id).
       resolve(fn _, %{context: %{current_user: user}} -> {:ok, Daemons.list_fleet(user.id)} end)
     end
 
@@ -100,8 +89,8 @@ defmodule SacrumWeb.Graphql.Types.DaemonTypes do
       arg(:id, non_null(:uuid4))
       arg(:name, :string)
 
-      resolve(fn %{id: id, name: name}, %{context: %{current_user: user}} ->
-        translate_error(Daemons.rename(user.id, id, %{name: name}))
+      resolve(fn args, %{context: %{current_user: user}} ->
+        translate_error(Daemons.rename(user.id, args.id, Map.take(args, [:name])))
       end)
     end
 
@@ -125,15 +114,17 @@ defmodule SacrumWeb.Graphql.Types.DaemonTypes do
       arg(:id, non_null(:uuid4))
 
       resolve(fn %{id: id}, %{context: %{current_user: user}} ->
-        with {:ok, daemon, token, credential} <- Daemons.rotate_bootstrap(user.id, id) do
-          {:ok, %{daemon: daemon, enrollment_token: token, expires_at: credential.expires_at}}
+        case Daemons.rotate_bootstrap(user.id, id) do
+          {:ok, daemon, token, credential} ->
+            {:ok, %{daemon: daemon, enrollment_token: token, expires_at: credential.expires_at}}
+
+          error ->
+            translate_error(error)
         end
       end)
     end
   end
 
-  # Structured, non-disclosing domain errors: unknown and foreign identities
-  # share one message; changesets flow to ChangesetErrors middleware unchanged.
   defp translate_error({:ok, _} = ok), do: ok
 
   defp translate_error({:error, :not_found}),

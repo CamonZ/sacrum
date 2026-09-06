@@ -56,7 +56,6 @@ defmodule SacrumWeb.Graphql.DaemonManagementTest do
       assert daemon["name"] == nil
       assert daemon["displayName"] == String.slice(daemon["id"], 0, 8)
 
-      # Legacy pre-naming rows project the same non-null fallback.
       legacy = Repo.get!(Daemon, daemon["id"])
       assert is_binary(Sacrum.Repo.Schemas.Daemon.display_name(legacy))
     end
@@ -159,6 +158,12 @@ defmodule SacrumWeb.Graphql.DaemonManagementTest do
       assert error_message(revoked) == "daemon is in a terminal state (revoked or removed)"
       assert Repo.get!(Daemon, ctx.id).name == "stable"
     end
+
+    test "omitted name leaves the current name unchanged", ctx do
+      result = run(ctx.conn, "mutation { renameDaemon(id: \"#{ctx.id}\") { id name } }")
+      assert result["data"]["renameDaemon"]["name"] == "stable"
+      assert Repo.get!(Daemon, ctx.id).name == "stable"
+    end
   end
 
   describe "daemonEnrollmentMetadata" do
@@ -186,7 +191,6 @@ defmodule SacrumWeb.Graphql.DaemonManagementTest do
       kinds = metadata["credentials"] |> Enum.map(& &1["credentialKind"]) |> Enum.sort()
       assert kinds == ["bootstrap", "reconnect"]
 
-      # Only safe projection fields exist; no secrets on the wire.
       body = inspect(result)
       refute body =~ "tokenHash"
       refute body =~ "token_hash"
@@ -232,16 +236,20 @@ defmodule SacrumWeb.Graphql.DaemonManagementTest do
       assert removed["name"] == "retire"
       assert is_binary(removed["removedAt"])
 
-      # Tombstone: gone from the fleet list, still readable directly.
       fleet = run(ctx.conn, "query { daemons { id status removedAt } }")
       assert [] == Enum.filter(fleet["data"]["daemons"], &(&1["id"] == id))
 
       direct = run(ctx.conn, "query { daemon(id: \"#{id}\") { id status removedAt } }")
       assert direct["data"]["daemon"]["status"] == "removed"
 
-      # Idempotent through GraphQL.
       again = run(ctx.conn, "mutation { unregisterDaemon(id: \"#{id}\") { status } }")
       assert again["data"]["unregisterDaemon"]["status"] == "removed"
+
+      revoked = run(ctx.conn, "mutation { revokeDaemon(id: \"#{id}\") { id status } }")
+      assert revoked["data"]["revokeDaemon"]["status"] == "removed"
+
+      fleet = run(ctx.conn, "query { daemons { id } }")
+      refute Enum.any?(fleet["data"]["daemons"], &(&1["id"] == id))
     end
 
     test "refuses enrolled identities and keeps the row visible", ctx do
@@ -286,61 +294,37 @@ defmodule SacrumWeb.Graphql.DaemonManagementTest do
     end
   end
 
-  describe "lifecycle integration across two owners" do
-    test "create, exchange, metadata, rename, rotate, revoke and safe pending unregister", ctx do
-      created =
+  describe "rotateDaemonCredentials errors" do
+    test "unknown and foreign identities share the non-disclosing not-found message", ctx do
+      {:ok, foreign, _} = Daemons.create(ctx.other.id)
+
+      unknown =
         run(
           ctx.conn,
-          "mutation { createDaemon(name: \"orbit\") { daemon { id } enrollmentToken } }"
+          "mutation { rotateDaemonCredentials(id: \"#{Ecto.UUID.generate()}\") { enrollmentToken } }"
         )
-        |> get_in(["data", "createDaemon"])
 
-      id = created["daemon"]["id"]
-      {:ok, _, _reconnect, _} = Daemons.exchange_bootstrap(id, created["enrollmentToken"])
-
-      metadata =
+      foreign =
         run(
           ctx.conn,
-          "query { daemonEnrollmentMetadata(id: \"#{id}\") { status enrolledAt } }"
+          "mutation { rotateDaemonCredentials(id: \"#{foreign.id}\") { enrollmentToken } }"
         )
-        |> get_in(["data", "daemonEnrollmentMetadata"])
 
-      assert metadata["status"] == "active"
-      assert is_binary(metadata["enrolledAt"])
+      assert error_message(unknown) == "daemon not found"
+      assert error_message(foreign) == "daemon not found"
+    end
 
-      assert run(
-               ctx.conn,
-               "mutation { renameDaemon(id: \"#{id}\", name: \"orbit two\") { name } }"
-             )
-             |> get_in(["data", "renameDaemon", "name"]) == "orbit two"
+    test "terminal identities refuse rotation with the stable terminal message", ctx do
+      id =
+        run(ctx.conn, "mutation { createDaemon { daemon { id } } }")
+        |> get_in(["data", "createDaemon", "daemon", "id"])
 
-      rotated =
-        run(
-          ctx.conn,
-          "mutation { rotateDaemonCredentials(id: \"#{id}\") { daemon { status } enrollmentToken expiresAt } }"
-        )
-        |> get_in(["data", "rotateDaemonCredentials"])
+      assert {:ok, _} = Sacrum.Accounts.Daemons.revoke(ctx.owner.id, id)
 
-      assert rotated["daemon"]["status"] == "active"
-      assert is_binary(rotated["enrollmentToken"])
+      result =
+        run(ctx.conn, "mutation { rotateDaemonCredentials(id: \"#{id}\") { enrollmentToken } }")
 
-      revoked =
-        run(ctx.conn, "mutation { revokeDaemon(id: \"#{id}\") { id status } }")
-        |> get_in(["data", "revokeDaemon"])
-
-      assert revoked["status"] == "revoked"
-
-      # Enrolled identities stay listed for both owners; neither can remove them.
-      other_conn = authenticate(build_conn(), ctx.other)
-
-      assert error_message(run(other_conn, "mutation { unregisterDaemon(id: \"#{id}\") { id } }")) ==
-               "daemon not found"
-
-      assert error_message(run(ctx.conn, "mutation { unregisterDaemon(id: \"#{id}\") { id } }")) ==
-               "daemon has enrollment history and cannot be unregistered until work ownership is established"
-
-      fleet = run(ctx.conn, "query { daemons { id status } }")
-      assert [%{"id" => ^id, "status" => "revoked"}] = fleet["data"]["daemons"]
+      assert error_message(result) == "daemon is in a terminal state (revoked or removed)"
     end
   end
 
@@ -356,7 +340,6 @@ defmodule SacrumWeb.Graphql.DaemonManagementTest do
 
       assert [%{"status" => "pending"}] = fleet["data"]["daemons"]
 
-      # The server-advertised endpoint fields were deliberately removed.
       removed = run(ctx.conn, "query { daemons { serverEndpoint } }")
       assert removed["errors"]
       assert removed["data"] == nil

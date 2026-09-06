@@ -34,6 +34,7 @@ defmodule Sacrum.Repo.Schemas.Daemon do
   @terminal_statuses ~w(revoked removed)
   @credential_eligible_statuses ~w(pending active)
   @name_unique_index :daemons_user_id_lower_name_index
+  @status_check :daemons_status_check
   @name_max_length 100
   @fallback_id_length 8
   @primary_key {:id, :binary_id, autogenerate: true}
@@ -73,21 +74,21 @@ defmodule Sacrum.Repo.Schemas.Daemon do
   @doc "Trusted lifecycle status transition; never exposed to client attrs."
   @spec update_changeset(t(), map()) :: Ecto.Changeset.t()
   def update_changeset(daemon, attrs) do
-    daemon |> cast(attrs, [:status]) |> validate_inclusion(:status, @statuses)
+    daemon
+    |> cast(attrs, [:status])
+    |> validate_inclusion(:status, @statuses)
+    |> validate_terminal_status_stability()
+    |> check_constraint(:status, name: @status_check)
   end
 
-  @doc """
-  Records first credential enrollment atomically with the consuming exchange.
-  Trusted internal path: a `pending` daemon becomes `active`, and
-  `enrolled_at` is written only when still unknown so rotation preserves the
-  first observed enrollment time.
-  """
+  @doc "First-enrollment stamp. Activates a pending daemon; does not recast later rotations."
   @spec enroll_changeset(t(), DateTime.t()) :: Ecto.Changeset.t()
   def enroll_changeset(%__MODULE__{} = daemon, %DateTime{} = enrolled_at) do
     daemon
     |> change(enrolled_at: enrolled_at)
     |> activate_if_pending()
     |> validate_inclusion(:status, @statuses)
+    |> check_constraint(:status, name: @status_check)
   end
 
   @doc "Stable display fallback for unnamed legacy or new rows: the short ID."
@@ -98,11 +99,7 @@ defmodule Sacrum.Repo.Schemas.Daemon do
   def display_name(%__MODULE__{id: id}) when is_binary(id),
     do: binary_part(id, 0, @fallback_id_length)
 
-  @doc """
-  Terminal-state guard for credential operations (exchange, rotation,
-  reconnect). Uses an explicit allowlist, so any later terminal tombstone
-  state cannot pass a naive `status != "revoked"` check.
-  """
+  @doc "True for pending/active identities that may still hold credentials."
   @spec credential_eligible?(t()) :: boolean()
   @spec credential_eligible?(String.t()) :: boolean()
   def credential_eligible?(%__MODULE__{status: status}), do: credential_eligible?(status)
@@ -119,16 +116,25 @@ defmodule Sacrum.Repo.Schemas.Daemon do
   def removed?(%__MODULE__{status: "removed"}), do: true
   def removed?(%__MODULE__{}), do: false
 
-  @doc """
-  Trusted terminal-removal transition. Soft tombstone: the row, credential
-  audit and execution history are retained; only fleet membership and access
-  end. Never exposed to client attrs.
-  """
+  @doc "Trusted tombstone transition. Never exposed to client attrs."
   @spec remove_changeset(t(), DateTime.t()) :: Ecto.Changeset.t()
   def remove_changeset(%__MODULE__{} = daemon, %DateTime{} = removed_at) do
     daemon
     |> change(status: "removed", removed_at: removed_at)
     |> validate_inclusion(:status, @statuses)
+    |> check_constraint(:status, name: @status_check)
+  end
+
+  defp validate_terminal_status_stability(changeset) do
+    validate_change(changeset, :status, fn :status, new_status ->
+      current = changeset.data.status
+
+      if current in @terminal_statuses and new_status != current do
+        [status: "terminal identities cannot change status"]
+      else
+        []
+      end
+    end)
   end
 
   defp validate_name(changeset) do

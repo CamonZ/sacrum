@@ -59,9 +59,14 @@ defmodule SacrumWeb.DaemonChannel do
   @doc "Standalone registration grants no execution/reporting authority."
   @spec handle_in(String.t(), term(), Phoenix.Socket.t()) ::
           {:reply, {:error, map()}, Phoenix.Socket.t()}
+          | {:stop, :shutdown, Phoenix.Socket.t()}
   @impl true
-  def handle_in(_event, _payload, socket),
-    do: {:reply, {:error, %{reason: "unsupported_operation"}}, socket}
+  def handle_in(_event, _payload, socket) do
+    case revalidate(socket) do
+      :ok -> {:reply, {:error, %{reason: "unsupported_operation"}}, socket}
+      :invalid -> {:stop, :shutdown, socket}
+    end
+  end
 
   @impl true
   def handle_info(:daemon_credentials_invalidated, socket) do
@@ -102,9 +107,6 @@ defmodule SacrumWeb.DaemonChannel do
             daemon_registered: true
           )
 
-        # Post-registration recheck: a revoke/rotation that committed between
-        # authorization and registration is caught here and releases the
-        # registration we just claimed.
         case revalidate(socket) do
           :ok ->
             {:ok, schedule_revalidation(socket)}
@@ -125,6 +127,8 @@ defmodule SacrumWeb.DaemonChannel do
       {:error, _} -> :invalid
     end
   end
+
+  defp revalidate(_socket), do: :invalid
 
   defp schedule_revalidation(socket) do
     case Application.get_env(:sacrum, @revalidate_interval, 30_000) do

@@ -93,7 +93,7 @@ defmodule Sacrum.Repo.DaemonExchangeTest do
     assert {:ok, _, reconnect, _} = Daemons.exchange_bootstrap(ctx.daemon.id, ctx.bootstrap)
     assert {:ok, revoked} = Accounts.Daemons.revoke(ctx.owner.id, ctx.daemon.id)
     assert {:error, :invalid_credentials} = Daemons.verify_token(revoked.id, reconnect)
-    assert {:error, :invalid_credentials} = Daemons.rotate(revoked)
+    assert {:error, :terminal_state} = Daemons.rotate(revoked)
 
     {:ok, another, bootstrap} = Daemons.create(ctx.owner.id)
     {:ok, _} = Daemons.revoke(another)

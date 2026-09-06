@@ -100,6 +100,8 @@ defmodule Sacrum.GenericResource do
         )
       end
 
+      defoverridable list_by: 1, list_by: 2
+
       defp extract_opts(opts) do
         if Keyword.keyword?(opts) and Keyword.has_key?(opts, :conditions) do
           {Keyword.get(opts, :conditions, []), Keyword.get(opts, :preloads, [])}

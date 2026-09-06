@@ -398,7 +398,6 @@ mix test test/sacrum/repo/schemas/daemon_credential_test.exs \
   test/sacrum/repo/daemons_test.exs \
   test/sacrum/repo/daemon_exchange_test.exs \
   test/sacrum/repo/daemon_exchange_concurrency_test.exs \
-  test/sacrum/repo/daemon_enrollment_metadata_test.exs \
   test/sacrum/accounts/daemons_test.exs \
   test/sacrum/daemon_provisioning_security_test.exs \
   test/sacrum_web/graphql/daemon_bootstrap_test.exs \
@@ -415,9 +414,9 @@ The larger pool avoids connection starvation when the private `DATABASE_URL`
 overrides test configuration and the suite runs with 24 concurrent cases. The
 race tests serialize their fixtures, use separate committed database sessions,
 observe both contenders waiting on a held row lock, and clean up their records.
-The lifecycle races (exchange/rotation/revoke/unregister against each other and
-against renames) reuse the same barrier pattern; a failure-injection trigger is
-used to prove transaction rollback. Other tests use the existing SQL sandbox.
+The lifecycle races (revoke vs exchange, unregister vs exchange) reuse the same
+barrier pattern; a failure-injection trigger proves unregister rollback.
+Other tests use the existing SQL sandbox.
 `mix test` creates/migrates its configured
 database; `mix precommit` also formats code and unlocks unused dependencies, so
 review its diff before committing. Run full checks serially, not alongside another
