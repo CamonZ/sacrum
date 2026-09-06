@@ -13,11 +13,19 @@ defmodule Sacrum.Accounts.Daemons do
   @spec create(String.t(), map()) :: {:ok, Daemon.t(), String.t()} | {:error, Ecto.Changeset.t()}
   def create(user_id, attrs \\ %{}), do: DaemonsRepo.create(%Daemon{user_id: user_id}, attrs)
 
+  @doc """
+  Owner-scoped revocation. Returns the committed daemon; invalidated
+  credential identities stay in the repository committed result for the
+  post-commit session-invalidation layer.
+  """
   @spec revoke(String.t(), String.t()) ::
           {:ok, Daemon.t()} | {:error, :not_found | Ecto.Changeset.t()}
   def revoke(user_id, daemon_id) do
     with {:ok, daemon} <- get_by(user_id, conditions: [id: daemon_id]) do
-      DaemonsRepo.revoke(daemon)
+      case DaemonsRepo.revoke(daemon) do
+        {:ok, %{daemon: daemon}} -> {:ok, daemon}
+        {:error, changeset} -> {:error, changeset}
+      end
     end
   end
 
@@ -50,8 +58,9 @@ defmodule Sacrum.Accounts.Daemons do
           {:ok, Daemon.t(), String.t()}
           | {:error, :not_found | :invalid_credentials | Ecto.Changeset.t()}
   def rotate(user_id, daemon_id) do
-    with {:ok, daemon} <- get_by(user_id, conditions: [id: daemon_id]) do
-      DaemonsRepo.rotate(daemon)
+    case rotate_bootstrap(user_id, daemon_id) do
+      {:ok, daemon, token, _credential} -> {:ok, daemon, token}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -73,7 +82,13 @@ defmodule Sacrum.Accounts.Daemons do
           | {:error, :not_found | :invalid_credentials | Ecto.Changeset.t()}
   def rotate_bootstrap(user_id, daemon_id) do
     with {:ok, daemon} <- get_by(user_id, conditions: [id: daemon_id]) do
-      DaemonsRepo.rotate_bootstrap(daemon)
+      case DaemonsRepo.rotate_bootstrap(daemon) do
+        {:ok, %{daemon: daemon, token: token, credential: credential}} ->
+          {:ok, daemon, token, credential}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
     end
   end
 end

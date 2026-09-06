@@ -12,6 +12,19 @@ defmodule Sacrum.Repo.Daemons do
   @default_ttl 86_400
   @reconnect_ttl_seconds 2_592_000
 
+  @typedoc """
+  Committed lifecycle mutation result. `invalidated_credential_ids` carries
+  safe identities of credentials invalidated by the committed transaction so
+  post-commit session invalidation can target exactly those sessions. It
+  contains no token material and must not be produced before commit.
+  """
+  @type committed_lifecycle :: %{
+          daemon: Daemon.t(),
+          credential: DaemonCredential.t() | nil,
+          token: String.t() | nil,
+          invalidated_credential_ids: [String.t()]
+        }
+
   @spec create(User.t() | String.t() | Daemon.t()) ::
           {:ok, Daemon.t(), String.t()} | {:error, Ecto.Changeset.t()}
   @spec create(User.t() | String.t() | Daemon.t(), map()) ::
@@ -57,9 +70,47 @@ defmodule Sacrum.Repo.Daemons do
   def create_bootstrap(user_id, attrs) when is_binary(user_id),
     do: create_bootstrap(%Daemon{user_id: user_id}, attrs)
 
-  @spec revoke(Daemon.t()) :: {:ok, Daemon.t()} | {:error, Ecto.Changeset.t()}
-  def revoke(%Daemon{} = daemon) do
-    Repo.update(Daemon.update_changeset(daemon, %{status: "revoked"}))
+  @doc """
+  Atomically revokes the identity and every active credential under the
+  daemon row lock, using the same lock order as exchange/rotation. All
+  credentials receive one consistent revoked timestamp. Idempotent: revoking
+  an already-revoked identity is a no-op that never re-enables access. The
+  committed result carries the invalidated credential identities for
+  post-commit session invalidation; no socket effect happens before commit.
+  """
+  @spec revoke(Daemon.t(), keyword()) ::
+          {:ok, committed_lifecycle()} | {:error, Ecto.Changeset.t()}
+  def revoke(%Daemon{} = daemon, _opts \\ []) do
+    result =
+      Repo.transaction(fn ->
+        # Unconditional lock: idempotent revoke must observe and keep the
+        # terminal state instead of rejecting on an eligibility check.
+        daemon = lock_daemon_row!(daemon.id)
+        now = DateTime.utc_now()
+        invalidated = active_credential_ids(daemon.id)
+
+        Repo.update_all(
+          from(c in DaemonCredential,
+            where: c.daemon_id == ^daemon.id and c.status == "active"
+          ),
+          set: [status: "revoked", revoked_at: now, updated_at: now]
+        )
+
+        daemon = mark_revoked!(daemon)
+
+        %{daemon: daemon, credential: nil, token: nil, invalidated_credential_ids: invalidated}
+      end)
+
+    normalize_transaction(result)
+  end
+
+  defp mark_revoked!(%Daemon{status: "revoked"} = daemon), do: daemon
+
+  defp mark_revoked!(%Daemon{} = daemon) do
+    case Repo.update(Daemon.update_changeset(daemon, %{status: "revoked"})) do
+      {:ok, daemon} -> daemon
+      {:error, changeset} -> Repo.rollback(changeset)
+    end
   end
 
   @doc """
@@ -103,27 +154,43 @@ defmodule Sacrum.Repo.Daemons do
     }
   end
 
-  @doc "Revokes all prior credentials and issues a fresh bootstrap on the same identity."
+  @doc """
+  Revokes all prior credentials and issues a fresh bootstrap on the same
+  identity under the daemon row lock, preserving the one-live-bootstrap
+  invariant. The committed result carries the prior credentials invalidated
+  by this rotation for post-commit session invalidation.
+  """
   @spec rotate(Daemon.t()) ::
-          {:ok, Daemon.t(), String.t()} | {:error, :invalid_credentials | Ecto.Changeset.t()}
-  def rotate(%Daemon{} = daemon) do
-    case rotate_bootstrap(daemon) do
-      {:ok, daemon, token, _credential} -> {:ok, daemon, token}
+          {:ok, committed_lifecycle()} | {:error, :invalid_credentials | Ecto.Changeset.t()}
+  @spec rotate(Daemon.t(), keyword()) ::
+          {:ok, committed_lifecycle()} | {:error, :invalid_credentials | Ecto.Changeset.t()}
+  def rotate(%Daemon{} = daemon, opts \\ []) do
+    case rotate_bootstrap(daemon, opts) do
+      {:ok, result} -> {:ok, %{result | token: nil, credential: nil}}
       {:error, reason} -> {:error, reason}
     end
   end
 
+  @doc """
+  Same as `rotate/1` but the committed result also carries the newly issued
+  bootstrap credential and its plaintext token for the owner-authorized
+  response only.
+  """
   @spec rotate_bootstrap(Daemon.t()) ::
-          {:ok, Daemon.t(), String.t(), DaemonCredential.t()}
+          {:ok, committed_lifecycle()}
           | {:error, :invalid_credentials | Ecto.Changeset.t()}
-  def rotate_bootstrap(%Daemon{} = daemon) do
+  @spec rotate_bootstrap(Daemon.t(), keyword()) ::
+          {:ok, committed_lifecycle()}
+          | {:error, :invalid_credentials | Ecto.Changeset.t()}
+  def rotate_bootstrap(%Daemon{} = daemon, opts \\ []) do
+    now = now(opts)
     token = new_token()
     token_hash = Argon2.hash_pwd_salt(token)
 
     result =
       Repo.transaction(fn ->
         daemon = lock_daemon!(daemon.id)
-        now = DateTime.utc_now()
+        invalidated = active_credential_ids(daemon.id)
 
         Repo.update_all(
           from(c in DaemonCredential, where: c.daemon_id == ^daemon.id and c.status == "active"),
@@ -133,13 +200,15 @@ defmodule Sacrum.Repo.Daemons do
         credential =
           insert_credential!(daemon.id, "bootstrap", token_hash, DateTime.add(now, @default_ttl))
 
-        {daemon, credential}
+        %{
+          daemon: daemon,
+          credential: credential,
+          token: token,
+          invalidated_credential_ids: invalidated
+        }
       end)
 
-    case result do
-      {:ok, {daemon, credential}} -> {:ok, daemon, token, credential}
-      {:error, reason} -> {:error, reason}
-    end
+    normalize_transaction(result)
   end
 
   @doc """
@@ -214,10 +283,11 @@ defmodule Sacrum.Repo.Daemons do
                join: c in DaemonCredential,
                on: c.daemon_id == d.id,
                where:
-                 d.id == ^daemon_id and c.id == ^credential_id and d.status != "revoked" and
+                 d.id == ^daemon_id and c.id == ^credential_id and
                    c.credential_kind == "reconnect",
                select: {d, c}
            ),
+         true <- Daemon.credential_eligible?(daemon),
          true <- DaemonCredential.valid_for_authentication?(credential, now(opts)) do
       {:ok, daemon, credential}
     else
@@ -286,10 +356,39 @@ defmodule Sacrum.Repo.Daemons do
     end
   end
 
+  # Eligibility-guarded lock for operations that issue or consume credentials.
+  # Terminal identities (revoked, and any later tombstone state) fail closed
+  # through the explicit allowlist instead of a `!= "revoked"` comparison.
   defp lock_daemon!(daemon_id) do
+    daemon = lock_daemon_row!(daemon_id)
+
+    if Daemon.credential_eligible?(daemon) do
+      daemon
+    else
+      Repo.rollback(:invalid_credentials)
+    end
+  end
+
+  defp lock_daemon_row!(daemon_id) do
     case Repo.one(from d in Daemon, where: d.id == ^daemon_id, lock: "FOR UPDATE") do
-      %Daemon{status: status} = daemon when status != "revoked" -> daemon
+      %Daemon{} = daemon -> daemon
       _ -> Repo.rollback(:invalid_credentials)
+    end
+  end
+
+  defp active_credential_ids(daemon_id) do
+    Repo.all(
+      from c in DaemonCredential,
+        where: c.daemon_id == ^daemon_id and c.status == "active",
+        select: c.id,
+        order_by: [asc: c.inserted_at, asc: c.id]
+    )
+  end
+
+  defp normalize_transaction(result) do
+    case result do
+      {:ok, value} -> {:ok, value}
+      {:error, reason} -> {:error, reason}
     end
   end
 

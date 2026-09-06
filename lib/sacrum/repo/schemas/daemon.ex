@@ -8,9 +8,13 @@ defmodule Sacrum.Repo.Schemas.Daemon do
     * `active` — completed at least one bootstrap exchange under this schema.
     * `revoked` — terminal; all credentials invalid.
 
-  It never claims the daemon is online. `enrolled_at` records the first
-  successful exchange observed by this schema version and survives rotation;
-  rows provisioned before the field existed keep it NULL (unknown).
+  It never claims the daemon is online. Terminal identities fail every
+  credential operation through `credential_eligible?/1`, an explicit
+  allowlist rather than a `!= "revoked"` comparison, so future terminal
+  states (for example a removal tombstone) cannot accidentally requalify.
+  `enrolled_at` records the first successful exchange observed by this
+  schema version and survives rotation; rows provisioned before the field
+  existed keep it NULL (unknown).
 
   Display names are optional. The validation policy is shared by create and
   rename: the value is trimmed, must contain 1..100 characters after trimming,
@@ -24,6 +28,7 @@ defmodule Sacrum.Repo.Schemas.Daemon do
 
   @type t :: %__MODULE__{}
   @statuses ~w(pending active revoked)
+  @credential_eligible_statuses ~w(pending active)
   @name_unique_index :daemons_user_id_lower_name_index
   @name_max_length 100
   @fallback_id_length 8
@@ -87,6 +92,18 @@ defmodule Sacrum.Repo.Schemas.Daemon do
 
   def display_name(%__MODULE__{id: id}) when is_binary(id),
     do: binary_part(id, 0, @fallback_id_length)
+
+  @doc """
+  Terminal-state guard for credential operations (exchange, rotation,
+  reconnect). Uses an explicit allowlist, so any later terminal tombstone
+  state cannot pass a naive `status != "revoked"` check.
+  """
+  @spec credential_eligible?(t()) :: boolean()
+  @spec credential_eligible?(String.t()) :: boolean()
+  def credential_eligible?(%__MODULE__{status: status}), do: credential_eligible?(status)
+
+  def credential_eligible?(status) when is_binary(status),
+    do: status in @credential_eligible_statuses
 
   defp validate_name(changeset) do
     changeset

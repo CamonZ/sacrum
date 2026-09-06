@@ -3,7 +3,7 @@ defmodule Sacrum.Repo.DaemonsTest do
 
   alias Sacrum.Repo.{Daemons, Users}
   alias Sacrum.Repo.DaemonCredentials
-  alias Sacrum.Repo.Schemas.DaemonCredential
+  alias Sacrum.Repo.Schemas.{Daemon, DaemonCredential}
 
   test "creates a daemon with a one-time credential and generic CRUD works" do
     {:ok, user} =
@@ -32,8 +32,12 @@ defmodule Sacrum.Repo.DaemonsTest do
 
     {:ok, daemon, old_token} = Daemons.create(user.id)
     [previous] = DaemonCredentials.list_active_for_daemon(daemon.id)
-    assert {:ok, rotated, new_token} = Daemons.rotate(daemon)
+
+    assert {:ok, %{daemon: rotated, token: new_token, invalidated_credential_ids: ids}} =
+             Daemons.rotate_bootstrap(daemon)
+
     assert rotated.id == daemon.id
+    assert ids == [previous.id]
     assert {:error, :invalid_credentials} = Daemons.verify_token(daemon.id, old_token)
 
     previous = Repo.get!(DaemonCredential, previous.id)
@@ -70,7 +74,7 @@ defmodule Sacrum.Repo.DaemonsTest do
     assert enrolled.enrolled_at == first_exchange
     assert enrolled.status == "active"
 
-    {:ok, rotated, new_bootstrap, _} = Daemons.rotate_bootstrap(daemon)
+    {:ok, %{daemon: rotated, token: new_bootstrap}} = Daemons.rotate_bootstrap(daemon)
     assert rotated.id == daemon.id
     assert rotated.enrolled_at == first_exchange
 
@@ -103,6 +107,111 @@ defmodule Sacrum.Repo.DaemonsTest do
 
     assert {:ok, cleared} = Daemons.rename(renamed, %{name: nil})
     assert cleared.name == nil
+  end
+
+  test "revoke atomically invalidates every credential with one consistent timestamp" do
+    {:ok, user} =
+      Users.insert(%{
+        email: "atomic-revoke@example.com",
+        username: "atomic_revoke",
+        password: "password123"
+      })
+
+    {:ok, daemon, bootstrap} = Daemons.create(user.id, %{name: "target"})
+    assert {:ok, _, reconnect, _} = Daemons.exchange_bootstrap(daemon.id, bootstrap)
+
+    assert {:ok, %{daemon: revoked, invalidated_credential_ids: ids} = result} =
+             Daemons.revoke(daemon)
+
+    assert revoked.id == daemon.id
+    assert revoked.status == "revoked"
+    assert revoked.name == "target"
+    # The consumed bootstrap and the live reconnect are both invalidated.
+    assert length(ids) == 2
+    assert refute_token_material(result, [bootstrap, reconnect])
+
+    assert Repo.aggregate(
+             from(c in DaemonCredential,
+               where: c.daemon_id == ^daemon.id and c.status == "active"
+             ),
+             :count
+           ) == 0
+
+    revoked_rows =
+      Repo.all(
+        from c in DaemonCredential,
+          where: c.daemon_id == ^daemon.id and c.status == "revoked",
+          order_by: [asc: c.inserted_at]
+      )
+
+    assert length(revoked_rows) == 2
+    timestamps = Enum.map(revoked_rows, & &1.revoked_at)
+    assert Enum.all?(timestamps, &(&1 != nil))
+    assert Enum.uniq(timestamps) == [List.first(timestamps)]
+
+    reconnect_id = List.last(ids)
+    assert {:error, :invalid_credentials} = Daemons.verify_token(daemon.id, reconnect)
+    assert {:error, :invalid_credentials} = Daemons.revalidate_reconnect(daemon.id, reconnect_id)
+  end
+
+  test "revoke is idempotent and a stale struct cannot resurrect access" do
+    {:ok, user} =
+      Users.insert(%{
+        email: "idempotent-revoke@example.com",
+        username: "idempotent_revoke",
+        password: "password123"
+      })
+
+    {:ok, daemon, _bootstrap} = Daemons.create(user.id)
+    stale = Repo.get!(Daemon, daemon.id)
+
+    assert {:ok, first} = Daemons.revoke(stale)
+    assert first.daemon.status == "revoked"
+    assert first.invalidated_credential_ids != []
+
+    # A stale pre-revoke struct must not re-enable anything.
+    assert {:ok, second} = Daemons.revoke(stale)
+    assert second.daemon.status == "revoked"
+    assert second.invalidated_credential_ids == []
+
+    assert {:ok, third} = Daemons.revoke(Repo.get!(Daemon, daemon.id))
+    assert third.daemon.status == "revoked"
+    assert third.invalidated_credential_ids == []
+
+    assert {:error, :invalid_credentials} = Daemons.rotate(daemon)
+    assert {:error, :invalid_credentials} = Daemons.rotate_bootstrap(daemon)
+  end
+
+  test "terminal identities cannot rotate or reauthenticate after revoke" do
+    {:ok, user} =
+      Users.insert(%{
+        email: "terminal-revoke@example.com",
+        username: "terminal_revoke",
+        password: "password123"
+      })
+
+    {:ok, daemon, bootstrap} = Daemons.create(user.id)
+    assert {:ok, _, reconnect, credential} = Daemons.exchange_bootstrap(daemon.id, bootstrap)
+    assert {:ok, revoked} = Daemons.revoke(daemon)
+
+    assert revoked.daemon.status == "revoked"
+    assert {:error, :invalid_credentials} = Daemons.rotate_bootstrap(revoked.daemon)
+    assert {:error, :invalid_credentials} = Daemons.exchange_bootstrap(daemon.id, bootstrap)
+    assert {:error, :invalid_credentials} = Daemons.revalidate_reconnect(daemon.id, credential.id)
+    assert {:error, :invalid_credentials} = Daemons.verify_token(daemon.id, reconnect)
+
+    assert Repo.aggregate(
+             from(c in DaemonCredential,
+               where: c.daemon_id == ^daemon.id and c.status == "active"
+             ),
+             :count
+           ) == 0
+  end
+
+  defp refute_token_material(result, tokens) do
+    inspected = inspect(result)
+    refute Enum.any?(tokens, &String.contains?(inspected, &1))
+    true
   end
 
   test "enrollment_metadata projects safe credential summaries without token material" do

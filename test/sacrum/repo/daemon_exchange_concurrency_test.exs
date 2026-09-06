@@ -132,6 +132,162 @@ defmodule Sacrum.Repo.DaemonExchangeConcurrencyTest do
     end)
   end
 
+  describe "revoke races" do
+    test "revoke racing bootstrap exchange always ends terminal and unauthenticated", ctx do
+      contenders = [
+        fn -> Daemons.exchange_bootstrap(ctx.daemon.id, ctx.bootstrap) end,
+        fn -> Daemons.revoke(ctx.daemon) end
+      ]
+
+      results = race_on_daemon_lock(ctx.daemon.id, contenders)
+
+      revoke = Enum.find(results, &match?({:ok, %{daemon: _}}, &1))
+      assert {:ok, %{daemon: %{status: "revoked"}}} = revoke
+
+      committed(fn ->
+        daemon = Repo.get!(Daemon, ctx.daemon.id)
+        assert daemon.status == "revoked"
+
+        assert Repo.aggregate(
+                 from(c in DaemonCredential,
+                   where: c.daemon_id == ^daemon.id and c.status == "active"
+                 ),
+                 :count
+               ) == 0
+
+        # Even a winning exchange cannot leave a usable reconnect behind.
+        exchange = Enum.find(results, &match?({:ok, _, _, _}, &1))
+
+        if exchange do
+          reconnect = elem(exchange, 2)
+          assert {:error, :invalid_credentials} = Daemons.verify_token(daemon.id, reconnect)
+        end
+      end)
+    end
+
+    test "revoke racing rotation always ends terminal with no live credentials", ctx do
+      contenders = [
+        fn -> Daemons.rotate_bootstrap(ctx.daemon) end,
+        fn -> Daemons.revoke(ctx.daemon) end
+      ]
+
+      results = race_on_daemon_lock(ctx.daemon.id, contenders)
+
+      assert {:ok, %{daemon: %{status: "revoked"}}} =
+               Enum.find(results, &match?({:ok, %{daemon: _}}, &1))
+
+      rotate = Enum.find(results, &match?({:ok, %{token: token}} when is_binary(token), &1))
+
+      committed(fn ->
+        daemon = Repo.get!(Daemon, ctx.daemon.id)
+        assert daemon.status == "revoked"
+
+        assert Repo.aggregate(
+                 from(c in DaemonCredential,
+                   where: c.daemon_id == ^daemon.id and c.status == "active"
+                 ),
+                 :count
+               ) == 0
+
+        # If rotation won the race, revoke still invalidated its fresh bootstrap.
+        if rotate do
+          token = rotate |> elem(1) |> Map.fetch!(:token)
+          assert {:error, :invalid_credentials} = Daemons.exchange_bootstrap(daemon.id, token)
+        end
+
+        assert {:error, :invalid_credentials} = Daemons.rotate_bootstrap(daemon)
+      end)
+    end
+
+    test "injected failure of the daemon status update rolls back credential invalidation", ctx do
+      suffix = System.unique_integer([:positive])
+      function = "fail_revoke_#{suffix}"
+      trigger = "fail_revoke_trigger_#{suffix}"
+
+      committed(fn ->
+        Repo.query!("""
+        CREATE FUNCTION #{function}() RETURNS trigger AS $$
+        BEGIN
+          RAISE EXCEPTION 'injected revoke failure';
+        END;
+        $$ LANGUAGE plpgsql;
+        """)
+
+        Repo.query!("""
+        CREATE TRIGGER #{trigger} BEFORE UPDATE ON daemons
+        FOR EACH ROW WHEN (NEW.status = 'revoked' AND OLD.status <> 'revoked' AND NEW.id = '#{ctx.daemon.id}')
+        EXECUTE FUNCTION #{function}();
+        """)
+      end)
+
+      try do
+        committed(fn ->
+          assert_raise Postgrex.Error, ~r/injected revoke failure/, fn ->
+            Daemons.revoke(ctx.daemon)
+          end
+
+          # Identity and credential mutations rolled back together.
+          daemon = Repo.get!(Daemon, ctx.daemon.id)
+          assert daemon.status == "pending"
+
+          assert [%{status: "active"}] =
+                   Repo.all(
+                     from c in DaemonCredential,
+                       where: c.daemon_id == ^daemon.id and c.status == "active"
+                   )
+        end)
+      after
+        committed(fn ->
+          Repo.query!("DROP TRIGGER #{trigger} ON daemons")
+          Repo.query!("DROP FUNCTION #{function}()")
+        end)
+      end
+
+      committed(fn ->
+        assert {:ok, %{daemon: %{status: "revoked"}}} = Daemons.revoke(ctx.daemon)
+      end)
+    end
+  end
+
+  defp race_on_daemon_lock(daemon_id, contenders) do
+    supervisor = start_supervised!({Task.Supervisor, []})
+    parent = self()
+
+    tasks =
+      committed(fn ->
+        {:ok, tasks} =
+          Repo.transaction(fn ->
+            Repo.one!(from d in Daemon, where: d.id == ^daemon_id, lock: "FOR UPDATE")
+
+            tasks =
+              for contender <- contenders do
+                Task.Supervisor.async_nolink(supervisor, fn ->
+                  committed(fn ->
+                    %{rows: [[backend]]} = Repo.query!("SELECT pg_backend_pid()")
+                    send(parent, {:ready, self(), backend})
+                    contender.()
+                  end)
+                end)
+              end
+
+            backends =
+              for task <- tasks do
+                pid = task.pid
+                assert_receive {:ready, ^pid, backend}, 5_000
+                backend
+              end
+
+            assert length(Enum.uniq(backends)) == length(contenders)
+            await_blocked(backends, System.monotonic_time(:millisecond) + 5_000)
+            tasks
+          end)
+
+        tasks
+      end)
+
+    tasks |> Enum.map(&Task.await(&1, 10_000))
+  end
+
   defp await_blocked(backends, deadline) do
     Repo.query!("SELECT pg_stat_clear_snapshot()")
 
