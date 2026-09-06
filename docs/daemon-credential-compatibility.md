@@ -99,8 +99,11 @@ fields are rejected. Unrelated GraphQL operations remain account-authenticated.
 Malformed shape returns HTTP 400 `invalid_request`; invalid credentials return
 401 `invalid_credentials`; configuration/persistence validation failure returns
 503 `exchange_unavailable`. Responses use `Cache-Control: no-store`. Credential
-parameter names are filtered by Phoenix logging. Do not place credentials in URL
-paths or query strings; proxy/access logs can record URLs before Phoenix filtering.
+parameter names are filtered by Phoenix logging. HTTP exchange credentials belong in the request body, never URL paths or query
+strings. Phoenix WebSocket connection parameters use the handshake query string;
+reverse proxies and access loggers must omit or redact query strings on
+`/socket/websocket` (including any public prefix). Use HTTPS/WSS for remote
+connections. Phoenix parameter filtering cannot redact upstream access logs.
 
 ## Standalone socket authentication
 
@@ -124,3 +127,25 @@ unregister another session. Disconnect and channel/application process restart d
 not invalidate the durable reconnect credential. Bootstrap expiry after exchange
 does not affect reconnect authentication. Live-session invalidation on later
 rotation/revocation is completed by the lifecycle follow-up.
+
+## Supported operation matrix
+
+| Boundary/operation | Bootstrap | Standalone reconnect | Account API token |
+| --- | --- | --- | --- |
+| HTTP bootstrap exchange | Once, matching unexpired identity | 401 `invalid_credentials` | Does not substitute for bootstrap |
+| Account GraphQL queries/provisioning/rotation/revocation | 401 `Invalid API token` | 401 `Invalid API token` | Existing owner-scoped access |
+| Execution/session-log GraphQL mutations | 401 `Invalid API token` | 401 `Invalid API token` | Existing owner-scoped access |
+| Socket `daemon:<own-id>` registration | Rejected at connect | Allowed, one live registration | Historical join also requires matching reconnect |
+| Other daemon topic | Rejected at connect | `identity_mismatch` | Matching owner and reconnect required |
+| Project topic, any `client_type` | Rejected at connect | `forbidden` | Existing owned-project access |
+| Daemon topic inbound report/completion/run/cancel/unknown event | No session | `unsupported_operation` | Same explicit unsupported daemon-topic reply |
+
+This matrix covers the existing HTTP GraphQL, bootstrap HTTP transport, and
+`/socket` channels. The only supported standalone daemon operation is registration.
+No persisted assignment binds a standalone daemon to a current execution in this
+scope, so reporting/completion are deliberately unsupported even when the caller
+knows a real execution ID. No claimed user, daemon, project, or execution ID grants
+additional access. Project assignment and reporting require a separate design that
+checks server-owned current execution identity before supporting those operations.
+The legacy account project channel's `client_type=daemon` is delivery classification
+inside existing account authorization; it does not elevate a standalone principal.

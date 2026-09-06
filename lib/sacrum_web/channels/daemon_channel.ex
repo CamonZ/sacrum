@@ -37,6 +37,13 @@ defmodule SacrumWeb.DaemonChannel do
 
   def join(_, _, _), do: {:error, %{reason: "invalid_registration"}}
 
+  @doc "Standalone registration grants no execution/reporting authority."
+  @spec handle_in(String.t(), term(), Phoenix.Socket.t()) ::
+          {:reply, {:error, map()}, Phoenix.Socket.t()}
+  @impl true
+  def handle_in(_event, _payload, socket),
+    do: {:reply, {:error, %{reason: "unsupported_operation"}}, socket}
+
   @spec terminate(term(), Phoenix.Socket.t()) :: :ok
   @impl true
   def terminate(_reason, socket) do
