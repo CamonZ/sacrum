@@ -7,6 +7,9 @@ defmodule Sacrum.Repo.Schemas.Daemon do
     * `pending` — provisioned with an unconsumed bootstrap credential.
     * `active` — completed at least one bootstrap exchange under this schema.
     * `revoked` — terminal; all credentials invalid.
+    * `removed` — terminal tombstone; unregistered from the active fleet
+      while identity references, credential audit and execution history
+      are retained.
 
   It never claims the daemon is online. Terminal identities fail every
   credential operation through `credential_eligible?/1`, an explicit
@@ -27,7 +30,8 @@ defmodule Sacrum.Repo.Schemas.Daemon do
   import Ecto.Changeset
 
   @type t :: %__MODULE__{}
-  @statuses ~w(pending active revoked)
+  @statuses ~w(pending active revoked removed)
+  @terminal_statuses ~w(revoked removed)
   @credential_eligible_statuses ~w(pending active)
   @name_unique_index :daemons_user_id_lower_name_index
   @name_max_length 100
@@ -39,6 +43,7 @@ defmodule Sacrum.Repo.Schemas.Daemon do
     field :name, :string
     field :status, :string, default: "pending"
     field :enrolled_at, :utc_datetime_usec
+    field :removed_at, :utc_datetime_usec
     belongs_to :user, Sacrum.Repo.Schemas.User
     has_many :credentials, Sacrum.Repo.Schemas.DaemonCredential
     timestamps(type: :utc_datetime_usec)
@@ -104,6 +109,27 @@ defmodule Sacrum.Repo.Schemas.Daemon do
 
   def credential_eligible?(status) when is_binary(status),
     do: status in @credential_eligible_statuses
+
+  @doc "Terminal identities (revoked or removed) can no longer be mutated into service."
+  @spec terminal?(t()) :: boolean()
+  def terminal?(%__MODULE__{status: status}), do: status in @terminal_statuses
+
+  @doc "True for the terminal unregister tombstone."
+  @spec removed?(t()) :: boolean()
+  def removed?(%__MODULE__{status: "removed"}), do: true
+  def removed?(%__MODULE__{}), do: false
+
+  @doc """
+  Trusted terminal-removal transition. Soft tombstone: the row, credential
+  audit and execution history are retained; only fleet membership and access
+  end. Never exposed to client attrs.
+  """
+  @spec remove_changeset(t(), DateTime.t()) :: Ecto.Changeset.t()
+  def remove_changeset(%__MODULE__{} = daemon, %DateTime{} = removed_at) do
+    daemon
+    |> change(status: "removed", removed_at: removed_at)
+    |> validate_inclusion(:status, @statuses)
+  end
 
   defp validate_name(changeset) do
     changeset

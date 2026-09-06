@@ -199,6 +199,49 @@ defmodule Sacrum.Repo.DaemonExchangeConcurrencyTest do
       end)
     end
 
+    test "pending unregister racing bootstrap exchange never orphans and never overlaps", ctx do
+      contenders = [
+        fn -> Daemons.exchange_bootstrap(ctx.daemon.id, ctx.bootstrap) end,
+        fn -> Daemons.unregister(ctx.daemon) end
+      ]
+
+      results = race_on_daemon_lock(ctx.daemon.id, contenders)
+
+      exchange = Enum.find(results, &match?({:ok, _, _, _}, &1))
+      unregister = Enum.find(results, &match?({:ok, %{daemon: _}}, &1))
+
+      committed(fn ->
+        daemon = Repo.get!(Daemon, ctx.daemon.id)
+
+        case {exchange, unregister} do
+          {{:ok, _, _, _}, nil} ->
+            # Exchange won: evidence committed first, removal safely refused.
+            assert {:error, :ownership_unknown} = Enum.find(results, &match?({:error, _}, &1))
+            assert daemon.status == "active"
+            assert daemon.enrolled_at
+
+          {nil, {:ok, _}} ->
+            # Removal won: terminal tombstone; exchange failed closed.
+            assert {:error, :invalid_credentials} = Enum.find(results, &match?({:error, _}, &1))
+            assert daemon.status == "removed"
+            assert daemon.removed_at
+
+            assert Repo.aggregate(
+                     from(c in DaemonCredential,
+                       where: c.daemon_id == ^daemon.id and c.status == "active"
+                     ),
+                     :count
+                   ) == 0
+        end
+
+        # Identity, audit rows and history are always retained.
+        assert Repo.aggregate(
+                 from(c in DaemonCredential, where: c.daemon_id == ^daemon.id),
+                 :count
+               ) >= 1
+      end)
+    end
+
     test "injected failure of the daemon status update rolls back credential invalidation", ctx do
       suffix = System.unique_integer([:positive])
       function = "fail_revoke_#{suffix}"

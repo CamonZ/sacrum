@@ -71,6 +71,97 @@ defmodule Sacrum.Repo.Daemons do
     do: create_bootstrap(%Daemon{user_id: user_id}, attrs)
 
   @doc """
+  Terminal unregister under the daemon row lock, serialized against exchange
+  and rotation through the same lock order.
+
+  Conservative work-safety boundary: removal is permitted only for
+  never-enrolled provisioning (no credential was ever successfully
+  exchanged — no reconnect credential of any status and no consumed
+  bootstrap). Anything with enrollment evidence is refused with
+  `{:error, :ownership_unknown}`: Sacrum has no daemon-keyed work ownership
+  subsystem yet, so an enrolled daemon's lack of execution authority cannot
+  be conclusively established. Evidence is re-checked after the lock so a
+  concurrent exchange cannot slip past the guard. Removal invalidates every
+  active credential, records a soft tombstone (row, credential audit and
+  execution history are preserved) and is idempotent on already-removed
+  rows.
+  """
+  @spec unregister(Daemon.t()) ::
+          {:ok, committed_lifecycle()} | {:error, :ownership_unknown | Ecto.Changeset.t()}
+  def unregister(%Daemon{} = daemon) do
+    result =
+      Repo.transaction(fn ->
+        daemon = lock_daemon_row!(daemon.id)
+
+        cond do
+          Daemon.removed?(daemon) ->
+            tombstone_result(daemon)
+
+          enrollment_evidence?(daemon.id) ->
+            Repo.rollback(:ownership_unknown)
+
+          true ->
+            remove!(daemon)
+        end
+      end)
+
+    normalize_transaction(result)
+  end
+
+  defp tombstone_result(daemon),
+    do: %{daemon: daemon, credential: nil, token: nil, invalidated_credential_ids: []}
+
+  defp remove!(%Daemon{} = daemon) do
+    now = DateTime.utc_now()
+    invalidated = active_credential_ids(daemon.id)
+
+    Repo.update_all(
+      from(c in DaemonCredential, where: c.daemon_id == ^daemon.id and c.status == "active"),
+      set: [status: "revoked", revoked_at: now, updated_at: now]
+    )
+
+    case Repo.update(Daemon.remove_changeset(daemon, now)) do
+      {:ok, removed} ->
+        %{
+          daemon: removed,
+          credential: nil,
+          token: nil,
+          invalidated_credential_ids: invalidated
+        }
+
+      {:error, changeset} ->
+        Repo.rollback(changeset)
+    end
+  end
+
+  # Enrollment evidence: any reconnect credential (including revoked,
+  # consumed or expired ones and rows migrated from the legacy schema) or a
+  # consumed bootstrap proves the identity once held a session, so removal
+  # safety cannot be established without daemon-keyed ownership.
+  defp enrollment_evidence?(daemon_id) do
+    Repo.exists?(
+      from c in DaemonCredential,
+        where:
+          c.daemon_id == ^daemon_id and
+            (c.credential_kind == "reconnect" or not is_nil(c.consumed_at))
+    )
+  end
+
+  @doc """
+  Owner's daemons excluding removed tombstones — the active fleet view.
+  Tombstones stay readable through direct owner reads; execution history
+  and credential audit are never deleted.
+  """
+  @spec list_active_fleet(String.t()) :: [Daemon.t()]
+  def list_active_fleet(user_id) when is_binary(user_id) do
+    Repo.all(
+      from d in Daemon,
+        where: d.user_id == ^user_id and d.status != "removed",
+        order_by: [asc: d.inserted_at, asc: d.id]
+    )
+  end
+
+  @doc """
   Atomically revokes the identity and every active credential under the
   daemon row lock, using the same lock order as exchange/rotation. All
   credentials receive one consistent revoked timestamp. Idempotent: revoking

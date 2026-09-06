@@ -37,15 +37,72 @@ defmodule Sacrum.Accounts.Daemons do
 
   @doc """
   Owner-scoped rename through the shared name policy. `nil`/omitted name
-  semantics follow `Sacrum.Repo.Schemas.Daemon.name_changeset/2`.
+  semantics follow `Sacrum.Repo.Schemas.Daemon.name_changeset/2`. Terminal
+  identities (revoked or removed) keep a stable name for audit and cannot be
+  renamed back into service.
   """
   @spec rename(String.t(), String.t(), map()) ::
-          {:ok, Daemon.t()} | {:error, :not_found | Ecto.Changeset.t()}
+          {:ok, Daemon.t()}
+          | {:error, :not_found | :terminal_state | Ecto.Changeset.t()}
   def rename(user_id, daemon_id, attrs) do
     with {:ok, daemon} <- get_by(user_id, conditions: [id: daemon_id]) do
-      DaemonsRepo.rename(daemon, attrs)
+      if Daemon.terminal?(daemon) do
+        {:error, :terminal_state}
+      else
+        DaemonsRepo.rename(daemon, attrs)
+      end
     end
   end
+
+  @doc """
+  Owner-scoped terminal unregister with conservative work guards.
+
+  Decision order:
+
+    * unknown or foreign daemon -> `{:error, :not_found}` (no disclosure)
+    * a currently connected session -> `{:error, :active_work}` (disconnect
+      alone does not make an enrolled daemon removable)
+    * any enrollment evidence (reconnect credential of any status, or a
+      consumed bootstrap) -> `{:error, :ownership_unknown}`, because
+      daemon-keyed work ownership does not exist yet and lack of execution
+      authority cannot be conclusively established
+    * never-enrolled provisioning -> terminal removal: credentials
+      invalidated, soft tombstone recorded, sessions invalidated post-commit,
+      history preserved
+
+  Already-removed daemons are removed again idempotently by the repository.
+  Removal serializes against exchange/rotation under the daemon row lock; a
+  denied removal leaves names, credentials and history unchanged.
+  """
+  @spec unregister(String.t(), String.t()) ::
+          {:ok, Daemon.t()}
+          | {:error, :not_found | :active_work | :ownership_unknown | Ecto.Changeset.t()}
+  def unregister(user_id, daemon_id) do
+    with {:ok, daemon} <- get_by(user_id, conditions: [id: daemon_id]),
+         :ok <- refuse_connected_session(daemon) do
+      case DaemonsRepo.unregister(daemon) do
+        {:ok, %{daemon: removed}} ->
+          Sacrum.DaemonConnectionRegistry.invalidate_sessions(removed.id)
+          {:ok, removed}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  defp refuse_connected_session(%Daemon{} = daemon) do
+    if Sacrum.DaemonConnectionRegistry.lookup(daemon.id) == [],
+      do: :ok,
+      else: {:error, :active_work}
+  end
+
+  @doc """
+  The owner's active fleet: all daemons except removed tombstones.
+  Tombstones remain readable through `get_by/2`.
+  """
+  @spec list_fleet(String.t()) :: [Daemon.t()]
+  def list_fleet(user_id) when is_binary(user_id), do: DaemonsRepo.list_active_fleet(user_id)
 
   @doc """
   Owner-scoped enrollment metadata. Exposes credential kind/expiry/status and
