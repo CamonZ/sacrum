@@ -14,7 +14,8 @@ recheck the bootstrap row; a changeset alone cannot prevent concurrent reuse.
 The kind and identity come from trusted structs, while lifecycle functions set
 consumption and revocation timestamps. The create changeset retains the existing
 hash/expiry/status input contract. Creation with a daemon issues a bootstrap;
-rotation retains the daemon ID and produces a reconnect credential. These are
+rotation retains the daemon ID, revokes all old credentials, and issues a fresh
+bootstrap for owner-authorized recovery. These are
 persistence contracts; the exchange and socket authentication layers enforce
 which kind is accepted at each boundary.
 
@@ -47,3 +48,27 @@ Rolling back the kind migration loses classification and consumption history;
 an old application could accept a consumed bootstrap again. Never perform that
 rollback while issued bootstrap credentials remain usable. Prefer a forward fix;
 otherwise stop authentication and revoke affected credentials before rollback.
+
+
+## Exchange and recovery service
+
+`Accounts.Daemons.exchange_bootstrap(daemon_id, bootstrap_token)` returns
+`{:ok, daemon, reconnect_token, reconnect_credential}` on success. The metadata
+contains its expiry and credential ID; the daemon row supplies the trusted owner.
+Invalid, expired, consumed, revoked, or mismatched inputs return
+`{:error, :invalid_credentials}`. Persistence validation errors return a changeset.
+The reconnect lifetime is 30 days from exchange and is independent of bootstrap
+expiry. `verify_token` accepts reconnect credentials only.
+
+Exchange verifies and hashes before acquiring a daemon row lock, then locks and
+rechecks the bootstrap and writes consumption plus issuance in one transaction.
+Rotation takes the same daemon lock before revoking all credentials and issuing a
+bootstrap. Daemon revocation obtains that row lock through its update. This orders
+exchange against concurrent rotation/revocation. Socket lifecycle invalidation
+must use these persisted revocation states in the follow-up lifecycle work.
+
+A lost successful response cannot be replayed to recover its plaintext. The owner
+calls `Accounts.Daemons.rotate(user_id, daemon_id)` and exchanges the newly issued
+bootstrap; rotation invalidates the lost reconnect. No plaintext recovery storage
+exists. Trusted tests can pass `now: datetime` to exchange or verification;
+production callers omit it, checking current UTC after acquiring locks.

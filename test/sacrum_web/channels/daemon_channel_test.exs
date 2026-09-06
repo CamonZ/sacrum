@@ -22,7 +22,11 @@ defmodule SacrumWeb.DaemonChannelTest do
         password: "password123"
       })
 
-    {:ok, daemon, token} = Sacrum.Accounts.Daemons.create(user.id)
+    {:ok, daemon, bootstrap} = Sacrum.Accounts.Daemons.create(user.id)
+
+    {:ok, daemon, token, _credential} =
+      Sacrum.Accounts.Daemons.exchange_bootstrap(daemon.id, bootstrap)
+
     {:ok, socket} = connect(UserSocket, %{"token" => api_token(user)})
     {user, daemon, token, socket}
   end

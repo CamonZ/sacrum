@@ -15,8 +15,7 @@ defmodule Sacrum.Repo.DaemonsTest do
     assert {:ok, daemon, token} = Daemons.create(user.id)
     assert {:ok, found} = Daemons.get(daemon.id)
     assert found.id == daemon.id
-    assert {:ok, verified} = Daemons.verify_token(daemon.id, token)
-    assert verified.id == daemon.id
+    assert {:error, :invalid_credentials} = Daemons.verify_token(daemon.id, token)
 
     assert [%{credential_kind: "bootstrap", consumed_at: nil}] =
              DaemonCredentials.list_active_for_daemon(daemon.id)
@@ -34,7 +33,12 @@ defmodule Sacrum.Repo.DaemonsTest do
     assert {:ok, rotated, new_token} = Daemons.rotate(daemon)
     assert rotated.id == daemon.id
     assert {:error, :invalid_credentials} = Daemons.verify_token(daemon.id, old_token)
-    assert {:ok, _} = Daemons.verify_token(daemon.id, new_token)
-    assert [%{credential_kind: "reconnect"}] = DaemonCredentials.list_active_for_daemon(daemon.id)
+    assert {:ok, _, reconnect, _} = Daemons.exchange_bootstrap(daemon.id, new_token)
+    assert {:ok, _} = Daemons.verify_token(daemon.id, reconnect)
+
+    assert Enum.any?(
+             DaemonCredentials.list_active_for_daemon(daemon.id),
+             &(&1.credential_kind == "reconnect")
+           )
   end
 end
