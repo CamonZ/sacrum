@@ -62,4 +62,103 @@ defmodule SacrumWeb.DaemonChannelTest do
                "enrollment_token" => other_token
              })
   end
+
+  test "standalone session owns registration and duplicate failure cannot release it" do
+    {user, daemon, token, _} = setup_daemon("standalone")
+
+    assert {:ok, socket} =
+             connect(UserSocket, %{"daemon_id" => daemon.id, "reconnect_token" => token})
+
+    assert {:ok, _, channel} =
+             subscribe_and_join(socket, "daemon:#{daemon.id}", %{
+               "user_id" => Ecto.UUID.generate()
+             })
+
+    assert channel.assigns.user_id == user.id
+    refute Map.has_key?(channel.assigns, :current_user)
+    owner = channel.channel_pid
+    assert [{^owner, _}] = Sacrum.DaemonConnectionRegistry.lookup(daemon.id)
+
+    assert {:ok, duplicate} =
+             connect(UserSocket, %{"daemon_id" => daemon.id, "reconnect_token" => token})
+
+    assert {:error, %{reason: "already_connected"}} =
+             subscribe_and_join(duplicate, "daemon:#{daemon.id}")
+
+    assert [{^owner, _}] = Sacrum.DaemonConnectionRegistry.lookup(daemon.id)
+    :ok = Sacrum.DaemonConnectionRegistry.unregister(daemon.id)
+    assert [{^owner, _}] = Sacrum.DaemonConnectionRegistry.lookup(daemon.id)
+    monitor = Process.monitor(owner)
+    leave(channel)
+    assert_receive {:DOWN, ^monitor, :process, ^owner, _}
+    assert Sacrum.DaemonConnectionRegistry.lookup(daemon.id) == []
+    assert {:ok, _, rejoined} = subscribe_and_join(duplicate, "daemon:#{daemon.id}")
+    assert rejoined.assigns.daemon_id == daemon.id
+  end
+
+  test "standalone topic identity is exact and project channels remain forbidden" do
+    {_user, daemon, token, _} = setup_daemon("topics")
+    {:ok, socket} = connect(UserSocket, %{"daemon_id" => daemon.id, "reconnect_token" => token})
+
+    assert {:error, %{reason: "identity_mismatch"}} =
+             subscribe_and_join(socket, "daemon:#{Ecto.UUID.generate()}")
+
+    assert {:error, %{reason: "forbidden"}} =
+             subscribe_and_join(socket, "project:#{Ecto.UUID.generate()}")
+
+    assert Sacrum.DaemonConnectionRegistry.lookup(daemon.id) == []
+  end
+
+  test "join rechecks revocation and rotation since socket authentication" do
+    for action <- [:rotate, :revoke] do
+      {user, daemon, token, _} = setup_daemon("recheck#{action}")
+      {:ok, socket} = connect(UserSocket, %{"daemon_id" => daemon.id, "reconnect_token" => token})
+      apply(Sacrum.Accounts.Daemons, action, [user.id, daemon.id])
+
+      assert {:error, %{reason: "invalid_credentials"}} =
+               subscribe_and_join(socket, "daemon:#{daemon.id}")
+
+      assert Sacrum.DaemonConnectionRegistry.lookup(daemon.id) == []
+    end
+  end
+
+  test "reconnect survives bootstrap expiry and channel process restart" do
+    {_user, daemon, token, _} = setup_daemon("restart")
+    import Ecto.Query
+
+    Repo.update_all(
+      from(c in Sacrum.Repo.Schemas.DaemonCredential,
+        where: c.daemon_id == ^daemon.id and c.credential_kind == "bootstrap"
+      ),
+      set: [expires_at: DateTime.add(DateTime.utc_now(), -60)]
+    )
+
+    {:ok, socket} = connect(UserSocket, %{"daemon_id" => daemon.id, "reconnect_token" => token})
+    {:ok, _, channel} = subscribe_and_join(socket, "daemon:#{daemon.id}")
+    monitor = Process.monitor(channel.channel_pid)
+    close(channel)
+    assert_receive {:DOWN, ^monitor, :process, _, _}
+    assert Sacrum.DaemonConnectionRegistry.lookup(daemon.id) == []
+    {:ok, fresh} = connect(UserSocket, %{"daemon_id" => daemon.id, "reconnect_token" => token})
+    assert {:ok, _, restarted} = subscribe_and_join(fresh, "daemon:#{daemon.id}")
+    assert restarted.assigns.daemon_id == daemon.id
+  end
+
+  test "join refuses reconnect that expired after socket authentication" do
+    {_user, daemon, token, _} = setup_daemon("expiry")
+    {:ok, socket} = connect(UserSocket, %{"daemon_id" => daemon.id, "reconnect_token" => token})
+    import Ecto.Query
+
+    Repo.update_all(
+      from(c in Sacrum.Repo.Schemas.DaemonCredential,
+        where: c.id == ^socket.assigns.principal.credential_id
+      ),
+      set: [expires_at: DateTime.utc_now()]
+    )
+
+    assert {:error, %{reason: "invalid_credentials"}} =
+             subscribe_and_join(socket, "daemon:#{daemon.id}")
+
+    assert Sacrum.DaemonConnectionRegistry.lookup(daemon.id) == []
+  end
 end

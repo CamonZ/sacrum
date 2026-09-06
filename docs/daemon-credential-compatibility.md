@@ -101,3 +101,26 @@ Malformed shape returns HTTP 400 `invalid_request`; invalid credentials return
 503 `exchange_unavailable`. Responses use `Cache-Control: no-store`. Credential
 parameter names are filtered by Phoenix logging. Do not place credentials in URL
 paths or query strings; proxy/access logs can record URLs before Phoenix filtering.
+
+## Standalone socket authentication
+
+Connect to the returned `socket_endpoint` with Phoenix socket parameters
+`daemon_id` and `reconnect_token`, then join `daemon:<daemon_id>` with an empty
+payload. Account tokens continue to use the separate `token` parameter. Mixed
+account/daemon authentication parameters are rejected.
+
+The daemon principal carries only the persisted daemon, owner, and credential IDs;
+it never synthesizes `current_user` or retains reconnect plaintext in assigns.
+Client-supplied owner or credential IDs cannot override the verified identity.
+Socket identifiers distinguish account sockets from daemon/credential sockets.
+Joining rechecks credential expiry/revocation and daemon revocation, and the topic
+must exactly match the authenticated daemon ID. Daemon principals cannot join
+project channels. Historical account-authenticated daemon joins still require a
+reconnect credential and matching account ownership.
+
+The local single-registration registry rejects duplicate sessions. Channel
+termination releases only its own successful registration; failed joins cannot
+unregister another session. Disconnect and channel/application process restart do
+not invalidate the durable reconnect credential. Bootstrap expiry after exchange
+does not affect reconnect authentication. Live-session invalidation on later
+rotation/revocation is completed by the lifecycle follow-up.

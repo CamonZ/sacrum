@@ -136,22 +136,52 @@ defmodule Sacrum.Repo.Daemons do
 
   @spec verify_token(term(), term(), keyword()) ::
           {:ok, Daemon.t()} | {:error, :invalid_credentials}
-  def verify_token(daemon_id, token, opts \\ [])
+  def verify_token(daemon_id, token, opts \\ []) do
+    case authenticate_reconnect(daemon_id, token, opts) do
+      {:ok, daemon, _credential} -> {:ok, daemon}
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
-  def verify_token(daemon_id, token, opts) when is_binary(daemon_id) and is_binary(token) do
+  @spec authenticate_reconnect(term(), term(), keyword()) ::
+          {:ok, Daemon.t(), DaemonCredential.t()} | {:error, :invalid_credentials}
+  def authenticate_reconnect(daemon_id, token, opts \\ [])
+
+  def authenticate_reconnect(daemon_id, token, opts)
+      when is_binary(daemon_id) and is_binary(token) do
     with {:ok, daemon_id} <- Ecto.UUID.cast(daemon_id),
          %DaemonCredential{} = credential <-
-           matching_credential(daemon_id, token, "reconnect", now(opts)),
-         %Daemon{status: status} = daemon when status != "revoked" <- Repo.get(Daemon, daemon_id),
-         %DaemonCredential{} = current <- Repo.get(DaemonCredential, credential.id),
-         true <- DaemonCredential.valid_for_authentication?(current, now(opts)) do
-      {:ok, daemon}
+           matching_credential(daemon_id, token, "reconnect", now(opts)) do
+      revalidate_reconnect(daemon_id, credential.id, opts)
     else
       _ -> {:error, :invalid_credentials}
     end
   end
 
-  def verify_token(_, _, _), do: {:error, :invalid_credentials}
+  def authenticate_reconnect(_, _, _), do: {:error, :invalid_credentials}
+
+  @doc "Rechecks an already authenticated credential by persisted identity without retaining plaintext."
+  @spec revalidate_reconnect(term(), term(), keyword()) ::
+          {:ok, Daemon.t(), DaemonCredential.t()} | {:error, :invalid_credentials}
+  def revalidate_reconnect(daemon_id, credential_id, opts \\ []) do
+    with {:ok, daemon_id} <- Ecto.UUID.cast(daemon_id),
+         {:ok, credential_id} <- Ecto.UUID.cast(credential_id),
+         {daemon, credential} <-
+           Repo.one(
+             from d in Daemon,
+               join: c in DaemonCredential,
+               on: c.daemon_id == d.id,
+               where:
+                 d.id == ^daemon_id and c.id == ^credential_id and d.status != "revoked" and
+                   c.credential_kind == "reconnect",
+               select: {d, c}
+           ),
+         true <- DaemonCredential.valid_for_authentication?(credential, now(opts)) do
+      {:ok, daemon, credential}
+    else
+      _ -> {:error, :invalid_credentials}
+    end
+  end
 
   defp exchange_credential(daemon_id, bootstrap_id, reconnect_hash, opts) do
     Repo.transaction(fn ->
