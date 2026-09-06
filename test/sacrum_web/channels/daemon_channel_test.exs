@@ -44,13 +44,108 @@ defmodule SacrumWeb.DaemonChannelTest do
 
     assert channel.assigns.daemon_id == daemon.id
     assert channel.assigns.user_id == daemon.user_id
-    assert [{_pid, user_id}] = Sacrum.DaemonConnectionRegistry.lookup(daemon.id)
+    assert is_binary(channel.assigns.credential_id)
+
+    assert [{_pid, %{user_id: user_id, credential_id: credential_id}}] =
+             Sacrum.DaemonConnectionRegistry.lookup(daemon.id)
+
     assert user_id == daemon.user_id
+    assert credential_id == channel.assigns.credential_id
 
     ref = Process.monitor(channel.channel_pid)
     leave(channel)
     assert_receive {:DOWN, ^ref, :process, _pid, _reason}
     assert Sacrum.DaemonConnectionRegistry.lookup(daemon.id) == []
+  end
+
+  test "committed revoke terminates the connected standalone session" do
+    {user, daemon, token, _} = setup_daemon("revoke_live")
+
+    {:ok, socket} =
+      connect(UserSocket, %{"daemon_id" => daemon.id, "reconnect_token" => token})
+
+    {:ok, _, channel} = subscribe_and_join(socket, "daemon:#{daemon.id}")
+    monitor = Process.monitor(channel.channel_pid)
+
+    assert {:ok, revoked} = Sacrum.Accounts.Daemons.revoke(user.id, daemon.id)
+    assert revoked.status == "revoked"
+
+    assert_receive {:DOWN, ^monitor, :process, _pid, _reason}
+    assert Sacrum.DaemonConnectionRegistry.lookup(daemon.id) == []
+
+    assert :error =
+             connect(UserSocket, %{"daemon_id" => daemon.id, "reconnect_token" => token})
+  end
+
+  test "rotation terminates only affected sessions; siblings survive and exchange reconnects" do
+    {user, daemon, token, _} = setup_daemon("rotate_live")
+
+    {:ok, sibling, sibling_bootstrap} = Sacrum.Accounts.Daemons.create(user.id)
+
+    {:ok, _, sibling_token, _} =
+      Sacrum.Accounts.Daemons.exchange_bootstrap(sibling.id, sibling_bootstrap)
+
+    {:ok, socket} =
+      connect(UserSocket, %{"daemon_id" => daemon.id, "reconnect_token" => token})
+
+    {:ok, _, channel} = subscribe_and_join(socket, "daemon:#{daemon.id}")
+    monitor = Process.monitor(channel.channel_pid)
+
+    {:ok, sibling_socket} =
+      connect(UserSocket, %{"daemon_id" => sibling.id, "reconnect_token" => sibling_token})
+
+    {:ok, _, sibling_channel} = subscribe_and_join(sibling_socket, "daemon:#{sibling.id}")
+    sibling_monitor = Process.monitor(sibling_channel.channel_pid)
+
+    assert {:ok, _, new_bootstrap, _} =
+             Sacrum.Accounts.Daemons.rotate_bootstrap(user.id, daemon.id)
+
+    assert_receive {:DOWN, ^monitor, :process, _pid, _reason}
+    assert Sacrum.DaemonConnectionRegistry.lookup(daemon.id) == []
+
+    ref = Phoenix.ChannelTest.push(sibling_channel, "report", %{})
+    assert_reply ref, :error, %{reason: "unsupported_operation"}
+    refute_received {:DOWN, ^sibling_monitor, :process, _, _}
+
+    {:ok, _, fresh_reconnect, _} =
+      Sacrum.Accounts.Daemons.exchange_bootstrap(daemon.id, new_bootstrap)
+
+    {:ok, fresh_socket} =
+      connect(UserSocket, %{"daemon_id" => daemon.id, "reconnect_token" => fresh_reconnect})
+
+    assert {:ok, _, fresh_channel} = subscribe_and_join(fresh_socket, "daemon:#{daemon.id}")
+    assert fresh_channel.assigns.daemon_id == daemon.id
+    leave(sibling_channel)
+  end
+
+  test "delayed invalidation cannot terminate a newer valid session" do
+    {user, daemon, token, _} = setup_daemon("stale_invalidation")
+
+    {:ok, socket} =
+      connect(UserSocket, %{"daemon_id" => daemon.id, "reconnect_token" => token})
+
+    {:ok, _, channel} = subscribe_and_join(socket, "daemon:#{daemon.id}")
+    monitor = Process.monitor(channel.channel_pid)
+
+    assert {:ok, _, new_bootstrap, _} =
+             Sacrum.Accounts.Daemons.rotate_bootstrap(user.id, daemon.id)
+
+    assert_receive {:DOWN, ^monitor, :process, _pid, _reason}
+
+    {:ok, _, fresh_reconnect, _} =
+      Sacrum.Accounts.Daemons.exchange_bootstrap(daemon.id, new_bootstrap)
+
+    {:ok, fresh_socket} =
+      connect(UserSocket, %{"daemon_id" => daemon.id, "reconnect_token" => fresh_reconnect})
+
+    {:ok, _, fresh_channel} = subscribe_and_join(fresh_socket, "daemon:#{daemon.id}")
+    fresh_monitor = Process.monitor(fresh_channel.channel_pid)
+
+    send(fresh_channel.channel_pid, :daemon_credentials_invalidated)
+
+    ref = Phoenix.ChannelTest.push(fresh_channel, "report", %{})
+    assert_reply ref, :error, %{reason: "unsupported_operation"}
+    refute_received {:DOWN, ^fresh_monitor, :process, _, _}
   end
 
   test "rejects a credential belonging to another daemon" do

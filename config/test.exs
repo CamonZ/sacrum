@@ -44,6 +44,7 @@ config :phoenix,
 config :sacrum,
   daemon_presence_required: false,
   scheduler_recovery_enabled: false,
-  max_concurrent_executions: 1000
+  max_concurrent_executions: 1000,
+  daemon_session_revalidate_interval_ms: :infinity
 
 config :sacrum, :cdc, start_consumer: false

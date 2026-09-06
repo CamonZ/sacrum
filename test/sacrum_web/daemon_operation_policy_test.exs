@@ -82,6 +82,8 @@ defmodule SacrumWeb.DaemonOperationPolicyTest do
   end
 
   test "all standalone reporting and execution events are explicitly unsupported", ctx do
+    before = Repo.get!(Daemon, ctx.daemon.id)
+
     {:ok, socket} =
       Phoenix.ChannelTest.connect(UserSocket, %{
         "daemon_id" => ctx.daemon.id,
@@ -112,14 +114,20 @@ defmodule SacrumWeb.DaemonOperationPolicyTest do
 
     assert Repo.get!(StepExecution, ctx.execution.id).status == "running"
     assert Repo.get!(StepExecution, ctx.execution.id).output == nil
-    assert Repo.get!(Daemon, ctx.daemon.id).status == "pending"
+
+    after_events = Repo.get!(Daemon, ctx.daemon.id)
+    assert after_events.status == before.status
+    assert after_events.enrolled_at == before.enrolled_at
   end
 
   test "bootstrap and reconnect cannot authorize any account GraphQL operation", ctx do
     operations = [
       "{ projects { id } }",
+      "{ daemons { id } }",
       "mutation { createDaemon { daemon { id } } }",
+      "mutation { renameDaemon(id: \"#{ctx.other_daemon.id}\", name: \"stolen\") { id } }",
       "mutation { revokeDaemon(id: \"#{ctx.other_daemon.id}\") { id } }",
+      "mutation { unregisterDaemon(id: \"#{ctx.other_daemon.id}\") { id } }",
       "mutation { updateStepExecution(id: \"#{ctx.execution.id}\", status: \"completed\") { id } }",
       "mutation { createProject(name: \"Forbidden\") { id } }"
     ]
@@ -172,5 +180,24 @@ defmodule SacrumWeb.DaemonOperationPolicyTest do
     id = created["data"]["createProject"]["id"]
     assert {:ok, project} = Accounts.Projects.get_by(ctx.owner.id, conditions: [id: id])
     assert project.user_id == ctx.owner.id
+  end
+
+  test "daemon lifecycle invalidation never touches user project sessions", ctx do
+    {:ok, account_token, _} = Auth.create_api_token(ctx.owner, %{name: "policy lifecycle"})
+    {:ok, socket} = Phoenix.ChannelTest.connect(UserSocket, %{"token" => account_token})
+
+    assert {:ok, _, channel} =
+             subscribe_and_join(socket, "project:#{ctx.project.id}", %{"client_type" => "default"})
+
+    monitor = Process.monitor(channel.channel_pid)
+
+    assert {:ok, _} = Accounts.Daemons.revoke(ctx.owner.id, ctx.daemon.id)
+    assert {:ok, _, _, _} = Accounts.Daemons.rotate_bootstrap(ctx.owner.id, ctx.sibling.id)
+
+    # Synchronous contact proves the user session is still alive and serving.
+    assert is_map(:sys.get_state(channel.channel_pid))
+    refute_received {:DOWN, ^monitor, :process, _, _}
+    assert Repo.get!(Daemon, ctx.daemon.id).status == "revoked"
+    leave(channel)
   end
 end

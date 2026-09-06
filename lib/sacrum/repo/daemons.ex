@@ -12,6 +12,17 @@ defmodule Sacrum.Repo.Daemons do
   @default_ttl 86_400
   @reconnect_ttl_seconds 2_592_000
 
+  @typedoc """
+  Committed lifecycle mutation result. Token/credential are present only for
+  owner-authorized issuance (rotate/create). Post-commit session invalidation
+  is always by daemon id — the registry holds at most one session per daemon.
+  """
+  @type committed_lifecycle :: %{
+          daemon: Daemon.t(),
+          credential: DaemonCredential.t() | nil,
+          token: String.t() | nil
+        }
+
   @spec create(User.t() | String.t() | Daemon.t()) ::
           {:ok, Daemon.t(), String.t()} | {:error, Ecto.Changeset.t()}
   @spec create(User.t() | String.t() | Daemon.t(), map()) ::
@@ -57,48 +68,183 @@ defmodule Sacrum.Repo.Daemons do
   def create_bootstrap(user_id, attrs) when is_binary(user_id),
     do: create_bootstrap(%Daemon{user_id: user_id}, attrs)
 
-  @spec revoke(Daemon.t()) :: {:ok, Daemon.t()} | {:error, Ecto.Changeset.t()}
-  def revoke(%Daemon{} = daemon) do
-    Repo.update(Daemon.update_changeset(daemon, %{status: "revoked"}))
+  @doc """
+  Terminal unregister under the daemon row lock. Never-enrolled provisioning
+  is tombstoned; enrollment evidence refuses with `:ownership_unknown`.
+  """
+  @spec unregister(Daemon.t()) ::
+          {:ok, committed_lifecycle()}
+          | {:error, :ownership_unknown | :active_work | Ecto.Changeset.t()}
+  @spec unregister(Daemon.t(), keyword()) ::
+          {:ok, committed_lifecycle()}
+          | {:error, :ownership_unknown | :active_work | Ecto.Changeset.t()}
+  def unregister(%Daemon{} = daemon, opts \\ []) do
+    Repo.transaction(fn ->
+      daemon = lock_daemon_row!(daemon.id)
+
+      cond do
+        Daemon.removed?(daemon) ->
+          lifecycle_result(daemon)
+
+        connected?(opts, daemon) ->
+          Repo.rollback(:active_work)
+
+        enrollment_evidence?(daemon.id) ->
+          Repo.rollback(:ownership_unknown)
+
+        true ->
+          remove!(daemon)
+      end
+    end)
   end
 
-  @doc "Revokes all prior credentials and issues a fresh bootstrap on the same identity."
+  defp connected?(opts, daemon) do
+    case Keyword.get(opts, :connected?) do
+      fun when is_function(fun, 1) -> fun.(daemon)
+      _ -> false
+    end
+  end
+
+  defp remove!(%Daemon{} = daemon) do
+    now = DateTime.utc_now()
+    revoke_active_credentials(daemon.id, now)
+
+    case Repo.update(Daemon.remove_changeset(daemon, now)) do
+      {:ok, removed} -> lifecycle_result(removed)
+      {:error, changeset} -> Repo.rollback(changeset)
+    end
+  end
+
+  defp enrollment_evidence?(daemon_id) do
+    Repo.exists?(
+      from c in DaemonCredential,
+        where:
+          c.daemon_id == ^daemon_id and
+            (c.credential_kind == "reconnect" or not is_nil(c.consumed_at))
+    )
+  end
+
+  @doc "Owner's daemons excluding removed tombstones."
+  @spec list_active_fleet(String.t()) :: [Daemon.t()]
+  def list_active_fleet(user_id) when is_binary(user_id) do
+    Repo.all(
+      from d in Daemon,
+        where: d.user_id == ^user_id and d.status != "removed",
+        order_by: [asc: d.inserted_at, asc: d.id]
+    )
+  end
+
+  @doc """
+  Row-locked revoke of the identity and every active credential. Idempotent
+  on terminal rows; `removed` stays `removed`.
+  """
+  @spec revoke(Daemon.t()) :: {:ok, committed_lifecycle()} | {:error, Ecto.Changeset.t()}
+  def revoke(%Daemon{} = daemon) do
+    Repo.transaction(fn ->
+      daemon = lock_daemon_row!(daemon.id)
+      now = DateTime.utc_now()
+      revoke_active_credentials(daemon.id, now)
+      lifecycle_result(persist_revoked!(daemon))
+    end)
+  end
+
+  defp persist_revoked!(%Daemon{} = daemon) do
+    if Daemon.terminal?(daemon) do
+      daemon
+    else
+      case Repo.update(Daemon.update_changeset(daemon, %{status: "revoked"})) do
+        {:ok, daemon} -> daemon
+        {:error, changeset} -> Repo.rollback(changeset)
+      end
+    end
+  end
+
+  @doc "Renames or clears the display name. Terminal identities refuse under the row lock."
+  @spec rename(Daemon.t(), map()) ::
+          {:ok, Daemon.t()} | {:error, :terminal_state | Ecto.Changeset.t()}
+  def rename(%Daemon{} = daemon, attrs) do
+    Repo.transaction(fn ->
+      daemon.id
+      |> lock_daemon_row!()
+      |> apply_rename!(attrs)
+    end)
+  end
+
+  defp apply_rename!(%Daemon{} = daemon, attrs) do
+    if Daemon.terminal?(daemon), do: Repo.rollback(:terminal_state)
+
+    case Repo.update(Daemon.name_changeset(daemon, attrs)) do
+      {:ok, renamed} -> renamed
+      {:error, changeset} -> Repo.rollback(changeset)
+    end
+  end
+
+  @doc "Enrollment metadata without token hashes or plaintext."
+  @spec enrollment_metadata(Daemon.t()) :: %{
+          daemon_id: String.t(),
+          status: String.t(),
+          enrolled_at: DateTime.t() | nil,
+          credentials: [map()]
+        }
+  def enrollment_metadata(%Daemon{} = daemon) do
+    credentials =
+      Repo.all(
+        from c in DaemonCredential,
+          where: c.daemon_id == ^daemon.id,
+          order_by: [asc: c.inserted_at, asc: c.id]
+      )
+
+    %{
+      daemon_id: daemon.id,
+      status: daemon.status,
+      enrolled_at: daemon.enrolled_at,
+      credentials: Enum.map(credentials, &DaemonCredential.safe_metadata/1)
+    }
+  end
+
+  @doc """
+  Row-locked rotation: revoke live credentials and issue a fresh bootstrap.
+  Terminal identities refuse with `:terminal_state`.
+  """
   @spec rotate(Daemon.t()) ::
-          {:ok, Daemon.t(), String.t()} | {:error, :invalid_credentials | Ecto.Changeset.t()}
-  def rotate(%Daemon{} = daemon) do
-    case rotate_bootstrap(daemon) do
-      {:ok, daemon, token, _credential} -> {:ok, daemon, token}
+          {:ok, committed_lifecycle()}
+          | {:error, :invalid_credentials | :terminal_state | Ecto.Changeset.t()}
+  @spec rotate(Daemon.t(), keyword()) ::
+          {:ok, committed_lifecycle()}
+          | {:error, :invalid_credentials | :terminal_state | Ecto.Changeset.t()}
+  def rotate(%Daemon{} = daemon, opts \\ []) do
+    case rotate_bootstrap(daemon, opts) do
+      {:ok, result} -> {:ok, %{result | token: nil, credential: nil}}
       {:error, reason} -> {:error, reason}
     end
   end
 
+  @doc "Same as `rotate/1` with the new bootstrap token for the owner response."
   @spec rotate_bootstrap(Daemon.t()) ::
-          {:ok, Daemon.t(), String.t(), DaemonCredential.t()}
-          | {:error, :invalid_credentials | Ecto.Changeset.t()}
-  def rotate_bootstrap(%Daemon{} = daemon) do
+          {:ok, committed_lifecycle()}
+          | {:error, :invalid_credentials | :terminal_state | Ecto.Changeset.t()}
+  @spec rotate_bootstrap(Daemon.t(), keyword()) ::
+          {:ok, committed_lifecycle()}
+          | {:error, :invalid_credentials | :terminal_state | Ecto.Changeset.t()}
+  def rotate_bootstrap(%Daemon{} = daemon, opts \\ []) do
+    now = now(opts)
     token = new_token()
     token_hash = Argon2.hash_pwd_salt(token)
 
-    result =
-      Repo.transaction(fn ->
-        daemon = lock_daemon!(daemon.id)
-        now = DateTime.utc_now()
+    Repo.transaction(fn ->
+      daemon = lock_daemon_row!(daemon.id)
 
-        Repo.update_all(
-          from(c in DaemonCredential, where: c.daemon_id == ^daemon.id and c.status == "active"),
-          set: [status: "revoked", revoked_at: now, updated_at: now]
-        )
+      unless Daemon.credential_eligible?(daemon) do
+        Repo.rollback(:terminal_state)
+      end
 
-        credential =
-          insert_credential!(daemon.id, "bootstrap", token_hash, DateTime.add(now, @default_ttl))
+      revoke_active_credentials(daemon.id, now)
 
-        {daemon, credential}
-      end)
+      credential =
+        insert_credential!(daemon.id, "bootstrap", token_hash, DateTime.add(now, @default_ttl))
 
-    case result do
-      {:ok, {daemon, credential}} -> {:ok, daemon, token, credential}
-      {:error, reason} -> {:error, reason}
-    end
+      %{daemon: daemon, credential: credential, token: token}
+    end)
   end
 
   @doc """
@@ -173,10 +319,11 @@ defmodule Sacrum.Repo.Daemons do
                join: c in DaemonCredential,
                on: c.daemon_id == d.id,
                where:
-                 d.id == ^daemon_id and c.id == ^credential_id and d.status != "revoked" and
+                 d.id == ^daemon_id and c.id == ^credential_id and
                    c.credential_kind == "reconnect",
                select: {d, c}
            ),
+         true <- Daemon.credential_eligible?(daemon),
          true <- DaemonCredential.valid_for_authentication?(credential, now(opts)) do
       {:ok, daemon, credential}
     else
@@ -208,8 +355,19 @@ defmodule Sacrum.Repo.Daemons do
           DateTime.add(now, @reconnect_ttl_seconds)
         )
 
+      daemon = record_enrollment!(daemon, now)
+
       {daemon, reconnect}
     end)
+  end
+
+  defp record_enrollment!(%Daemon{enrolled_at: %DateTime{}} = daemon, _now), do: daemon
+
+  defp record_enrollment!(%Daemon{} = daemon, now) do
+    case Repo.update(Daemon.enroll_changeset(daemon, now)) do
+      {:ok, daemon} -> daemon
+      {:error, changeset} -> Repo.rollback(changeset)
+    end
   end
 
   defp matching_credential(daemon_id, token, kind, now) do
@@ -233,11 +391,31 @@ defmodule Sacrum.Repo.Daemons do
   end
 
   defp lock_daemon!(daemon_id) do
+    daemon = lock_daemon_row!(daemon_id)
+
+    if Daemon.credential_eligible?(daemon) do
+      daemon
+    else
+      Repo.rollback(:invalid_credentials)
+    end
+  end
+
+  defp lock_daemon_row!(daemon_id) do
     case Repo.one(from d in Daemon, where: d.id == ^daemon_id, lock: "FOR UPDATE") do
-      %Daemon{status: status} = daemon when status != "revoked" -> daemon
+      %Daemon{} = daemon -> daemon
       _ -> Repo.rollback(:invalid_credentials)
     end
   end
+
+  defp revoke_active_credentials(daemon_id, now) do
+    Repo.update_all(
+      from(c in DaemonCredential, where: c.daemon_id == ^daemon_id and c.status == "active"),
+      set: [status: "revoked", revoked_at: now, updated_at: now]
+    )
+  end
+
+  defp lifecycle_result(daemon),
+    do: %{daemon: daemon, credential: nil, token: nil}
 
   defp insert_credential!(daemon_id, kind, token_hash, expires_at) do
     changeset =

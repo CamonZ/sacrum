@@ -29,6 +29,16 @@ defmodule Sacrum.Repo.Schemas.DaemonCredential do
     :inserted_at,
     :updated_at
   ]
+  @safe_metadata_fields [
+    :id,
+    :credential_kind,
+    :status,
+    :expires_at,
+    :consumed_at,
+    :revoked_at,
+    :inserted_at,
+    :updated_at
+  ]
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
   @derive {Jason.Encoder, only: @json_fields}
@@ -96,4 +106,22 @@ defmodule Sacrum.Repo.Schemas.DaemonCredential do
   def revoke_changeset(credential) do
     change(credential, status: "revoked", revoked_at: DateTime.utc_now())
   end
+
+  @doc """
+  Safe metadata projection for enrollment surfaces. Excludes `token_hash`;
+  raw credential records are not public DTOs and must never serialize hashes
+  or plaintext.
+  """
+  @spec safe_metadata(t()) :: %{
+          id: String.t(),
+          credential_kind: String.t(),
+          status: String.t(),
+          expires_at: DateTime.t(),
+          consumed_at: DateTime.t() | nil,
+          revoked_at: DateTime.t() | nil,
+          inserted_at: DateTime.t(),
+          updated_at: DateTime.t()
+        }
+  def safe_metadata(%__MODULE__{} = credential),
+    do: Map.take(credential, @safe_metadata_fields)
 end

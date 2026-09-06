@@ -132,6 +132,167 @@ defmodule Sacrum.Repo.DaemonExchangeConcurrencyTest do
     end)
   end
 
+  describe "revoke races" do
+    test "revoke racing bootstrap exchange always ends terminal and unauthenticated", ctx do
+      contenders = [
+        fn -> Daemons.exchange_bootstrap(ctx.daemon.id, ctx.bootstrap) end,
+        fn -> Daemons.revoke(ctx.daemon) end
+      ]
+
+      results = race_on_daemon_lock(ctx.daemon.id, contenders)
+
+      revoke = Enum.find(results, &match?({:ok, %{daemon: _}}, &1))
+      assert {:ok, %{daemon: %{status: "revoked"}}} = revoke
+
+      committed(fn ->
+        daemon = Repo.get!(Daemon, ctx.daemon.id)
+        assert daemon.status == "revoked"
+
+        assert Repo.aggregate(
+                 from(c in DaemonCredential,
+                   where: c.daemon_id == ^daemon.id and c.status == "active"
+                 ),
+                 :count
+               ) == 0
+
+        exchange = Enum.find(results, &match?({:ok, _, _, _}, &1))
+
+        if exchange do
+          reconnect = elem(exchange, 2)
+          assert {:error, :invalid_credentials} = Daemons.verify_token(daemon.id, reconnect)
+        end
+      end)
+    end
+
+    test "pending unregister racing bootstrap exchange never orphans and never overlaps", ctx do
+      contenders = [
+        fn -> Daemons.exchange_bootstrap(ctx.daemon.id, ctx.bootstrap) end,
+        fn -> Daemons.unregister(ctx.daemon) end
+      ]
+
+      results = race_on_daemon_lock(ctx.daemon.id, contenders)
+
+      exchange = Enum.find(results, &match?({:ok, _, _, _}, &1))
+      unregister = Enum.find(results, &match?({:ok, %{daemon: _}}, &1))
+
+      committed(fn ->
+        daemon = Repo.get!(Daemon, ctx.daemon.id)
+
+        case {exchange, unregister} do
+          {{:ok, _, _, _}, nil} ->
+            assert {:error, :ownership_unknown} = Enum.find(results, &match?({:error, _}, &1))
+            assert daemon.status == "active"
+            assert daemon.enrolled_at
+
+          {nil, {:ok, _}} ->
+            assert {:error, :invalid_credentials} = Enum.find(results, &match?({:error, _}, &1))
+            assert daemon.status == "removed"
+            assert daemon.removed_at
+
+            assert Repo.aggregate(
+                     from(c in DaemonCredential,
+                       where: c.daemon_id == ^daemon.id and c.status == "active"
+                     ),
+                     :count
+                   ) == 0
+        end
+
+        assert Repo.aggregate(
+                 from(c in DaemonCredential, where: c.daemon_id == ^daemon.id),
+                 :count
+               ) >= 1
+      end)
+    end
+
+    test "injected failure of the tombstone update rolls back credential invalidation", ctx do
+      suffix = System.unique_integer([:positive])
+      function = "fail_remove_#{suffix}"
+      trigger = "fail_remove_trigger_#{suffix}"
+
+      committed(fn ->
+        Repo.query!("""
+        CREATE FUNCTION #{function}() RETURNS trigger AS $$
+        BEGIN
+          RAISE EXCEPTION 'injected removal failure';
+        END;
+        $$ LANGUAGE plpgsql;
+        """)
+
+        Repo.query!("""
+        CREATE TRIGGER #{trigger} BEFORE UPDATE ON daemons
+        FOR EACH ROW WHEN (NEW.status = 'removed' AND NEW.id = '#{ctx.daemon.id}')
+        EXECUTE FUNCTION #{function}();
+        """)
+      end)
+
+      try do
+        committed(fn ->
+          assert_raise Postgrex.Error, ~r/injected removal failure/, fn ->
+            Daemons.unregister(ctx.daemon)
+          end
+
+          daemon = Repo.get!(Daemon, ctx.daemon.id)
+          assert daemon.status == "pending"
+          assert daemon.removed_at == nil
+
+          assert [%{status: "active"}] =
+                   Repo.all(
+                     from c in DaemonCredential,
+                       where: c.daemon_id == ^daemon.id and c.status == "active"
+                   )
+        end)
+      after
+        committed(fn ->
+          Repo.query!("DROP TRIGGER #{trigger} ON daemons")
+          Repo.query!("DROP FUNCTION #{function}()")
+        end)
+      end
+
+      committed(fn ->
+        assert {:ok, %{daemon: %{status: "removed"}}} = Daemons.unregister(ctx.daemon)
+      end)
+    end
+  end
+
+  defp race_on_daemon_lock(daemon_id, contenders) do
+    supervisor = start_supervised!({Task.Supervisor, []})
+    parent = self()
+
+    tasks =
+      committed(fn ->
+        {:ok, tasks} =
+          Repo.transaction(fn ->
+            Repo.one!(from d in Daemon, where: d.id == ^daemon_id, lock: "FOR UPDATE")
+
+            tasks =
+              for contender <- contenders do
+                Task.Supervisor.async_nolink(supervisor, fn ->
+                  committed(fn ->
+                    %{rows: [[backend]]} = Repo.query!("SELECT pg_backend_pid()")
+                    send(parent, {:ready, self(), backend})
+                    contender.()
+                  end)
+                end)
+              end
+
+            backends =
+              for task <- tasks do
+                pid = task.pid
+                assert_receive {:ready, ^pid, backend}, 5_000
+                backend
+              end
+
+            assert length(Enum.uniq(backends)) == length(contenders)
+            await_blocked(backends, System.monotonic_time(:millisecond) + 5_000)
+            tasks
+          end)
+
+        tasks
+      end)
+
+    tasks |> Enum.map(&Task.await(&1, 10_000))
+  end
+
   defp await_blocked(backends, deadline) do
     Repo.query!("SELECT pg_stat_clear_snapshot()")
 

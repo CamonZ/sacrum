@@ -83,14 +83,16 @@ defmodule SacrumWeb.DaemonEnrollmentIntegrationTest do
     do: graphql(owner, "mutation { createDaemon { #{@bootstrap_fields} } }")["createDaemon"]
 
   defp graphql(owner, query) do
-    response =
-      build_conn()
-      |> authenticate(owner)
-      |> post("/graphql", %{query: query})
-      |> json_response(200)
-
+    response = graphql_response(owner, query)
     refute Map.has_key?(response, "errors")
     response["data"]
+  end
+
+  defp graphql_response(owner, query) do
+    build_conn()
+    |> authenticate(owner)
+    |> post("/graphql", %{query: query})
+    |> json_response(200)
   end
 
   defp exchange(daemon_id, token) do
