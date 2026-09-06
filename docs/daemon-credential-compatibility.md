@@ -73,26 +73,22 @@ production callers omit it, checking current UTC after acquiring locks.
 
 ## Provisioning and HTTP transport
 
-Authenticated GraphQL `createDaemon` and `rotateDaemonCredentials` retain
-`daemon`, `enrollmentToken`, and `serverEndpoint` and add non-null `expiresAt`.
+Authenticated GraphQL `createDaemon` and `rotateDaemonCredentials` return
+`daemon`, `enrollmentToken`, and non-null `expiresAt`.
 Expiry is returned from the exact credential inserted in the issuance transaction,
 so concurrent rotation cannot substitute another credential's timestamp.
 
-`serverEndpoint` is the HTTP(S) base URL, including any nondefault port and reverse
-proxy prefix. Set runtime `DAEMON_EXTERNAL_URL`, for example
-`https://fleet.example:8443/sacrum`, when public routing differs from the listener.
-Without an override the trusted Phoenix endpoint URL supplies the base, including
-its configured listener port. Invalid explicit configuration fails closed; neither
-Host nor forwarded headers influence issuance. URLs with credentials, query,
-fragment, unsupported scheme, invalid port or parent path segments are rejected.
-The reverse proxy must strip the configured prefix before forwarding to Phoenix.
+The server does not advertise its own endpoints. Each daemon derives the URLs it
+needs from the base URL configured in its client configuration (for example
+`config.toml`): append `/api/daemon/exchange` for the HTTP exchange and use
+`<base>/socket/websocket` (scheme `ws`/`wss` matching `http`/`https`) for the
+socket. The configured base URL must include any nondefault port and reverse
+proxy prefix.
 
-Append `/api/daemon/exchange` to the base and POST a body containing exactly
-`daemon_id` and `bootstrap_token` (the GraphQL `enrollmentToken`). No account bearer
-token is needed. Success returns `daemon_id`, `reconnect_token`, `expires_at`,
-`server_endpoint`, and the complete `socket_endpoint` (`ws`/`wss`, matching public
-port and prefix, ending in `/socket/websocket`). Query credentials and extra body
-fields are rejected. Unrelated GraphQL operations remain account-authenticated.
+Append `/api/daemon/exchange` to the configured base URL and POST a body containing
+exactly `daemon_id` and `bootstrap_token` (the GraphQL `enrollmentToken`). No
+account bearer token is needed. Success returns `daemon_id`, `reconnect_token`,
+and `expires_at`. Query credentials and extra body fields are rejected. Unrelated GraphQL operations remain account-authenticated.
 
 Malformed shape returns HTTP 400 `invalid_request`; invalid credentials return
 401 `invalid_credentials`; configuration/persistence validation failure returns
@@ -105,7 +101,8 @@ connections. Phoenix parameter filtering cannot redact upstream access logs.
 
 ## Standalone socket authentication
 
-Connect to the returned `socket_endpoint` with Phoenix socket parameters
+Connect to the socket endpoint derived from the configured base URL
+(`<base>/socket/websocket`, scheme `ws`/`wss`) with Phoenix socket parameters
 `daemon_id` and `reconnect_token`, then join `daemon:<daemon_id>` with an empty
 payload. Account tokens continue to use the separate `token` parameter. Mixed
 account/daemon authentication parameters are rejected.
@@ -184,7 +181,7 @@ The maintained tests distinguish layers instead of using helper-only checks:
 | Required fields, kinds, references, legacy defaults, hash redaction | `test/sacrum/repo/schemas/daemon_credential_test.exs` |
 | Exact expiry, mismatched/revoked/replayed credentials, owner recovery | `test/sacrum/repo/daemon_exchange_test.exs` |
 | Two real database sessions contend; one winner; insertion failure rolls back consumption | `test/sacrum/repo/daemon_exchange_concurrency_test.exs` |
-| Exact GraphQL expiry and trusted URL | `test/sacrum_web/graphql/daemon_bootstrap_test.exs`, `test/sacrum_web/daemon_endpoints_test.exs` |
+| Exact GraphQL expiry | `test/sacrum_web/graphql/daemon_bootstrap_test.exs` |
 | Account-free exchange, input rejection, actual request-log redaction | `test/sacrum_web/controllers/daemon_exchange_controller_test.exs` |
 | Restricted socket principal, duplicate ownership, reconnect, revalidation | `test/sacrum_web/channels/user_socket_test.exs`, `test/sacrum_web/channels/daemon_channel_test.exs` |
 | Account/project/execution policy and unchanged protected rows | `test/sacrum_web/daemon_operation_policy_test.exs` |

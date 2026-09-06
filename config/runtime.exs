@@ -23,27 +23,6 @@ end
 config :sacrum, SacrumWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
-if external_url = System.get_env("DAEMON_EXTERNAL_URL") do
-  valid_external_url? =
-    case URI.new(external_url) do
-      {:ok,
-       %URI{scheme: scheme, host: host, port: port, userinfo: nil, query: nil, fragment: nil}}
-      when scheme in ["http", "https"] and is_binary(host) and host != "" and port in 1..65_535 ->
-        true
-
-      _ ->
-        false
-    end
-
-  unless valid_external_url?,
-    do:
-      raise(
-        "DAEMON_EXTERNAL_URL must be an HTTP(S) base URL without credentials, query or fragment"
-      )
-
-  config :sacrum, :daemon_external_url, external_url
-end
-
 database_url = System.get_env("DATABASE_URL")
 
 if database_url do

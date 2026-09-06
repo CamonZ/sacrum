@@ -402,7 +402,6 @@ mix test test/sacrum/repo/schemas/daemon_credential_test.exs \
   test/sacrum/accounts/daemons_test.exs \
   test/sacrum/daemon_provisioning_security_test.exs \
   test/sacrum_web/graphql/daemon_bootstrap_test.exs \
-  test/sacrum_web/daemon_endpoints_test.exs \
   test/sacrum_web/controllers/daemon_exchange_controller_test.exs \
   test/sacrum_web/channels/user_socket_test.exs \
   test/sacrum_web/channels/daemon_channel_test.exs \

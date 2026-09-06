@@ -20,7 +20,8 @@ defmodule SacrumWeb.DaemonExchangeControllerTest do
     assert result["daemon_id"] == ctx.daemon.id
     assert is_binary(result["reconnect_token"])
     assert {:ok, _, 0} = DateTime.from_iso8601(result["expires_at"])
-    assert String.ends_with?(result["socket_endpoint"], "/socket/websocket")
+    refute Map.has_key?(result, "server_endpoint")
+    refute Map.has_key?(result, "socket_endpoint")
     assert get_resp_header(conn, "cache-control") == ["no-store"]
     assert {:ok, _} = Sacrum.Repo.Daemons.verify_token(ctx.daemon.id, result["reconnect_token"])
     refute Map.has_key?(result, "token_hash")

@@ -8,7 +8,7 @@ defmodule SacrumWeb.DaemonEnrollmentIntegrationTest do
   alias SacrumWeb.UserSocket
 
   @endpoint SacrumWeb.Endpoint
-  @bootstrap_fields "daemon { id } enrollmentToken serverEndpoint expiresAt"
+  @bootstrap_fields "daemon { id } enrollmentToken expiresAt"
 
   setup do
     Process.flag(:trap_exit, true)
@@ -20,12 +20,9 @@ defmodule SacrumWeb.DaemonEnrollmentIntegrationTest do
     daemon_id = bootstrap["daemon"]["id"]
     issued = exchange(daemon_id, bootstrap["enrollmentToken"])
     assert issued["daemon_id"] == daemon_id
-    assert issued["server_endpoint"] == bootstrap["serverEndpoint"]
 
     assert DateTime.compare(parse_time(issued["expires_at"]), parse_time(bootstrap["expiresAt"])) ==
              :gt
-
-    assert String.ends_with?(issued["socket_endpoint"], "/socket/websocket")
 
     channel = join_machine(issued)
     assert channel.assigns.user_id == owner.id

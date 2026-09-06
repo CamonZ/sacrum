@@ -1,7 +1,6 @@
 defmodule SacrumWeb.Graphql.Types.DaemonTypes do
   use Absinthe.Schema.Notation
   alias Sacrum.Accounts.Daemons
-  alias SacrumWeb.DaemonEndpoints
 
   object :daemon do
     field :id, non_null(:uuid4)
@@ -12,7 +11,6 @@ defmodule SacrumWeb.Graphql.Types.DaemonTypes do
 
   object :daemon_bootstrap do
     field :daemon, non_null(:daemon)
-    field :server_endpoint, non_null(:string)
     field :enrollment_token, non_null(:string)
     field :expires_at, non_null(:datetime)
   end
@@ -37,15 +35,8 @@ defmodule SacrumWeb.Graphql.Types.DaemonTypes do
   object :daemon_mutations do
     field :create_daemon, non_null(:daemon_bootstrap) do
       resolve(fn args, %{context: %{current_user: user}} ->
-        with {:ok, endpoint} <- DaemonEndpoints.base_url(),
-             {:ok, daemon, token, credential} <- Daemons.create_bootstrap(user.id, args) do
-          {:ok,
-           %{
-             daemon: daemon,
-             enrollment_token: token,
-             server_endpoint: endpoint,
-             expires_at: credential.expires_at
-           }}
+        with {:ok, daemon, token, credential} <- Daemons.create_bootstrap(user.id, args) do
+          {:ok, %{daemon: daemon, enrollment_token: token, expires_at: credential.expires_at}}
         end
       end)
     end
@@ -62,15 +53,8 @@ defmodule SacrumWeb.Graphql.Types.DaemonTypes do
       arg(:id, non_null(:uuid4))
 
       resolve(fn %{id: id}, %{context: %{current_user: user}} ->
-        with {:ok, endpoint} <- DaemonEndpoints.base_url(),
-             {:ok, daemon, token, credential} <- Daemons.rotate_bootstrap(user.id, id) do
-          {:ok,
-           %{
-             daemon: daemon,
-             enrollment_token: token,
-             server_endpoint: endpoint,
-             expires_at: credential.expires_at
-           }}
+        with {:ok, daemon, token, credential} <- Daemons.rotate_bootstrap(user.id, id) do
+          {:ok, %{daemon: daemon, enrollment_token: token, expires_at: credential.expires_at}}
         end
       end)
     end
