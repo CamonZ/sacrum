@@ -14,17 +14,23 @@ defmodule Sacrum.Accounts.Daemons do
   def create(user_id, attrs \\ %{}), do: DaemonsRepo.create(%Daemon{user_id: user_id}, attrs)
 
   @doc """
-  Owner-scoped revocation. Returns the committed daemon; invalidated
-  credential identities stay in the repository committed result for the
-  post-commit session-invalidation layer.
+  Owner-scoped revocation. The committed result's invalidated credential
+  identities drive post-commit session invalidation: already-connected
+  daemon sessions for this identity re-derive authorization from the
+  database and terminate. Delivery is best-effort local messaging; a
+  delivery failure never implies the database mutation rolled back.
   """
   @spec revoke(String.t(), String.t()) ::
           {:ok, Daemon.t()} | {:error, :not_found | Ecto.Changeset.t()}
   def revoke(user_id, daemon_id) do
     with {:ok, daemon} <- get_by(user_id, conditions: [id: daemon_id]) do
       case DaemonsRepo.revoke(daemon) do
-        {:ok, %{daemon: daemon}} -> {:ok, daemon}
-        {:error, changeset} -> {:error, changeset}
+        {:ok, %{daemon: daemon}} ->
+          Sacrum.DaemonConnectionRegistry.invalidate_sessions(daemon.id)
+          {:ok, daemon}
+
+        {:error, changeset} ->
+          {:error, changeset}
       end
     end
   end
@@ -84,6 +90,9 @@ defmodule Sacrum.Accounts.Daemons do
     with {:ok, daemon} <- get_by(user_id, conditions: [id: daemon_id]) do
       case DaemonsRepo.rotate_bootstrap(daemon) do
         {:ok, %{daemon: daemon, token: token, credential: credential}} ->
+          # Rotation invalidates prior bootstrap/reconnect credentials; any
+          # live sessions authorized by them must re-derive and disconnect.
+          Sacrum.DaemonConnectionRegistry.invalidate_sessions(daemon.id)
           {:ok, daemon, token, credential}
 
         {:error, reason} ->

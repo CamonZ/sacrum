@@ -178,4 +178,23 @@ defmodule SacrumWeb.DaemonOperationPolicyTest do
     assert {:ok, project} = Accounts.Projects.get_by(ctx.owner.id, conditions: [id: id])
     assert project.user_id == ctx.owner.id
   end
+
+  test "daemon lifecycle invalidation never touches user project sessions", ctx do
+    {:ok, account_token, _} = Auth.create_api_token(ctx.owner, %{name: "policy lifecycle"})
+    {:ok, socket} = Phoenix.ChannelTest.connect(UserSocket, %{"token" => account_token})
+
+    assert {:ok, _, channel} =
+             subscribe_and_join(socket, "project:#{ctx.project.id}", %{"client_type" => "default"})
+
+    monitor = Process.monitor(channel.channel_pid)
+
+    assert {:ok, _} = Accounts.Daemons.revoke(ctx.owner.id, ctx.daemon.id)
+    assert {:ok, _, _, _} = Accounts.Daemons.rotate_bootstrap(ctx.owner.id, ctx.sibling.id)
+
+    # Synchronous contact proves the user session is still alive and serving.
+    assert is_map(:sys.get_state(channel.channel_pid))
+    refute_received {:DOWN, ^monitor, :process, _, _}
+    assert Repo.get!(Daemon, ctx.daemon.id).status == "revoked"
+    leave(channel)
+  end
 end
