@@ -19,7 +19,14 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
 
   alias Ecto.Multi
   alias Sacrum.Accounts
-  alias Sacrum.Orchestrator.{ExecutionHistory, PromptContext, PromptRenderer}
+
+  alias Sacrum.Orchestrator.{
+    AsyncStepExecutionSupervisor,
+    ExecutionHistory,
+    PromptContext,
+    PromptRenderer
+  }
+
   alias Sacrum.Orchestrator.TaskRuns.Failure
   alias Sacrum.Realtime.CommandBroadcaster
   alias Sacrum.Repo
@@ -65,6 +72,33 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
       {:error, reason} = err ->
         Logger.error("[ExecutionDispatcher] create_and_dispatch failed: #{inspect(reason)}")
         mark_dispatch_failure(task_run_or_id, reason)
+        err
+    end
+  end
+
+  @doc "Persists a queued direct run and starts its supervised asynchronous worker."
+  @spec create_and_queue(String.t(), Task.t(), String.t(), TaskRun.t()) ::
+          {:ok, StepExecution.t()} | {:error, term()}
+  def create_and_queue(user_id, task, step_id, task_run) do
+    with {:ok, step} <- fetch_step(user_id, step_id),
+         :ok <- validate_dispatchable_step(step),
+         :ok <- validate_workflow(task),
+         {:ok, task_run} <- fetch_and_validate_task_run(task_run, task),
+         {:ok, rendered} <- render_dispatch_prompt(task, step, task_run, nil),
+         {:ok, %{execution: execution}} <-
+           insert_and_stamp(task, step, task_run, nil, rendered, "queued"),
+         {:ok, _pid} <-
+           AsyncStepExecutionSupervisor.start_execution(
+             execution.id,
+             user_id,
+             task.project_id,
+             task_run.id
+           ) do
+      {:ok, execution}
+    else
+      {:error, reason} = err ->
+        Logger.error("[ExecutionDispatcher] create_and_queue failed: #{inspect(reason)}")
+        mark_dispatch_failure(task_run, reason)
         err
     end
   end
@@ -146,11 +180,11 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   # derive/1 sees the new execution.
   @spec insert_and_stamp(Task.t(), WorkflowStep.t(), TaskRun.t(), handoff(), String.t()) ::
           {:ok, map()} | {:error, atom(), term(), map()}
-  defp insert_and_stamp(task, step, task_run, handoff, rendered) do
+  defp insert_and_stamp(task, step, task_run, handoff, rendered, status \\ "started") do
     Multi.new()
     |> Multi.insert(
       :execution,
-      execution_changeset(task, step, task_run, handoff, %{prompt: rendered})
+      execution_changeset(task, step, task_run, handoff, %{prompt: rendered, status: status})
     )
     |> Multi.update(:task_run, fn %{execution: execution} ->
       TaskRun.update_changeset(task_run, %{
@@ -219,7 +253,13 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
     |> Status.put_status()
   end
 
-  @spec broadcast_dispatch(Task.t(), WorkflowStep.t(), StepExecution.t(), String.t(), TaskRun.t()) ::
+  @spec broadcast_dispatch(
+          Task.t(),
+          WorkflowStep.t(),
+          StepExecution.t(),
+          String.t(),
+          TaskRun.t()
+        ) ::
           {:ok, StepExecution.t()}
   defp broadcast_dispatch(task, step, execution, rendered, task_run) do
     Logger.info(

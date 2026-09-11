@@ -3752,8 +3752,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       data = result["data"]["runStep"]
       assert data["stepName"] == "step_1"
       assert data["stepType"] == "execute"
-      # ExecutionDispatcher creates executions in "started" status
-      assert data["status"] == "started"
+      assert data["status"] == "queued"
       assert data["taskId"] == task.id
       assert data["id"] != nil
       assert data["taskRunId"] != nil
@@ -3809,7 +3808,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       data = result["data"]["runStep"]
       assert data["stepName"] == "Route decision"
       assert data["stepType"] == "route"
-      assert data["status"] == "started"
+      assert data["status"] == "queued"
       assert data["taskId"] == task.id
     end
 
@@ -3880,7 +3879,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         |> json_response(200)
 
       data = result["data"]["runStep"]
-      assert data["status"] == "started"
+      assert data["status"] == "queued"
       assert data["taskRunId"] == task_run.id
 
       reloaded_run = Sacrum.Repo.get!(Sacrum.Repo.Schemas.TaskRun, task_run.id)
@@ -3966,8 +3965,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         |> json_response(200)
 
       data = result["data"]["runStep"]
-      # ExecutionDispatcher creates executions in "started" status
-      assert data["status"] == "started"
+      assert data["status"] == "queued"
       # Context is no longer populated in the execution (null becomes %{} in JSON)
       assert data["context"] == %{} or data["context"] == nil
     end
@@ -4056,8 +4054,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         |> json_response(200)
 
       data = result["data"]["runStep"]
-      # ExecutionDispatcher creates executions in "started" status
-      assert data["status"] == "started"
+      assert data["status"] == "queued"
       assert data["id"] != nil
     end
 

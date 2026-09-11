@@ -369,7 +369,7 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
              :ok <- check_daemon_presence(task.project_id) do
           with {:ok, task_run} <- Root.get_or_create(task),
                :ok <- validate_manual_step_dispatch(task_run) do
-            ExecutionDispatcher.create_and_dispatch(user.id, task, step_id, task_run)
+            ExecutionDispatcher.create_and_queue(user.id, task, step_id, task_run)
           end
         end
       end)
@@ -377,14 +377,9 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
 
     @spec check_daemon_presence(binary()) :: :ok | {:error, String.t()}
     defp check_daemon_presence(project_id) do
-      daemon_presence_required = Application.get_env(:sacrum, :daemon_presence_required, false)
-
-      if daemon_presence_required do
-        if Sacrum.DaemonRegistry.daemon_connected?(project_id) do
-          :ok
-        else
-          {:error, "No daemon is currently connected for this project"}
-        end
+      if Application.get_env(:sacrum, :daemon_presence_required, false) and
+           not Sacrum.DaemonRegistry.daemon_connected?(project_id) do
+        {:error, "No daemon is currently connected for this project"}
       else
         :ok
       end
@@ -449,7 +444,10 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
                Accounts.StepExecutions.get_by(user.id, conditions: [id: execution_id]) do
           # Only allow cancellation if the execution is in pending or in_progress status
           case execution.status do
-            status when status in ["pending", "in_progress"] ->
+            "queued" ->
+              Accounts.StepExecutions.update(execution, %{status: "cancelled"})
+
+            status when status in ["pending", "started", "in_progress"] ->
               # Update the execution status to cancelling
               with {:ok, updated_execution} <-
                      Accounts.StepExecutions.update(execution, %{status: "cancelling"}) do
