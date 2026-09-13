@@ -68,39 +68,17 @@ and reconnect credentials authorize nothing on this surface.
 |-----------|----------|
 | `createDaemon(name?)` | Omitted name stays compatible; returns `daemon`, one-time `enrollmentToken`, `expiresAt`. |
 | `renameDaemon(id, name)` | Shared name policy; omitted `name` leaves the current value unchanged, `name: null` clears the name. |
-| `deleteDaemon(id)` | Owner-scoped hard delete. Deletes the identity and cascaded credentials in a locked transaction, then invalidates any connected daemon session after commit. |
+| `unregisterDaemon(id)` | Owner-scoped hard delete. Deletes the identity and cascaded credentials in a locked transaction, then invalidates any connected daemon session after commit. |
 | `rotateDaemonCredentials(id)` | New bootstrap on the same identity; prior credentials (and the live session) are invalidated. Unknown/foreign/deleted IDs are `daemon not found`. |
-| `unregisterDaemon(id)` | Deprecated compatibility operation. It hard-deletes never-enrolled provisioning but retains the historical active-session and enrollment-work refusal semantics; use `deleteDaemon` for deletion. |
 | `daemons` | Active fleet. Deleted identities are absent. |
 | `daemon(id)` / `daemonEnrollmentMetadata(id)` | Owner-scoped reads. Deleted identities are not readable; foreign IDs are indistinguishable from unknown IDs. |
 
-The delete operation is serialized with exchange and rotation by locking the
-daemon row before checking the optional daemon-keyed active-work guard and
+The unregister operation is serialized with exchange and rotation by locking
+the daemon row before checking the optional daemon-keyed active-work guard and
 deleting it. A successful commit is the boundary for session invalidation.
 Database deletion alone does not synchronously terminate an already-connected
 Phoenix channel; the channel receives invalidation and revalidates its
 persisted daemon and credential identity before shutting down.
-
-## Unregister compatibility semantics
-
-`unregisterDaemon` is retained only so older clients do not silently change
-their safety contract. It is not a second lifecycle state and never creates a
-soft tombstone:
-
-- `daemon not found` — unknown, deleted, or another owner's daemon (no
-  disclosure).
-- `daemon has an active session; disconnect it before unregistering` — a
-  session is currently connected.
-- `daemon has enrollment history and cannot be unregistered until work
-  ownership is established` — any reconnect credential (of any status) or a
-  consumed bootstrap exists. This preserves the conservative behavior until
-  authoritative daemon-keyed work ownership is available.
-- Only never-enrolled provisioning is removable through this deprecated path.
-
-Unlike `unregisterDaemon`, `deleteDaemon` is the explicit owner-authorized
-hard-delete operation and invalidates a connected session after a successful
-commit. Repeating either operation after deletion returns `daemon not found`,
-the same non-disclosing result as an unknown or foreign ID.
 
 ## Errors and rotation behavior
 

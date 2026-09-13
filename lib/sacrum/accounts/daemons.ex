@@ -14,16 +14,16 @@ defmodule Sacrum.Accounts.Daemons do
   def create(user_id, attrs \\ %{}), do: DaemonsRepo.create(%Daemon{user_id: user_id}, attrs)
 
   @doc """
-  Owner-scoped hard deletion. The repository commits the delete before this
-  function sends the best-effort session invalidation message, so a failed
-  delete cannot disconnect a still-valid session.
+  Owner-scoped hard deletion. The repository commits the unregister before
+  this function sends the best-effort session invalidation message, so a
+  failed unregister cannot disconnect a still-valid session.
   """
-  @spec delete(String.t(), String.t()) ::
+  @spec unregister(String.t(), String.t()) ::
           {:ok, Daemon.t()}
           | {:error, :not_found | :active_work | Ecto.Changeset.t()}
-  def delete(user_id, daemon_id) do
+  def unregister(user_id, daemon_id) do
     with {:ok, daemon} <- get_by(user_id, conditions: [id: daemon_id]) do
-      case DaemonsRepo.delete(daemon) do
+      case DaemonsRepo.unregister(daemon) do
         {:ok, %{daemon: daemon}} ->
           Sacrum.DaemonConnectionRegistry.invalidate_sessions(daemon.id)
           {:ok, daemon}
@@ -43,33 +43,6 @@ defmodule Sacrum.Accounts.Daemons do
       DaemonsRepo.rename(daemon, attrs)
     end
   end
-
-  @doc """
-  Legacy owner-scoped unregister compatibility path.
-
-  This keeps the existing conservative refusal semantics for connected
-  sessions and enrolled identities. It hard-deletes never-enrolled
-  provisioning instead of creating a removed tombstone. New callers should
-  use `delete/2`.
-  """
-  @spec unregister(String.t(), String.t()) ::
-          {:ok, Daemon.t()}
-          | {:error, :not_found | :active_work | :ownership_unknown | Ecto.Changeset.t()}
-  def unregister(user_id, daemon_id) do
-    with {:ok, daemon} <- get_by(user_id, conditions: [id: daemon_id]) do
-      case DaemonsRepo.unregister(daemon, connected?: &session_connected?/1) do
-        {:ok, %{daemon: removed}} ->
-          Sacrum.DaemonConnectionRegistry.invalidate_sessions(removed.id)
-          {:ok, removed}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    end
-  end
-
-  defp session_connected?(%Daemon{id: id}),
-    do: Sacrum.DaemonConnectionRegistry.lookup(id) != []
 
   @doc "Owner's daemon identities. Deleted rows are not returned."
   @spec list_fleet(String.t()) :: [Daemon.t()]

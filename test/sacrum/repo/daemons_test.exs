@@ -81,7 +81,7 @@ defmodule Sacrum.Repo.DaemonsTest do
     assert reenrolled.status == "active"
   end
 
-  test "delete atomically removes the daemon and cascaded credentials" do
+  test "unregister atomically removes the daemon and cascaded credentials" do
     {:ok, user} =
       Users.insert(%{
         email: "atomic-delete@example.com",
@@ -92,7 +92,7 @@ defmodule Sacrum.Repo.DaemonsTest do
     {:ok, daemon, bootstrap} = Daemons.create(user.id, %{name: "target"})
     assert {:ok, _, reconnect, _} = Daemons.exchange_bootstrap(daemon.id, bootstrap)
 
-    assert {:ok, %{daemon: deleted} = result} = Daemons.delete(daemon)
+    assert {:ok, %{daemon: deleted} = result} = Daemons.unregister(daemon)
 
     assert deleted.id == daemon.id
     assert deleted.status == "active"
@@ -108,7 +108,7 @@ defmodule Sacrum.Repo.DaemonsTest do
     assert {:error, :invalid_credentials} = Daemons.rotate_bootstrap(daemon)
   end
 
-  test "delete is not-found on repeat and a stale struct cannot resurrect access" do
+  test "unregister is not-found on repeat and a stale struct cannot resurrect access" do
     {:ok, user} =
       Users.insert(%{
         email: "repeat-delete@example.com",
@@ -119,15 +119,15 @@ defmodule Sacrum.Repo.DaemonsTest do
     {:ok, daemon, _bootstrap} = Daemons.create(user.id)
     stale = Repo.get!(Daemon, daemon.id)
 
-    assert {:ok, first} = Daemons.delete(stale)
+    assert {:ok, first} = Daemons.unregister(stale)
     assert first.daemon.id == daemon.id
-    assert {:error, :not_found} = Daemons.delete(stale)
+    assert {:error, :not_found} = Daemons.unregister(stale)
     assert Repo.get(Daemon, daemon.id) == nil
     assert {:error, :invalid_credentials} = Daemons.rotate(daemon)
     assert {:error, :invalid_credentials} = Daemons.rotate_bootstrap(daemon)
   end
 
-  test "delete preserves the daemon-keyed active-work refusal" do
+  test "unregister preserves the daemon-keyed active-work refusal" do
     {:ok, user} =
       Users.insert(%{
         email: "active-work-delete@example.com",
@@ -138,7 +138,7 @@ defmodule Sacrum.Repo.DaemonsTest do
     {:ok, daemon, bootstrap} = Daemons.create(user.id)
 
     assert {:error, :active_work} =
-             Daemons.delete(daemon, active_work?: fn _daemon -> true end)
+             Daemons.unregister(daemon, active_work?: fn _daemon -> true end)
 
     assert Repo.get(Daemon, daemon.id).status == "pending"
 
@@ -153,27 +153,5 @@ defmodule Sacrum.Repo.DaemonsTest do
     inspected = inspect(result)
     refute Enum.any?(tokens, &String.contains?(inspected, &1))
     true
-  end
-
-  test "legacy enrollment evidence without enrolled_at still blocks removal" do
-    {:ok, user} =
-      Users.insert(%{
-        email: "unregister-legacy@example.com",
-        username: "unregister_legacy",
-        password: "password123"
-      })
-
-    {:ok, daemon, _bootstrap} = Daemons.create(user.id)
-
-    # Simulate a pre-migration row: reconnect evidence, no enrolled_at stamp.
-    Repo.insert!(%DaemonCredential{
-      daemon_id: daemon.id,
-      credential_kind: "reconnect",
-      token_hash: :crypto.strong_rand_bytes(32) |> Base.encode64(),
-      expires_at: DateTime.add(DateTime.utc_now(), 3600)
-    })
-
-    assert {:error, :ownership_unknown} = Daemons.unregister(daemon)
-    assert Repo.get!(Daemon, daemon.id).status == "pending"
   end
 end

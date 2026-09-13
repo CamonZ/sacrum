@@ -58,8 +58,8 @@ defmodule SacrumWeb.DaemonChannelTest do
     assert Sacrum.DaemonConnectionRegistry.lookup(daemon.id) == []
   end
 
-  test "committed delete terminates the connected standalone session" do
-    {user, daemon, token, _} = setup_daemon("delete_live")
+  test "committed unregister terminates the connected standalone session" do
+    {user, daemon, token, _} = setup_daemon("unregister_live")
 
     {:ok, socket} =
       connect(UserSocket, %{"daemon_id" => daemon.id, "reconnect_token" => token})
@@ -67,7 +67,7 @@ defmodule SacrumWeb.DaemonChannelTest do
     {:ok, _, channel} = subscribe_and_join(socket, "daemon:#{daemon.id}")
     monitor = Process.monitor(channel.channel_pid)
 
-    assert {:ok, deleted} = Sacrum.Accounts.Daemons.delete(user.id, daemon.id)
+    assert {:ok, deleted} = Sacrum.Accounts.Daemons.unregister(user.id, daemon.id)
     assert deleted.status == "active"
 
     assert_receive {:DOWN, ^monitor, :process, _pid, _reason}
@@ -204,8 +204,8 @@ defmodule SacrumWeb.DaemonChannelTest do
     assert Sacrum.DaemonConnectionRegistry.lookup(daemon.id) == []
   end
 
-  test "join rechecks deletion and rotation since socket authentication" do
-    for action <- [:rotate, :delete] do
+  test "join rechecks unregister and rotation since socket authentication" do
+    for action <- [:rotate, :unregister] do
       {user, daemon, token, _} = setup_daemon("recheck#{action}")
       {:ok, socket} = connect(UserSocket, %{"daemon_id" => daemon.id, "reconnect_token" => token})
       apply(Sacrum.Accounts.Daemons, action, [user.id, daemon.id])

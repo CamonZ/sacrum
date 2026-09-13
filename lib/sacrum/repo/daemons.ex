@@ -69,7 +69,7 @@ defmodule Sacrum.Repo.Daemons do
     do: create_bootstrap(%Daemon{user_id: user_id}, attrs)
 
   @doc """
-  Deletes a daemon under its row lock and transaction.
+  Unregisters a daemon by deleting it under its row lock and transaction.
 
   The lock is shared with bootstrap exchange and credential rotation, so a
   committed delete always wins over any credentials issued by a contending
@@ -78,17 +78,17 @@ defmodule Sacrum.Repo.Daemons do
 
   Callers that have an authoritative daemon-keyed work guard can pass an
   `active_work?` function. A connected session alone is not a database work
-  reference: successful deletion invalidates it after commit.
+  reference: successful unregister invalidates it after commit.
   """
-  @spec delete(Daemon.t()) ::
+  @spec unregister(Daemon.t()) ::
           {:ok, committed_lifecycle()}
           | {:error, :not_found | :active_work | Ecto.Changeset.t()}
-  @spec delete(Daemon.t(), keyword()) ::
+  @spec unregister(Daemon.t(), keyword()) ::
           {:ok, committed_lifecycle()}
           | {:error, :not_found | :active_work | Ecto.Changeset.t()}
-  def delete(%Daemon{} = daemon), do: delete(daemon, [])
+  def unregister(%Daemon{} = daemon), do: unregister(daemon, [])
 
-  def delete(%Daemon{} = daemon, opts) when is_list(opts) do
+  def unregister(%Daemon{} = daemon, opts) when is_list(opts) do
     Repo.transaction(fn ->
       daemon = lock_daemon_for_delete!(daemon.id)
 
@@ -96,13 +96,6 @@ defmodule Sacrum.Repo.Daemons do
 
       delete_locked!(daemon)
     end)
-  end
-
-  defp connected?(opts, daemon) do
-    case Keyword.get(opts, :connected?) do
-      fun when is_function(fun, 1) -> fun.(daemon)
-      _ -> false
-    end
   end
 
   defp delete_locked!(%Daemon{} = daemon) do
@@ -117,47 +110,6 @@ defmodule Sacrum.Repo.Daemons do
       fun when is_function(fun, 1) -> fun.(daemon)
       _ -> false
     end
-  end
-
-  @doc """
-  Legacy unregister compatibility path.
-
-  Unregister keeps the historical conservative refusal boundary while the
-  daemon-keyed work ownership contract is unavailable: connected sessions
-  return `:active_work`, and any enrollment evidence returns
-  `:ownership_unknown`. A never-enrolled daemon is hard-deleted. New callers
-  should use `delete/2`, which invalidates connected sessions after commit.
-  """
-  @spec unregister(Daemon.t()) ::
-          {:ok, committed_lifecycle()}
-          | {:error, :not_found | :ownership_unknown | :active_work | Ecto.Changeset.t()}
-  @spec unregister(Daemon.t(), keyword()) ::
-          {:ok, committed_lifecycle()}
-          | {:error, :not_found | :ownership_unknown | :active_work | Ecto.Changeset.t()}
-  def unregister(%Daemon{} = daemon, opts \\ []) do
-    Repo.transaction(fn ->
-      daemon = lock_daemon_for_delete!(daemon.id)
-
-      cond do
-        connected?(opts, daemon) ->
-          Repo.rollback(:active_work)
-
-        enrollment_evidence?(daemon.id) ->
-          Repo.rollback(:ownership_unknown)
-
-        true ->
-          delete_locked!(daemon)
-      end
-    end)
-  end
-
-  defp enrollment_evidence?(daemon_id) do
-    Repo.exists?(
-      from c in DaemonCredential,
-        where:
-          c.daemon_id == ^daemon_id and
-            (c.credential_kind == "reconnect" or not is_nil(c.consumed_at))
-    )
   end
 
   @doc "Owner's active daemon identities. Deleted rows are not returned."

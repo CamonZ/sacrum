@@ -91,13 +91,13 @@ defmodule Sacrum.Repo.DaemonExchangeTest do
 
   test "deleted daemon refuses exchange and reconnect authentication", ctx do
     assert {:ok, _, reconnect, _} = Daemons.exchange_bootstrap(ctx.daemon.id, ctx.bootstrap)
-    assert {:ok, deleted} = Accounts.Daemons.delete(ctx.owner.id, ctx.daemon.id)
+    assert {:ok, deleted} = Accounts.Daemons.unregister(ctx.owner.id, ctx.daemon.id)
     assert {:error, :invalid_credentials} = Daemons.verify_token(deleted.id, reconnect)
     assert {:error, :invalid_credentials} = Daemons.rotate(deleted)
     assert {:error, :not_found} = Accounts.Daemons.rotate(ctx.owner.id, ctx.daemon.id)
 
     {:ok, another, bootstrap} = Daemons.create(ctx.owner.id)
-    {:ok, _} = Daemons.delete(another)
+    {:ok, _} = Daemons.unregister(another)
     assert {:error, :invalid_credentials} = Daemons.exchange_bootstrap(another.id, bootstrap)
   end
 

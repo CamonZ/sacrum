@@ -414,7 +414,7 @@ The larger pool avoids connection starvation when the private `DATABASE_URL`
 overrides test configuration and the suite runs with 24 concurrent cases. The
 race tests serialize their fixtures, use separate committed database sessions,
 observe both contenders waiting on a held row lock, and clean up their records.
-The lifecycle races (delete/rotation/exchange) reuse the same barrier pattern;
+The lifecycle races (unregister/rotation/exchange) reuse the same barrier pattern;
 a failure-injection trigger proves delete rollback and leaves both the daemon
 and its cascaded credentials unchanged.
 Other tests use the existing SQL sandbox.
