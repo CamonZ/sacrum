@@ -12,19 +12,21 @@ A daemon is an owner-scoped identity. Its lifecycle status is one of:
 |--------|---------|
 | `pending` | Provisioned but never enrolled. A live bootstrap credential exists. |
 | `active` | Enrolled at least once (a reconnect credential was issued). |
-| `revoked` | Terminal. All credentials invalidated; no exchange, reconnect or rotation succeeds. |
-| `removed` | Terminal soft tombstone. Same refusals as `revoked`; additionally excluded from the fleet list. |
+
+`status` describes credential-enrollment lifecycle, not connection health.
+There is no daemon-level `revoked` or `removed` status. Identity invalidation
+is represented by deleting the daemon row.
 
 Timestamps:
 
 - `enrolledAt` — first successful bootstrap exchange; `null` for identities
   that have never enrolled (never fabricated).
-- `removedAt` — tombstone time, set only on successful unregister.
 - `expiresAt` (bootstrap responses) — the one-time enrollment token's expiry.
   Reconnect credentials issued by exchange last 30 days.
 
-Terminal states (`revoked`, `removed`) are permanent. No credential
-operation, refresh or rename returns an identity to service.
+Deletion removes the daemon identity and its credentials. The daemon ID is not
+recreated, and a later request with the old ID is treated like any other
+unknown identity.
 
 ## Credentials and secret handling
 
@@ -39,19 +41,23 @@ operation, refresh or rename returns an identity to service.
   response is lost, the only recovery is owner-initiated rotation, which
   invalidates prior credentials and issues a fresh bootstrap on the same
   identity.
+- Credential-level `revoked` rows remain supported for rotation history. They
+  do not represent a daemon lifecycle state and are all deleted with their
+  daemon.
 - Socket connect uses `daemon_id` + `reconnect_token`. Joining
   `daemon:{daemon_id}` revalidates the credential against the database, so a
-  session established before a revocation still terminates on join or on the
-  next periodic revalidation.
+  session established before deletion is terminated on the post-commit
+  invalidation message or on the next periodic revalidation.
 
 ## Names
 
 - `name` is optional: trimmed, 1..100 characters, unique per owner
   (case-insensitive). Blank strings are rejected, not silently ignored.
 - `displayName` is always non-null: the name when set, otherwise a stable
-  short-ID fallback derived from the daemon id. Legacy rows project the same
+  short-ID fallback derived from the daemon ID. Legacy rows project the same
   fallback.
-- Terminal identities keep their name for audit and refuse renames.
+- Deletion removes the identity; it does not preserve a renamed or terminal
+  tombstone.
 
 ## Owner management surface (GraphQL)
 
@@ -62,37 +68,50 @@ and reconnect credentials authorize nothing on this surface.
 |-----------|----------|
 | `createDaemon(name?)` | Omitted name stays compatible; returns `daemon`, one-time `enrollmentToken`, `expiresAt`. |
 | `renameDaemon(id, name)` | Shared name policy; omitted `name` leaves the current value unchanged, `name: null` clears the name. |
-| `revokeDaemon(id)` | Terminal, idempotent. Kills the daemon's connected session post-commit. Revoking a `removed` tombstone keeps status `removed` (does not resurrect it into the fleet). |
-| `rotateDaemonCredentials(id)` | New bootstrap; prior credentials (and the live session) invalidated. Unknown/foreign ids are `daemon not found`; terminal identities refuse with the terminal-state message. |
-| `unregisterDaemon(id)` | See refusal semantics below. Idempotent on already-removed rows. |
-| `daemons` | Active fleet: tombstones excluded after successful removal only. |
-| `daemon(id)` / `daemonEnrollmentMetadata(id)` | Owner-scoped reads; tombstones remain readable; foreign ids are indistinguishable from unknown ids. |
+| `deleteDaemon(id)` | Owner-scoped hard delete. Deletes the identity and cascaded credentials in a locked transaction, then invalidates any connected daemon session after commit. |
+| `rotateDaemonCredentials(id)` | New bootstrap on the same identity; prior credentials (and the live session) are invalidated. Unknown/foreign/deleted IDs are `daemon not found`. |
+| `unregisterDaemon(id)` | Deprecated compatibility operation. It hard-deletes never-enrolled provisioning but retains the historical active-session and enrollment-work refusal semantics; use `deleteDaemon` for deletion. |
+| `daemons` | Active fleet. Deleted identities are absent. |
+| `daemon(id)` / `daemonEnrollmentMetadata(id)` | Owner-scoped reads. Deleted identities are not readable; foreign IDs are indistinguishable from unknown IDs. |
 
-## Unregister refusal semantics
+The delete operation is serialized with exchange and rotation by locking the
+daemon row before checking the optional daemon-keyed active-work guard and
+deleting it. A successful commit is the boundary for session invalidation.
+Database deletion alone does not synchronously terminate an already-connected
+Phoenix channel; the channel receives invalidation and revalidates its
+persisted daemon and credential identity before shutting down.
 
-Removal preserves the row, credential audit and execution history (soft
-tombstone; credentials are revoked, never deleted). It is refused
-conservatively whenever work safety cannot be established:
+## Unregister compatibility semantics
 
-- `daemon not found` — unknown id or another owner's daemon (no disclosure).
+`unregisterDaemon` is retained only so older clients do not silently change
+their safety contract. It is not a second lifecycle state and never creates a
+soft tombstone:
+
+- `daemon not found` — unknown, deleted, or another owner's daemon (no
+  disclosure).
 - `daemon has an active session; disconnect it before unregistering` — a
-  session is currently connected. Disconnection alone does not make an
-  enrolled daemon removable.
+  session is currently connected.
 - `daemon has enrollment history and cannot be unregistered until work
   ownership is established` — any reconnect credential (of any status) or a
-  consumed bootstrap exists. Unregistering an idle enrolled daemon
-  **awaits reliable daemon-keyed work-ownership integration**; until then the
-  server cannot prove absence of in-flight work.
-- Only never-enrolled provisioning is removable today.
+  consumed bootstrap exists. This preserves the conservative behavior until
+  authoritative daemon-keyed work ownership is available.
+- Only never-enrolled provisioning is removable through this deprecated path.
 
-## Errors and idempotency
+Unlike `unregisterDaemon`, `deleteDaemon` is the explicit owner-authorized
+hard-delete operation and invalidates a connected session after a successful
+commit. Repeating either operation after deletion returns `daemon not found`,
+the same non-disclosing result as an unknown or foreign ID.
+
+## Errors and rotation behavior
 
 - Naming violations surface as field-scoped GraphQL errors on `name`.
-- Domain refusals use the stable messages above; unknown and foreign
+- Delete and rotation are owner-scoped; unknown, foreign and already-deleted
   identities are intentionally indistinguishable.
-- `revokeDaemon` and `unregisterDaemon` are idempotent: repeating them
-  returns the terminal state instead of an error.
-- Lost exchange responses are not replayable; recovery is rotation only.
+- Rotation preserves the daemon identity and `enrolledAt`, revokes its prior
+  active credentials, and issues a new bootstrap. Rotation never recreates a
+  deleted daemon and cannot issue credentials after deletion wins a race.
+- A failed delete leaves the daemon and every credential unchanged because
+  the row delete and database cascade are transactional.
 
 ## Intentionally unsupported
 

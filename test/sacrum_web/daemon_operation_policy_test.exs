@@ -126,7 +126,7 @@ defmodule SacrumWeb.DaemonOperationPolicyTest do
       "{ daemons { id } }",
       "mutation { createDaemon { daemon { id } } }",
       "mutation { renameDaemon(id: \"#{ctx.other_daemon.id}\", name: \"stolen\") { id } }",
-      "mutation { revokeDaemon(id: \"#{ctx.other_daemon.id}\") { id } }",
+      "mutation { deleteDaemon(id: \"#{ctx.other_daemon.id}\") { id } }",
       "mutation { unregisterDaemon(id: \"#{ctx.other_daemon.id}\") { id } }",
       "mutation { updateStepExecution(id: \"#{ctx.execution.id}\", status: \"completed\") { id } }",
       "mutation { createProject(name: \"Forbidden\") { id } }"
@@ -191,13 +191,14 @@ defmodule SacrumWeb.DaemonOperationPolicyTest do
 
     monitor = Process.monitor(channel.channel_pid)
 
-    assert {:ok, _} = Accounts.Daemons.revoke(ctx.owner.id, ctx.daemon.id)
+    assert {:ok, deleted} = Accounts.Daemons.delete(ctx.owner.id, ctx.daemon.id)
     assert {:ok, _, _, _} = Accounts.Daemons.rotate_bootstrap(ctx.owner.id, ctx.sibling.id)
 
     # Synchronous contact proves the user session is still alive and serving.
     assert is_map(:sys.get_state(channel.channel_pid))
     refute_received {:DOWN, ^monitor, :process, _, _}
-    assert Repo.get!(Daemon, ctx.daemon.id).status == "revoked"
+    assert deleted.id == ctx.daemon.id
+    assert Repo.get(Daemon, ctx.daemon.id) == nil
     leave(channel)
   end
 end

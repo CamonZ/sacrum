@@ -6,18 +6,12 @@ defmodule Sacrum.Repo.Schemas.Daemon do
 
     * `pending` — provisioned with an unconsumed bootstrap credential.
     * `active` — completed at least one bootstrap exchange under this schema.
-    * `revoked` — terminal; all credentials invalid.
-    * `removed` — terminal tombstone; unregistered from the active fleet
-      while identity references, credential audit and execution history
-      are retained.
 
-  It never claims the daemon is online. Terminal identities fail every
-  credential operation through `credential_eligible?/1`, an explicit
-  allowlist rather than a `!= "revoked"` comparison, so future terminal
-  states (for example a removal tombstone) cannot accidentally requalify.
-  `enrolled_at` records the first successful exchange observed by this
-  schema version and survives rotation; rows provisioned before the field
-  existed keep it NULL (unknown).
+  It never claims the daemon is online. Deletion removes the identity and its
+  credentials instead of retaining a terminal daemon state. `enrolled_at`
+  records the first successful exchange observed by this schema version and
+  survives rotation; rows provisioned before the field existed keep it NULL
+  (unknown).
 
   Display names are optional. The validation policy is shared by create and
   rename: the value is trimmed, must contain 1..100 characters after trimming,
@@ -30,8 +24,7 @@ defmodule Sacrum.Repo.Schemas.Daemon do
   import Ecto.Changeset
 
   @type t :: %__MODULE__{}
-  @statuses ~w(pending active revoked removed)
-  @terminal_statuses ~w(revoked removed)
+  @statuses ~w(pending active)
   @credential_eligible_statuses ~w(pending active)
   @name_unique_index :daemons_user_id_lower_name_index
   @status_check :daemons_status_check
@@ -44,7 +37,6 @@ defmodule Sacrum.Repo.Schemas.Daemon do
     field :name, :string
     field :status, :string, default: "pending"
     field :enrolled_at, :utc_datetime_usec
-    field :removed_at, :utc_datetime_usec
     belongs_to :user, Sacrum.Repo.Schemas.User
     has_many :credentials, Sacrum.Repo.Schemas.DaemonCredential
     timestamps(type: :utc_datetime_usec)
@@ -69,16 +61,6 @@ defmodule Sacrum.Repo.Schemas.Daemon do
   @spec name_changeset(t(), map()) :: Ecto.Changeset.t()
   def name_changeset(daemon, attrs) do
     daemon |> cast(attrs, [:name], empty_values: []) |> validate_name()
-  end
-
-  @doc "Trusted lifecycle status transition; never exposed to client attrs."
-  @spec update_changeset(t(), map()) :: Ecto.Changeset.t()
-  def update_changeset(daemon, attrs) do
-    daemon
-    |> cast(attrs, [:status])
-    |> validate_inclusion(:status, @statuses)
-    |> validate_terminal_status_stability()
-    |> check_constraint(:status, name: @status_check)
   end
 
   @doc "First-enrollment stamp. Activates a pending daemon; does not recast later rotations."
@@ -106,36 +88,6 @@ defmodule Sacrum.Repo.Schemas.Daemon do
 
   def credential_eligible?(status) when is_binary(status),
     do: status in @credential_eligible_statuses
-
-  @doc "Terminal identities (revoked or removed) can no longer be mutated into service."
-  @spec terminal?(t()) :: boolean()
-  def terminal?(%__MODULE__{status: status}), do: status in @terminal_statuses
-
-  @doc "True for the terminal unregister tombstone."
-  @spec removed?(t()) :: boolean()
-  def removed?(%__MODULE__{status: "removed"}), do: true
-  def removed?(%__MODULE__{}), do: false
-
-  @doc "Trusted tombstone transition. Never exposed to client attrs."
-  @spec remove_changeset(t(), DateTime.t()) :: Ecto.Changeset.t()
-  def remove_changeset(%__MODULE__{} = daemon, %DateTime{} = removed_at) do
-    daemon
-    |> change(status: "removed", removed_at: removed_at)
-    |> validate_inclusion(:status, @statuses)
-    |> check_constraint(:status, name: @status_check)
-  end
-
-  defp validate_terminal_status_stability(changeset) do
-    validate_change(changeset, :status, fn :status, new_status ->
-      current = changeset.data.status
-
-      if current in @terminal_statuses and new_status != current do
-        [status: "terminal identities cannot change status"]
-      else
-        []
-      end
-    end)
-  end
 
   defp validate_name(changeset) do
     changeset

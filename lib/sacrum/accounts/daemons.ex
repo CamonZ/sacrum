@@ -14,14 +14,16 @@ defmodule Sacrum.Accounts.Daemons do
   def create(user_id, attrs \\ %{}), do: DaemonsRepo.create(%Daemon{user_id: user_id}, attrs)
 
   @doc """
-  Owner-scoped revocation. Session invalidation is post-commit and best-effort;
-  a delivery failure does not roll back the mutation. A tombstone stays removed.
+  Owner-scoped hard deletion. The repository commits the delete before this
+  function sends the best-effort session invalidation message, so a failed
+  delete cannot disconnect a still-valid session.
   """
-  @spec revoke(String.t(), String.t()) ::
-          {:ok, Daemon.t()} | {:error, :not_found | Ecto.Changeset.t()}
-  def revoke(user_id, daemon_id) do
+  @spec delete(String.t(), String.t()) ::
+          {:ok, Daemon.t()}
+          | {:error, :not_found | :active_work | Ecto.Changeset.t()}
+  def delete(user_id, daemon_id) do
     with {:ok, daemon} <- get_by(user_id, conditions: [id: daemon_id]) do
-      case DaemonsRepo.revoke(daemon) do
+      case DaemonsRepo.delete(daemon) do
         {:ok, %{daemon: daemon}} ->
           Sacrum.DaemonConnectionRegistry.invalidate_sessions(daemon.id)
           {:ok, daemon}
@@ -32,10 +34,10 @@ defmodule Sacrum.Accounts.Daemons do
     end
   end
 
-  @doc "Owner-scoped rename. Terminal identities cannot be renamed."
+  @doc "Owner-scoped rename."
   @spec rename(String.t(), String.t(), map()) ::
           {:ok, Daemon.t()}
-          | {:error, :not_found | :terminal_state | Ecto.Changeset.t()}
+          | {:error, :not_found | Ecto.Changeset.t()}
   def rename(user_id, daemon_id, attrs) do
     with {:ok, daemon} <- get_by(user_id, conditions: [id: daemon_id]) do
       DaemonsRepo.rename(daemon, attrs)
@@ -43,9 +45,12 @@ defmodule Sacrum.Accounts.Daemons do
   end
 
   @doc """
-  Owner-scoped unregister. Connected sessions refuse with `:active_work`;
-  enrollment evidence refuses with `:ownership_unknown`. Never-enrolled
-  provisioning is tombstoned. Already-removed rows are idempotent.
+  Legacy owner-scoped unregister compatibility path.
+
+  This keeps the existing conservative refusal semantics for connected
+  sessions and enrolled identities. It hard-deletes never-enrolled
+  provisioning instead of creating a removed tombstone. New callers should
+  use `delete/2`.
   """
   @spec unregister(String.t(), String.t()) ::
           {:ok, Daemon.t()}
@@ -66,7 +71,7 @@ defmodule Sacrum.Accounts.Daemons do
   defp session_connected?(%Daemon{id: id}),
     do: Sacrum.DaemonConnectionRegistry.lookup(id) != []
 
-  @doc "Owner's daemons excluding removed tombstones. Tombstones remain readable via `get_by/2`."
+  @doc "Owner's daemon identities. Deleted rows are not returned."
   @spec list_fleet(String.t()) :: [Daemon.t()]
   def list_fleet(user_id) when is_binary(user_id), do: DaemonsRepo.list_active_fleet(user_id)
 
@@ -84,7 +89,7 @@ defmodule Sacrum.Accounts.Daemons do
 
   @spec rotate(String.t(), String.t()) ::
           {:ok, Daemon.t(), String.t()}
-          | {:error, :not_found | :invalid_credentials | :terminal_state | Ecto.Changeset.t()}
+          | {:error, :not_found | :invalid_credentials | Ecto.Changeset.t()}
   def rotate(user_id, daemon_id) do
     case rotate_bootstrap(user_id, daemon_id) do
       {:ok, daemon, token, _credential} -> {:ok, daemon, token}
@@ -107,7 +112,7 @@ defmodule Sacrum.Accounts.Daemons do
 
   @spec rotate_bootstrap(String.t(), String.t()) ::
           {:ok, Daemon.t(), String.t(), Sacrum.Repo.Schemas.DaemonCredential.t()}
-          | {:error, :not_found | :invalid_credentials | :terminal_state | Ecto.Changeset.t()}
+          | {:error, :not_found | :invalid_credentials | Ecto.Changeset.t()}
   def rotate_bootstrap(user_id, daemon_id) do
     with {:ok, daemon} <- get_by(user_id, conditions: [id: daemon_id]) do
       case DaemonsRepo.rotate_bootstrap(daemon) do

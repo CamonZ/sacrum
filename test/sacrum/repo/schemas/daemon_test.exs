@@ -3,7 +3,7 @@ defmodule Sacrum.Repo.Schemas.DaemonTest do
 
   alias Sacrum.Repo.Schemas.Daemon
 
-  test "requires a user and keeps lifecycle status a trusted input" do
+  test "requires a user and ignores lifecycle status input" do
     assert %{user_id: ["can't be blank"]} = errors_on(Daemon.create_changeset(%Daemon{}, %{}))
 
     changeset =
@@ -12,23 +12,6 @@ defmodule Sacrum.Repo.Schemas.DaemonTest do
     assert changeset.valid?
     refute Map.has_key?(changeset.changes, :status)
     assert changeset.data.status == "pending"
-  end
-
-  test "rejects unknown lifecycle states in trusted lifecycle changesets" do
-    changeset =
-      Daemon.update_changeset(%Daemon{user_id: Ecto.UUID.generate()}, %{status: "unknown"})
-
-    assert %{status: [_]} = errors_on(changeset)
-  end
-
-  test "terminal identities cannot be rewritten into another status" do
-    removed = %Daemon{user_id: Ecto.UUID.generate(), status: "removed"}
-    changeset = Daemon.update_changeset(removed, %{status: "revoked"})
-    assert %{status: [_]} = errors_on(changeset)
-
-    revoked = %Daemon{user_id: Ecto.UUID.generate(), status: "revoked"}
-    assert %{status: [_]} = errors_on(Daemon.update_changeset(revoked, %{status: "active"}))
-    assert Daemon.update_changeset(revoked, %{status: "revoked"}).valid?
   end
 
   describe "name policy shared by create and rename" do
@@ -113,8 +96,6 @@ defmodule Sacrum.Repo.Schemas.DaemonTest do
     assert Ecto.Changeset.get_change(active, :enrolled_at) == now
     refute Map.has_key?(active.changes, :status)
 
-    revoked = Daemon.enroll_changeset(%{daemon | status: "revoked"}, now)
-    assert revoked.valid?
-    refute Map.has_key?(revoked.changes, :status)
+    refute Daemon.credential_eligible?("deleted")
   end
 end

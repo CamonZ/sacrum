@@ -132,26 +132,24 @@ defmodule Sacrum.Repo.DaemonExchangeConcurrencyTest do
     end)
   end
 
-  describe "revoke races" do
-    test "revoke racing bootstrap exchange always ends terminal and unauthenticated", ctx do
+  describe "delete races" do
+    test "delete racing bootstrap exchange always leaves the identity absent", ctx do
       contenders = [
         fn -> Daemons.exchange_bootstrap(ctx.daemon.id, ctx.bootstrap) end,
-        fn -> Daemons.revoke(ctx.daemon) end
+        fn -> Daemons.delete(ctx.daemon) end
       ]
 
       results = race_on_daemon_lock(ctx.daemon.id, contenders)
 
-      revoke = Enum.find(results, &match?({:ok, %{daemon: _}}, &1))
-      assert {:ok, %{daemon: %{status: "revoked"}}} = revoke
+      delete = Enum.find(results, &match?({:ok, %{daemon: _}}, &1))
+      assert {:ok, %{daemon: %{id: id}}} = delete
 
       committed(fn ->
-        daemon = Repo.get!(Daemon, ctx.daemon.id)
-        assert daemon.status == "revoked"
+        assert id == ctx.daemon.id
+        assert Repo.get(Daemon, ctx.daemon.id) == nil
 
         assert Repo.aggregate(
-                 from(c in DaemonCredential,
-                   where: c.daemon_id == ^daemon.id and c.status == "active"
-                 ),
+                 from(c in DaemonCredential, where: c.daemon_id == ^ctx.daemon.id),
                  :count
                ) == 0
 
@@ -159,7 +157,7 @@ defmodule Sacrum.Repo.DaemonExchangeConcurrencyTest do
 
         if exchange do
           reconnect = elem(exchange, 2)
-          assert {:error, :invalid_credentials} = Daemons.verify_token(daemon.id, reconnect)
+          assert {:error, :invalid_credentials} = Daemons.verify_token(ctx.daemon.id, reconnect)
         end
       end)
     end
@@ -176,38 +174,30 @@ defmodule Sacrum.Repo.DaemonExchangeConcurrencyTest do
       unregister = Enum.find(results, &match?({:ok, %{daemon: _}}, &1))
 
       committed(fn ->
-        daemon = Repo.get!(Daemon, ctx.daemon.id)
-
         case {exchange, unregister} do
           {{:ok, _, _, _}, nil} ->
             assert {:error, :ownership_unknown} = Enum.find(results, &match?({:error, _}, &1))
+            daemon = Repo.get!(Daemon, ctx.daemon.id)
             assert daemon.status == "active"
             assert daemon.enrolled_at
 
-          {nil, {:ok, _}} ->
+          {nil, {:ok, %{daemon: %{id: id}}}} ->
+            assert id == ctx.daemon.id
             assert {:error, :invalid_credentials} = Enum.find(results, &match?({:error, _}, &1))
-            assert daemon.status == "removed"
-            assert daemon.removed_at
+            assert Repo.get(Daemon, ctx.daemon.id) == nil
 
             assert Repo.aggregate(
-                     from(c in DaemonCredential,
-                       where: c.daemon_id == ^daemon.id and c.status == "active"
-                     ),
+                     from(c in DaemonCredential, where: c.daemon_id == ^ctx.daemon.id),
                      :count
                    ) == 0
         end
-
-        assert Repo.aggregate(
-                 from(c in DaemonCredential, where: c.daemon_id == ^daemon.id),
-                 :count
-               ) >= 1
       end)
     end
 
-    test "injected failure of the tombstone update rolls back credential invalidation", ctx do
+    test "injected delete failure rolls back daemon and credential deletion", ctx do
       suffix = System.unique_integer([:positive])
-      function = "fail_remove_#{suffix}"
-      trigger = "fail_remove_trigger_#{suffix}"
+      function = "fail_delete_#{suffix}"
+      trigger = "fail_delete_trigger_#{suffix}"
 
       committed(fn ->
         Repo.query!("""
@@ -219,8 +209,8 @@ defmodule Sacrum.Repo.DaemonExchangeConcurrencyTest do
         """)
 
         Repo.query!("""
-        CREATE TRIGGER #{trigger} BEFORE UPDATE ON daemons
-        FOR EACH ROW WHEN (NEW.status = 'removed' AND NEW.id = '#{ctx.daemon.id}')
+        CREATE TRIGGER #{trigger} BEFORE DELETE ON daemons
+        FOR EACH ROW WHEN (OLD.id = '#{ctx.daemon.id}')
         EXECUTE FUNCTION #{function}();
         """)
       end)
@@ -228,12 +218,11 @@ defmodule Sacrum.Repo.DaemonExchangeConcurrencyTest do
       try do
         committed(fn ->
           assert_raise Postgrex.Error, ~r/injected removal failure/, fn ->
-            Daemons.unregister(ctx.daemon)
+            Daemons.delete(ctx.daemon)
           end
 
           daemon = Repo.get!(Daemon, ctx.daemon.id)
           assert daemon.status == "pending"
-          assert daemon.removed_at == nil
 
           assert [%{status: "active"}] =
                    Repo.all(
@@ -249,7 +238,13 @@ defmodule Sacrum.Repo.DaemonExchangeConcurrencyTest do
       end
 
       committed(fn ->
-        assert {:ok, %{daemon: %{status: "removed"}}} = Daemons.unregister(ctx.daemon)
+        assert {:ok, %{daemon: %{status: "pending"}}} = Daemons.delete(ctx.daemon)
+        assert Repo.get(Daemon, ctx.daemon.id) == nil
+
+        assert Repo.aggregate(
+                 from(c in DaemonCredential, where: c.daemon_id == ^ctx.daemon.id),
+                 :count
+               ) == 0
       end)
     end
   end
