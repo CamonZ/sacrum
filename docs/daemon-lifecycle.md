@@ -91,6 +91,29 @@ persisted daemon and credential identity before shutting down.
 - A failed delete leaves the daemon and every credential unchanged because
   the row delete and database cascade are transactional.
 
+## Account fleet realtime channel
+
+Authenticated account clients may join `account:<user_id>` over the existing
+user-authenticated socket. The topic is owner-scoped: the socket's current
+user must match the topic user ID, and standalone daemon principals cannot
+join it. The existing `daemon:<daemon_id>` registration/revalidation topic is
+unchanged and remains unavailable to account clients for management events.
+
+The post-commit WalEx CDC projector publishes these sanitized events to every
+active account subscriber:
+
+| Event | Meaning |
+|-------|---------|
+| `daemon_created` | A daemon identity was created. |
+| `daemon_updated` | A daemon was renamed or its persisted lifecycle state changed. |
+| `daemon_deleted` | A daemon row was hard-deleted. |
+
+Every payload has `schema_version: 1` and only contains `id`, `status`,
+`name`, `display_name`, `enrolled_at`, `inserted_at`, and `updated_at`.
+Daemon status remains `pending` or `active`; hard deletion is represented by
+`daemon_deleted`. Credential plaintext, token hashes, and credential rows are
+never projected.
+
 ## Intentionally unsupported
 
 - Daemon sockets do not execute, report or observe project work. All

@@ -16,6 +16,7 @@ defmodule Sacrum.Realtime.Cdc.Projector do
     Artifact,
     ArtifactLink,
     CodeRef,
+    Daemon,
     SessionLog,
     StepExecution,
     StepTransition,
@@ -29,6 +30,7 @@ defmodule Sacrum.Realtime.Cdc.Projector do
   }
 
   alias Sacrum.TaskRuns.Status, as: TaskRunStatus
+  alias SacrumWeb.AccountChannel
   alias SacrumWeb.ProjectChannel
 
   require Logger
@@ -50,7 +52,8 @@ defmodule Sacrum.Realtime.Cdc.Projector do
     "task_dependencies" => TaskDependency,
     "code_refs" => CodeRef,
     "artifacts" => Artifact,
-    "artifact_links" => ArtifactLink
+    "artifact_links" => ArtifactLink,
+    "daemons" => Daemon
   }
 
   @channel_broadcasts %{
@@ -89,7 +92,10 @@ defmodule Sacrum.Realtime.Cdc.Projector do
     "artifact_deleted" => :broadcast_artifact_deleted,
     "artifact_link_created" => :broadcast_artifact_link_created,
     "artifact_link_updated" => :broadcast_artifact_link_updated,
-    "artifact_link_deleted" => :broadcast_artifact_link_deleted
+    "artifact_link_deleted" => :broadcast_artifact_link_deleted,
+    "daemon_created" => :broadcast_daemon_created,
+    "daemon_updated" => :broadcast_daemon_updated,
+    "daemon_deleted" => :broadcast_daemon_deleted
   }
 
   @type dispatch_result :: %{
@@ -409,6 +415,21 @@ defmodule Sacrum.Realtime.Cdc.Projector do
     [projection("artifact_link_deleted", artifact_link.project_id, artifact_link)]
   end
 
+  defp projections(%WalEx.Event{source: %{table: "daemons"}, type: :insert, new_record: record}) do
+    daemon = record_to_struct!("daemons", record)
+    [projection("daemon_created", daemon.user_id, daemon)]
+  end
+
+  defp projections(%WalEx.Event{source: %{table: "daemons"}, type: :update, new_record: record}) do
+    daemon = record_to_struct!("daemons", record)
+    [projection("daemon_updated", daemon.user_id, daemon)]
+  end
+
+  defp projections(%WalEx.Event{source: %{table: "daemons"}, type: :delete, old_record: record}) do
+    daemon = record_to_struct!("daemons", record)
+    [projection("daemon_deleted", daemon.user_id, daemon)]
+  end
+
   defp projections(%WalEx.Event{}), do: []
 
   defp projection_context(events) do
@@ -579,9 +600,19 @@ defmodule Sacrum.Realtime.Cdc.Projector do
       reraise exception, __STACKTRACE__
   end
 
-  defp emit(%{project_id: project_id, payload: payload, channel_function: function}) do
-    apply(ProjectChannel, function, [project_id, payload])
+  defp emit(%{project_id: account_id, payload: payload, channel_function: function}) do
+    apply(channel_for(function), function, [account_id, payload])
   end
+
+  defp channel_for(function)
+       when function in [
+              :broadcast_daemon_created,
+              :broadcast_daemon_updated,
+              :broadcast_daemon_deleted
+            ],
+       do: AccountChannel
+
+  defp channel_for(_function), do: ProjectChannel
 
   defp projection(event, project_id, payload, channel_function \\ nil) do
     %{

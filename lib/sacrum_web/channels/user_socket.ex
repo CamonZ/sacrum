@@ -4,6 +4,7 @@ defmodule SacrumWeb.UserSocket do
   alias Sacrum.Auth
   alias Sacrum.Repo.Daemons
 
+  channel "account:*", SacrumWeb.AccountChannel
   channel "project:*", SacrumWeb.ProjectChannel
   channel "daemon:*", SacrumWeb.DaemonChannel
 

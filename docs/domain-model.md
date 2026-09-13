@@ -22,7 +22,11 @@ Sacrum is an API-only workflow engine and task management system built with Phoe
 
 **Artifact files** — Projects contain named text files whose contents are stored in `Artifact.body`. `ArtifactLink` records attach those files to projects, tasks, task sections, workflows, task runs, and step executions.
 
-**Real-time updates** — State changes broadcast to a Phoenix channel (`ProjectChannel`) keyed by project ID (`project:<project_id>`), so connected clients receive live events for task, workflow, and step mutations.
+**Real-time updates** — Project state changes broadcast to `ProjectChannel`,
+keyed by project ID (`project:<project_id>`), while daemon fleet lifecycle
+changes are projected after commit to the owner-scoped
+`account:<user_id>` channel. Connected clients receive live task, workflow,
+step, and daemon-management updates without receiving credential secrets.
 
 ## Domain Model
 
@@ -282,6 +286,14 @@ The complete default-client WalEx CDC mapping, source-row requirements, payload
 completeness guarantees, daemon command exclusions, and snapshot/gap recovery
 rules are defined in
 [WalEx CDC GUI Projection Contract](walex-cdc-gui-projection-contract.md).
+
+Daemon management clients use the authenticated `account:<user_id>` topic for
+`daemon_created`, `daemon_updated`, and `daemon_deleted` projections. The
+account topic is owner-authorized and its payload contains only sanitized
+daemon identity/lifecycle fields. Row updates arrive as complete
+`daemon_updated` replacement payloads, while hard deletion arrives as
+`daemon_deleted`; the existing `daemon:<daemon_id>` registration/revalidation
+channel and project-scoped work commands remain separate.
 
 ### Event Types
 

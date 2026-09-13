@@ -145,6 +145,77 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
     end)
   end
 
+  test "committed daemon lifecycle mutations are projected to every owner client" do
+    with_project(fn user, _project ->
+      :ok = subscribe_account(user.id)
+
+      {:ok, daemon, bootstrap} = Accounts.Daemons.create(user.id, %{name: "Managed bot"})
+
+      assert_account_broadcast(
+        user.id,
+        "daemon_created",
+        %{
+          id: daemon.id,
+          status: "pending",
+          name: "Managed bot",
+          display_name: "Managed bot"
+        },
+        1_000
+      )
+
+      {:ok, renamed} = Accounts.Daemons.rename(user.id, daemon.id, %{name: "Renamed bot"})
+
+      assert_account_broadcast(
+        user.id,
+        "daemon_updated",
+        %{
+          id: daemon.id,
+          status: "pending",
+          name: "Renamed bot",
+          display_name: "Renamed bot"
+        },
+        1_000
+      )
+
+      {:ok, enrolled, _reconnect, _credential} =
+        Accounts.Daemons.exchange_bootstrap(renamed.id, bootstrap)
+
+      assert_account_broadcast(
+        user.id,
+        "daemon_updated",
+        %{
+          id: daemon.id,
+          status: "active",
+          name: "Renamed bot",
+          display_name: "Renamed bot"
+        },
+        1_000
+      )
+
+      assert enrolled.status == "active"
+      assert %DateTime{} = enrolled.enrolled_at
+
+      {:ok, removable, _bootstrap} = Accounts.Daemons.create(user.id, %{name: "Retired bot"})
+      assert_account_broadcast(user.id, "daemon_created", %{id: removable.id}, 1_000)
+
+      {:ok, deleted} = Accounts.Daemons.unregister(user.id, removable.id)
+
+      assert_account_broadcast(
+        user.id,
+        "daemon_deleted",
+        %{
+          id: removable.id,
+          status: "pending",
+          name: "Retired bot",
+          display_name: "Retired bot"
+        },
+        1_000
+      )
+
+      assert deleted.id == removable.id
+    end)
+  end
+
   test "committed artifact and attachment changes project complete payloads and cascade tombstones" do
     with_project(fn user, project ->
       :ok = subscribe_project(project.id)

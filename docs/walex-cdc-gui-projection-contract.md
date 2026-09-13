@@ -197,3 +197,31 @@ uncertain, treat it as a gap:
 3. Resume live CDC from the new snapshot cursor.
 
 Refetch is a recovery path, not the routine live-event path.
+
+## Account daemon fleet projection
+
+Daemon fleet state has a separate account-scoped stream and is not sent on
+`ProjectChannel`. Authenticated user sockets may join `account:<user_id>` only
+when the topic ID equals the socket user's ID. Daemon-authenticated sockets
+and other account IDs are rejected.
+
+The same WalEx consumer handles the `daemons` publication subscription after
+commit and emits the following events through `SacrumWeb.AccountChannel`:
+
+| Event | Source image | Payload |
+| --- | --- | --- |
+| `daemon_created` | `daemons` after insert | Complete sanitized daemon identity |
+| `daemon_updated` | `daemons` after update | Complete sanitized replacement identity |
+| `daemon_deleted` | `daemons` before delete | Sanitized identity tombstone |
+
+Payloads use `snake_case` keys and `schema_version: 1`. The explicit payload
+allowlist is `id`, `status`, `name`, `display_name`, `enrolled_at`,
+`inserted_at`, and `updated_at`. `user_id` is used only to route the event to
+the owner's topic. `token`, `token_hash`, credentials, and other secret
+material are excluded. Daemon status is limited to `pending` and `active`;
+unregister hard-deletes the identity and produces `daemon_deleted`.
+
+Account events are projections of committed rows and are delivered to every
+active subscriber on the owner's topic. They do not alter the existing
+`daemon:<daemon_id>` registration/revalidation channel or project-scoped
+`run_step`/`cancel_step` command behavior.

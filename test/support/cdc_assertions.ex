@@ -10,6 +10,11 @@ defmodule Sacrum.CdcAssertions do
     Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project_id}")
   end
 
+  @spec subscribe_account(binary()) :: :ok | {:error, term()}
+  def subscribe_account(user_id) do
+    Phoenix.PubSub.subscribe(Sacrum.PubSub, "account:#{user_id}")
+  end
+
   @spec assert_project_broadcast(binary(), map(), timeout()) :: map()
   def assert_project_broadcast(event, expected_payload, timeout \\ 100) do
     payload = receive_project_broadcast(event, expected_payload, timeout)
@@ -24,6 +29,18 @@ defmodule Sacrum.CdcAssertions do
   @spec refute_project_broadcast(binary(), timeout()) :: true
   def refute_project_broadcast(event, timeout \\ 100) do
     refute_receive %Phoenix.Socket.Broadcast{event: ^event}, timeout
+  end
+
+  @spec assert_account_broadcast(binary(), binary(), map(), timeout()) :: map()
+  def assert_account_broadcast(user_id, event, expected_payload, timeout \\ 100) do
+    topic = "account:#{user_id}"
+    payload = receive_account_broadcast(topic, event, expected_payload, timeout)
+
+    for {key, expected_value} <- expected_payload do
+      assert Map.fetch!(payload, key) == expected_value
+    end
+
+    payload
   end
 
   defp receive_project_broadcast(event, expected_payload, timeout) do
@@ -41,6 +58,25 @@ defmodule Sacrum.CdcAssertions do
       timeout ->
         flunk(
           "expected project broadcast #{inspect(event)} with payload #{inspect(expected_payload)}"
+        )
+    end
+  end
+
+  defp receive_account_broadcast(topic, event, expected_payload, timeout) do
+    receive do
+      %Phoenix.Socket.Broadcast{topic: ^topic, event: ^event, payload: payload} ->
+        if payload_matches?(payload, expected_payload) do
+          payload
+        else
+          receive_account_broadcast(topic, event, expected_payload, timeout)
+        end
+
+      %Phoenix.Socket.Broadcast{} ->
+        receive_account_broadcast(topic, event, expected_payload, timeout)
+    after
+      timeout ->
+        flunk(
+          "expected account broadcast #{inspect(event)} on #{inspect(topic)} with payload #{inspect(expected_payload)}"
         )
     end
   end
