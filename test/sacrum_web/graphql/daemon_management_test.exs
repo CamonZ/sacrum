@@ -1,7 +1,7 @@
 defmodule SacrumWeb.Graphql.DaemonManagementTest do
   @moduledoc """
   GraphQL daemon management surface: naming policy, safe enrollment
-  metadata, unregister semantics, error translation and compatibility.
+  metadata, deletion semantics and error translation.
   """
 
   use SacrumWeb.ConnCase, async: false
@@ -149,14 +149,15 @@ defmodule SacrumWeb.Graphql.DaemonManagementTest do
       assert Repo.get!(Daemon, foreign.id).name == nil
     end
 
-    test "terminal identities refuse rename", ctx do
-      assert {:ok, _} = Sacrum.Accounts.Daemons.revoke(ctx.owner.id, ctx.id)
+    test "deleted identities cannot be renamed", ctx do
+      assert {:ok, deleted} = Sacrum.Accounts.Daemons.unregister(ctx.owner.id, ctx.id)
 
-      revoked =
+      result =
         run(ctx.conn, "mutation { renameDaemon(id: \"#{ctx.id}\", name: \"zombie\") { id } }")
 
-      assert error_message(revoked) == "daemon is in a terminal state (revoked or removed)"
-      assert Repo.get!(Daemon, ctx.id).name == "stable"
+      assert deleted.id == ctx.id
+      assert error_message(result) == "daemon not found"
+      assert Repo.get(Daemon, ctx.id) == nil
     end
 
     test "omitted name leaves the current name unchanged", ctx do
@@ -223,74 +224,56 @@ defmodule SacrumWeb.Graphql.DaemonManagementTest do
   end
 
   describe "unregisterDaemon" do
-    test "removes never-enrolled provisioning and applies tombstone semantics", ctx do
-      id =
-        run(ctx.conn, "mutation { createDaemon(name: \"retire\") { daemon { id } } }")
-        |> get_in(["data", "createDaemon", "daemon", "id"])
+    test "hard-deletes the identity and makes reads and authentication fail", ctx do
+      created =
+        run(
+          ctx.conn,
+          "mutation { createDaemon(name: \"delete-me\") { daemon { id status name } enrollmentToken } }"
+        )
+        |> get_in(["data", "createDaemon"])
 
-      removed =
-        run(ctx.conn, "mutation { unregisterDaemon(id: \"#{id}\") { id status name removedAt } }")
+      assert {:ok, _, reconnect, _} =
+               Daemons.exchange_bootstrap(created["daemon"]["id"], created["enrollmentToken"])
+
+      deleted =
+        run(
+          ctx.conn,
+          "mutation { unregisterDaemon(id: \"#{created["daemon"]["id"]}\") { id status name } }"
+        )
         |> get_in(["data", "unregisterDaemon"])
 
-      assert removed["status"] == "removed"
-      assert removed["name"] == "retire"
-      assert is_binary(removed["removedAt"])
+      assert deleted["id"] == created["daemon"]["id"]
+      assert deleted["status"] == "active"
+      assert deleted["name"] == "delete-me"
+      assert Repo.get(Daemon, deleted["id"]) == nil
+      assert {:error, :invalid_credentials} = Daemons.verify_token(deleted["id"], reconnect)
 
-      fleet = run(ctx.conn, "query { daemons { id status removedAt } }")
-      assert [] == Enum.filter(fleet["data"]["daemons"], &(&1["id"] == id))
+      daemon_read = run(ctx.conn, "query { daemon(id: \"#{deleted["id"]}\") { id } }")
 
-      direct = run(ctx.conn, "query { daemon(id: \"#{id}\") { id status removedAt } }")
-      assert direct["data"]["daemon"]["status"] == "removed"
+      metadata_read =
+        run(ctx.conn, "query { daemonEnrollmentMetadata(id: \"#{deleted["id"]}\") { daemonId } }")
 
-      again = run(ctx.conn, "mutation { unregisterDaemon(id: \"#{id}\") { status } }")
-      assert again["data"]["unregisterDaemon"]["status"] == "removed"
+      assert daemon_read["data"]["daemon"] == nil
+      assert metadata_read["data"]["daemonEnrollmentMetadata"] == nil
 
-      revoked = run(ctx.conn, "mutation { revokeDaemon(id: \"#{id}\") { id status } }")
-      assert revoked["data"]["revokeDaemon"]["status"] == "removed"
+      repeated =
+        run(ctx.conn, "mutation { unregisterDaemon(id: \"#{deleted["id"]}\") { id } }")
 
-      fleet = run(ctx.conn, "query { daemons { id } }")
-      refute Enum.any?(fleet["data"]["daemons"], &(&1["id"] == id))
+      assert error_message(repeated) == "daemon not found"
     end
 
-    test "refuses enrolled identities and keeps the row visible", ctx do
-      {:ok, daemon, bootstrap} = Daemons.create(ctx.owner.id)
-      {:ok, _, _, _} = Daemons.exchange_bootstrap(daemon.id, bootstrap)
+    test "does not disclose foreign or unknown identities", ctx do
+      {:ok, foreign, _} = Daemons.create(ctx.other.id)
 
-      result = run(ctx.conn, "mutation { unregisterDaemon(id: \"#{daemon.id}\") { id } }")
+      foreign_result =
+        run(ctx.conn, "mutation { unregisterDaemon(id: \"#{foreign.id}\") { id } }")
 
-      assert error_message(result) ==
-               "daemon has enrollment history and cannot be unregistered until work ownership is established"
+      unknown_result =
+        run(ctx.conn, "mutation { unregisterDaemon(id: \"#{Ecto.UUID.generate()}\") { id } }")
 
-      fleet = run(ctx.conn, "query { daemons { id } }")
-      assert Enum.any?(fleet["data"]["daemons"], &(&1["id"] == daemon.id))
-      assert Repo.get!(Daemon, daemon.id).status == "active"
-    end
-
-    test "refuses removal while a session is connected", ctx do
-      {:ok, daemon, _} = Daemons.create(ctx.owner.id)
-
-      :ok =
-        Sacrum.DaemonConnectionRegistry.register(daemon.id, %{
-          user_id: ctx.owner.id,
-          credential_id: Ecto.UUID.generate()
-        })
-
-      result = run(ctx.conn, "mutation { unregisterDaemon(id: \"#{daemon.id}\") { id } }")
-      :ok = Sacrum.DaemonConnectionRegistry.unregister(daemon.id)
-
-      assert error_message(result) ==
-               "daemon has an active session; disconnect it before unregistering"
-
-      assert Repo.get!(Daemon, daemon.id).status == "pending"
-    end
-
-    test "never discloses foreign rows and failed removals leave them listed", ctx do
-      {:ok, daemon, bootstrap} = Daemons.create(ctx.other.id)
-      {:ok, _, _, _} = Daemons.exchange_bootstrap(daemon.id, bootstrap)
-
-      result = run(ctx.conn, "mutation { unregisterDaemon(id: \"#{daemon.id}\") { id } }")
-      assert error_message(result) == "daemon not found"
-      assert Repo.get!(Daemon, daemon.id).status == "active"
+      assert error_message(foreign_result) == "daemon not found"
+      assert error_message(unknown_result) == "daemon not found"
+      assert Repo.get(Daemon, foreign.id)
     end
   end
 
@@ -314,17 +297,18 @@ defmodule SacrumWeb.Graphql.DaemonManagementTest do
       assert error_message(foreign) == "daemon not found"
     end
 
-    test "terminal identities refuse rotation with the stable terminal message", ctx do
+    test "deleted identities refuse rotation as not found", ctx do
       id =
         run(ctx.conn, "mutation { createDaemon { daemon { id } } }")
         |> get_in(["data", "createDaemon", "daemon", "id"])
 
-      assert {:ok, _} = Sacrum.Accounts.Daemons.revoke(ctx.owner.id, id)
+      assert {:ok, deleted} = Sacrum.Accounts.Daemons.unregister(ctx.owner.id, id)
 
       result =
         run(ctx.conn, "mutation { rotateDaemonCredentials(id: \"#{id}\") { enrollmentToken } }")
 
-      assert error_message(result) == "daemon is in a terminal state (revoked or removed)"
+      assert deleted.id == id
+      assert error_message(result) == "daemon not found"
     end
   end
 
@@ -335,7 +319,7 @@ defmodule SacrumWeb.Graphql.DaemonManagementTest do
       fleet =
         run(
           ctx.conn,
-          "query { daemons { id status name displayName enrolledAt removedAt insertedAt updatedAt } }"
+          "query { daemons { id status name displayName enrolledAt insertedAt updatedAt } }"
         )
 
       assert [%{"status" => "pending"}] = fleet["data"]["daemons"]

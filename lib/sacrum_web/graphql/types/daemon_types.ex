@@ -17,7 +17,6 @@ defmodule SacrumWeb.Graphql.Types.DaemonTypes do
     end
 
     field :enrolled_at, :datetime
-    field :removed_at, :datetime
     field :inserted_at, :datetime
     field :updated_at, :datetime
   end
@@ -94,14 +93,6 @@ defmodule SacrumWeb.Graphql.Types.DaemonTypes do
       end)
     end
 
-    field :revoke_daemon, :daemon do
-      arg(:id, non_null(:uuid4))
-
-      resolve(fn %{id: id}, %{context: %{current_user: user}} ->
-        translate_error(Daemons.revoke(user.id, id))
-      end)
-    end
-
     field :unregister_daemon, :daemon do
       arg(:id, non_null(:uuid4))
 
@@ -129,17 +120,6 @@ defmodule SacrumWeb.Graphql.Types.DaemonTypes do
 
   defp translate_error({:error, :not_found}),
     do: {:error, "daemon not found"}
-
-  defp translate_error({:error, :terminal_state}),
-    do: {:error, "daemon is in a terminal state (revoked or removed)"}
-
-  defp translate_error({:error, :active_work}),
-    do: {:error, "daemon has an active session; disconnect it before unregistering"}
-
-  defp translate_error({:error, :ownership_unknown}),
-    do:
-      {:error,
-       "daemon has enrollment history and cannot be unregistered until work ownership is established"}
 
   defp translate_error(other), do: other
 end

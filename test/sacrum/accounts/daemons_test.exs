@@ -24,7 +24,9 @@ defmodule Sacrum.Accounts.DaemonsTest do
     assert {:ok, _} = Daemons.get_by(owner.id, conditions: [id: daemon.id])
     assert {:error, :not_found} = Daemons.get_by(other.id, conditions: [id: daemon.id])
     assert {:error, :not_found} = Daemons.rotate(other.id, daemon.id)
-    assert {:error, :not_found} = Daemons.revoke(other.id, daemon.id)
-    assert {:ok, _} = Daemons.revoke(owner.id, daemon.id)
+    assert {:error, :not_found} = Daemons.unregister(other.id, daemon.id)
+    assert {:ok, deleted} = Daemons.unregister(owner.id, daemon.id)
+    assert deleted.id == daemon.id
+    assert {:error, :not_found} = Daemons.get_by(owner.id, conditions: [id: daemon.id])
   end
 end

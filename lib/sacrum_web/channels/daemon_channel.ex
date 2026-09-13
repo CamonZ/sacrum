@@ -8,9 +8,9 @@ defmodule SacrumWeb.DaemonChannel do
   2. claim the Registry registration (process-owned),
   3. re-revalidate after registration.
 
-  A lifecycle mutation (revoke/rotation) committing at any point is therefore
-  caught: before (1) rejects, between (1) and (2) is caught by (3) which
-  releases the fresh registration, and after (2) is delivered through
+  A lifecycle mutation (deletion/rotation) committing at any point is
+  therefore caught: before (1) rejects, between (1) and (2) is caught by (3)
+  which releases the fresh registration, and after (2) is delivered through
   `Sacrum.DaemonConnectionRegistry.invalidate_sessions/1` or the bounded
   periodic recheck. Reconnects and restarts always re-derive authorization
   from the database.

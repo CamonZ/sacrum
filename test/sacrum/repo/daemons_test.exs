@@ -81,104 +81,77 @@ defmodule Sacrum.Repo.DaemonsTest do
     assert reenrolled.status == "active"
   end
 
-  test "revoke atomically invalidates every credential with one consistent timestamp" do
+  test "unregister atomically removes the daemon and cascaded credentials" do
     {:ok, user} =
       Users.insert(%{
-        email: "atomic-revoke@example.com",
-        username: "atomic_revoke",
+        email: "atomic-delete@example.com",
+        username: "atomic_delete",
         password: "password123"
       })
 
     {:ok, daemon, bootstrap} = Daemons.create(user.id, %{name: "target"})
     assert {:ok, _, reconnect, _} = Daemons.exchange_bootstrap(daemon.id, bootstrap)
 
-    assert {:ok, %{daemon: revoked} = result} = Daemons.revoke(daemon)
+    assert {:ok, %{daemon: deleted} = result} = Daemons.unregister(daemon)
 
-    assert revoked.id == daemon.id
-    assert revoked.status == "revoked"
-    assert revoked.name == "target"
+    assert deleted.id == daemon.id
+    assert deleted.status == "active"
+    assert deleted.name == "target"
     assert refute_token_material(result, [bootstrap, reconnect])
+    assert Repo.get(Daemon, daemon.id) == nil
 
-    assert Repo.aggregate(
-             from(c in DaemonCredential,
-               where: c.daemon_id == ^daemon.id and c.status == "active"
-             ),
-             :count
-           ) == 0
-
-    revoked_rows =
-      Repo.all(
-        from c in DaemonCredential,
-          where: c.daemon_id == ^daemon.id and c.status == "revoked",
-          order_by: [asc: c.inserted_at]
-      )
-
-    assert length(revoked_rows) == 2
-    timestamps = Enum.map(revoked_rows, & &1.revoked_at)
-    assert Enum.all?(timestamps, &(&1 != nil))
-    assert Enum.uniq(timestamps) == [List.first(timestamps)]
-
-    reconnect_row =
-      Repo.one!(
-        from c in DaemonCredential,
-          where: c.daemon_id == ^daemon.id and c.credential_kind == "reconnect"
-      )
+    assert Repo.aggregate(from(c in DaemonCredential, where: c.daemon_id == ^daemon.id), :count) ==
+             0
 
     assert {:error, :invalid_credentials} = Daemons.verify_token(daemon.id, reconnect)
-
-    assert {:error, :invalid_credentials} =
-             Daemons.revalidate_reconnect(daemon.id, reconnect_row.id)
+    assert {:error, :invalid_credentials} = Daemons.exchange_bootstrap(daemon.id, bootstrap)
+    assert {:error, :invalid_credentials} = Daemons.rotate_bootstrap(daemon)
   end
 
-  test "revoke is idempotent and a stale struct cannot resurrect access" do
+  test "unregister is not-found on repeat and a stale struct cannot resurrect access" do
     {:ok, user} =
       Users.insert(%{
-        email: "idempotent-revoke@example.com",
-        username: "idempotent_revoke",
+        email: "repeat-delete@example.com",
+        username: "repeat_delete",
         password: "password123"
       })
 
     {:ok, daemon, _bootstrap} = Daemons.create(user.id)
     stale = Repo.get!(Daemon, daemon.id)
 
-    assert {:ok, first} = Daemons.revoke(stale)
-    assert first.daemon.status == "revoked"
+    assert {:ok, first} = Daemons.unregister(stale)
+    assert first.daemon.id == daemon.id
+    assert {:error, :not_found} = Daemons.unregister(stale)
+    assert Repo.get(Daemon, daemon.id) == nil
+    assert {:error, :invalid_credentials} = Daemons.rotate(daemon)
+    assert {:error, :invalid_credentials} = Daemons.rotate_bootstrap(daemon)
+  end
 
-    assert {:ok, second} = Daemons.revoke(stale)
-    assert second.daemon.status == "revoked"
+  test "unregister preserves the daemon-keyed active-work refusal" do
+    {:ok, user} =
+      Users.insert(%{
+        email: "active-work-delete@example.com",
+        username: "active_work_delete",
+        password: "password123"
+      })
 
-    assert {:ok, third} = Daemons.revoke(Repo.get!(Daemon, daemon.id))
-    assert third.daemon.status == "revoked"
+    {:ok, daemon, bootstrap} = Daemons.create(user.id)
 
-    assert {:error, :terminal_state} = Daemons.rotate(daemon)
-    assert {:error, :terminal_state} = Daemons.rotate_bootstrap(daemon)
+    assert {:error, :active_work} =
+             Daemons.unregister(daemon, active_work?: fn _daemon -> true end)
+
+    assert Repo.get(Daemon, daemon.id).status == "pending"
+
+    assert Repo.aggregate(from(c in DaemonCredential, where: c.daemon_id == ^daemon.id), :count) ==
+             1
+
+    assert {:ok, _daemon, _token, _credential} =
+             Daemons.exchange_bootstrap(daemon.id, bootstrap)
   end
 
   defp refute_token_material(result, tokens) do
     inspected = inspect(result)
     refute Enum.any?(tokens, &String.contains?(inspected, &1))
     true
-  end
-
-  test "legacy enrollment evidence without enrolled_at still blocks removal" do
-    {:ok, user} =
-      Users.insert(%{
-        email: "unregister-legacy@example.com",
-        username: "unregister_legacy",
-        password: "password123"
-      })
-
-    {:ok, daemon, _bootstrap} = Daemons.create(user.id)
-
-    # Simulate a pre-migration row: reconnect evidence, no enrolled_at stamp.
-    Repo.insert!(%DaemonCredential{
-      daemon_id: daemon.id,
-      credential_kind: "reconnect",
-      token_hash: :crypto.strong_rand_bytes(32) |> Base.encode64(),
-      expires_at: DateTime.add(DateTime.utc_now(), 3600)
-    })
-
-    assert {:error, :ownership_unknown} = Daemons.unregister(daemon)
-    assert Repo.get!(Daemon, daemon.id).status == "pending"
   end
 end

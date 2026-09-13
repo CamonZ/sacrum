@@ -414,8 +414,9 @@ The larger pool avoids connection starvation when the private `DATABASE_URL`
 overrides test configuration and the suite runs with 24 concurrent cases. The
 race tests serialize their fixtures, use separate committed database sessions,
 observe both contenders waiting on a held row lock, and clean up their records.
-The lifecycle races (revoke vs exchange, unregister vs exchange) reuse the same
-barrier pattern; a failure-injection trigger proves unregister rollback.
+The lifecycle races (unregister/rotation/exchange) reuse the same barrier pattern;
+a failure-injection trigger proves delete rollback and leaves both the daemon
+and its cascaded credentials unchanged.
 Other tests use the existing SQL sandbox.
 `mix test` creates/migrates its configured
 database; `mix precommit` also formats code and unlocks unused dependencies, so

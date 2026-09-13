@@ -69,99 +69,62 @@ defmodule Sacrum.Repo.Daemons do
     do: create_bootstrap(%Daemon{user_id: user_id}, attrs)
 
   @doc """
-  Terminal unregister under the daemon row lock. Never-enrolled provisioning
-  is tombstoned; enrollment evidence refuses with `:ownership_unknown`.
+  Unregisters a daemon by deleting it under its row lock and transaction.
+
+  The lock is shared with bootstrap exchange and credential rotation, so a
+  committed delete always wins over any credentials issued by a contending
+  lifecycle operation. The daemon foreign key owns credential cleanup through
+  `ON DELETE CASCADE`; no credential rows are retained or manually revoked.
+
+  Callers that have an authoritative daemon-keyed work guard can pass an
+  `active_work?` function. A connected session alone is not a database work
+  reference: successful unregister invalidates it after commit.
   """
   @spec unregister(Daemon.t()) ::
           {:ok, committed_lifecycle()}
-          | {:error, :ownership_unknown | :active_work | Ecto.Changeset.t()}
+          | {:error, :not_found | :active_work | Ecto.Changeset.t()}
   @spec unregister(Daemon.t(), keyword()) ::
           {:ok, committed_lifecycle()}
-          | {:error, :ownership_unknown | :active_work | Ecto.Changeset.t()}
-  def unregister(%Daemon{} = daemon, opts \\ []) do
+          | {:error, :not_found | :active_work | Ecto.Changeset.t()}
+  def unregister(%Daemon{} = daemon), do: unregister(daemon, [])
+
+  def unregister(%Daemon{} = daemon, opts) when is_list(opts) do
     Repo.transaction(fn ->
-      daemon = lock_daemon_row!(daemon.id)
+      daemon = lock_daemon_for_delete!(daemon.id)
 
-      cond do
-        Daemon.removed?(daemon) ->
-          lifecycle_result(daemon)
+      if active_work?(opts, daemon), do: Repo.rollback(:active_work)
 
-        connected?(opts, daemon) ->
-          Repo.rollback(:active_work)
-
-        enrollment_evidence?(daemon.id) ->
-          Repo.rollback(:ownership_unknown)
-
-        true ->
-          remove!(daemon)
-      end
+      delete_locked!(daemon)
     end)
   end
 
-  defp connected?(opts, daemon) do
-    case Keyword.get(opts, :connected?) do
+  defp delete_locked!(%Daemon{} = daemon) do
+    case Repo.delete(daemon) do
+      {:ok, deleted} -> lifecycle_result(deleted)
+      {:error, changeset} -> Repo.rollback(changeset)
+    end
+  end
+
+  defp active_work?(opts, daemon) do
+    case Keyword.get(opts, :active_work?) do
       fun when is_function(fun, 1) -> fun.(daemon)
       _ -> false
     end
   end
 
-  defp remove!(%Daemon{} = daemon) do
-    now = DateTime.utc_now()
-    revoke_active_credentials(daemon.id, now)
-
-    case Repo.update(Daemon.remove_changeset(daemon, now)) do
-      {:ok, removed} -> lifecycle_result(removed)
-      {:error, changeset} -> Repo.rollback(changeset)
-    end
-  end
-
-  defp enrollment_evidence?(daemon_id) do
-    Repo.exists?(
-      from c in DaemonCredential,
-        where:
-          c.daemon_id == ^daemon_id and
-            (c.credential_kind == "reconnect" or not is_nil(c.consumed_at))
-    )
-  end
-
-  @doc "Owner's daemons excluding removed tombstones."
+  @doc "Owner's active daemon identities. Deleted rows are not returned."
   @spec list_active_fleet(String.t()) :: [Daemon.t()]
   def list_active_fleet(user_id) when is_binary(user_id) do
     Repo.all(
       from d in Daemon,
-        where: d.user_id == ^user_id and d.status != "removed",
+        where: d.user_id == ^user_id,
         order_by: [asc: d.inserted_at, asc: d.id]
     )
   end
 
-  @doc """
-  Row-locked revoke of the identity and every active credential. Idempotent
-  on terminal rows; `removed` stays `removed`.
-  """
-  @spec revoke(Daemon.t()) :: {:ok, committed_lifecycle()} | {:error, Ecto.Changeset.t()}
-  def revoke(%Daemon{} = daemon) do
-    Repo.transaction(fn ->
-      daemon = lock_daemon_row!(daemon.id)
-      now = DateTime.utc_now()
-      revoke_active_credentials(daemon.id, now)
-      lifecycle_result(persist_revoked!(daemon))
-    end)
-  end
-
-  defp persist_revoked!(%Daemon{} = daemon) do
-    if Daemon.terminal?(daemon) do
-      daemon
-    else
-      case Repo.update(Daemon.update_changeset(daemon, %{status: "revoked"})) do
-        {:ok, daemon} -> daemon
-        {:error, changeset} -> Repo.rollback(changeset)
-      end
-    end
-  end
-
-  @doc "Renames or clears the display name. Terminal identities refuse under the row lock."
+  @doc "Renames or clears the display name under the daemon row lock."
   @spec rename(Daemon.t(), map()) ::
-          {:ok, Daemon.t()} | {:error, :terminal_state | Ecto.Changeset.t()}
+          {:ok, Daemon.t()} | {:error, :not_found | Ecto.Changeset.t()}
   def rename(%Daemon{} = daemon, attrs) do
     Repo.transaction(fn ->
       daemon.id
@@ -171,8 +134,6 @@ defmodule Sacrum.Repo.Daemons do
   end
 
   defp apply_rename!(%Daemon{} = daemon, attrs) do
-    if Daemon.terminal?(daemon), do: Repo.rollback(:terminal_state)
-
     case Repo.update(Daemon.name_changeset(daemon, attrs)) do
       {:ok, renamed} -> renamed
       {:error, changeset} -> Repo.rollback(changeset)
@@ -203,15 +164,16 @@ defmodule Sacrum.Repo.Daemons do
   end
 
   @doc """
-  Row-locked rotation: revoke live credentials and issue a fresh bootstrap.
-  Terminal identities refuse with `:terminal_state`.
+  Row-locked rotation: revoke live credentials and issue a fresh bootstrap
+  on the same identity. Deletion is the separate identity-invalidating
+  operation.
   """
   @spec rotate(Daemon.t()) ::
           {:ok, committed_lifecycle()}
-          | {:error, :invalid_credentials | :terminal_state | Ecto.Changeset.t()}
+          | {:error, :invalid_credentials | Ecto.Changeset.t()}
   @spec rotate(Daemon.t(), keyword()) ::
           {:ok, committed_lifecycle()}
-          | {:error, :invalid_credentials | :terminal_state | Ecto.Changeset.t()}
+          | {:error, :invalid_credentials | Ecto.Changeset.t()}
   def rotate(%Daemon{} = daemon, opts \\ []) do
     case rotate_bootstrap(daemon, opts) do
       {:ok, result} -> {:ok, %{result | token: nil, credential: nil}}
@@ -222,10 +184,10 @@ defmodule Sacrum.Repo.Daemons do
   @doc "Same as `rotate/1` with the new bootstrap token for the owner response."
   @spec rotate_bootstrap(Daemon.t()) ::
           {:ok, committed_lifecycle()}
-          | {:error, :invalid_credentials | :terminal_state | Ecto.Changeset.t()}
+          | {:error, :invalid_credentials | Ecto.Changeset.t()}
   @spec rotate_bootstrap(Daemon.t(), keyword()) ::
           {:ok, committed_lifecycle()}
-          | {:error, :invalid_credentials | :terminal_state | Ecto.Changeset.t()}
+          | {:error, :invalid_credentials | Ecto.Changeset.t()}
   def rotate_bootstrap(%Daemon{} = daemon, opts \\ []) do
     now = now(opts)
     token = new_token()
@@ -235,10 +197,10 @@ defmodule Sacrum.Repo.Daemons do
       daemon = lock_daemon_row!(daemon.id)
 
       unless Daemon.credential_eligible?(daemon) do
-        Repo.rollback(:terminal_state)
+        Repo.rollback(:invalid_credentials)
       end
 
-      revoke_active_credentials(daemon.id, now)
+      invalidate_active_credentials(daemon.id, now)
 
       credential =
         insert_credential!(daemon.id, "bootstrap", token_hash, DateTime.add(now, @default_ttl))
@@ -407,7 +369,14 @@ defmodule Sacrum.Repo.Daemons do
     end
   end
 
-  defp revoke_active_credentials(daemon_id, now) do
+  defp lock_daemon_for_delete!(daemon_id) do
+    case Repo.one(from d in Daemon, where: d.id == ^daemon_id, lock: "FOR UPDATE") do
+      %Daemon{} = daemon -> daemon
+      _ -> Repo.rollback(:not_found)
+    end
+  end
+
+  defp invalidate_active_credentials(daemon_id, now) do
     Repo.update_all(
       from(c in DaemonCredential, where: c.daemon_id == ^daemon_id and c.status == "active"),
       set: [status: "revoked", revoked_at: now, updated_at: now]
