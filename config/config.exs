@@ -33,7 +33,8 @@ config :sacrum, :cdc,
     "task_dependencies",
     "code_refs",
     "artifacts",
-    "artifact_links"
+    "artifact_links",
+    "daemons"
   ],
   modules: [Sacrum.Realtime.Cdc.WalExConsumer]
 

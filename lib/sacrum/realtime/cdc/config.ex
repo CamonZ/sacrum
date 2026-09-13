@@ -15,6 +15,7 @@ defmodule Sacrum.Realtime.Cdc.Config do
     code_refs
     artifacts
     artifact_links
+    daemons
   )
 
   @spec start_consumer?() :: boolean()
