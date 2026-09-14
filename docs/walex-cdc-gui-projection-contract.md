@@ -201,9 +201,11 @@ Refetch is a recovery path, not the routine live-event path.
 ## Account daemon fleet projection
 
 Daemon fleet state has a separate account-scoped stream and is not sent on
-`ProjectChannel`. Authenticated user sockets may join `account:<user_id>` only
-when the topic ID equals the socket user's ID. Daemon-authenticated sockets
-and other account IDs are rejected.
+`ProjectChannel`. Authenticated user sockets may join only `accounts:me`.
+Sacrum derives the user ID from socket authentication and internally
+subscribes the channel process to `account:<user_id>`; that internal topic is
+not externally joinable. Daemon-authenticated sockets and client-supplied
+account IDs are rejected or ignored for account routing.
 
 The same WalEx consumer handles the `daemons` publication subscription after
 commit and emits the following events through `SacrumWeb.AccountChannel`:
@@ -222,6 +224,7 @@ secret material are excluded. Daemon status is limited to `pending` and
 `active`; unregister hard-deletes the identity and produces `daemon_deleted`.
 
 Account events are projections of committed rows and are delivered to every
-active subscriber on the owner's topic. They do not alter the existing
+active `accounts:me` subscriber for the owning authenticated user. They do not
+alter the existing
 `daemon:<daemon_id>` registration/revalidation channel or project-scoped
 `run_step`/`cancel_step` command behavior.

@@ -24,9 +24,10 @@ Sacrum is an API-only workflow engine and task management system built with Phoe
 
 **Real-time updates** — Project state changes broadcast to `ProjectChannel`,
 keyed by project ID (`project:<project_id>`), while daemon fleet lifecycle
-changes are projected after commit to the owner-scoped
-`account:<user_id>` channel. Connected clients receive live task, workflow,
-step, and daemon-management updates without receiving credential secrets.
+changes are projected after commit to the owner's internal
+`account:<user_id>` topic and exposed to clients through `accounts:me`.
+Connected clients receive live task, workflow, step, and daemon-management
+updates without receiving credential secrets.
 
 ## Domain Model
 
@@ -287,10 +288,12 @@ completeness guarantees, daemon command exclusions, and snapshot/gap recovery
 rules are defined in
 [WalEx CDC GUI Projection Contract](walex-cdc-gui-projection-contract.md).
 
-Daemon management clients use the authenticated `account:<user_id>` topic for
-`daemon_created`, `daemon_updated`, and `daemon_deleted` projections. The
-account topic is owner-authorized and its payload contains only sanitized
-daemon identity, lifecycle, and concurrency fields. Row updates arrive as complete
+Daemon management clients use the authenticated `accounts:me` channel for
+`daemon_created`, `daemon_updated`, and `daemon_deleted` projections. Sacrum
+derives the account from the socket and routes internally through
+`account:<user_id>`; clients cannot join that internal topic or select another
+user through join parameters. The payload contains only sanitized daemon
+identity, lifecycle, and concurrency fields. Row updates arrive as complete
 `daemon_updated` replacement payloads, while hard deletion arrives as
 `daemon_deleted`; the existing `daemon:<daemon_id>` registration/revalidation
 channel and project-scoped work commands remain separate.

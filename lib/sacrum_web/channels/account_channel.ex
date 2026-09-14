@@ -1,13 +1,22 @@
 defmodule SacrumWeb.AccountChannel do
-  @moduledoc "Account-scoped realtime channel for authenticated daemon fleet clients."
+  @moduledoc """
+  Account-scoped realtime channel for authenticated account clients.
+
+  Clients join the public `accounts:me` topic. The channel derives the
+  account from the authenticated user socket and subscribes internally to
+  that user's `account:<user_id>` topic, which is reserved for server-side
+  broadcasts.
+  """
 
   use Phoenix.Channel
 
+  alias Phoenix.Socket.Broadcast
   alias Sacrum.Realtime.AccountChannelCdcContract
   alias Sacrum.Repo.Schemas.Daemon
 
   @events AccountChannelCdcContract.event_names()
   @schema_version 1
+  @public_topic "accounts:me"
 
   intercept(@events)
 
@@ -15,15 +24,18 @@ defmodule SacrumWeb.AccountChannel do
           {:ok, Phoenix.Socket.t()} | {:error, map()}
   @impl true
   def join(
-        "account:" <> account_id,
+        @public_topic,
         _params,
-        %{assigns: %{current_user: %{id: account_id}}} = socket
+        %{assigns: %{current_user: %{id: user_id}}} = socket
       ) do
-    {:ok, assign(socket, :account_id, account_id)}
-  end
+    account_topic = AccountChannelCdcContract.topic(user_id)
+    :ok = SacrumWeb.Endpoint.subscribe(account_topic)
 
-  def join("account:" <> _account_id, _params, _socket),
-    do: {:error, %{reason: "forbidden"}}
+    {:ok,
+     socket
+     |> assign(:account_id, user_id)
+     |> assign(:account_topic, account_topic)}
+  end
 
   def join(_, _, _), do: {:error, %{reason: "forbidden"}}
 
@@ -50,6 +62,17 @@ defmodule SacrumWeb.AccountChannel do
     push(socket, event, daemon_payload(payload))
     {:noreply, socket}
   end
+
+  @impl true
+  def handle_info(
+        %Broadcast{topic: topic, event: event, payload: payload},
+        %{assigns: %{account_topic: topic}} = socket
+      )
+      when event in @events do
+    handle_out(event, payload, socket)
+  end
+
+  def handle_info(_message, socket), do: {:noreply, socket}
 
   defp broadcast_daemon(account_id, event, daemon) do
     SacrumWeb.Endpoint.broadcast(
