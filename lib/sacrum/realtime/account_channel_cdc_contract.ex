@@ -11,7 +11,9 @@ defmodule Sacrum.Realtime.AccountChannelCdcContract do
   @event_names ~w(daemon_created daemon_updated daemon_deleted)
   @schema_version 1
 
-  @daemon_payload_keys ~w(id status name display_name enrolled_at inserted_at updated_at)a
+  @daemon_payload_keys ~w(
+    id status name display_name max_concurrency enrolled_at inserted_at updated_at
+  )a
 
   @daemon_source_image_fields [:user_id | @daemon_payload_keys -- [:display_name]]
   @daemon_event_payload_keys [:schema_version | @daemon_payload_keys]

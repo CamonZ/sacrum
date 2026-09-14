@@ -23,6 +23,7 @@ defmodule Sacrum.Realtime.AccountChannelCdcContractTest do
     refute :token_hash in AccountChannelCdcContract.payload_keys()
     refute :credential in AccountChannelCdcContract.payload_keys()
     refute :token in AccountChannelCdcContract.payload_keys()
+    assert :max_concurrency in AccountChannelCdcContract.payload_keys()
   end
 
   test "uses the update event for row changes and delete event for hard deletes" do

@@ -24,6 +24,7 @@ defmodule Sacrum.Realtime.Cdc.DaemonProjectionTest do
     assert payload.id == daemon_id
     assert payload.status == "pending"
     assert payload.name == "Fleet bot"
+    assert payload.max_concurrency == nil
     assert payload.display_name == "Fleet bot"
     assert payload.schema_version == 1
     refute Map.has_key?(payload, :user_id)
@@ -106,6 +107,7 @@ defmodule Sacrum.Realtime.Cdc.DaemonProjectionTest do
       "user_id" => user_id,
       "status" => status,
       "name" => name,
+      "max_concurrency" => nil,
       "enrolled_at" => nil,
       "inserted_at" => now,
       "updated_at" => now,

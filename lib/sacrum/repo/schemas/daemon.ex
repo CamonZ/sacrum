@@ -37,6 +37,7 @@ defmodule Sacrum.Repo.Schemas.Daemon do
     field :name, :string
     field :status, :string, default: "pending"
     field :enrolled_at, :utc_datetime_usec
+    field :max_concurrency, :integer
     belongs_to :user, Sacrum.Repo.Schemas.User
     has_many :credentials, Sacrum.Repo.Schemas.DaemonCredential
     timestamps(type: :utc_datetime_usec)
@@ -61,6 +62,15 @@ defmodule Sacrum.Repo.Schemas.Daemon do
   @spec name_changeset(t(), map()) :: Ecto.Changeset.t()
   def name_changeset(daemon, attrs) do
     daemon |> cast(attrs, [:name], empty_values: []) |> validate_name()
+  end
+
+  @doc "Sets or clears the daemon execution concurrency limit."
+  @spec max_concurrency_changeset(t(), map()) :: Ecto.Changeset.t()
+  def max_concurrency_changeset(daemon, attrs) do
+    daemon
+    |> cast(attrs, [:max_concurrency])
+    |> validate_number(:max_concurrency, greater_than: 0)
+    |> check_constraint(:max_concurrency, name: :daemons_max_concurrency_positive)
   end
 
   @doc "First-enrollment stamp. Activates a pending daemon; does not recast later rotations."

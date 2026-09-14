@@ -69,6 +69,7 @@ defmodule SacrumWeb.AccountChannel do
       status: Map.get(daemon, :status),
       name: name,
       display_name: Daemon.display_name(%Daemon{id: id, name: name}),
+      max_concurrency: Map.get(daemon, :max_concurrency),
       enrolled_at: Map.get(daemon, :enrolled_at),
       inserted_at: Map.get(daemon, :inserted_at),
       updated_at: Map.get(daemon, :updated_at)

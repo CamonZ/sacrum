@@ -83,6 +83,28 @@ defmodule Sacrum.Repo.Schemas.DaemonTest do
     end
   end
 
+  describe "max_concurrency policy" do
+    test "accepts positive values and nil and rejects non-positive values" do
+      daemon = %Daemon{user_id: Ecto.UUID.generate(), max_concurrency: 3}
+
+      assert Daemon.max_concurrency_changeset(daemon, %{max_concurrency: 5}).valid?
+      assert Daemon.max_concurrency_changeset(daemon, %{max_concurrency: nil}).valid?
+
+      for value <- [0, -1] do
+        changeset = Daemon.max_concurrency_changeset(daemon, %{max_concurrency: value})
+        assert %{max_concurrency: ["must be greater than 0"]} = errors_on(changeset)
+      end
+    end
+
+    test "clears an existing value" do
+      daemon = %Daemon{user_id: Ecto.UUID.generate(), max_concurrency: 3}
+
+      changeset = Daemon.max_concurrency_changeset(daemon, %{max_concurrency: nil})
+
+      assert Ecto.Changeset.get_change(changeset, :max_concurrency) == nil
+    end
+  end
+
   test "enroll_changeset stamps first enrollment and activates pending daemons" do
     now = DateTime.utc_now()
     daemon = %Daemon{user_id: Ecto.UUID.generate(), status: "pending"}
