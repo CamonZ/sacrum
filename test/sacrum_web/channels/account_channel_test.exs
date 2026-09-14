@@ -57,6 +57,7 @@ defmodule SacrumWeb.AccountChannelTest do
     assert created_payload.status == "pending"
     assert created_payload.name == "Fleet bot"
     assert created_payload.display_name == "Fleet bot"
+    assert created_payload.max_concurrency == nil
     assert created_payload.schema_version == 1
 
     leave(channel)
@@ -106,6 +107,7 @@ defmodule SacrumWeb.AccountChannelTest do
              :enrolled_at,
              :id,
              :inserted_at,
+             :max_concurrency,
              :name,
              :schema_version,
              :status,

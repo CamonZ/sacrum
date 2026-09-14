@@ -167,6 +167,92 @@ defmodule SacrumWeb.Graphql.DaemonManagementTest do
     end
   end
 
+  describe "daemon max concurrency" do
+    setup ctx do
+      {:ok, daemon, _} = Daemons.create(ctx.owner.id)
+      Map.put(ctx, :daemon, daemon)
+    end
+
+    test "sets and clears the owner daemon limit", ctx do
+      set_result =
+        run(
+          ctx.conn,
+          "mutation { setDaemonMaxConcurrency(id: \"#{ctx.daemon.id}\", maxConcurrency: 3) { id maxConcurrency } }"
+        )
+
+      assert set_result["data"]["setDaemonMaxConcurrency"] == %{
+               "id" => ctx.daemon.id,
+               "maxConcurrency" => 3
+             }
+
+      listed = run(ctx.conn, "query { daemons { id maxConcurrency } }")
+      assert [%{"id" => id, "maxConcurrency" => 3}] = listed["data"]["daemons"]
+      assert id == ctx.daemon.id
+
+      clear_result =
+        run(
+          ctx.conn,
+          "mutation { clearDaemonMaxConcurrency(id: \"#{ctx.daemon.id}\") { id maxConcurrency } }"
+        )
+
+      assert clear_result["data"]["clearDaemonMaxConcurrency"] == %{
+               "id" => ctx.daemon.id,
+               "maxConcurrency" => nil
+             }
+    end
+
+    test "rejects invalid limits with a field error", ctx do
+      result =
+        run(
+          ctx.conn,
+          "mutation { setDaemonMaxConcurrency(id: \"#{ctx.daemon.id}\", maxConcurrency: 0) { id } }"
+        )
+
+      assert result["data"]["setDaemonMaxConcurrency"] == nil
+      assert [%{"field" => "max_concurrency"}] = result["errors"]
+      assert Repo.get!(Daemon, ctx.daemon.id).max_concurrency == nil
+    end
+
+    test "does not allow foreign or unknown daemon IDs", ctx do
+      {:ok, foreign} =
+        Repo.Users.insert(%{
+          email: "mgmt-limit-foreign@example.com",
+          username: "mgmt_limit_foreign",
+          password: "password123"
+        })
+
+      {:ok, foreign_daemon, _} = Daemons.create(foreign.id)
+
+      foreign_result =
+        run(
+          ctx.conn,
+          "mutation { setDaemonMaxConcurrency(id: \"#{foreign_daemon.id}\", maxConcurrency: 2) { id } }"
+        )
+
+      unknown_result =
+        run(
+          ctx.conn,
+          "mutation { setDaemonMaxConcurrency(id: \"#{Ecto.UUID.generate()}\", maxConcurrency: 2) { id } }"
+        )
+
+      assert error_message(foreign_result) == "daemon not found"
+      assert error_message(unknown_result) == "daemon not found"
+      assert Repo.get!(Daemon, foreign_daemon.id).max_concurrency == nil
+    end
+
+    test "deleted daemon IDs cannot be configured", ctx do
+      assert {:ok, _deleted} = Sacrum.Accounts.Daemons.unregister(ctx.owner.id, ctx.daemon.id)
+
+      result =
+        run(
+          ctx.conn,
+          "mutation { setDaemonMaxConcurrency(id: \"#{ctx.daemon.id}\", maxConcurrency: 2) { id } }"
+        )
+
+      assert error_message(result) == "daemon not found"
+    end
+  end
+
   describe "daemonEnrollmentMetadata" do
     test "projects safe summaries for enrolled identities without token material", ctx do
       created =

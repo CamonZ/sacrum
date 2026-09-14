@@ -44,6 +44,24 @@ defmodule Sacrum.Accounts.Daemons do
     end
   end
 
+  @doc "Owner-scoped daemon concurrency limit update."
+  @spec set_max_concurrency(String.t(), String.t(), pos_integer()) ::
+          {:ok, Daemon.t()} | {:error, :not_found | Ecto.Changeset.t()}
+  def set_max_concurrency(user_id, daemon_id, max_concurrency) do
+    with {:ok, daemon} <- get_by(user_id, conditions: [id: daemon_id]) do
+      DaemonsRepo.update_max_concurrency(daemon, max_concurrency)
+    end
+  end
+
+  @doc "Owner-scoped daemon concurrency limit removal."
+  @spec clear_max_concurrency(String.t(), String.t()) ::
+          {:ok, Daemon.t()} | {:error, :not_found | Ecto.Changeset.t()}
+  def clear_max_concurrency(user_id, daemon_id) do
+    with {:ok, daemon} <- get_by(user_id, conditions: [id: daemon_id]) do
+      DaemonsRepo.update_max_concurrency(daemon, nil)
+    end
+  end
+
   @doc "Owner's daemon identities. Deleted rows are not returned."
   @spec list_fleet(String.t()) :: [Daemon.t()]
   def list_fleet(user_id) when is_binary(user_id), do: DaemonsRepo.list_active_fleet(user_id)

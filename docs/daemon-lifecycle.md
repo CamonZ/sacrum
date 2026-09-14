@@ -59,6 +59,14 @@ unknown identity.
 - Deletion removes the identity; it does not preserve a renamed or terminal
   tombstone.
 
+## Execution concurrency
+
+`maxConcurrency` is an optional positive integer controlling the daemon's
+client-side execution budget. A `null` value leaves the daemon unlimited from
+its own configuration perspective. Owners can set or clear the value with
+`setDaemonMaxConcurrency(id:, maxConcurrency:)` and
+`clearDaemonMaxConcurrency(id:)`; both mutations are owner-scoped.
+
 ## Owner management surface (GraphQL)
 
 All management operations require an authenticated account token; bootstrap
@@ -68,6 +76,8 @@ and reconnect credentials authorize nothing on this surface.
 |-----------|----------|
 | `createDaemon(name?)` | Omitted name stays compatible; returns `daemon`, one-time `enrollmentToken`, `expiresAt`. |
 | `renameDaemon(id, name)` | Shared name policy; omitted `name` leaves the current value unchanged, `name: null` clears the name. |
+| `setDaemonMaxConcurrency(id, maxConcurrency)` | Sets a positive per-daemon execution limit and returns the updated daemon. |
+| `clearDaemonMaxConcurrency(id)` | Clears the per-daemon execution limit and returns the updated daemon. |
 | `unregisterDaemon(id)` | Owner-scoped hard delete. Deletes the identity and cascaded credentials in a locked transaction, then invalidates any connected daemon session after commit. |
 | `rotateDaemonCredentials(id)` | New bootstrap on the same identity; prior credentials (and the live session) are invalidated. Unknown/foreign/deleted IDs are `daemon not found`. |
 | `daemons` | Active fleet. Deleted identities are absent. |
@@ -109,7 +119,8 @@ active account subscriber:
 | `daemon_deleted` | A daemon row was hard-deleted. |
 
 Every payload has `schema_version: 1` and only contains `id`, `status`,
-`name`, `display_name`, `enrolled_at`, `inserted_at`, and `updated_at`.
+`name`, `display_name`, `max_concurrency`, `enrolled_at`, `inserted_at`, and
+`updated_at`.
 Daemon status remains `pending` or `active`; hard deletion is represented by
 `daemon_deleted`. Credential plaintext, token hashes, and credential rows are
 never projected.

@@ -290,7 +290,7 @@ rules are defined in
 Daemon management clients use the authenticated `account:<user_id>` topic for
 `daemon_created`, `daemon_updated`, and `daemon_deleted` projections. The
 account topic is owner-authorized and its payload contains only sanitized
-daemon identity/lifecycle fields. Row updates arrive as complete
+daemon identity, lifecycle, and concurrency fields. Row updates arrive as complete
 `daemon_updated` replacement payloads, while hard deletion arrives as
 `daemon_deleted`; the existing `daemon:<daemon_id>` registration/revalidation
 channel and project-scoped work commands remain separate.

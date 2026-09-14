@@ -140,6 +140,26 @@ defmodule Sacrum.Repo.Daemons do
     end
   end
 
+  @doc "Updates the daemon concurrency limit under the daemon row lock."
+  @spec update_max_concurrency(Daemon.t(), pos_integer() | nil) ::
+          {:ok, Daemon.t()} | {:error, :not_found | Ecto.Changeset.t()}
+  def update_max_concurrency(%Daemon{} = daemon, max_concurrency) do
+    Repo.transaction(fn ->
+      daemon.id
+      |> lock_daemon_row!()
+      |> apply_max_concurrency!(max_concurrency)
+    end)
+  end
+
+  defp apply_max_concurrency!(%Daemon{} = daemon, max_concurrency) do
+    case Repo.update(
+           Daemon.max_concurrency_changeset(daemon, %{max_concurrency: max_concurrency})
+         ) do
+      {:ok, updated} -> updated
+      {:error, changeset} -> Repo.rollback(changeset)
+    end
+  end
+
   @doc "Enrollment metadata without token hashes or plaintext."
   @spec enrollment_metadata(Daemon.t()) :: %{
           daemon_id: String.t(),

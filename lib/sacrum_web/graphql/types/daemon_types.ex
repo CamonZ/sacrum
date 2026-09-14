@@ -9,6 +9,7 @@ defmodule SacrumWeb.Graphql.Types.DaemonTypes do
     field :id, non_null(:uuid4)
     field :status, non_null(:string)
     field :name, :string
+    field :max_concurrency, :integer
 
     field :display_name, non_null(:string) do
       description("Name when set, with a stable short-ID fallback for legacy rows.")
@@ -90,6 +91,23 @@ defmodule SacrumWeb.Graphql.Types.DaemonTypes do
 
       resolve(fn args, %{context: %{current_user: user}} ->
         translate_error(Daemons.rename(user.id, args.id, Map.take(args, [:name])))
+      end)
+    end
+
+    field :set_daemon_max_concurrency, :daemon do
+      arg(:id, non_null(:uuid4))
+      arg(:max_concurrency, non_null(:integer))
+
+      resolve(fn args, %{context: %{current_user: user}} ->
+        translate_error(Daemons.set_max_concurrency(user.id, args.id, args.max_concurrency))
+      end)
+    end
+
+    field :clear_daemon_max_concurrency, :daemon do
+      arg(:id, non_null(:uuid4))
+
+      resolve(fn %{id: id}, %{context: %{current_user: user}} ->
+        translate_error(Daemons.clear_max_concurrency(user.id, id))
       end)
     end
 
