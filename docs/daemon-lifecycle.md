@@ -103,14 +103,17 @@ persisted daemon and credential identity before shutting down.
 
 ## Account fleet realtime channel
 
-Authenticated account clients may join `account:<user_id>` over the existing
-user-authenticated socket. The topic is owner-scoped: the socket's current
-user must match the topic user ID, and standalone daemon principals cannot
-join it. The existing `daemon:<daemon_id>` registration/revalidation topic is
-unchanged and remains unavailable to account clients for management events.
+Authenticated account clients join `accounts:me` over the existing
+user-authenticated socket. Sacrum derives the account exclusively from the
+socket's authenticated current user and internally subscribes the channel
+process to `account:<user_id>`. The internal topic is not externally
+joinable, and standalone daemon principals cannot join `accounts:me`. The
+existing `daemon:<daemon_id>` registration/revalidation topic is unchanged
+and remains unavailable to account clients for management events.
 
-The post-commit WalEx CDC projector publishes these sanitized events to every
-active account subscriber:
+The post-commit WalEx CDC projector publishes these sanitized events to the
+owner's internal account topic, where the `accounts:me` channel forwards them
+to that user's active subscribers:
 
 | Event | Meaning |
 |-------|---------|

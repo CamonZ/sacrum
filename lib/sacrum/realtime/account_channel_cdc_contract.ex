@@ -2,6 +2,11 @@ defmodule Sacrum.Realtime.AccountChannelCdcContract do
   @moduledoc """
   Contract for the account-scoped daemon fleet event stream.
 
+  Clients subscribe through the public `accounts:me` channel alias. The
+  `topic/1` helper returns the authenticated user's internal
+  `account:<user_id>` routing topic and must not be exposed as a client join
+  topic.
+
   The stream is deliberately a projection of `daemons` rows only. Credential
   rows are not part of this contract, and the payload keys are an explicit
   allowlist so token plaintext, token hashes, and future secret fields cannot

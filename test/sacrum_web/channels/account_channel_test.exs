@@ -34,18 +34,22 @@ defmodule SacrumWeb.AccountChannelTest do
     socket
   end
 
-  test "owner can join the account topic and active clients receive fleet events" do
+  test "authenticated users join accounts:me and receive their internal account events" do
     user = create_user("owner")
+    other = create_user("join_parameter")
     socket = connect_user(user)
     sibling_socket = connect_user(user)
 
-    assert {:ok, _reply, channel} = subscribe_and_join(socket, "account:#{user.id}")
+    assert {:ok, _reply, channel} =
+             subscribe_and_join(socket, "accounts:me", %{"user_id" => other.id})
 
     assert {:ok, _reply, sibling_channel} =
-             subscribe_and_join(sibling_socket, "account:#{user.id}")
+             subscribe_and_join(sibling_socket, "accounts:me")
 
     assert channel.assigns.account_id == user.id
+    assert channel.assigns.account_topic == AccountChannelCdcContract.topic(user.id)
     assert sibling_channel.assigns.account_id == user.id
+    assert sibling_channel.assigns.account_topic == AccountChannelCdcContract.topic(user.id)
 
     {:ok, daemon, _bootstrap} = Daemons.create(user.id, %{name: "Fleet bot"})
     assert :ok = AccountChannel.broadcast_daemon_created(user.id, daemon)
@@ -64,17 +68,34 @@ defmodule SacrumWeb.AccountChannelTest do
     leave(sibling_channel)
   end
 
-  test "account topic authorization is owner scoped" do
-    owner = create_user("authorized")
+  test "accounts:me does not deliver another user's account events" do
+    user = create_user("isolated")
     other = create_user("foreign")
-    socket = connect_user(owner)
+    {:ok, _reply, owner_channel} = subscribe_and_join(connect_user(user), "accounts:me")
+    {:ok, _reply, other_channel} = subscribe_and_join(connect_user(other), "accounts:me")
 
-    assert {:ok, _reply, _channel} = subscribe_and_join(socket, "account:#{owner.id}")
+    {:ok, daemon, _bootstrap} = Daemons.create(user.id, %{name: "Private bot"})
+    assert :ok = AccountChannel.broadcast_daemon_created(user.id, daemon)
+
+    assert_push "daemon_created", %{id: daemon_id}
+    assert daemon_id == daemon.id
+    refute_receive %Phoenix.Socket.Message{event: "daemon_created"}, 100
+
+    leave(owner_channel)
+    leave(other_channel)
+  end
+
+  test "the internal account topic is not an externally joinable account channel" do
+    user = create_user("authorized")
+    socket = connect_user(user)
+
+    assert UserSocket.__channel__(AccountChannelCdcContract.topic(user.id)) == nil
 
     assert {:error, %{reason: "forbidden"}} =
-             subscribe_and_join(connect_user(owner), "account:#{other.id}")
+             subscribe_and_join(socket, AccountChannel, AccountChannelCdcContract.topic(user.id))
 
-    assert {:error, %{reason: "forbidden"}} = subscribe_and_join(socket, "account:not-a-user")
+    assert {:error, %{reason: "forbidden"}} =
+             AccountChannel.join("accounts:other", %{}, %Phoenix.Socket{})
   end
 
   test "standalone daemon principals cannot join account topics" do
@@ -88,12 +109,17 @@ defmodule SacrumWeb.AccountChannelTest do
       connect(UserSocket, %{"daemon_id" => daemon.id, "reconnect_token" => reconnect_token})
 
     assert {:error, %{reason: "forbidden"}} =
-             subscribe_and_join(socket, "account:#{user.id}")
+             subscribe_and_join(socket, "accounts:me")
+  end
+
+  test "missing authentication cannot join accounts:me" do
+    assert {:error, %{reason: "forbidden"}} =
+             AccountChannel.join("accounts:me", %{}, %Phoenix.Socket{})
   end
 
   test "account broadcasts use an explicit sanitized payload allowlist" do
     user = create_user("sanitized")
-    {:ok, _reply, channel} = subscribe_and_join(connect_user(user), "account:#{user.id}")
+    {:ok, _reply, channel} = subscribe_and_join(connect_user(user), "accounts:me")
     {:ok, daemon, _bootstrap} = Daemons.create(user.id, %{name: "Safe bot"})
 
     drain_created_event()
@@ -121,7 +147,7 @@ defmodule SacrumWeb.AccountChannelTest do
 
   test "channel-level delivery sanitizes raw daemon payloads" do
     user = create_user("raw")
-    {:ok, _reply, channel} = subscribe_and_join(connect_user(user), "account:#{user.id}")
+    {:ok, _reply, channel} = subscribe_and_join(connect_user(user), "accounts:me")
 
     raw_payload = %{
       id: Ecto.UUID.generate(),
