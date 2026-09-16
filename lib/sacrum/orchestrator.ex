@@ -2,17 +2,24 @@ defmodule Sacrum.Orchestrator do
   @moduledoc """
   High-level API for managing running TaskOrchestrator instances.
 
-  Stopping an orchestrator halts any in-flight step execution:
-  - Marks the in-flight step execution as "cancelled" (matches status in ["started", "in_progress", "waiting"])
+  Stopping a TaskRun cancels any in-flight step execution:
+  - Marks queued, started, in-progress, and waiting executions as "cancelled"
+  - Releases queued execution-pool requests and notifies direct workers
   - Broadcasts cancel_step to the daemon (fire-and-forget)
-  - Terminates the FSM child
+  - Terminates the FSM child when one is present
   """
 
   require Logger
 
   import Ecto.Query
 
-  alias Sacrum.Orchestrator.{TaskFSMSupervisor, TaskRegistry}
+  alias Sacrum.Orchestrator.{
+    AsyncStepExecutionSupervisor,
+    ExecutionEvents,
+    TaskFSMSupervisor,
+    TaskRegistry
+  }
+
   alias Sacrum.Orchestrator.TaskRuns.{Lookup, StateTransitions}
   alias Sacrum.Realtime.CommandBroadcaster
   alias Sacrum.Repo
@@ -83,9 +90,13 @@ defmodule Sacrum.Orchestrator do
 
   @spec stop_durable_run_without_fsm(active_task_run(), String.t()) ::
           {:ok, map() | :not_running} | {:error, term()}
-  defp stop_durable_run_without_fsm({:ok, _task_run} = active_task_run, log_prefix) do
-    case commit_stop(active_task_run, :none) do
+  defp stop_durable_run_without_fsm({:ok, task_run} = active_task_run, log_prefix) do
+    task_id = task_run.task_id
+    in_flight_execution = find_in_flight_execution(task_id, active_task_run)
+
+    case commit_stop(active_task_run, in_flight_execution) do
       {:ok, changes} ->
+        broadcast_cancelled_execution(changes)
         {:ok, changes}
 
       {:error, reason} ->
@@ -141,7 +152,7 @@ defmodule Sacrum.Orchestrator do
       from(e in StepExecution,
         where:
           e.task_run_id == ^task_run.id and
-            e.status in ["started", "in_progress", "waiting"],
+            e.status in ["queued", "started", "in_progress", "waiting"],
         order_by: [desc: e.inserted_at],
         limit: 1
       )
@@ -155,7 +166,9 @@ defmodule Sacrum.Orchestrator do
   defp find_in_flight_execution(task_id, {:error, :not_found}) do
     query =
       from(e in StepExecution,
-        where: e.task_id == ^task_id and e.status in ["started", "in_progress", "waiting"],
+        where:
+          e.task_id == ^task_id and
+            e.status in ["queued", "started", "in_progress", "waiting"],
         order_by: [desc: e.inserted_at],
         limit: 1
       )
@@ -169,6 +182,8 @@ defmodule Sacrum.Orchestrator do
   @spec broadcast_cancelled_execution(map()) :: term()
   defp broadcast_cancelled_execution(%{execution: execution}) do
     Logger.info("[Orchestrator.stop] Marked execution #{execution.id} as cancelled")
+    ExecutionEvents.broadcast_status_changed(execution)
+    AsyncStepExecutionSupervisor.cancel_execution(execution.id)
     broadcast_cancel_step(execution)
   end
 

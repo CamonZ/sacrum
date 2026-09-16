@@ -70,6 +70,58 @@ defmodule Sacrum.Orchestrator.ExecutionPoolTest do
       Enum.each(tl(slots), &ExecutionPool.release_slot(pool, &1))
     end
 
+    test "cancels a queued request without consuming a slot", %{pool: pool} do
+      parent = self()
+
+      slots =
+        Enum.map(1..5, fn _i ->
+          {:ok, slot} = ExecutionPool.request_slot(pool, self(), :infinity)
+          slot
+        end)
+
+      {:ok, waiter} =
+        Task.start(fn ->
+          result = ExecutionPool.request_slot(pool, self(), :infinity)
+          send(parent, {:cancelled_request, result})
+        end)
+
+      waiter_ref = Process.monitor(waiter)
+
+      wait_for_queue(pool, 1)
+
+      assert :ok = ExecutionPool.cancel_request(pool, waiter)
+      assert_receive {:cancelled_request, {:error, :cancelled}}, 1000
+      assert ExecutionPool.pool_status(pool).queue_length == 0
+      assert ExecutionPool.pool_status(pool).in_use_count == 5
+
+      assert_receive {:DOWN, ^waiter_ref, :process, ^waiter, _reason}, 1000
+
+      Enum.each(slots, &ExecutionPool.release_slot(pool, &1))
+    end
+
+    test "removes a queued request when its owner exits", %{pool: pool} do
+      slots =
+        Enum.map(1..5, fn _i ->
+          {:ok, slot} = ExecutionPool.request_slot(pool, self(), :infinity)
+          slot
+        end)
+
+      {:ok, waiter} =
+        Task.start(fn ->
+          _ = ExecutionPool.request_slot(pool, self(), :infinity)
+        end)
+
+      wait_for_queue(pool, 1)
+
+      waiter_ref = Process.monitor(waiter)
+      Process.exit(waiter, :kill)
+      assert_receive {:DOWN, ^waiter_ref, :process, ^waiter, :killed}, 1000
+      wait_for_queue(pool, 0)
+      assert ExecutionPool.pool_status(pool).in_use_count == 5
+
+      Enum.each(slots, &ExecutionPool.release_slot(pool, &1))
+    end
+
     test "releases slot and dequeues next request", %{pool: pool} do
       slots =
         Enum.map(1..5, fn _i ->
