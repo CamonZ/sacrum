@@ -57,6 +57,17 @@ defmodule Sacrum.Orchestrator.ExecutionPool do
     GenServer.call(server, {:release_slot, slot_id})
   end
 
+  @doc "Cancel all queued slot requests owned by the given process."
+  @spec cancel_request(pid()) :: :ok
+  def cancel_request(pid) when is_pid(pid) do
+    cancel_request(__MODULE__, pid)
+  end
+
+  @spec cancel_request(GenServer.server(), pid()) :: :ok
+  def cancel_request(server, pid) when is_pid(pid) do
+    GenServer.call(server, {:cancel_request, pid})
+  end
+
   @spec pool_status() :: map()
   def pool_status do
     pool_status(__MODULE__)
@@ -84,7 +95,8 @@ defmodule Sacrum.Orchestrator.ExecutionPool do
       in_use: %{},
       in_use_by_scope: %{},
       monitors: %{},
-      queue: :queue.new()
+      queue: :queue.new(),
+      queued_monitors: %{}
     }
 
     Logger.info("[ExecutionPool] Initialized with max_concurrent=#{max_concurrent}")
@@ -106,7 +118,7 @@ defmodule Sacrum.Orchestrator.ExecutionPool do
         "[ExecutionPool] No slots available, queuing #{inspect(pid)} scope=#{inspect(scope)} (queue_len=#{:queue.len(state.queue) + 1})"
       )
 
-      new_state = %{state | queue: :queue.in(%{pid: pid, from: from, scope: scope}, state.queue)}
+      new_state = enqueue_request(state, pid, from, scope)
       {:noreply, new_state}
     end
   end
@@ -121,6 +133,26 @@ defmodule Sacrum.Orchestrator.ExecutionPool do
       :error ->
         {:reply, :ok, state}
     end
+  end
+
+  @impl true
+  def handle_call({:cancel_request, pid}, _from, state) do
+    {cancelled, remaining} =
+      state.queue
+      |> :queue.to_list()
+      |> Enum.split_with(&(&1.pid == pid))
+
+    Enum.each(cancelled, fn %{from: from, monitor_ref: monitor_ref} ->
+      Process.demonitor(monitor_ref, [:flush])
+      GenServer.reply(from, {:error, :cancelled})
+    end)
+
+    queued_monitors =
+      Enum.reduce(cancelled, state.queued_monitors, fn request, monitors ->
+        Map.delete(monitors, request.monitor_ref)
+      end)
+
+    {:reply, :ok, %{state | queue: :queue.from_list(remaining), queued_monitors: queued_monitors}}
   end
 
   @impl true
@@ -144,7 +176,7 @@ defmodule Sacrum.Orchestrator.ExecutionPool do
         {:noreply, new_state}
 
       :error ->
-        {:noreply, state}
+        {:noreply, remove_queued_request(state, monitor_ref)}
     end
   end
 
@@ -178,6 +210,17 @@ defmodule Sacrum.Orchestrator.ExecutionPool do
     {slot_id, new_state}
   end
 
+  defp enqueue_request(state, pid, from, scope) do
+    monitor_ref = Process.monitor(pid)
+    request = %{pid: pid, from: from, scope: scope, monitor_ref: monitor_ref}
+
+    %{
+      state
+      | queue: :queue.in(request, state.queue),
+        queued_monitors: Map.put(state.queued_monitors, monitor_ref, true)
+    }
+  end
+
   defp remove_slot_and_serve_queue(state, slot_id) do
     case Map.pop(state.in_use, slot_id) do
       {nil, _in_use} ->
@@ -200,6 +243,7 @@ defmodule Sacrum.Orchestrator.ExecutionPool do
         state
 
       {%{from: from} = request, state} ->
+        state = remove_queued_monitor(state, request.monitor_ref)
         {slot_id, state} = grant_slot(state, request)
         GenServer.reply(from, {:ok, slot_id})
         serve_queue(state)
@@ -216,6 +260,28 @@ defmodule Sacrum.Orchestrator.ExecutionPool do
       index ->
         {request, queue} = List.pop_at(queue, index)
         {request, %{state | queue: :queue.from_list(queue)}}
+    end
+  end
+
+  defp remove_queued_monitor(state, monitor_ref) do
+    Process.demonitor(monitor_ref, [:flush])
+    %{state | queued_monitors: Map.delete(state.queued_monitors, monitor_ref)}
+  end
+
+  defp remove_queued_request(state, monitor_ref) do
+    if Map.has_key?(state.queued_monitors, monitor_ref) do
+      remaining =
+        state.queue
+        |> :queue.to_list()
+        |> Enum.reject(&(&1.monitor_ref == monitor_ref))
+
+      %{
+        state
+        | queue: :queue.from_list(remaining),
+          queued_monitors: Map.delete(state.queued_monitors, monitor_ref)
+      }
+    else
+      state
     end
   end
 
