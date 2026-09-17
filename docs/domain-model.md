@@ -293,10 +293,12 @@ Daemon management clients use the authenticated `accounts:me` channel for
 derives the account from the socket and routes internally through
 `account:<user_id>`; clients cannot join that internal topic or select another
 user through join parameters. The payload contains only sanitized daemon
-identity, lifecycle, and concurrency fields. Row updates arrive as complete
-`daemon_updated` replacement payloads, while hard deletion arrives as
-`daemon_deleted`; the existing `daemon:<daemon_id>` registration/revalidation
-channel and project-scoped work commands remain separate.
+identity, lifecycle, concurrency, freshness, and capability fields. Row updates
+arrive as complete `daemon_updated` replacement payloads, while hard deletion
+arrives as `daemon_deleted`; the existing `daemon:<daemon_id>`
+registration/revalidation channel remains the authenticated report path and
+project-scoped work commands remain separate. See
+[Daemon Telemetry Contract](daemon-telemetry-contract.md).
 
 ### Event Types
 

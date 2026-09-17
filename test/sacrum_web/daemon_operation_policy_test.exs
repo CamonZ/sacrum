@@ -81,7 +81,7 @@ defmodule SacrumWeb.DaemonOperationPolicyTest do
     assert Repo.get!(Daemon, ctx.other_daemon.id).status == "pending"
   end
 
-  test "all standalone reporting and execution events are explicitly unsupported", ctx do
+  test "all standalone execution events are explicitly unsupported", ctx do
     before = Repo.get!(Daemon, ctx.daemon.id)
 
     {:ok, socket} =
@@ -93,7 +93,6 @@ defmodule SacrumWeb.DaemonOperationPolicyTest do
     {:ok, _, channel} = subscribe_and_join(socket, "daemon:#{ctx.daemon.id}")
 
     for event <- [
-          "report",
           "complete_step",
           "update_step_execution",
           "create_session_log",

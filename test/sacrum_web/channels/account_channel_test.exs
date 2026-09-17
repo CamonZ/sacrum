@@ -145,6 +145,39 @@ defmodule SacrumWeb.AccountChannelTest do
     leave(channel)
   end
 
+  test "account channel delivers live daemon metrics separately from CDC" do
+    user = create_user("metrics")
+    {:ok, _reply, channel} = subscribe_and_join(connect_user(user), "accounts:me")
+
+    metrics = %{
+      id: Ecto.UUID.generate(),
+      report_version: 1,
+      daemon_version: "v1.2.3",
+      os: "linux",
+      architecture: "x86_64",
+      host: "builder-1",
+      started_at: ~U[2026-09-17 10:00:00Z],
+      last_seen_at: ~U[2026-09-17 10:00:05Z],
+      capabilities: %{"providers" => %{"openai" => true}},
+      connection_status: "online",
+      health: "healthy",
+      health_reason: nil,
+      token_hash: "must-not-be-delivered"
+    }
+
+    assert :ok = AccountChannel.broadcast_daemon_metrics(user.id, metrics)
+    assert_push "daemon_metrics", payload
+
+    assert Map.keys(payload) |> Enum.sort() ==
+             AccountChannelCdcContract.metrics_payload_keys() |> Enum.sort()
+
+    assert payload.id == metrics.id
+    assert payload.capabilities == metrics.capabilities
+    refute Map.has_key?(payload, :token_hash)
+    refute inspect(payload) =~ "must-not-be-delivered"
+    leave(channel)
+  end
+
   test "channel-level delivery sanitizes raw daemon payloads" do
     user = create_user("raw")
     {:ok, _reply, channel} = subscribe_and_join(connect_user(user), "accounts:me")

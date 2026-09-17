@@ -10,6 +10,7 @@ defmodule Sacrum.Realtime.Cdc.Projector do
 
   import Ecto.Query
 
+  alias Sacrum.Accounts.Daemons, as: DaemonAccounts
   alias Sacrum.Repo
 
   alias Sacrum.Repo.Schemas.{
@@ -38,6 +39,7 @@ defmodule Sacrum.Realtime.Cdc.Projector do
   @name __MODULE__
 
   @task_bucket_identity_fields [:archived, :level, :current_step_id, :workflow_id]
+  @daemon_row_meaningful_fields [:status, :name, :max_concurrency, :enrolled_at]
 
   @schema_by_table %{
     "tasks" => Task,
@@ -417,17 +419,22 @@ defmodule Sacrum.Realtime.Cdc.Projector do
 
   defp projections(%WalEx.Event{source: %{table: "daemons"}, type: :insert, new_record: record}) do
     daemon = record_to_struct!("daemons", record)
-    [projection("daemon_created", daemon.user_id, daemon)]
+    [projection("daemon_created", daemon.user_id, daemon_snapshot(daemon))]
   end
 
-  defp projections(%WalEx.Event{source: %{table: "daemons"}, type: :update, new_record: record}) do
-    daemon = record_to_struct!("daemons", record)
-    [projection("daemon_updated", daemon.user_id, daemon)]
+  defp projections(%WalEx.Event{source: %{table: "daemons"}, type: :update} = event) do
+    daemon = record_to_struct!("daemons", event.new_record)
+
+    if meaningful_change?(event, @daemon_row_meaningful_fields) do
+      [projection("daemon_updated", daemon.user_id, daemon_snapshot(daemon))]
+    else
+      []
+    end
   end
 
   defp projections(%WalEx.Event{source: %{table: "daemons"}, type: :delete, old_record: record}) do
     daemon = record_to_struct!("daemons", record)
-    [projection("daemon_deleted", daemon.user_id, daemon)]
+    [projection("daemon_deleted", daemon.user_id, daemon_snapshot(daemon))]
   end
 
   defp projections(%WalEx.Event{}), do: []
@@ -666,11 +673,12 @@ defmodule Sacrum.Realtime.Cdc.Projector do
     )
   end
 
-  defp old_value(%WalEx.Event{changes: changes}, field) when is_map(changes) do
+  defp old_value(%WalEx.Event{changes: changes, old_record: old_record}, field)
+       when is_map(changes) do
     case value(changes, field) do
       %{old_value: value} -> value
       %{"old_value" => value} -> value
-      _ -> value(%{}, field)
+      _ -> value(old_record || %{}, field)
     end
   end
 
@@ -708,4 +716,24 @@ defmodule Sacrum.Realtime.Cdc.Projector do
   end
 
   defp normalize_task_run_status(status), do: status
+
+  defp daemon_snapshot(%Daemon{} = daemon), do: DaemonAccounts.snapshot(daemon)
+
+  defp meaningful_change?(%WalEx.Event{changes: changes, old_record: old_record} = event, fields)
+       when is_map(changes) do
+    cond do
+      map_size(changes) > 0 ->
+        Enum.any?(fields, &changed?(event, &1))
+
+      is_map(old_record) ->
+        Enum.any?(fields, fn field -> old_value(event, field) != new_value(event, field) end)
+
+      true ->
+        false
+    end
+  end
+
+  defp meaningful_change?(%WalEx.Event{} = event, fields) do
+    Enum.any?(fields, fn field -> old_value(event, field) != new_value(event, field) end)
+  end
 end

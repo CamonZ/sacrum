@@ -8,7 +8,7 @@ defmodule SacrumWeb.Graphql.DaemonManagementTest do
 
   alias Sacrum.Repo
   alias Sacrum.Repo.{Daemons, Users}
-  alias Sacrum.Repo.Schemas.Daemon
+  alias Sacrum.Repo.Schemas.{Daemon, DaemonReport}
 
   setup do
     owner = create_user()
@@ -416,6 +416,76 @@ defmodule SacrumWeb.Graphql.DaemonManagementTest do
 
       socket = run(ctx.conn, "query { daemons { socketEndpoint } }")
       assert socket["errors"]
+    end
+
+    test "returns owner-scoped authoritative health and capability snapshots", ctx do
+      {:ok, daemon, bootstrap} = Daemons.create(ctx.owner.id, %{name: "Telemetry bot"})
+      enrolled_at = ~U[2026-09-17 10:00:00.000000Z]
+
+      {:ok, _enrolled, _reconnect, _credential} =
+        Daemons.exchange_bootstrap(daemon.id, bootstrap, now: enrolled_at)
+
+      assert {:ok, report} =
+               DaemonReport.parse(%{
+                 "version" => 1,
+                 "daemon_id" => daemon.id,
+                 "daemon_version" => "v2.0.0",
+                 "os" => "linux",
+                 "architecture" => "x86_64",
+                 "host" => "builder-2",
+                 "started_at" => "2026-09-17T09:59:00Z",
+                 "capabilities" => %{"providers" => %{"openai" => true}}
+               })
+
+      now = DateTime.utc_now()
+      metrics = DaemonReport.merge_metrics(report, nil, false, now)
+      metrics = Map.merge(metrics, Sacrum.DaemonHealth.derive(daemon, metrics, now))
+
+      assert :ok =
+               Sacrum.DaemonConnectionRegistry.register(daemon.id, %{
+                 user_id: ctx.owner.id,
+                 credential_id: Ecto.UUID.generate(),
+                 metrics: metrics
+               })
+
+      on_exit(fn -> Sacrum.DaemonConnectionRegistry.unregister(daemon.id) end)
+
+      snapshot_query = """
+      query {
+        daemons {
+          id status name displayName daemonVersion os architecture host
+          enrolledAt lastSeenAt reportVersion capabilities connectionStatus health healthReason
+        }
+        daemon(id: "#{daemon.id}") {
+          id health connectionStatus capabilities daemonVersion
+        }
+      }
+      """
+
+      result = run(ctx.conn, snapshot_query)
+      assert result["errors"] == nil
+      [listed] = result["data"]["daemons"]
+      detail = result["data"]["daemon"]
+
+      for snapshot <- [listed, detail] do
+        assert snapshot["id"] == daemon.id
+        assert snapshot["health"] == "healthy"
+        assert snapshot["connectionStatus"] == "online"
+        assert snapshot["capabilities"] == %{"providers" => %{"openai" => true}}
+      end
+
+      assert listed["daemonVersion"] == "v2.0.0"
+      assert listed["os"] == "linux"
+      assert listed["architecture"] == "x86_64"
+      assert listed["host"] == "builder-2"
+      assert listed["reportVersion"] == 1
+      assert is_binary(listed["lastSeenAt"])
+      assert listed["healthReason"] == nil
+
+      foreign_conn = authenticate(build_conn(), ctx.other)
+      foreign = run(foreign_conn, "query { daemons { id } daemon(id: \"#{daemon.id}\") { id } }")
+      assert foreign["errors"] == nil
+      assert foreign["data"] == %{"daemons" => [], "daemon" => nil}
     end
   end
 end
