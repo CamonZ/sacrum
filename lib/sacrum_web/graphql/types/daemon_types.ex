@@ -11,6 +11,18 @@ defmodule SacrumWeb.Graphql.Types.DaemonTypes do
     field :name, :string
     field :max_concurrency, :integer
 
+    field :daemon_version, :string
+    field :os, :string
+    field :architecture, :string
+    field :host, :string
+    field :started_at, :datetime
+    field :last_seen_at, :datetime
+    field :report_version, :integer
+    field :capabilities, :json
+    field :connection_status, non_null(:string)
+    field :health, non_null(:string)
+    field :health_reason, :string
+
     field :display_name, non_null(:string) do
       description("Name when set, with a stable short-ID fallback for legacy rows.")
 
@@ -55,7 +67,7 @@ defmodule SacrumWeb.Graphql.Types.DaemonTypes do
       arg(:id, non_null(:uuid4))
 
       resolve(fn %{id: id}, %{context: %{current_user: user}} ->
-        case Daemons.get_by(user.id, conditions: [id: id]) do
+        case Daemons.get_snapshot(user.id, id) do
           {:ok, daemon} -> {:ok, daemon}
           {:error, :not_found} -> {:ok, nil}
         end
@@ -80,7 +92,12 @@ defmodule SacrumWeb.Graphql.Types.DaemonTypes do
 
       resolve(fn args, %{context: %{current_user: user}} ->
         with {:ok, daemon, token, credential} <- Daemons.create_bootstrap(user.id, args) do
-          {:ok, %{daemon: daemon, enrollment_token: token, expires_at: credential.expires_at}}
+          {:ok,
+           %{
+             daemon: Daemons.snapshot(daemon),
+             enrollment_token: token,
+             expires_at: credential.expires_at
+           }}
         end
       end)
     end
@@ -125,7 +142,12 @@ defmodule SacrumWeb.Graphql.Types.DaemonTypes do
       resolve(fn %{id: id}, %{context: %{current_user: user}} ->
         case Daemons.rotate_bootstrap(user.id, id) do
           {:ok, daemon, token, credential} ->
-            {:ok, %{daemon: daemon, enrollment_token: token, expires_at: credential.expires_at}}
+            {:ok,
+             %{
+               daemon: Daemons.snapshot(daemon),
+               enrollment_token: token,
+               expires_at: credential.expires_at
+             }}
 
           error ->
             translate_error(error)
@@ -134,7 +156,7 @@ defmodule SacrumWeb.Graphql.Types.DaemonTypes do
     end
   end
 
-  defp translate_error({:ok, _} = ok), do: ok
+  defp translate_error({:ok, %Daemon{} = daemon}), do: {:ok, Daemons.snapshot(daemon)}
 
   defp translate_error({:error, :not_found}),
     do: {:error, "daemon not found"}

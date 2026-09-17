@@ -2,11 +2,12 @@ defmodule Sacrum.DaemonConnectionRegistry do
   @moduledoc """
   Tracks active daemon channel registrations by stable daemon ID.
 
-  Each registration value is `%{user_id: ..., credential_id: ...}`: the
-  credential identity that authorized the session. Registrations are owned
-  exclusively by their channel process; only that process can unregister
-  (`Registry.unregister/2` is process-local), so a delayed or duplicated
-  invalidation can never release a newer session's registration.
+  Each registration value contains the credential identity that authorized
+  the session and the latest live metrics, when one has been received.
+  Registrations are owned exclusively by their channel process; only that
+  process can unregister (`Registry.unregister/2` is process-local), so a
+  delayed or duplicated invalidation can never release a newer session's
+  registration.
 
   Session invalidation after a committed lifecycle mutation is best-effort
   local delivery: every currently registered channel for the daemon receives
@@ -19,7 +20,13 @@ defmodule Sacrum.DaemonConnectionRegistry do
 
   @invalidation_message :daemon_credentials_invalidated
 
-  @type session :: %{user_id: String.t(), credential_id: String.t()}
+  @type metrics :: Sacrum.Repo.Schemas.DaemonReport.metrics()
+
+  @type session :: %{
+          user_id: String.t(),
+          credential_id: String.t(),
+          metrics: metrics() | nil
+        }
 
   @spec register(String.t(), session()) :: :ok | {:error, :already_connected}
   def register(daemon_id, session) do
@@ -35,6 +42,21 @@ defmodule Sacrum.DaemonConnectionRegistry do
 
   @spec lookup(String.t()) :: [{pid(), session()}]
   def lookup(daemon_id), do: Registry.lookup(__MODULE__, daemon_id)
+
+  @spec metrics(String.t()) :: metrics() | nil
+  def metrics(daemon_id) do
+    case lookup(daemon_id) do
+      [{_pid, %{metrics: metrics}}] -> metrics
+      _ -> nil
+    end
+  end
+
+  @doc "Updates the latest report in the owning daemon channel's registration."
+  @spec update_metrics(String.t(), metrics()) :: :ok
+  def update_metrics(daemon_id, metrics) do
+    Registry.update_value(__MODULE__, daemon_id, &Map.put(&1, :metrics, metrics))
+    :ok
+  end
 
   @doc """
   Asks every registered session of this daemon to re-derive authorization

@@ -6,6 +6,7 @@ defmodule Sacrum.Accounts.Daemons do
     preloads: [],
     default_order: [asc: :inserted_at]
 
+  alias Sacrum.DaemonHealth
   alias Sacrum.Repo.Daemons, as: DaemonsRepo
   alias Sacrum.Repo.Schemas.Daemon
 
@@ -64,10 +65,30 @@ defmodule Sacrum.Accounts.Daemons do
 
   @doc "Owner's daemon identities. Deleted rows are not returned."
   @spec list_fleet(String.t()) :: [Daemon.t()]
-  def list_fleet(user_id) when is_binary(user_id), do: DaemonsRepo.list_active_fleet(user_id)
+  def list_fleet(user_id) when is_binary(user_id) do
+    Enum.map(DaemonsRepo.list_active_fleet(user_id), &snapshot/1)
+  end
 
   @spec list_by(String.t()) :: [Daemon.t()]
   def list_by(user_id) when is_binary(user_id), do: list_fleet(user_id)
+
+  @doc "Owner-scoped daemon detail snapshot with server-derived health."
+  @spec get_snapshot(String.t(), String.t()) :: {:ok, Daemon.t()} | {:error, :not_found}
+  def get_snapshot(user_id, daemon_id) do
+    case get_by(user_id, conditions: [id: daemon_id]) do
+      {:ok, daemon} -> {:ok, snapshot(daemon)}
+      error -> error
+    end
+  end
+
+  @doc "Returns the daemon with its latest live metrics and current health."
+  @spec snapshot(Daemon.t()) :: Daemon.t()
+  def snapshot(%Daemon{} = daemon) do
+    metrics = Sacrum.DaemonConnectionRegistry.metrics(daemon.id)
+    health = DaemonHealth.derive(daemon, metrics, DateTime.utc_now())
+
+    struct(daemon, Map.merge(metrics || %{}, health))
+  end
 
   @doc "Owner-scoped enrollment metadata without token material."
   @spec enrollment(String.t(), String.t()) :: {:ok, map()} | {:error, :not_found}

@@ -18,7 +18,10 @@ defmodule SacrumWeb.DaemonChannel do
 
   use Phoenix.Channel
 
-  alias Sacrum.Repo.Daemons
+  alias Sacrum.DaemonHealth
+  alias Sacrum.Repo.Daemons, as: DaemonsRepo
+  alias Sacrum.Repo.Schemas.DaemonReport
+  alias SacrumWeb.AccountChannel
 
   @revalidate_interval :daemon_session_revalidate_interval_ms
 
@@ -32,7 +35,7 @@ defmodule SacrumWeb.DaemonChannel do
       ) do
     with true <- daemon_id == principal.daemon_id,
          {:ok, daemon, credential} <-
-           Daemons.revalidate_reconnect(daemon_id, principal.credential_id) do
+           DaemonsRepo.revalidate_reconnect(daemon_id, principal.credential_id) do
       register(socket, daemon, credential.id)
     else
       false -> {:error, %{reason: "identity_mismatch"}}
@@ -45,7 +48,7 @@ defmodule SacrumWeb.DaemonChannel do
         %{"enrollment_token" => token},
         %{assigns: %{current_user: user}} = socket
       ) do
-    with {:ok, daemon, credential} <- Daemons.authenticate_reconnect(daemon_id, token),
+    with {:ok, daemon, credential} <- DaemonsRepo.authenticate_reconnect(daemon_id, token),
          true <- daemon.user_id == user.id do
       register(socket, daemon, credential.id)
     else
@@ -60,6 +63,25 @@ defmodule SacrumWeb.DaemonChannel do
   @spec handle_in(String.t(), term(), Phoenix.Socket.t()) ::
           {:reply, {:error, map()}, Phoenix.Socket.t()}
           | {:stop, :shutdown, Phoenix.Socket.t()}
+  @impl true
+  def handle_in(event, payload, socket) when event in ["report", "heartbeat"] do
+    case process_report(socket, event, payload) do
+      {:ok, telemetry} ->
+        {:reply,
+         {:ok,
+          %{
+            accepted: true,
+            report_version: telemetry.report_version
+          }}, socket}
+
+      {:error, :invalid_report} ->
+        {:reply, {:error, %{reason: "invalid_report"}}, socket}
+
+      {:error, :invalid_credentials} ->
+        {:stop, :shutdown, socket}
+    end
+  end
+
   @impl true
   def handle_in(_event, _payload, socket) do
     case revalidate(socket) do
@@ -95,7 +117,8 @@ defmodule SacrumWeb.DaemonChannel do
   defp register(socket, daemon, credential_id) do
     case Sacrum.DaemonConnectionRegistry.register(daemon.id, %{
            user_id: daemon.user_id,
-           credential_id: credential_id
+           credential_id: credential_id,
+           metrics: nil
          }) do
       :ok ->
         socket =
@@ -122,13 +145,59 @@ defmodule SacrumWeb.DaemonChannel do
   end
 
   defp revalidate(%{assigns: %{daemon_id: daemon_id, credential_id: credential_id}}) do
-    case Daemons.revalidate_reconnect(daemon_id, credential_id) do
+    case DaemonsRepo.revalidate_reconnect(daemon_id, credential_id) do
       {:ok, _daemon, _credential} -> :ok
       {:error, _} -> :invalid
     end
   end
 
   defp revalidate(_socket), do: :invalid
+
+  defp process_report(_socket, "report", payload) when payload == %{},
+    do: {:error, :invalid_report}
+
+  defp process_report(socket, event, payload) do
+    with :ok <- revalidate_report_session(socket),
+         {:ok, report} <- DaemonReport.parse(payload),
+         :ok <- report_identity_matches?(report, socket.assigns.daemon_id),
+         {:ok, metrics} <- update_metrics(socket, event, report) do
+      {:ok, metrics}
+    else
+      {:error, :invalid_report} -> {:error, :invalid_report}
+      {:error, :invalid_credentials} -> {:error, :invalid_credentials}
+    end
+  end
+
+  defp revalidate_report_session(socket) do
+    case revalidate(socket) do
+      :ok -> :ok
+      :invalid -> {:error, :invalid_credentials}
+    end
+  end
+
+  defp report_identity_matches?(%{daemon_id: nil}, _daemon_id), do: :ok
+
+  defp report_identity_matches?(%{daemon_id: daemon_id}, daemon_id), do: :ok
+
+  defp report_identity_matches?(_report, _daemon_id), do: {:error, :invalid_report}
+
+  defp update_metrics(socket, event, report) do
+    now = DateTime.utc_now()
+    daemon_id = socket.assigns.daemon_id
+    previous = Sacrum.DaemonConnectionRegistry.metrics(daemon_id)
+
+    metrics = DaemonReport.merge_metrics(report, previous, event == "heartbeat", now)
+    metrics = Map.merge(metrics, DaemonHealth.derive(socket.assigns.daemon, metrics, now))
+    :ok = Sacrum.DaemonConnectionRegistry.update_metrics(daemon_id, metrics)
+
+    :ok =
+      AccountChannel.broadcast_daemon_metrics(
+        socket.assigns.user_id,
+        Map.put(metrics, :id, daemon_id)
+      )
+
+    {:ok, metrics}
+  end
 
   defp schedule_revalidation(socket) do
     case Application.get_env(:sacrum, @revalidate_interval, 30_000) do

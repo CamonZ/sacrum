@@ -108,31 +108,35 @@ user-authenticated socket. Sacrum derives the account exclusively from the
 socket's authenticated current user and internally subscribes the channel
 process to `account:<user_id>`. The internal topic is not externally
 joinable, and standalone daemon principals cannot join `accounts:me`. The
-existing `daemon:<daemon_id>` registration/revalidation topic is unchanged
-and remains unavailable to account clients for management events.
+existing `daemon:<daemon_id>` registration/revalidation topic remains the
+daemon-authenticated transport and remains unavailable to account clients for
+management events.
 
-The post-commit WalEx CDC projector publishes these sanitized events to the
-owner's internal account topic, where the `accounts:me` channel forwards them
-to that user's active subscribers:
+The post-commit WalEx CDC projector publishes these durable lifecycle events to
+the owner's internal account topic, where the `accounts:me` channel forwards
+them to that user's active subscribers:
 
 | Event | Meaning |
 |-------|---------|
 | `daemon_created` | A daemon identity was created. |
-| `daemon_updated` | A daemon was renamed or its persisted lifecycle state changed. |
+| `daemon_updated` | A daemon's durable identity or enrollment lifecycle changed. |
 | `daemon_deleted` | A daemon row was hard-deleted. |
+| `daemon_metrics` | A connected daemon accepted a report or heartbeat; carries live capabilities, freshness, and derived health. |
 
-Every payload has `schema_version: 1` and only contains `id`, `status`,
-`name`, `display_name`, `max_concurrency`, `enrolled_at`, `inserted_at`, and
-`updated_at`.
+Lifecycle payloads have `schema_version: 1` and contain the complete sanitized
+identity. Metrics payloads use the same version and are ephemeral direct PubSub
+events; they are not persisted or replayed by WalEx. See [Daemon Telemetry Contract](daemon-telemetry-contract.md)
+for the report format, freshness thresholds, and exact allowlists.
 Daemon status remains `pending` or `active`; hard deletion is represented by
 `daemon_deleted`. Credential plaintext, token hashes, and credential rows are
 never projected.
 
 ## Intentionally unsupported
 
-- Daemon sockets do not execute, report or observe project work. All
-  execution/reporting events on `daemon:*` topics reply
-  `unsupported_operation`. There is no second source of execution truth.
+- Daemon sockets do not execute or observe project work. Execution events on
+  `daemon:*` topics reply `unsupported_operation`; the authenticated `report`
+  and `heartbeat` events are limited to fleet telemetry and are not a source of
+  project execution truth.
 - The server advertises no endpoints. Daemon base URLs and socket endpoints
   come from client configuration and remain authoritative.
 - Standalone credentials never expand into account, project or management

@@ -38,6 +38,17 @@ defmodule Sacrum.Repo.Schemas.Daemon do
     field :status, :string, default: "pending"
     field :enrolled_at, :utc_datetime_usec
     field :max_concurrency, :integer
+    field :daemon_version, :string, virtual: true
+    field :os, :string, virtual: true
+    field :architecture, :string, virtual: true
+    field :host, :string, virtual: true
+    field :started_at, :utc_datetime_usec, virtual: true
+    field :last_seen_at, :utc_datetime_usec, virtual: true
+    field :report_version, :integer, virtual: true
+    field :capabilities, :map, virtual: true
+    field :connection_status, :string, virtual: true
+    field :health, :string, virtual: true
+    field :health_reason, :string, virtual: true
     belongs_to :user, Sacrum.Repo.Schemas.User
     has_many :credentials, Sacrum.Repo.Schemas.DaemonCredential
     timestamps(type: :utc_datetime_usec)

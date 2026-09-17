@@ -33,4 +33,12 @@ defmodule Sacrum.Realtime.AccountChannelCdcContractTest do
     refute AccountChannelCdcContract.event?("daemon_revoked")
     refute AccountChannelCdcContract.event?("daemon_removed")
   end
+
+  test "defines a separate ephemeral daemon metrics event" do
+    assert AccountChannelCdcContract.metrics_event_name() == "daemon_metrics"
+    assert :capabilities in AccountChannelCdcContract.metrics_payload_keys()
+    assert :health in AccountChannelCdcContract.metrics_payload_keys()
+    refute :name in AccountChannelCdcContract.metrics_payload_keys()
+    refute :token_hash in AccountChannelCdcContract.metrics_payload_keys()
+  end
 end

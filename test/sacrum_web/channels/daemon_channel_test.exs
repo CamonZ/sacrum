@@ -104,7 +104,7 @@ defmodule SacrumWeb.DaemonChannelTest do
     assert Sacrum.DaemonConnectionRegistry.lookup(daemon.id) == []
 
     ref = Phoenix.ChannelTest.push(sibling_channel, "report", %{})
-    assert_reply ref, :error, %{reason: "unsupported_operation"}
+    assert_reply ref, :error, %{reason: "invalid_report"}
     refute_received {:DOWN, ^sibling_monitor, :process, _, _}
 
     {:ok, _, fresh_reconnect, _} =
@@ -144,7 +144,7 @@ defmodule SacrumWeb.DaemonChannelTest do
     send(fresh_channel.channel_pid, :daemon_credentials_invalidated)
 
     ref = Phoenix.ChannelTest.push(fresh_channel, "report", %{})
-    assert_reply ref, :error, %{reason: "unsupported_operation"}
+    assert_reply ref, :error, %{reason: "invalid_report"}
     refute_received {:DOWN, ^fresh_monitor, :process, _, _}
   end
 
@@ -255,5 +255,75 @@ defmodule SacrumWeb.DaemonChannelTest do
              subscribe_and_join(socket, "daemon:#{daemon.id}")
 
     assert Sacrum.DaemonConnectionRegistry.lookup(daemon.id) == []
+  end
+
+  test "accepts authenticated reports and heartbeat liveness on the daemon topic" do
+    {user, daemon, token, socket} = setup_daemon("report")
+
+    {:ok, _, channel} =
+      subscribe_and_join(socket, "daemon:#{daemon.id}", %{
+        "enrollment_token" => token
+      })
+
+    :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "account:#{user.id}")
+
+    report = %{
+      "version" => 1,
+      "daemon_id" => daemon.id,
+      "daemon_version" => "v1.2.3",
+      "os" => "linux",
+      "architecture" => "x86_64",
+      "host" => "builder-1",
+      "started_at" => "2026-09-17T10:00:00Z",
+      "capabilities" => %{"providers" => %{"openai" => true}},
+      "token_hash" => "must-not-be-stored",
+      "project_ids" => [Ecto.UUID.generate()]
+    }
+
+    ref = Phoenix.ChannelTest.push(channel, "report", report)
+    assert_reply ref, :ok, %{accepted: true, report_version: 1}
+
+    user_id = user.id
+    daemon_id = daemon.id
+    metrics = Sacrum.DaemonConnectionRegistry.metrics(daemon.id)
+    assert metrics.daemon_version == "v1.2.3"
+    assert metrics.connection_status == "online"
+    assert metrics.health == "healthy"
+    refute inspect(metrics) =~ "must-not-be-stored"
+    refute inspect(metrics) =~ "project_ids"
+
+    assert_receive %Phoenix.Socket.Broadcast{
+      topic: "account:" <> ^user_id,
+      event: "daemon_metrics",
+      payload: %{id: ^daemon_id, health: "healthy"}
+    }
+
+    ref = Phoenix.ChannelTest.push(channel, "heartbeat", %{})
+    assert_reply ref, :ok, %{accepted: true, report_version: 1}
+
+    metrics = Sacrum.DaemonConnectionRegistry.metrics(daemon.id)
+    assert metrics.last_seen_at
+    assert metrics.report_version == 1
+  end
+
+  test "rejects spoofed, unsupported, and empty reports without updating metrics" do
+    {_user, daemon, token, socket} = setup_daemon("invalid_report")
+    {_other_user, other_daemon, _other_token, _other_socket} = setup_daemon("spoofed_report")
+
+    {:ok, _, channel} =
+      subscribe_and_join(socket, "daemon:#{daemon.id}", %{
+        "enrollment_token" => token
+      })
+
+    for payload <- [
+          %{"version" => 1, "daemon_id" => other_daemon.id},
+          %{"version" => 2},
+          %{}
+        ] do
+      ref = Phoenix.ChannelTest.push(channel, "report", payload)
+      assert_reply ref, :error, %{reason: "invalid_report"}
+    end
+
+    assert Sacrum.DaemonConnectionRegistry.metrics(daemon.id) == nil
   end
 end
