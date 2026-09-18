@@ -9,6 +9,7 @@ defmodule Sacrum.Orchestrator.PromptContext do
   require Logger
 
   alias Sacrum.Accounts.Artifacts
+  alias Sacrum.Repo.Schemas.Task
 
   @section_type_map %{
     "testing_criterion" => "testing_criteria",
@@ -201,7 +202,7 @@ defmodule Sacrum.Orchestrator.PromptContext do
       "description" => task.description || "",
       "level" => task.level || "",
       "tags" => task.tags || [],
-      "worktree" => task.worktree || ""
+      "worktree" => Task.workspace_worktree(task) || ""
     }
     |> Map.merge(group_sections_by_type(task.sections))
     |> Map.put("code_refs", build_code_refs_list(task.code_refs))
@@ -259,15 +260,18 @@ defmodule Sacrum.Orchestrator.PromptContext do
   end
 
   defp group_sections_by_type(sections) do
-    Enum.group_by(
-      sections,
+    sections
+    |> loaded_collection()
+    |> Enum.group_by(
       &Map.get(@section_type_map, &1.section_type, &1.section_type),
       & &1.content
     )
   end
 
   defp build_code_refs_list(code_refs) do
-    Enum.map(code_refs, fn ref ->
+    code_refs
+    |> loaded_collection()
+    |> Enum.map(fn ref ->
       reject_nil_values(%{
         "path" => ref.path || "",
         "line_start" => ref.line_start,
@@ -277,6 +281,10 @@ defmodule Sacrum.Orchestrator.PromptContext do
       })
     end)
   end
+
+  defp loaded_collection(value) when is_list(value), do: value
+  defp loaded_collection(%Ecto.Association.NotLoaded{}), do: []
+  defp loaded_collection(_value), do: []
 
   defp build_history_list(history) when is_list(history) do
     Enum.map(history, fn exec ->

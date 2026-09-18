@@ -10,6 +10,7 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
 
   alias Sacrum.Accounts
   alias Sacrum.Orchestrator.TaskRegistry
+  alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.TaskDependencies
   alias Sacrum.Repo.TaskWorkflows
   alias Sacrum.TaskRuns.RunControls
@@ -23,6 +24,11 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
     field :active_run, :task_run
   end
 
+  object :task_workspace do
+    field :daemon_id, :uuid4
+    field :worktree_path, :string
+  end
+
   object :task do
     field :id, :id
     field :title, :string
@@ -33,7 +39,17 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
     field :rejection_reason, :string
     field :started_at, :datetime
     field :completed_at, :datetime
-    field :worktree, :string
+
+    field :workspace, :task_workspace do
+      resolve(fn task, _args, _resolution ->
+        {:ok, Task.workspace_payload(task)}
+      end)
+    end
+
+    field :worktree, :string do
+      resolve(fn task, _args, _resolution -> {:ok, Task.legacy_worktree(task)} end)
+    end
+
     field :archived, :boolean
     field :inserted_at, :datetime
     field :updated_at, :datetime

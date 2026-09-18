@@ -3,6 +3,7 @@ defmodule SacrumWeb.ProjectChannel do
 
   alias Sacrum.Accounts.Projects
   alias Sacrum.Realtime.ProjectChannelCdcContract
+  alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{ArtifactLinkMetadata, Task, WorkflowStep}
   alias Sacrum.TaskRuns.RunControls
   alias Sacrum.TaskRuns.Status, as: TaskRunStatus
@@ -463,7 +464,8 @@ defmodule SacrumWeb.ProjectChannel do
       parent_id: task.parent_id,
       status: task.status,
       archived: task.archived,
-      worktree: task.worktree,
+      workspace: Task.workspace_payload(task),
+      worktree: Task.legacy_worktree(task),
       run_controls: task_controls_payload(task),
       inserted_at: task.inserted_at,
       updated_at: task.updated_at
@@ -649,8 +651,13 @@ defmodule SacrumWeb.ProjectChannel do
   defp task_run_payload(task_run) do
     task_run
     |> task_run_base_payload()
+    |> Map.put(:workspace, task_run_workspace(task_run))
     |> Map.put(:run_controls, task_run_controls_payload(task_run))
     |> version_payload()
+  end
+
+  defp task_run_workspace(task_run) do
+    Task.workspace_payload(Repo.get(Task, task_run.task_id))
   end
 
   defp task_run_base_payload(nil), do: nil
@@ -692,6 +699,7 @@ defmodule SacrumWeb.ProjectChannel do
     end
   end
 
+  @dialyzer {:no_match, task_struct: 1}
   defp task_struct(%Task{} = task), do: task
   defp task_struct(task), do: struct(Task, task)
 
@@ -811,7 +819,7 @@ defmodule SacrumWeb.ProjectChannel do
       task_id: data.execution.task_id,
       prompt: data.rendered_prompt,
       agent_config: data.step.agent_config,
-      worktree: data.task.worktree
+      worktree: Task.workspace_worktree(data.task)
     }
 
     payload =

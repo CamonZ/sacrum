@@ -3,15 +3,30 @@ defmodule Sacrum.Orchestrator.TaskRuns.Root do
   Root TaskRun acquisition and dispatchability checks.
   """
 
+  alias Ecto.Multi
   alias Sacrum.Accounts.TaskRuns
+  alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{Task, TaskRun}
+  alias Sacrum.Repo.TaskRuns, as: TaskRunsRepo
   alias Sacrum.TaskRuns.Status, as: TaskRunStatus
+  alias Sacrum.Tasks.Placement
 
+  @dialyzer {:no_opaque, get_or_create: 2}
   @spec get_or_create(Task.t(), keyword()) :: {:ok, TaskRun.t()} | {:error, term()}
   def get_or_create(%Task{} = task, opts \\ []) when is_list(opts) do
-    case TaskRuns.get_active_for_task(task.user_id, task.id) do
-      {:ok, %TaskRun{} = task_run} -> validate_dispatchable(task_run)
-      {:error, :not_found} -> create(task, opts)
+    multi =
+      Multi.new()
+      |> Placement.append_queue_assignment(:placement, task)
+      |> Multi.run(:task_run, fn _repo, %{{:placement, :task} => task} ->
+        case TaskRuns.get_active_for_task(task.user_id, task.id) do
+          {:ok, %TaskRun{} = task_run} -> validate_dispatchable(task_run)
+          {:error, :not_found} -> create(task, opts)
+        end
+      end)
+
+    case Repo.transaction(multi) do
+      {:ok, %{task_run: %TaskRun{} = task_run}} -> {:ok, task_run}
+      {:error, _operation, reason, _changes} -> {:error, reason}
     end
   end
 
@@ -24,7 +39,7 @@ defmodule Sacrum.Orchestrator.TaskRuns.Root do
 
   @spec create(Task.t(), keyword()) :: {:ok, TaskRun.t()} | {:error, term()}
   defp create(%Task{} = task, opts) do
-    TaskRuns.insert(task.user_id, task.project_id, task.id, %{
+    TaskRunsRepo.insert_locked(task.user_id, task.project_id, task.id, %{
       status: :queued,
       max_concurrency: Keyword.get(opts, :max_concurrency)
     })

@@ -22,7 +22,17 @@ defmodule SacrumWeb.Graphql.TaskRunApiTest do
   end
 
   defp create_task(user, project, title) do
-    {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: title})
+    {:ok, daemon, bootstrap} = Accounts.Daemons.create(user.id)
+
+    {:ok, _daemon, _reconnect, _credential} =
+      Accounts.Daemons.exchange_bootstrap(daemon.id, bootstrap)
+
+    {:ok, task} =
+      Accounts.Tasks.insert(user.id, project.id, %{
+        title: title,
+        workspace: %{daemon_id: daemon.id, worktree_path: "/tmp/task-run-api-task"}
+      })
+
     task
   end
 

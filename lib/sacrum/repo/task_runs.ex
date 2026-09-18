@@ -7,7 +7,7 @@ defmodule Sacrum.Repo.TaskRuns do
 
   import Ecto.Query
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.{SessionLog, StepExecution, TaskRun}
+  alias Sacrum.Repo.Schemas.{SessionLog, StepExecution, Task, TaskRun}
   alias Sacrum.TaskRuns.Status, as: TaskRunStatus
 
   @type concurrency_scope :: %{id: String.t(), max_concurrency: pos_integer() | nil}
@@ -16,9 +16,48 @@ defmodule Sacrum.Repo.TaskRuns do
           {:ok, TaskRun.t()} | {:error, Ecto.Changeset.t()}
   def insert(user_id, project_id, task_id, attrs)
       when is_binary(user_id) and is_binary(project_id) and is_binary(task_id) and is_map(attrs) do
-    %TaskRun{user_id: user_id, project_id: project_id, task_id: task_id}
-    |> TaskRun.create_changeset(attrs)
-    |> Repo.insert()
+    if Repo.in_transaction?() do
+      insert_locked(user_id, project_id, task_id, attrs)
+    else
+      insert_with_task_lock(user_id, project_id, task_id, attrs)
+    end
+  end
+
+  defp insert_with_task_lock(user_id, project_id, task_id, attrs) do
+    Repo.transaction(fn ->
+      case Repo.one(from t in Task, where: t.id == ^task_id, lock: "FOR UPDATE") do
+        nil -> Repo.rollback(:task_not_found)
+        _task -> insert_locked!(user_id, project_id, task_id, attrs)
+      end
+    end)
+  end
+
+  @doc "Inserts a task run when the caller already holds the task lock."
+  @spec insert_locked(String.t(), String.t(), String.t(), map()) ::
+          {:ok, TaskRun.t()} | {:error, Ecto.Changeset.t()}
+  def insert_locked(user_id, project_id, task_id, attrs)
+      when is_binary(user_id) and is_binary(project_id) and is_binary(task_id) and is_map(attrs) do
+    case insert_locked_result(user_id, project_id, task_id, attrs) do
+      {:ok, task_run} -> {:ok, task_run}
+      {:error, changeset} -> {:error, changeset}
+    end
+  end
+
+  defp insert_locked!(user_id, project_id, task_id, attrs) do
+    case insert_locked_result(user_id, project_id, task_id, attrs) do
+      {:ok, task_run} -> task_run
+      {:error, changeset} -> Repo.rollback(changeset)
+    end
+  end
+
+  defp insert_locked_result(user_id, project_id, task_id, attrs) do
+    changeset =
+      TaskRun.create_changeset(
+        %TaskRun{user_id: user_id, project_id: project_id, task_id: task_id},
+        attrs
+      )
+
+    Repo.insert(changeset)
   end
 
   @spec update(TaskRun.t(), map()) :: {:ok, TaskRun.t()} | {:error, Ecto.Changeset.t()}

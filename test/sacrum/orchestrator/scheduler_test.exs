@@ -62,7 +62,7 @@ defmodule Sacrum.Orchestrator.SchedulerTest do
     }
 
     {:ok, task} = Accounts.Tasks.insert(user.id, project.id, Map.merge(default_attrs, attrs))
-    task
+    assign_workspace(task, user.id)
   end
 
   defp assign_workflow_to_task(_user, task, workflow) do

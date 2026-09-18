@@ -6,8 +6,40 @@ defmodule Sacrum.Orchestrator.TaskRuns.RootTest do
   alias Sacrum.Accounts.{Projects, TaskRuns, Tasks, WorkflowSteps, Workflows}
   alias Sacrum.Orchestrator.TaskRuns.Root
   alias Sacrum.Repo
-  alias Sacrum.Repo.{StepTransitions, TaskWorkflows, Users}
-  alias Sacrum.Repo.Schemas.WorkflowStep
+  alias Sacrum.Repo.{Daemons, StepTransitions, TaskWorkflows, Users}
+  alias Sacrum.Repo.Schemas.{Task, WorkflowStep}
+
+  test "get_or_create assigns a connected enrolled daemon to an unassigned task" do
+    user = create_user()
+    {:ok, project} = Projects.insert(user.id, %{name: "Root Project"})
+    {:ok, daemon, bootstrap} = Daemons.create(user.id)
+
+    {:ok, daemon, _reconnect, credential} =
+      Sacrum.Accounts.Daemons.exchange_bootstrap(daemon.id, bootstrap)
+
+    assert :ok =
+             Sacrum.DaemonConnectionRegistry.register(daemon.id, %{
+               user_id: user.id,
+               credential_id: credential.id,
+               metrics: nil
+             })
+
+    on_exit(fn -> Sacrum.DaemonConnectionRegistry.unregister(daemon.id) end)
+
+    {:ok, task} =
+      Tasks.insert(user.id, project.id, %{
+        title: "Unassigned root task",
+        worktree: "/tmp/unassigned-root-task"
+      })
+
+    assert task.workspace.daemon_id == nil
+    assert {:ok, task_run} = Root.get_or_create(task)
+
+    persisted_task = Repo.get!(Task, task.id)
+    assert task_run.status == :queued
+    assert persisted_task.workspace.daemon_id == daemon.id
+    assert persisted_task.workspace.worktree_path == "/tmp/unassigned-root-task"
+  end
 
   test "get_or_create creates a queued root run when no active run exists" do
     user = create_user()
@@ -96,7 +128,16 @@ defmodule Sacrum.Orchestrator.TaskRuns.RootTest do
 
   defp create_task(user) do
     {:ok, project} = Projects.insert(user.id, %{name: "Root Project"})
-    {:ok, task} = Tasks.insert(user.id, project.id, %{title: "Root Task"})
+    {:ok, daemon, bootstrap} = Sacrum.Repo.Daemons.create(user.id)
+
+    {:ok, _daemon, _reconnect, _credential} =
+      Sacrum.Accounts.Daemons.exchange_bootstrap(daemon.id, bootstrap)
+
+    {:ok, task} =
+      Tasks.insert(user.id, project.id, %{
+        title: "Root Task",
+        workspace: %{daemon_id: daemon.id, worktree_path: "/tmp/root-task"}
+      })
 
     {project, task}
   end

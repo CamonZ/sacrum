@@ -13,6 +13,7 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
   alias Sacrum.Orchestrator.{ExecutionDispatcher, Scheduler}
   alias Sacrum.Orchestrator.TaskRuns.Root
   alias Sacrum.Realtime.CommandBroadcaster
+  alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.Schemas.TaskRun
   alias Sacrum.Repo.Schemas.WorkflowStep
   alias Sacrum.TaskRuns.Status, as: TaskRunStatus
@@ -50,6 +51,15 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
     field :triggered_by_step_execution_id, :id
     field :inserted_at, :datetime
     field :updated_at, :datetime
+
+    field :workspace, :task_workspace do
+      resolve(fn task_run, _args, %{context: %{current_user: user}} ->
+        case Accounts.Tasks.find(user.id, task_run.task_id) do
+          {:ok, task} -> {:ok, Task.workspace_payload(task)}
+          {:error, :not_found} -> {:ok, nil}
+        end
+      end)
+    end
 
     field :task, :task do
       resolve(dataloader(Accounts.Tasks))
@@ -366,7 +376,7 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
                  preloads: [:sections, :code_refs, :workflow, :current_step]
                ),
              :ok <- ExecutionDispatcher.validate_step(user.id, step_id),
-             :ok <- check_daemon_presence(task.project_id) do
+             :ok <- check_daemon_presence(task) do
           with {:ok, task_run} <- Root.get_or_create(task),
                :ok <- validate_manual_step_dispatch(task_run) do
             ExecutionDispatcher.create_and_queue(user.id, task, step_id, task_run)
@@ -375,9 +385,10 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
       end)
     end
 
-    @spec check_daemon_presence(binary()) :: :ok | {:error, String.t()}
-    defp check_daemon_presence(project_id) do
+    @spec check_daemon_presence(Task.t()) :: :ok | {:error, String.t()}
+    defp check_daemon_presence(%Task{project_id: project_id} = task) do
       if Application.get_env(:sacrum, :daemon_presence_required, false) and
+           is_nil(Task.workspace_daemon(task)) and
            not Sacrum.DaemonRegistry.daemon_connected?(project_id) do
         {:error, "No daemon is currently connected for this project"}
       else
@@ -501,6 +512,35 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
     defp schedule_task_error(operation, task_id, :no_workflow_assigned) do
       Logger.warning("[#{operation_name(operation)}] Task #{task_id} has no workflow")
       {:error, "Task has no workflow assigned"}
+    end
+
+    defp schedule_task_error(operation, task_id, :workspace_required) do
+      Logger.warning("[#{operation_name(operation)}] Task #{task_id} has no workspace assignment")
+      {:error, "Task workspace must be assigned before execution can start"}
+    end
+
+    defp schedule_task_error(operation, task_id, :daemon_unavailable) do
+      Logger.warning(
+        "[#{operation_name(operation)}] No connected daemon is available for task #{task_id}"
+      )
+
+      {:error, "No connected daemon is available for task execution"}
+    end
+
+    defp schedule_task_error(operation, task_id, :daemon_not_found) do
+      Logger.warning(
+        "[#{operation_name(operation)}] Task #{task_id} references an unknown daemon"
+      )
+
+      {:error, "Task workspace daemon not found"}
+    end
+
+    defp schedule_task_error(operation, task_id, :daemon_not_enrolled) do
+      Logger.warning(
+        "[#{operation_name(operation)}] Task #{task_id} references an unenrolled daemon"
+      )
+
+      {:error, "Task workspace daemon is not enrolled"}
     end
 
     defp schedule_task_error(:run_workflow, task_id, :task_already_completed) do

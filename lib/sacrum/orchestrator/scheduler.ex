@@ -16,6 +16,7 @@ defmodule Sacrum.Orchestrator.Scheduler do
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{Task, TaskRun}
   alias Sacrum.Repo.{TaskDependencies, TaskHierarchy}
+  alias Sacrum.Tasks.Placement
 
   @spec start_link(keyword()) :: {:ok, pid()} | {:error, term()}
   def start_link(opts) do
@@ -104,6 +105,7 @@ defmodule Sacrum.Orchestrator.Scheduler do
          :ok <- validate_no_active_fsm(task_id),
          {:ok, task_run} <- Lookup.fetch(task_run_id),
          :ok <- validate_task_run_matches(task_run, task_record),
+         {:ok, _task_record} <- Placement.resolve_for_dispatch(task_record),
          {:ok, task_run} <- Root.validate_dispatchable(task_run) do
       Logger.info(
         "[Scheduler] Starting existing TaskRun task_id=#{task_id}, task_run_id=#{task_run.id}"

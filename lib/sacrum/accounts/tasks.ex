@@ -15,10 +15,11 @@ defmodule Sacrum.Accounts.Tasks do
 
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.Task
+  alias Sacrum.Repo.Schemas.TaskSection
   alias Sacrum.Repo.TaskDependencies
-  alias Sacrum.Repo.TaskHierarchy
   alias Sacrum.Repo.Tasks, as: TasksRepo
   alias Sacrum.Repo.TaskSections
+  alias Sacrum.Tasks.Placement
 
   @doc """
   Find a task by UUID within a user's scope.
@@ -147,75 +148,102 @@ defmodule Sacrum.Accounts.Tasks do
     TasksRepo.delete(task, opts)
   end
 
-  defp do_update_task(task, attrs) do
-    task_attrs = Map.drop(attrs, ["sections", :sections, "section_deletions", :section_deletions])
-    section_attrs = Map.get(attrs, "sections", Map.get(attrs, :sections, []))
-
-    section_deletions =
-      Map.get(attrs, "section_deletions", Map.get(attrs, :section_deletions, []))
-
-    with {:ok, updated_task} <- update_task_fields(task, task_attrs),
-         :ok <- delete_task_sections(task, section_deletions),
-         :ok <- upsert_task_sections(task, section_attrs) do
-      {:ok, updated_task}
-    end
-  end
-
-  defp unwrap_task_update_transaction({:ok, updated_task}), do: {:ok, updated_task}
-  defp unwrap_task_update_transaction({:error, {:error, _} = error}), do: error
-  defp unwrap_task_update_transaction({:error, error}), do: error
-
   defp run_task_update_transaction(task, attrs) do
-    transaction_result = Repo.transaction(fn -> commit_or_rollback_task_update(task, attrs) end)
+    transaction_result = Repo.transaction(task_update_multi(task, attrs))
     unwrap_task_update_transaction(transaction_result)
   end
 
-  defp commit_or_rollback_task_update(task, attrs) do
-    case do_atomic_task_update(task, attrs) do
-      {:ok, updated_task} -> updated_task
-      error -> Repo.rollback(error)
+  defp unwrap_task_update_transaction({:ok, %{result: updated_task}}),
+    do: {:ok, updated_task}
+
+  defp unwrap_task_update_transaction({:error, _operation, reason, _changes}),
+    do: {:error, reason}
+
+  @dialyzer {:no_opaque, task_update_multi: 2}
+  defp task_update_multi(task, attrs) do
+    section_attrs = Map.get(attrs, :sections, [])
+    section_deletions = Map.get(attrs, :section_deletions, []) || []
+
+    Ecto.Multi.new()
+    |> Placement.append_update(:placement, task, attrs)
+    |> Ecto.Multi.run(:prepare_task, &prepare_task_update_step(&1, &2, task, attrs))
+    |> Ecto.Multi.update(:task, &task_update_changeset/1)
+    |> Ecto.Multi.delete_all(
+      :delete_task_sections,
+      from(
+        section in TaskSection,
+        where:
+          section.task_id == ^task.id and section.project_id == ^task.project_id and
+            section.user_id == ^task.user_id and section.id in ^section_deletions
+      )
+    )
+    |> Ecto.Multi.run(
+      :upsert_task_sections,
+      &upsert_task_sections_step(&1, &2, task, section_attrs)
+    )
+    |> Ecto.Multi.run(:dependencies, &dependencies_step(&1, &2, attrs))
+    |> Ecto.Multi.run(:result, &task_update_result/2)
+  end
+
+  defp prepare_task_update_step(_repo, %{placement: placement}, task, attrs) do
+    case prepare_task_update(task, attrs, placement) do
+      {:ok, task_for_update, task_attrs} -> {:ok, {task_for_update, task_attrs}}
+      error -> error
     end
   end
 
-  defp do_atomic_task_update(task, attrs) do
-    with {:ok, updated_task} <- do_update_task(task, attrs),
-         {:ok, updated_task} <- maybe_update_parent(updated_task, attrs),
-         :ok <- maybe_update_dependencies(updated_task, attrs) do
-      {:ok, Repo.preload(updated_task, :sections, force: true)}
+  defp task_update_changeset(%{prepare_task: {task_for_update, task_attrs}}) do
+    Task.update_changeset(task_for_update, task_attrs)
+  end
+
+  defp upsert_task_sections_step(_repo, _changes, task, section_attrs) do
+    case upsert_task_sections(task, section_attrs) do
+      :ok -> {:ok, :ok}
+      error -> error
     end
   end
 
-  defp update_task_fields(task, attrs) do
-    task
-    |> Task.update_changeset(attrs)
-    |> TasksRepo.update()
+  defp dependencies_step(_repo, %{task: updated_task}, attrs) do
+    case maybe_update_dependencies(updated_task, attrs) do
+      :ok -> {:ok, updated_task}
+      error -> error
+    end
   end
 
-  defp maybe_update_parent(task, attrs) do
-    parent_id = Map.get(attrs, "parent_id", Map.get(attrs, :parent_id, :not_set))
+  defp task_update_result(_repo, %{dependencies: updated_task}) do
+    {:ok, Repo.preload(updated_task, :sections, force: true)}
+  end
 
-    case parent_id do
-      :not_set ->
-        {:ok, task}
+  defp prepare_task_update(_task, attrs, %{task: task_for_update, workspace: workspace}) do
+    task_attrs = Map.drop(attrs, [:sections, :section_deletions, :workspace, :worktree])
 
-      nil ->
-        case TaskHierarchy.remove_parent(task) do
-          {:ok, updated} -> {:ok, updated}
-          {:error, :not_found} -> {:ok, task}
-          error -> error
-        end
+    task_attrs =
+      if workspace == :not_set, do: task_attrs, else: Map.put(task_attrs, :workspace, workspace)
 
-      id ->
-        case scoped_task(task, id) do
+    with {:ok, task_attrs} <- prepare_parent_task_update(task_for_update, task_attrs, attrs) do
+      {:ok, task_for_update, task_attrs}
+    end
+  end
+
+  defp prepare_parent_task_update(task, task_attrs, attrs) do
+    case Map.fetch(attrs, :parent_id) do
+      :error ->
+        {:ok, task_attrs}
+
+      {:ok, nil} ->
+        {:ok, Map.put(task_attrs, :parent_id, nil)}
+
+      {:ok, parent_id} ->
+        case scoped_task(task, parent_id) do
           nil -> {:error, :not_found}
-          parent -> TaskHierarchy.set_parent(task, parent)
+          parent -> {:ok, Map.put(task_attrs, :parent_id, parent.id)}
         end
     end
   end
 
   defp maybe_update_dependencies(task, attrs)
-       when is_map_key(attrs, "depends_on_ids") or is_map_key(attrs, :depends_on_ids) do
-    ids = Map.get(attrs, "depends_on_ids", Map.get(attrs, :depends_on_ids))
+       when is_map_key(attrs, :depends_on_ids) do
+    ids = Map.get(attrs, :depends_on_ids)
     reconcile_dependencies(task, ids)
   end
 
@@ -350,8 +378,8 @@ defmodule Sacrum.Accounts.Tasks do
   end
 
   defp validate_section_ownership(%Task{} = task, attrs) do
-    sections = Map.get(attrs, "sections", Map.get(attrs, :sections))
-    deletion_ids = Map.get(attrs, "section_deletions", Map.get(attrs, :section_deletions, []))
+    sections = Map.get(attrs, :sections)
+    deletion_ids = Map.get(attrs, :section_deletions, [])
 
     case sections do
       nil ->
@@ -362,7 +390,7 @@ defmodule Sacrum.Accounts.Tasks do
 
         incoming_ids =
           sections
-          |> Enum.map(&(Map.get(&1, "id") || Map.get(&1, :id)))
+          |> Enum.map(&Map.get(&1, :id))
           |> Enum.reject(&is_nil/1)
           |> Enum.map(&to_string/1)
 
@@ -413,17 +441,6 @@ defmodule Sacrum.Accounts.Tasks do
 
   defp validate_section_ids(_task, _incoming_ids, _deletion_ids), do: :ok
 
-  defp delete_task_sections(_task, []), do: :ok
-
-  defp delete_task_sections(task, section_ids) do
-    Enum.reduce_while(section_ids, :ok, fn section_id, :ok ->
-      case find_task_section(task, section_id) do
-        {:ok, section} -> continue_or_halt(TaskSections.delete(section))
-        error -> {:halt, error}
-      end
-    end)
-  end
-
   defp upsert_task_sections(_task, []), do: :ok
 
   defp upsert_task_sections(task, sections) do
@@ -436,7 +453,7 @@ defmodule Sacrum.Accounts.Tasks do
   end
 
   defp upsert_task_section(task, attrs) do
-    case Map.get(attrs, "id", Map.get(attrs, :id)) do
+    case Map.get(attrs, :id) do
       nil -> TaskSections.upsert(task, attrs)
       id -> update_task_section(task, id, attrs)
     end
@@ -444,7 +461,7 @@ defmodule Sacrum.Accounts.Tasks do
 
   defp update_task_section(task, section_id, attrs) do
     with {:ok, section} <- find_task_section(task, section_id) do
-      TaskSections.update(section, Map.drop(attrs, ["id", :id]))
+      TaskSections.update(section, Map.delete(attrs, :id))
     end
   end
 
@@ -459,7 +476,4 @@ defmodule Sacrum.Accounts.Tasks do
       section -> {:ok, section}
     end
   end
-
-  defp continue_or_halt({:ok, _section}), do: {:cont, :ok}
-  defp continue_or_halt(error), do: {:halt, error}
 end
