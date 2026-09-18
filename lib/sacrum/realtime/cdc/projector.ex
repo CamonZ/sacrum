@@ -641,7 +641,7 @@ defmodule Sacrum.Realtime.Cdc.Projector do
     struct(schema, attrs)
   end
 
-  defp schema_fields(schema), do: schema.__schema__(:fields)
+  defp schema_fields(schema), do: schema.__schema__(:fields) ++ schema.__schema__(:embeds)
 
   defp active_task_run(task_id) do
     TaskRun

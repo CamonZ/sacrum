@@ -2,6 +2,7 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
   use ExUnit.Case, async: false
 
   import Sacrum.CdcAssertions
+  import Sacrum.TestWorkspace
 
   alias Ecto.Adapters.SQL.Sandbox
   alias Sacrum.Accounts
@@ -1438,7 +1439,7 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
       project
       |> Tasks.insert(Map.put(attrs, :title, title))
 
-    task
+    assign_workspace(task, project.user_id)
   end
 
   defp artifact_metadata(presentation) do

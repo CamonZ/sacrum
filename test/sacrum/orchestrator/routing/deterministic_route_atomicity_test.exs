@@ -565,6 +565,7 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
 
   defp create_task(user, project, workflow) do
     {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Deterministic route task"})
+    task = assign_workspace(task, user.id)
     {:ok, task} = Repo.TaskWorkflows.assign_workflow(task, workflow)
     task
   end

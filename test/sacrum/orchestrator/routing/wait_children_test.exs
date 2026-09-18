@@ -167,6 +167,7 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildrenTest do
 
   defp create_child(ctx, parent, title) do
     {:ok, child} = Accounts.Tasks.insert(ctx.user.id, ctx.project.id, %{title: title})
+    child = assign_workspace(child, ctx.user.id)
     {:ok, child} = Repo.TaskHierarchy.set_parent(child, parent)
     assign_workflow(child, ctx.child_workflow)
   end
@@ -263,7 +264,7 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildrenTest do
     }
 
     {:ok, task} = Accounts.Tasks.insert(user.id, project.id, Map.merge(base, attrs))
-    task
+    assign_workspace(task, user.id)
   end
 
   defp assign_workflow(task, workflow) do

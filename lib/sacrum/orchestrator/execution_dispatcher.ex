@@ -33,6 +33,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   alias Sacrum.Repo.Schemas.{StepExecution, Task, TaskRun, WorkflowStep}
   alias Sacrum.Routing.RouteMode
   alias Sacrum.TaskRuns.Status, as: TaskRunStatus
+  alias Sacrum.Tasks.Placement
   alias Sacrum.Tasks.Status
 
   @typep handoff :: map() | nil
@@ -62,7 +63,8 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
         ) ::
           {:ok, StepExecution.t()} | {:error, term()}
   def create_and_dispatch(user_id, task, step_id, task_run_or_id, handoff \\ nil) do
-    with {:ok, step} <- fetch_step(user_id, step_id),
+    with {:ok, task} <- Placement.resolve_for_dispatch(task),
+         {:ok, step} <- fetch_step(user_id, step_id),
          :ok <- validate_dispatchable_step(step),
          :ok <- validate_workflow(task),
          {:ok, task_run} <- fetch_and_validate_task_run(task_run_or_id, task) do
@@ -80,7 +82,8 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   @spec create_and_queue(String.t(), Task.t(), String.t(), TaskRun.t()) ::
           {:ok, StepExecution.t()} | {:error, term()}
   def create_and_queue(user_id, task, step_id, task_run) do
-    with {:ok, step} <- fetch_step(user_id, step_id),
+    with {:ok, task} <- Placement.resolve_for_dispatch(task),
+         {:ok, step} <- fetch_step(user_id, step_id),
          :ok <- validate_dispatchable_step(step),
          :ok <- validate_workflow(task),
          {:ok, task_run} <- fetch_and_validate_task_run(task_run, task),

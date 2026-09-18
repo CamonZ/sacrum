@@ -17,6 +17,7 @@ defmodule Sacrum.Repo.Tasks do
   alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.Schemas.TaskDependency
   alias Sacrum.Repo.UuidPrefixResolver
+  alias Sacrum.Tasks.Placement
 
   @doc """
   Lists tasks with optional filters.
@@ -44,6 +45,7 @@ defmodule Sacrum.Repo.Tasks do
     |> apply_task_preloads(opts)
     |> order_by([t], asc: t.inserted_at)
     |> Repo.all()
+    |> Enum.map(&Task.with_legacy_worktree/1)
   end
 
   @doc """
@@ -183,6 +185,12 @@ defmodule Sacrum.Repo.Tasks do
     where(query, [t], t.workflow_id == ^workflow_id)
   end
 
+  defp apply_filter(query, :workspace_daemon_id, nil), do: query
+
+  defp apply_filter(query, :workspace_daemon_id, daemon_id) do
+    where(query, [t], t.workspace_daemon_id == ^daemon_id)
+  end
+
   defp apply_filter(query, :archived, nil), do: query
 
   defp apply_filter(query, :archived, false) do
@@ -233,7 +241,10 @@ defmodule Sacrum.Repo.Tasks do
         where: t.project_id == ^project_id and t.user_id == ^user_id
       )
 
-    UuidPrefixResolver.find_by_prefix(query, prefix, preloads: [:sections, :parent])
+    case UuidPrefixResolver.find_by_prefix(query, prefix, preloads: [:sections, :parent]) do
+      {:ok, %Task{} = task} -> {:ok, Task.with_legacy_worktree(task)}
+      error -> error
+    end
   end
 
   @spec insert(Project.t(), map()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
@@ -258,11 +269,71 @@ defmodule Sacrum.Repo.Tasks do
   end
 
   defp do_insert(%Task{} = task, project_id, user_id, attrs) do
-    with {:ok, prepared_attrs} <- prepare_workflow_attrs(attrs, project_id, user_id) do
+    with :ok <- validate_workspace_owner(user_id, attrs),
+         {:ok, prepared_attrs} <- prepare_workflow_attrs(attrs, project_id, user_id) do
       case task |> Task.create_changeset(prepared_attrs) |> Repo.insert() do
-        {:ok, task} -> {:ok, Repo.preload(task, :sections, force: true)}
-        error -> error
+        {:ok, task} ->
+          task = Repo.preload(task, :sections, force: true)
+          {:ok, Task.with_legacy_worktree(task)}
+
+        error ->
+          error
       end
+    end
+  end
+
+  @doc false
+  @spec get(Ecto.UUID.t()) :: {:ok, Task.t()} | {:error, :not_found}
+  def get(id), do: get(id, [])
+
+  @doc false
+  @spec get(Ecto.UUID.t(), keyword()) :: {:ok, Task.t()} | {:error, :not_found}
+  def get(id, opts) do
+    case super(id, opts) do
+      {:ok, %Task{} = task} -> {:ok, Task.with_legacy_worktree(task)}
+      error -> error
+    end
+  end
+
+  @doc false
+  @spec get_by(keyword()) :: {:ok, Task.t()} | {:error, :not_found}
+  def get_by(opts) do
+    case super(opts) do
+      {:ok, %Task{} = task} -> {:ok, Task.with_legacy_worktree(task)}
+      error -> error
+    end
+  end
+
+  @doc false
+  @spec get!(Ecto.UUID.t()) :: Task.t()
+  def get!(id), do: Task.with_legacy_worktree(super(id))
+
+  @doc false
+  @spec all() :: [Task.t()]
+  def all, do: Enum.map(super(), &Task.with_legacy_worktree/1)
+
+  @doc false
+  @spec all(keyword() | term()) :: [Task.t()]
+  def all(opts_or_queryable) do
+    records = super(opts_or_queryable)
+    Enum.map(records, &Task.with_legacy_worktree/1)
+  end
+
+  @doc false
+  @spec insert(Ecto.Changeset.t()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
+  def insert(%Ecto.Changeset{} = changeset) do
+    case super(changeset) do
+      {:ok, %Task{} = task} -> {:ok, Task.with_legacy_worktree(task)}
+      error -> error
+    end
+  end
+
+  @doc false
+  @spec update(Ecto.Changeset.t()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
+  def update(%Ecto.Changeset{} = changeset) do
+    case super(changeset) do
+      {:ok, %Task{} = task} -> {:ok, Task.with_legacy_worktree(task)}
+      error -> error
     end
   end
 
@@ -278,7 +349,9 @@ defmodule Sacrum.Repo.Tasks do
 
   defp seed_provided_workflow(attrs, project_id, user_id, workflow_id) do
     conditions = [id: workflow_id, project_id: project_id]
-    conditions = if user_id, do: Keyword.put(conditions, :user_id, user_id), else: conditions
+
+    conditions =
+      if is_nil(user_id), do: conditions, else: Keyword.put(conditions, :user_id, user_id)
 
     case Repo.get_by(Sacrum.Repo.Schemas.Workflow, conditions) do
       nil ->
@@ -318,6 +391,36 @@ defmodule Sacrum.Repo.Tasks do
   end
 
   def assign_default_workflow_attrs(attrs, _project_id), do: attrs
+
+  defp validate_workspace_owner(nil, attrs) do
+    workspace = Map.get(attrs, :workspace)
+
+    case Placement.validate_workspace_owner(nil, workspace) do
+      :ok -> :ok
+      {:error, reason} -> invalid_workspace_changeset(reason)
+    end
+  end
+
+  defp validate_workspace_owner(user_id, attrs) do
+    workspace = Map.get(attrs, :workspace)
+
+    case Placement.validate_workspace_owner(user_id, workspace) do
+      :ok -> :ok
+      {:error, reason} -> invalid_workspace_changeset(reason)
+    end
+  end
+
+  defp invalid_workspace_changeset(reason) do
+    message =
+      case reason do
+        :daemon_not_found -> "daemon not found"
+        :daemon_not_enrolled -> "daemon is not enrolled"
+        :invalid_workspace -> "is invalid"
+      end
+
+    changeset = Ecto.Changeset.change(%Task{})
+    {:error, Ecto.Changeset.add_error(changeset, :workspace, message)}
+  end
 
   defp find_default_workflow(project_id) do
     Repo.one(

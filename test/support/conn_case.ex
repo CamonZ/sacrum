@@ -28,6 +28,7 @@ defmodule SacrumWeb.ConnCase do
       import Plug.Conn
       import Phoenix.ConnTest
       import SacrumWeb.ConnCase
+      import Sacrum.TestWorkspace
     end
   end
 

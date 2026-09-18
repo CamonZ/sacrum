@@ -87,7 +87,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
         tags: ["test"]
       })
 
-    task
+    assign_workspace(task, user.id)
   end
 
   defp setup_linear_workflow(opts) do

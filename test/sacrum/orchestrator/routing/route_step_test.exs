@@ -74,6 +74,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteStepTest do
         tags: ["test"]
       })
 
+    task = assign_workspace(task, user.id)
     {:ok, task} = Repo.TaskWorkflows.assign_workflow(task, workflow)
     task
   end

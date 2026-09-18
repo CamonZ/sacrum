@@ -43,6 +43,12 @@ defmodule Sacrum.DaemonConnectionRegistry do
   @spec lookup(String.t()) :: [{pid(), session()}]
   def lookup(daemon_id), do: Registry.lookup(__MODULE__, daemon_id)
 
+  @doc "Returns the stable IDs of daemons with an active channel registration."
+  @spec connected_daemon_ids() :: [String.t()]
+  def connected_daemon_ids do
+    Registry.select(__MODULE__, [{{:"$1", :_, :_}, [], [:"$1"]}])
+  end
+
   @spec metrics(String.t()) :: metrics() | nil
   def metrics(daemon_id) do
     case lookup(daemon_id) do

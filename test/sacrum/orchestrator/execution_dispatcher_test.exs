@@ -46,11 +46,17 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
   end
 
   defp create_task(user, project, attrs \\ %{}) do
+    {:ok, daemon, bootstrap} = Sacrum.Repo.Daemons.create(user.id)
+
+    {:ok, _daemon, _reconnect, _credential} =
+      Sacrum.Accounts.Daemons.exchange_bootstrap(daemon.id, bootstrap)
+
     default_attrs = %{
       title: "Test Task",
       description: "A test task description",
       level: "ticket",
-      tags: ["integration", "test"]
+      tags: ["integration", "test"],
+      workspace: %{daemon_id: daemon.id, worktree_path: "/tmp/dispatcher-task"}
     }
 
     {:ok, task} = Accounts.Tasks.insert(user.id, project.id, Map.merge(default_attrs, attrs))

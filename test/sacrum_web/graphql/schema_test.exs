@@ -1886,6 +1886,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       project: project
     } do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      task = assign_workspace(task, user.id)
 
       child_spec = {Sacrum.Orchestrator.TaskOrchestrator, task_id: task.id, user_id: user.id}
       {:ok, pid} = TaskFSMSupervisor.start_child(child_spec)
@@ -1946,6 +1947,8 @@ defmodule SacrumWeb.Graphql.SchemaTest do
     } do
       {:ok, task1} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task 1"})
       {:ok, task2} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task 2"})
+      task1 = assign_workspace(task1, user.id)
+      task2 = assign_workspace(task2, user.id)
 
       child_spec1 = {Sacrum.Orchestrator.TaskOrchestrator, task_id: task1.id, user_id: user.id}
       {:ok, pid1} = TaskFSMSupervisor.start_child(child_spec1)
@@ -3713,6 +3716,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       project: project
     } do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      task = assign_workspace(task, user.id)
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
 
       {:ok, step} =
@@ -3781,6 +3785,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       project: project
     } do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      task = assign_workspace(task, user.id)
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
 
       {:ok, step} =
@@ -3818,6 +3823,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       project: project
     } do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      task = assign_workspace(task, user.id)
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
 
       {:ok, stop_step} =
@@ -3860,6 +3866,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       project: project
     } do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      task = assign_workspace(task, user.id)
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
       {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "step_1", goal: "Do something"})
       {:ok, task} = Sacrum.Repo.TaskWorkflows.assign_workflow(task, wf)
@@ -3931,6 +3938,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
     test "runStep creates execution without context, uses prompt-based architecture",
          %{conn: conn, user: user, project: project} do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task Title"})
+      task = assign_workspace(task, user.id)
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
 
       {:ok, step} =
@@ -4000,6 +4008,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       project: project
     } do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      task = assign_workspace(task, user.id)
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
       # Create step with {task_id} placeholder in prompt
       {:ok, step} =
@@ -4036,6 +4045,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       project: project
     } do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      task = assign_workspace(task, user.id)
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
       {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "step_1", goal: "Do something"})
       {:ok, _task} = Sacrum.Repo.TaskWorkflows.assign_workflow(task, wf)
@@ -4100,6 +4110,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       project: project
     } do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      task = assign_workspace(task, user.id)
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
 
       {:ok, exec} =
@@ -4136,6 +4147,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       project: project
     } do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      task = assign_workspace(task, user.id)
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
 
       {:ok, exec} =
@@ -4169,6 +4181,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       project: project
     } do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      task = assign_workspace(task, user.id)
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
 
       {:ok, exec} =
@@ -4202,6 +4215,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       project: project
     } do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      task = assign_workspace(task, user.id)
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
 
       {:ok, exec} =
@@ -4239,6 +4253,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       project: project
     } do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      task = assign_workspace(task, user.id)
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
       {:ok, _step} = Accounts.WorkflowSteps.insert(wf, %{name: "step_1", goal: "Do something"})
       {:ok, updated_task} = Sacrum.Repo.TaskWorkflows.assign_workflow(task, wf)
@@ -4267,6 +4282,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       project: project
     } do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
+      task = assign_workspace(task, user.id)
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
       {:ok, _step} = Accounts.WorkflowSteps.insert(wf, %{name: "step_1", goal: "Do something"})
       {:ok, updated_task} = Sacrum.Repo.TaskWorkflows.assign_workflow(task, wf)
@@ -8257,6 +8273,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         })
 
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Test Task"})
+      task = assign_workspace(task, user.id)
       {:ok, task} = Sacrum.Repo.TaskWorkflows.assign_workflow(task, workflow)
 
       %{user: user, project: project, workflow: workflow, task: task, step1: step1, step2: step2}
