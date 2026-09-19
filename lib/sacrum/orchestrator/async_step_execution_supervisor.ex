@@ -9,15 +9,21 @@ defmodule Sacrum.Orchestrator.AsyncStepExecutionSupervisor do
   @spec start_execution(binary(), binary(), binary(), binary()) ::
           {:ok, pid()} | {:error, term()}
   def start_execution(execution_id, user_id, project_id, task_run_id) do
-    start_execution(execution_id, user_id, project_id, task_run_id, ExecutionPool)
+    start_execution(execution_id, user_id, project_id, task_run_id, ExecutionPool, [])
   end
 
   @spec start_execution(binary(), binary(), binary(), binary(), GenServer.server()) ::
           {:ok, pid()} | {:error, term()}
   def start_execution(execution_id, user_id, project_id, task_run_id, pool) do
+    start_execution(execution_id, user_id, project_id, task_run_id, pool, [])
+  end
+
+  @spec start_execution(binary(), binary(), binary(), binary(), GenServer.server(), keyword()) ::
+          {:ok, pid()} | {:error, term()}
+  def start_execution(execution_id, user_id, project_id, task_run_id, pool, admission_opts) do
     DynamicSupervisor.start_child(
       __MODULE__,
-      {AsyncStepExecution, {execution_id, user_id, project_id, task_run_id, pool}}
+      {AsyncStepExecution, {execution_id, user_id, project_id, task_run_id, pool, admission_opts}}
     )
   end
 

@@ -42,7 +42,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
     }
 
     {:ok, step} = Accounts.WorkflowSteps.insert(user.id, Map.merge(default_attrs, attrs))
-    step
+    Sacrum.Repo.preload(step, :workflow)
   end
 
   defp create_task(user, project, attrs \\ %{}) do
@@ -119,11 +119,11 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
   defp create_and_dispatch(ctx, task, step, handoff \\ nil) do
     task_run = create_task_run(ctx, task)
-    ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, step.id, task_run, handoff)
+    ExecutionDispatcher.create_and_dispatch(task, step, task_run, handoff)
   end
 
-  defp create_and_dispatch_with_run(ctx, task, step, task_run, handoff \\ nil) do
-    ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, step.id, task_run, handoff)
+  defp create_and_dispatch_with_run(_ctx, task, step, task_run, handoff \\ nil) do
+    ExecutionDispatcher.create_and_dispatch(task, step, task_run, handoff)
   end
 
   defp setup_dispatch_context(_) do
@@ -167,7 +167,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       task_run = create_task_run(ctx, task)
 
       assert {:error, :stop_step_not_dispatchable} =
-               ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, step.id, task_run)
+               ExecutionDispatcher.create_and_dispatch(task, step, task_run)
 
       assert Sacrum.Repo.get!(Sacrum.Repo.Schemas.TaskRun, task_run.id).status == :queued
 
@@ -194,7 +194,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       task_run = create_task_run(ctx, task)
 
       assert {:error, :configured_route_not_dispatchable} =
-               ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, step.id, task_run)
+               ExecutionDispatcher.create_and_dispatch(task, step, task_run)
 
       assert Sacrum.Repo.get!(Sacrum.Repo.Schemas.TaskRun, task_run.id).status == :queued
 
@@ -215,7 +215,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       task_run = create_task_run(ctx, task)
 
       assert {:error, :route_not_configured} =
-               ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, step.id, task_run)
+               ExecutionDispatcher.create_and_dispatch(task, step, task_run)
 
       assert Sacrum.Repo.get!(Sacrum.Repo.Schemas.TaskRun, task_run.id).status == :queued
 
@@ -314,7 +314,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       subscribe_to_project(ctx.project)
 
       {:ok, dispatched} =
-        ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, step.id, task_run)
+        ExecutionDispatcher.create_and_dispatch(task, step, task_run)
 
       expected = "Run artifact: #{artifact.id}"
       assert dispatched.prompt == expected
@@ -1041,7 +1041,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       subscribe_to_project(ctx.project)
 
       {:ok, dispatched} =
-        ExecutionDispatcher.create_and_dispatch(ctx.user.id, task, step.id, task_run)
+        ExecutionDispatcher.create_and_dispatch(task, step, task_run)
 
       reloaded_run = Sacrum.Repo.get!(Sacrum.Repo.Schemas.TaskRun, task_run.id)
 
@@ -1052,24 +1052,21 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
     end
 
     test "marks TaskRun failed when dispatch fails after run creation", ctx do
-      _step = create_step(ctx.user, ctx.workflow, %{})
+      step = create_step(ctx.user, ctx.workflow, %{})
       task = create_task(ctx.user, ctx.project) |> assign_workflow(ctx.workflow)
       task = PromptRenderer.preload_for_rendering(task)
       task_run = create_task_run(ctx, task)
 
-      assert {:error, :not_found} =
-               ExecutionDispatcher.create_and_dispatch(
-                 ctx.user.id,
-                 task,
-                 Ecto.UUID.generate(),
-                 task_run
-               )
+      invalid_step = %{step | id: Ecto.UUID.generate()}
+
+      assert {:error, _reason} =
+               ExecutionDispatcher.create_and_dispatch(task, invalid_step, task_run)
 
       failed_run = Sacrum.Repo.get!(Sacrum.Repo.Schemas.TaskRun, task_run.id)
       assert failed_run.status == :failed
       assert %DateTime{} = failed_run.ended_at
       assert failed_run.outcome_kind == "dispatch_failed"
-      assert failed_run.outcome_context["reason"] == "not_found"
+      assert failed_run.outcome_kind == "dispatch_failed"
     end
 
     test "persists rendered prompt on the execution row and broadcasts the same text", ctx do

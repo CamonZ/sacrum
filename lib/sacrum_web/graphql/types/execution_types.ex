@@ -10,7 +10,7 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
   import Absinthe.Resolution.Helpers
 
   alias Sacrum.Accounts
-  alias Sacrum.Orchestrator.{ExecutionDispatcher, Scheduler}
+  alias Sacrum.Orchestrator.{ExecutionDispatcher, Scheduler, TaskRunPlacement}
   alias Sacrum.Orchestrator.TaskRuns.Root
   alias Sacrum.Realtime.CommandBroadcaster
   alias Sacrum.Repo.Schemas.Task
@@ -375,11 +375,21 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
                  conditions: [id: task_id],
                  preloads: [:sections, :code_refs, :workflow, :current_step]
                ),
-             :ok <- ExecutionDispatcher.validate_step(user.id, step_id),
+             {:ok, step} <-
+               Accounts.WorkflowSteps.get_by(user.id,
+                 conditions: [id: step_id],
+                 preloads: [:workflow]
+               ),
+             :ok <- ExecutionDispatcher.validate_step(step),
              :ok <- check_daemon_presence(task) do
           with {:ok, task_run} <- Root.get_or_create(task),
                :ok <- validate_manual_step_dispatch(task_run) do
-            ExecutionDispatcher.create_and_queue(user.id, task, step_id, task_run)
+            ExecutionDispatcher.create_and_queue(
+              task,
+              step,
+              task_run,
+              TaskRunPlacement.admission_options(task, task_run)
+            )
           end
         end
       end)

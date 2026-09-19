@@ -82,10 +82,9 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
 
       assert {:ok, destination_execution} =
                ExecutionDispatcher.create_and_dispatch(
-                 fixture.data.user_id,
                  updated_task,
-                 fixture.destination.id,
-                 fixture.task_run.id,
+                 fixture.destination,
+                 fixture.task_run,
                  returned_data.pending_handoff
                )
 
@@ -208,10 +207,9 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
 
         assert {:ok, destination_execution} =
                  ExecutionDispatcher.create_and_dispatch(
-                   fixture.data.user_id,
                    updated_task,
-                   fixture.destination.id,
-                   fixture.task_run.id,
+                   fixture.destination,
+                   fixture.task_run,
                    returned_data.pending_handoff
                  )
 
@@ -582,7 +580,7 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
         "project_id" => workflow.project_id
       })
 
-    step
+    Repo.preload(step, :workflow)
   end
 
   defp create_step_transition(user, source, destination) do

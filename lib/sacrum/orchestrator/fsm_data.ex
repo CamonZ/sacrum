@@ -5,17 +5,21 @@ defmodule Sacrum.Orchestrator.FSMData do
   across the modules that participate in the FSM.
   """
 
-  alias Sacrum.Repo.Schemas.{Task, Workflow, WorkflowStep}
+  alias Sacrum.Repo.Schemas.{StepExecution, Task, TaskRun, Workflow, WorkflowStep}
 
   @enforce_keys [:user_id, :task, :project_id]
   defstruct [
     :user_id,
     :task,
+    :task_run,
     :task_run_id,
     :concurrency_scope,
+    :daemon_id,
+    :daemon_max_concurrency,
     :project_id,
     :workflow,
     :current_execution_id,
+    :current_execution,
     :slot_id,
     :pending_handoff,
     steps: %{},
@@ -26,13 +30,17 @@ defmodule Sacrum.Orchestrator.FSMData do
   @type t :: %__MODULE__{
           user_id: binary(),
           task: Task.t(),
+          task_run: TaskRun.t() | nil,
           task_run_id: binary() | nil,
           concurrency_scope: %{id: binary(), max_concurrency: pos_integer() | nil} | nil,
+          daemon_id: binary() | nil,
+          daemon_max_concurrency: pos_integer() | nil,
           project_id: binary(),
           workflow: Workflow.t() | nil,
           steps: %{optional(binary()) => WorkflowStep.t()},
           transitions: %{optional(binary()) => [binary()]},
           current_execution_id: binary() | nil,
+          current_execution: StepExecution.t() | nil,
           slot_id: integer() | nil,
           pending_handoff: map() | nil,
           run_retry_attempt: non_neg_integer()

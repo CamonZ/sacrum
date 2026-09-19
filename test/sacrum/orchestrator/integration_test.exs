@@ -515,13 +515,13 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
       %{user: user, project: project, human_step: human_step, task: task} =
         setup_human_input_workflow(next_final?: true)
 
-      available_before = ExecutionPool.pool_status().available_slots
+      in_use_before = ExecutionPool.pool_status().in_use_count
       subscribe_project(project.id)
 
       pid = start_orchestrator(task, user)
       wait_for_exit(pid)
 
-      assert ExecutionPool.pool_status().available_slots == available_before
+      assert ExecutionPool.pool_status().in_use_count == in_use_before
 
       assert [
                %StepExecution{

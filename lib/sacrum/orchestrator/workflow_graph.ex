@@ -11,8 +11,7 @@ defmodule Sacrum.Orchestrator.WorkflowGraph do
   alias Sacrum.Accounts
   alias Sacrum.Orchestrator.FSMData
   alias Sacrum.Repo.RouteValidation
-  alias Sacrum.Repo.Schemas.Task
-  alias Sacrum.Repo.Schemas.WorkflowStep
+  alias Sacrum.Repo.Schemas.{Task, Workflow, WorkflowStep}
   alias Sacrum.Routing.RouteValidator
 
   @doc """
@@ -28,7 +27,7 @@ defmodule Sacrum.Orchestrator.WorkflowGraph do
            Accounts.Workflows.get_by(user_id, conditions: [id: task.workflow_id]),
          {:ok, snapshot} <- RouteValidation.load_snapshot(workflow.id),
          :ok <- RouteValidator.validate_snapshot(snapshot, [workflow.id]) do
-      {steps, transitions} = owner_graph(snapshot, workflow.id)
+      {steps, transitions} = owner_graph(snapshot, workflow)
       {:ok, workflow, steps, transitions}
     end
   end
@@ -91,10 +90,11 @@ defmodule Sacrum.Orchestrator.WorkflowGraph do
     end
   end
 
-  defp owner_graph(snapshot, owner_id) do
+  defp owner_graph(snapshot, %Workflow{} = workflow) do
     steps =
       snapshot.steps
-      |> Enum.filter(fn {_id, step} -> step.workflow_id == owner_id end)
+      |> Enum.filter(fn {_id, step} -> step.workflow_id == workflow.id end)
+      |> Enum.map(fn {id, step} -> {id, %{step | workflow: workflow}} end)
       |> Map.new()
 
     transitions =

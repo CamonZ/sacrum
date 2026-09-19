@@ -31,6 +31,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     Retry,
     Scheduler,
     TaskCompletion,
+    TaskRunPlacement,
     WorkflowGraph
   }
 
@@ -39,7 +40,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   alias Sacrum.Orchestrator.Routing.{HumanInput, RouteRecovery, RouteStep, WaitChildren}
   alias Sacrum.Orchestrator.TaskRuns.{Failure, Lookup, Root}
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.{StepExecution, Task}
+  alias Sacrum.Repo.Schemas.{Daemon, StepExecution, Task, TaskRun}
   alias Sacrum.Repo.TaskHierarchy
   alias Sacrum.Repo.TaskWorkflows
   alias Sacrum.Routing.RouteMode
@@ -90,13 +91,23 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
 
       task ->
         with {:ok, task_run_id} <- ensure_task_run_id(task, task_run_id),
-             {:ok, concurrency_scope} <- task_run_concurrency_scope(task_run_id) do
+             {:ok, task_run} <- Lookup.fetch(task_run_id),
+             {:ok, concurrency_scope} <- TaskRuns.get_concurrency_scope(task_run) do
+          daemon_id = TaskRunPlacement.daemon_id(task, concurrency_scope)
+          daemon_max_concurrency = daemon_max_concurrency(daemon_id)
+          current_execution = active_execution(task_run)
+
           data = %FSMData{
             user_id: user_id,
             task: task,
+            task_run: task_run,
             task_run_id: task_run_id,
             concurrency_scope: concurrency_scope,
-            project_id: task.project_id
+            daemon_id: daemon_id,
+            daemon_max_concurrency: daemon_max_concurrency,
+            project_id: task.project_id,
+            current_execution: current_execution,
+            current_execution_id: current_execution && current_execution.id
           }
 
           Logger.info(
@@ -144,6 +155,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
           state: state,
           current_execution_id: data.current_execution_id
         })
+
+        release_task_group(data)
     end
 
     if data.slot_id, do: ExecutionPool.release_slot(data.slot_id)
@@ -200,6 +213,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   def handle_event(:enter, prev_state, :completed, data) do
     task_id = data.task.id
     Logger.info("[TaskOrchestrator:#{task_id}] enter #{prev_state} -> :completed, stopping")
+    release_task_group(data)
     Scheduler.notify_task_completed(task_id, %{status: "completed"})
     {:stop, :normal, data}
   end
@@ -207,6 +221,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   def handle_event(:enter, prev_state, :failed, data) do
     Logger.error("[TaskOrchestrator:#{data.task.id}] enter #{prev_state} -> :failed, stopping")
     if data.slot_id, do: ExecutionPool.release_slot(data.slot_id)
+    release_task_group(data)
     mark_run_failed_if_active(data, :orchestrator_failed, %{previous_state: prev_state})
     {:stop, :normal, data}
   end
@@ -590,7 +605,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
 
   @spec complete_finish_step(FSMData.t()) :: fsm_transition()
   defp complete_finish_step(data) do
-    if data.slot_id, do: ExecutionPool.release_slot(data.slot_id)
+    ExecutionPool.release_slot(data.slot_id)
 
     data = %{data | slot_id: nil}
 
@@ -613,6 +628,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
        do: :keep_state_and_data
 
   defp handle_execution_status_changed(execution_id, "completed", data) do
+    data = update_current_execution(data, "completed")
     {:ok, step} = WorkflowGraph.get_current_step(data)
 
     Logger.info(
@@ -623,10 +639,29 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   end
 
   defp handle_execution_status_changed(execution_id, "failed", data) do
-    Retry.handle_execution_failure(execution_id, data)
+    data
+    |> update_current_execution("failed")
+    |> then(&Retry.handle_execution_failure(execution_id, &1))
   end
 
-  defp handle_execution_status_changed(_execution_id, _status, _data), do: :keep_state_and_data
+  defp handle_execution_status_changed(_execution_id, status, data)
+       when status in ["cancelled", "stopped"] do
+    ExecutionPool.release_slot(data.slot_id)
+    {:next_state, :failed, data |> update_current_execution(status) |> Map.put(:slot_id, nil)}
+  end
+
+  defp handle_execution_status_changed(_execution_id, status, data) do
+    {:keep_state, update_current_execution(data, status)}
+  end
+
+  defp update_current_execution(
+         %{current_execution: %StepExecution{} = execution} = data,
+         status
+       ) do
+    %{data | current_execution: %{execution | status: status}}
+  end
+
+  defp update_current_execution(data, _status), do: data
 
   @spec reload_task(binary()) :: {:ok, Task.t()} | {:error, :task_not_found}
   defp reload_task(task_id) do
@@ -641,11 +676,12 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     task_id = data.task.id
 
     case ExecutionDispatcher.create_and_dispatch(
-           data.user_id,
            task,
-           current_step.id,
-           data.task_run_id,
-           data.pending_handoff
+           current_step,
+           data.task_run,
+           data.pending_handoff,
+           reuse_active: true,
+           active_execution: data.current_execution
          ) do
       {:ok, execution} ->
         :ok = ExecutionEvents.subscribe(execution.id)
@@ -654,24 +690,42 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
           "[TaskOrchestrator:#{task_id}] Dispatched execution #{execution.id} step=#{current_step.name}"
         )
 
-        {:keep_state, %{data | current_execution_id: execution.id, pending_handoff: nil}}
+        {:keep_state,
+         %{
+           data
+           | current_execution: execution,
+             current_execution_id: execution.id,
+             pending_handoff: nil
+         }}
 
       {:error, reason} ->
         Logger.error(
           "[TaskOrchestrator:#{task_id}] Failed to dispatch execution: #{inspect(reason)}"
         )
 
-        {:keep_state, data, [{:state_timeout, 0, :fail}]}
+        ExecutionPool.release_slot(data.slot_id)
+        {:keep_state, %{data | slot_id: nil}, [{:state_timeout, 0, :fail}]}
     end
   end
 
   @spec request_execution_slot(binary(), FSMData.t()) ::
           {:next_state, :executing | :failed, FSMData.t()}
   defp request_execution_slot(task_id, data) do
-    case ExecutionPool.request_slot(self(), :infinity, execution_slot_options(data)) do
+    attempt_id = next_attempt_id(data)
+
+    opts =
+      execution_slot_options(data) ++
+        [
+          daemon_id: data.daemon_id,
+          daemon_max_concurrency: data.daemon_max_concurrency,
+          attempt_id: attempt_id,
+          execution_id: data.current_execution_id
+        ]
+
+    case ExecutionPool.request_slot(self(), :infinity, opts) do
       {:ok, slot_id} ->
         Logger.info(
-          "[TaskOrchestrator:#{task_id}] Got pool slot #{slot_id} scope=#{inspect(data.concurrency_scope)}"
+          "[TaskOrchestrator:#{task_id}] Got admission slot #{slot_id} daemon=#{inspect(data.daemon_id)} scope=#{inspect(data.concurrency_scope)}"
         )
 
         {:next_state, :executing, %{data | slot_id: slot_id}}
@@ -767,7 +821,13 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
         {:stop, :normal, data}
 
       :fresh ->
-        request_execution_slot(task_id, data)
+        case WorkflowGraph.get_current_step(data) do
+          {:ok, %{step_type: type}} when type in [:human_input, :wait_children] ->
+            {:next_state, :executing, data}
+
+          _ ->
+            request_execution_slot(task_id, data)
+        end
     end
   end
 
@@ -790,21 +850,50 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     end
   end
 
-  @spec task_run_concurrency_scope(binary()) ::
-          {:ok, %{id: binary(), max_concurrency: pos_integer() | nil}} | {:error, term()}
-  defp task_run_concurrency_scope(task_run_id) do
-    with {:ok, task_run} <- Lookup.fetch(task_run_id) do
-      TaskRuns.get_concurrency_scope(task_run)
-    end
-  end
-
   @spec execution_slot_options(FSMData.t()) :: keyword()
   defp execution_slot_options(%{concurrency_scope: %{id: id, max_concurrency: limit}})
        when is_integer(limit) and limit > 0 do
-    [root_task_run_id: id, max_concurrency: limit]
+    [task_group_id: id, root_task_run_id: id, max_concurrency: limit]
   end
 
-  defp execution_slot_options(_data), do: []
+  defp execution_slot_options(%{concurrency_scope: %{id: id}}), do: [task_group_id: id]
+
+  defp next_attempt_id(%{current_execution_id: execution_id}) when is_binary(execution_id) do
+    case Repo.get(StepExecution, execution_id) do
+      %StepExecution{status: status} when status in ["queued", "started", "in_progress"] ->
+        execution_id
+
+      _ ->
+        Ecto.UUID.generate()
+    end
+  end
+
+  defp next_attempt_id(_data), do: Ecto.UUID.generate()
+
+  defp daemon_max_concurrency(nil), do: nil
+
+  defp daemon_max_concurrency(daemon_id) do
+    case Repo.get(Daemon, daemon_id) do
+      %Daemon{max_concurrency: max_concurrency} -> max_concurrency
+      _ -> nil
+    end
+  end
+
+  defp active_execution(%TaskRun{latest_step_execution_id: execution_id})
+       when is_binary(execution_id) do
+    case Repo.get(StepExecution, execution_id) do
+      %StepExecution{status: status} = execution
+      when status in ["queued", "started", "in_progress"] ->
+        execution
+
+      _ ->
+        nil
+    end
+  end
+
+  defp active_execution(_task_run) do
+    nil
+  end
 
   @spec human_input_latest_execution_status(FSMData.t()) :: String.t() | nil
   defp human_input_latest_execution_status(data) do
@@ -828,4 +917,9 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
       )
     )
   end
+
+  defp release_task_group(%{task_run_id: task_run_id, concurrency_scope: %{id: task_run_id}}),
+    do: ExecutionPool.release_task_group(task_run_id)
+
+  defp release_task_group(_data), do: :ok
 end

@@ -11,9 +11,7 @@ config :sacrum,
   ecto_repos: [Sacrum.Repo],
   generators: [timestamp_type: :utc_datetime, binary_id: true],
   # Daemon configuration
-  daemon_presence_required: false,
-  # Orchestrator configuration
-  max_concurrent_executions: 5
+  daemon_presence_required: false
 
 config :sacrum, :cdc,
   start_consumer: true,

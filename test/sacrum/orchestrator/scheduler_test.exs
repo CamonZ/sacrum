@@ -112,20 +112,20 @@ defmodule Sacrum.Orchestrator.SchedulerTest do
       task = create_task(user, project)
       task = assign_workflow_to_task(user, task, workflow)
 
-      available_slots = ExecutionPool.pool_status().available_slots
+      daemon_id = Sacrum.Repo.Schemas.Task.workspace_daemon(task)
+      daemon = Repo.get!(Sacrum.Repo.Schemas.Daemon, daemon_id)
+      {:ok, _daemon} = Repo.Daemons.update_max_concurrency(daemon, 1)
+      Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), Process.whereis(ExecutionPool))
 
-      held_slots =
-        if available_slots > 0 do
-          for _ <- 1..available_slots do
-            {:ok, slot_id} = ExecutionPool.request_slot(self(), 1_000)
-            slot_id
-          end
-        else
-          []
-        end
+      {:ok, held_slot} =
+        ExecutionPool.request_slot(self(), 1_000,
+          daemon_id: daemon_id,
+          daemon_max_concurrency: 1,
+          attempt_id: Ecto.UUID.generate()
+        )
 
       on_exit(fn ->
-        Enum.each(held_slots, &ExecutionPool.release_slot/1)
+        ExecutionPool.release_slot(held_slot)
         Sacrum.Orchestrator.stop(task.id)
       end)
 

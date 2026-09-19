@@ -18,7 +18,7 @@ defmodule Sacrum.Orchestrator.Supervisor do
   @impl true
   def init(_opts) do
     children = [
-      {Sacrum.Orchestrator.ExecutionPool, []},
+      Sacrum.Orchestrator.ExecutionPool,
       Sacrum.Orchestrator.AsyncStepExecutionRegistry,
       {Sacrum.Orchestrator.AsyncStepExecutionSupervisor, []},
       {Sacrum.Orchestrator.Scheduler, []},
