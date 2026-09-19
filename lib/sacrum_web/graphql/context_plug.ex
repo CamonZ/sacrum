@@ -1,6 +1,6 @@
 defmodule SacrumWeb.Graphql.ContextPlug do
   @moduledoc """
-  Plug to extract current user and API token from connection assigns
+  Plug to extract the authenticated user and API token from connection assigns
   and place them in the Absinthe context.
   """
 

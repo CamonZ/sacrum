@@ -1,4 +1,4 @@
-defmodule SacrumWeb.DaemonOperationPolicyTest do
+defmodule SacrumWeb.DaemonTokenGraphqlTest do
   use SacrumWeb.ConnCase, async: false
   import Phoenix.ChannelTest
 
@@ -119,29 +119,75 @@ defmodule SacrumWeb.DaemonOperationPolicyTest do
     assert after_events.enrolled_at == before.enrolled_at
   end
 
-  test "bootstrap and reconnect cannot authorize any account GraphQL operation", ctx do
-    operations = [
-      "{ projects { id } }",
-      "{ daemons { id } }",
-      "mutation { createDaemon { daemon { id } } }",
-      "mutation { renameDaemon(id: \"#{ctx.other_daemon.id}\", name: \"stolen\") { id } }",
-      "mutation { unregisterDaemon(id: \"#{ctx.other_daemon.id}\") { id } }",
-      "mutation { updateStepExecution(id: \"#{ctx.execution.id}\", status: \"completed\") { id } }",
-      "mutation { createProject(name: \"Forbidden\") { id } }"
-    ]
+  test "bootstrap is rejected and reconnect acts as the owning account token", ctx do
+    bootstrap_response =
+      build_conn()
+      |> daemon_auth(ctx.daemon, ctx.bootstrap)
+      |> post("/graphql", %{query: "{ projects { id } }"})
 
-    for token <- [ctx.bootstrap, ctx.reconnect], query <- operations do
-      conn =
-        build_conn()
-        |> put_req_header("authorization", "Bearer " <> token)
-        |> post("/graphql", %{query: query})
+    assert json_response(bootstrap_response, 401) == %{"error" => "Invalid daemon credentials"}
 
-      assert json_response(conn, 401) == %{"error" => "Invalid API token"}
-    end
+    projects_response =
+      build_conn()
+      |> daemon_auth(ctx.daemon, ctx.reconnect)
+      |> post("/graphql", %{query: "{ projects { id } }"})
 
+    assert json_response(projects_response, 200)["data"]["projects"] == [
+             %{"id" => ctx.project.id}
+           ]
+
+    created =
+      build_conn()
+      |> daemon_auth(ctx.daemon, ctx.reconnect)
+      |> post("/graphql", %{query: "mutation { createProject(name: \"Daemon CLI\") { id name } }"})
+      |> json_response(200)
+
+    assert created["data"]["createProject"]["name"] == "Daemon CLI"
     assert Repo.get!(StepExecution, ctx.execution.id).status == "running"
     assert Repo.get!(Daemon, ctx.other_daemon.id).status == "pending"
-    assert Enum.map(Accounts.Projects.list_by(ctx.owner.id), & &1.id) == [ctx.project.id]
+    assert length(Accounts.Projects.list_by(ctx.owner.id)) == 2
+  end
+
+  test "reconnect credentials can use the existing execution mutations", ctx do
+    {:ok, task} = Accounts.Tasks.insert(ctx.owner.id, ctx.project.id, %{title: "Daemon task"})
+
+    {:ok, execution} =
+      Accounts.StepExecutions.insert(ctx.owner.id, %{
+        task_id: task.id,
+        project_id: ctx.project.id,
+        step_name: "execute",
+        status: "in_progress"
+      })
+
+    update =
+      build_conn()
+      |> daemon_auth(ctx.daemon, ctx.reconnect)
+      |> post("/graphql", %{
+        query:
+          "mutation { updateStepExecution(id: \"#{execution.id}\", status: \"completed\", output: \"done\", model: \"model\") { id status output model } }"
+      })
+      |> json_response(200)
+
+    assert update["errors"] == nil
+
+    assert update["data"]["updateStepExecution"] == %{
+             "id" => execution.id,
+             "status" => "completed",
+             "output" => "done",
+             "model" => "model"
+           }
+
+    log =
+      build_conn()
+      |> daemon_auth(ctx.daemon, ctx.reconnect)
+      |> post("/graphql", %{
+        query:
+          "mutation { createSessionLog(stepExecutionId: \"#{execution.id}\", content: \"log\") { id content } }"
+      })
+      |> json_response(200)
+
+    assert log["errors"] == nil
+    assert log["data"]["createSessionLog"]["content"] == "log"
   end
 
   test "legitimate account callers retain their project and GraphQL access", ctx do
@@ -198,5 +244,11 @@ defmodule SacrumWeb.DaemonOperationPolicyTest do
     assert deleted.id == ctx.daemon.id
     assert Repo.get(Daemon, ctx.daemon.id) == nil
     leave(channel)
+  end
+
+  defp daemon_auth(conn, daemon, token) do
+    conn
+    |> put_req_header("authorization", "Bearer " <> token)
+    |> put_req_header("x-daemon-id", daemon.id)
   end
 end

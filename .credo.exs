@@ -20,6 +20,8 @@
       color: true,
       checks: [
         {Credo.Check.Warning.UnsafeToAtom, []},
+        # Credo 1.7.17 crashes on Elixir 1.20's atom-sigil token shape.
+        {Credo.Check.Consistency.SpaceAroundOperators, false},
         {Credo.Check.Readability.ModuleDoc, false},
         {Credo.Check.Design.TagTODO, false},
         {Credo.Check.Design.TagFIXME, false},
