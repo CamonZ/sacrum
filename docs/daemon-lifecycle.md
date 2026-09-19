@@ -81,8 +81,9 @@ request and release slots; it is not a durable step-attempt ledger.
 
 ## Owner management surface (GraphQL)
 
-All management operations require an authenticated account token; bootstrap
-and reconnect credentials authorize nothing on this surface.
+All management operations require an authenticated account token or a valid
+daemon reconnect credential. Bootstrap credentials authorize nothing on this
+surface.
 
 | Operation | Contract |
 |-----------|----------|
@@ -149,12 +150,15 @@ never projected.
   authenticated `daemon:<daemon_id>` topic.
 - Commands are not replayed on reconnect. `StepExecution` remains the durable
   execution and reporting record, but it is not a command queue.
-- Execution reports still use the existing account-authenticated API. Receiving
-  execution reports with standalone daemon credentials is a separate follow-up;
-  the daemon channel currently accepts telemetry, not execution results.
+- Execution reports use the existing GraphQL mutations already consumed by the
+  daemon. A standalone daemon sends its reconnect credential as
+  `Authorization: Bearer <reconnect_token>` together with
+  `X-Daemon-ID: <daemon_id>` on `/graphql` requests. Sacrum resolves the
+  credential to its owning account and uses the normal account GraphQL context,
+  so the same token can be used by the daemon's CLI while it works.
 - The existing task API still locks workspace changes during an active run.
   Updating a worktree path from an executing daemon is also separate follow-up work.
 - The server advertises no endpoints. Daemon base URLs and socket endpoints
   come from client configuration and remain authoritative.
-- Standalone credentials never expand into account, project or management
-  access.
+- A reconnect credential has the same GraphQL account access as its owning
+  account. Bootstrap credentials remain exchange-only.

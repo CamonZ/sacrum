@@ -457,6 +457,14 @@ emit `session_log_updated` with the same `id`, original `inserted_at`, latest
 should key log rows by `id` and treat `logical_key` as opaque backend/daemon
 metadata.
 
+Standalone daemon reporting uses the same GraphQL mutations and response
+shapes as account-authenticated clients. The request must include the daemon's
+reconnect credential as `Authorization: Bearer <reconnect_token>` and its
+stable identity as `X-Daemon-ID: <daemon_id>`. The server resolves that
+credential to the owning account and uses the normal account GraphQL context,
+so the same token can be used by the daemon's CLI during execution. Bootstrap
+credentials remain exchange-only.
+
 `task_run_created` and `task_run_updated` payloads include:
 
 ```ts
