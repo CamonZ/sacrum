@@ -104,6 +104,80 @@ defmodule Sacrum.Accounts.TasksTest do
     end
   end
 
+  describe "parent scope enforcement" do
+    test "rejects a parent from another project on insert" do
+      user = create_user()
+      project = create_project(user)
+      {:ok, other_project} = Projects.insert(user.id, %{name: "Other Project"})
+      {:ok, parent} = Tasks.insert(user.id, project.id, %{title: "Parent"})
+
+      assert {:error, changeset} =
+               Tasks.insert(user.id, other_project.id, %{
+                 title: "Child",
+                 parent_id: parent.id
+               })
+
+      assert %{parent_id: ["parent task must belong to the same project and user"]} =
+               errors_on(changeset)
+    end
+
+    test "rejects a parent from another user on insert" do
+      user = create_user()
+      project = create_project(user)
+
+      other_user =
+        create_user(%{
+          email: "other@example.com",
+          username: "other",
+          password: "password123"
+        })
+
+      other_project = create_project(other_user)
+      {:ok, parent} = Tasks.insert(user.id, project.id, %{title: "Parent"})
+
+      assert {:error, changeset} =
+               Tasks.insert(other_user.id, other_project.id, %{
+                 title: "Child",
+                 parent_id: parent.id
+               })
+
+      assert %{parent_id: ["parent task must belong to the same project and user"]} =
+               errors_on(changeset)
+    end
+
+    test "rejects a nonexistent parent on insert" do
+      user = create_user()
+      project = create_project(user)
+
+      assert {:error, changeset} =
+               Tasks.insert(user.id, project.id, %{
+                 title: "Child",
+                 parent_id: Ecto.UUID.generate()
+               })
+
+      assert %{parent_id: ["parent task must belong to the same project and user"]} =
+               errors_on(changeset)
+    end
+
+    test "rejects a cross-project parent on update without partial changes" do
+      user = create_user()
+      project = create_project(user)
+      {:ok, other_project} = Projects.insert(user.id, %{name: "Other Project"})
+      {:ok, parent} = Tasks.insert(user.id, project.id, %{title: "Parent"})
+      {:ok, child} = Tasks.insert(user.id, other_project.id, %{title: "Child"})
+
+      assert {:error, changeset} =
+               Tasks.update(child, %{title: "Changed", parent_id: parent.id})
+
+      assert %{parent_id: ["parent task must belong to the same project and user"]} =
+               errors_on(changeset)
+
+      {:ok, reloaded} = Tasks.find(user.id, child.id)
+      assert reloaded.title == "Child"
+      assert reloaded.parent_id == nil
+    end
+  end
+
   describe "find/2" do
     test "returns task only if scoped to user" do
       user1 = create_user()

@@ -12,6 +12,8 @@ defmodule Sacrum.Repo.Schemas.Task do
 
   @valid_levels ["epic", "ticket", "task"]
   @valid_priorities ["low", "medium", "high", "critical"]
+  @parent_scope_constraint "tasks_parent_scope_fkey"
+  @parent_scope_error "parent task must belong to the same project and user"
 
   @create_fields [
     :title,
@@ -104,7 +106,10 @@ defmodule Sacrum.Repo.Schemas.Task do
       end
     )
     |> foreign_key_constraint(:project_id)
-    |> foreign_key_constraint(:parent_id)
+    |> foreign_key_constraint(:parent_id,
+      name: @parent_scope_constraint,
+      message: @parent_scope_error
+    )
     |> foreign_key_constraint(:workflow_id)
     |> foreign_key_constraint(:current_step_id)
     |> foreign_key_constraint(:workspace_daemon_id, name: "tasks_workspace_daemon_id_fkey")
@@ -131,7 +136,10 @@ defmodule Sacrum.Repo.Schemas.Task do
       end
     )
     |> foreign_key_constraint(:workspace_daemon_id, name: "tasks_workspace_daemon_id_fkey")
-    |> foreign_key_constraint(:parent_id)
+    |> foreign_key_constraint(:parent_id,
+      name: @parent_scope_constraint,
+      message: @parent_scope_error
+    )
   end
 
   @spec assign_workflow_changeset(t(), Ecto.UUID.t() | nil, Ecto.UUID.t() | nil) ::

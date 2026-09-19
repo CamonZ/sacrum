@@ -201,15 +201,6 @@ defmodule Sacrum.Repo.ErrorHandlingTest do
       assert {:error, :not_found} = TaskDependencies.remove_dependency(task1, task2)
     end
 
-    test "TaskHierarchy.remove_parent/1 returns :not_found when no parent exists" do
-      {:ok, user} = Users.insert(@valid_user_attrs)
-      {:ok, project} = Projects.insert(user, %{name: "Test Project"})
-      {:ok, task} = Tasks.insert(project, %{title: "Task"})
-
-      # Task has no parent
-      assert {:error, :not_found} = TaskHierarchy.remove_parent(task)
-    end
-
     test "TaskHierarchy.get_parent/1 returns :not_found when no parent exists" do
       {:ok, user} = Users.insert(@valid_user_attrs)
       {:ok, project} = Projects.insert(user, %{name: "Test Project"})

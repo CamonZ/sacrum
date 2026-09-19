@@ -20,7 +20,6 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
     SessionLogs,
     StepTransitions,
     TaskDependencies,
-    TaskHierarchy,
     TaskRuns,
     TaskSections,
     Tasks,
@@ -724,7 +723,7 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
 
       :ok = subscribe_project(project.id)
 
-      {:ok, _parented_child} = TaskHierarchy.set_parent(child, parent)
+      {:ok, _parented_child} = Accounts.Tasks.update(child, %{parent_id: parent.id})
 
       assert_project_broadcast(
         "task_parent_changed",
