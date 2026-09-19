@@ -51,9 +51,17 @@ defmodule Sacrum.Repo.TaskSections do
     |> Repo.update()
   end
 
-  @spec upsert(Task.t(), map()) :: {:ok, TaskSection.t()} | {:error, Ecto.Changeset.t()}
+  @spec upsert(Task.t(), map()) ::
+          {:ok, TaskSection.t()} | {:error, :not_found} | {:error, Ecto.Changeset.t()}
   def upsert(%Task{} = task, attrs) do
-    section_type = Map.get(attrs, :section_type, Map.get(attrs, "section_type"))
+    case section_id(attrs) do
+      nil -> upsert_by_type(task, attrs)
+      section_id -> update_by_id(task, section_id, attrs)
+    end
+  end
+
+  defp upsert_by_type(task, attrs) do
+    section_type = Map.get(attrs, :section_type)
 
     if single_instance_section_type?(section_type) do
       upsert_single_instance(task, attrs, section_type)
@@ -61,6 +69,20 @@ defmodule Sacrum.Repo.TaskSections do
       insert(task, attrs)
     end
   end
+
+  defp update_by_id(task, section_id, attrs) do
+    case Repo.get_by(TaskSection,
+           id: section_id,
+           task_id: task.id,
+           project_id: task.project_id,
+           user_id: task.user_id
+         ) do
+      nil -> {:error, :not_found}
+      section -> __MODULE__.update(section, Map.delete(attrs, :id))
+    end
+  end
+
+  defp section_id(attrs), do: Map.get(attrs, :id)
 
   @spec delete(TaskSection.t()) :: {:ok, TaskSection.t()} | {:error, Ecto.Changeset.t()}
   def delete(%TaskSection{} = section) do

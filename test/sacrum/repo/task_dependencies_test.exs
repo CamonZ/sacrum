@@ -3,6 +3,7 @@ defmodule Sacrum.Repo.TaskDependenciesTest do
 
   alias Sacrum.Repo.Users
   alias Sacrum.Repo.Projects
+  alias Sacrum.Repo.Schemas.TaskDependency
   alias Sacrum.Repo.Tasks
   alias Sacrum.Repo.TaskDependencies
 
@@ -13,9 +14,19 @@ defmodule Sacrum.Repo.TaskDependenciesTest do
   }
 
   defp setup_project do
-    {:ok, user} = Users.insert(@valid_user_attrs)
+    {:ok, user} = Users.insert(unique_user_attrs())
     {:ok, project} = Projects.insert(user, %{name: "Test Project"})
     project
+  end
+
+  defp unique_user_attrs do
+    unique = System.unique_integer([:positive])
+
+    %{
+      @valid_user_attrs
+      | email: "test-#{unique}@example.com",
+        username: "testuser#{unique}"
+    }
   end
 
   defp create_task(project, title) do
@@ -70,6 +81,110 @@ defmodule Sacrum.Repo.TaskDependenciesTest do
     end
   end
 
+  describe "task scope constraints" do
+    test "maps missing task endpoint failures to task_id" do
+      task = setup_project() |> create_task("Task")
+
+      assert {:error, changeset} =
+               insert_dependency(%{
+                 task_id: Ecto.UUID.generate(),
+                 depends_on_id: task.id,
+                 project_id: task.project_id,
+                 user_id: task.user_id
+               })
+
+      assert %{task_id: ["task must belong to the same project and user"]} =
+               errors_on(changeset)
+    end
+
+    test "maps a cross-project task endpoint failure to task_id" do
+      project = setup_project()
+      {:ok, other_project} = Projects.insert(project.user_id, %{name: "Other Project"})
+      task = create_task(project, "Task")
+      other_task = create_task(other_project, "Other Task")
+
+      assert {:error, changeset} =
+               insert_dependency(%{
+                 task_id: other_task.id,
+                 depends_on_id: task.id,
+                 project_id: project.id,
+                 user_id: project.user_id
+               })
+
+      assert %{task_id: ["task must belong to the same project and user"]} =
+               errors_on(changeset)
+    end
+
+    test "maps a cross-user task endpoint failure to task_id" do
+      project = setup_project()
+      other_project = setup_project()
+      task = create_task(project, "Task")
+      other_task = create_task(other_project, "Other Task")
+
+      assert {:error, changeset} =
+               insert_dependency(%{
+                 task_id: other_task.id,
+                 depends_on_id: task.id,
+                 project_id: project.id,
+                 user_id: project.user_id
+               })
+
+      assert %{task_id: ["task must belong to the same project and user"]} =
+               errors_on(changeset)
+    end
+
+    test "maps a missing depends_on endpoint to depends_on_id" do
+      task = setup_project() |> create_task("Task")
+
+      assert {:error, changeset} =
+               insert_dependency(%{
+                 task_id: task.id,
+                 depends_on_id: Ecto.UUID.generate(),
+                 project_id: task.project_id,
+                 user_id: task.user_id
+               })
+
+      assert %{depends_on_id: ["dependency task must belong to the same project and user"]} =
+               errors_on(changeset)
+    end
+
+    test "maps a cross-project depends_on endpoint failure to depends_on_id" do
+      project = setup_project()
+      {:ok, other_project} = Projects.insert(project.user_id, %{name: "Other Project"})
+      task = create_task(project, "Task")
+      other_task = create_task(other_project, "Other Task")
+
+      assert {:error, changeset} =
+               insert_dependency(%{
+                 task_id: task.id,
+                 depends_on_id: other_task.id,
+                 project_id: project.id,
+                 user_id: project.user_id
+               })
+
+      assert %{depends_on_id: ["dependency task must belong to the same project and user"]} =
+               errors_on(changeset)
+    end
+
+    test "maps a cross-user depends_on endpoint failure to depends_on_id" do
+      project = setup_project()
+      other_project = setup_project()
+      task = create_task(project, "Task")
+      other_task = create_task(other_project, "Other Task")
+
+      assert {:error, changeset} =
+               insert_dependency(%{
+                 task_id: task.id,
+                 depends_on_id: other_task.id,
+                 project_id: project.id,
+                 user_id: project.user_id
+               })
+
+      assert %{depends_on_id: ["dependency task must belong to the same project and user"]} =
+               errors_on(changeset)
+    end
+  end
+
   describe "get_blockers/1" do
     test "returns transitive blockers" do
       project = setup_project()
@@ -99,5 +214,12 @@ defmodule Sacrum.Repo.TaskDependenciesTest do
 
       assert TaskDependencies.get_direct_blockers(task_a) == []
     end
+  end
+
+  defp insert_dependency(attrs) do
+    %TaskDependency{}
+    |> TaskDependency.changeset()
+    |> Ecto.Changeset.change(attrs)
+    |> Sacrum.Repo.insert()
   end
 end

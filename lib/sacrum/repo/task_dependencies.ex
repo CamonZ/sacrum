@@ -54,7 +54,12 @@ defmodule Sacrum.Repo.TaskDependencies do
   @spec remove_dependency(Task.t(), Task.t()) ::
           {:ok, TaskDependency.t()} | {:error, :not_found} | {:error, Ecto.Changeset.t()}
   def remove_dependency(%Task{} = task, %Task{} = depends_on) do
-    case Repo.get_by(TaskDependency, task_id: task.id, depends_on_id: depends_on.id) do
+    case Repo.get_by(TaskDependency,
+           task_id: task.id,
+           depends_on_id: depends_on.id,
+           project_id: task.project_id,
+           user_id: task.user_id
+         ) do
       nil -> {:error, :not_found}
       dep -> Repo.delete(dep)
     end

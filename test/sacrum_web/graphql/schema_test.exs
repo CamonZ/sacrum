@@ -1858,6 +1858,50 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert found_task.title == "Original"
     end
 
+    test "rejects section updates from another task", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Original"})
+      {:ok, other_task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Other"})
+
+      {:ok, foreign_section} =
+        Accounts.Sections.insert(user.id, %{
+          task_id: other_task.id,
+          project_id: project.id,
+          section_type: "context",
+          content: "Original context"
+        })
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            updateTask(
+              id: "#{task.id}"
+              title: "Should rollback"
+              sections: [{id: "#{foreign_section.id}", content: "Should not update"}]
+            ) {
+              id title
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["updateTask"] == nil
+      assert result["errors"] != nil
+
+      {:ok, found_task} = Accounts.Tasks.find(user.id, task.id)
+
+      {:ok, found_section} =
+        Accounts.Sections.get_by(user.id, conditions: [id: foreign_section.id])
+
+      assert found_task.title == "Original"
+      assert found_section.content == "Original context"
+    end
+
     test "deletes a task", %{conn: conn, user: user, project: project} do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "To Delete"})
 

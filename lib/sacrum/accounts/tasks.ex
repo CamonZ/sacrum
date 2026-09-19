@@ -21,6 +21,11 @@ defmodule Sacrum.Accounts.Tasks do
   alias Sacrum.Repo.TaskSections
   alias Sacrum.Tasks.Placement
 
+  @dependency_scope_constraints [
+    "task_dependencies_task_scope_fkey",
+    "task_dependencies_depends_on_scope_fkey"
+  ]
+
   @doc """
   Find a task by UUID within a user's scope.
   """
@@ -98,7 +103,7 @@ defmodule Sacrum.Accounts.Tasks do
   def update(%Task{} = task, attrs) do
     task = Repo.preload(task, :sections)
 
-    case validate_section_ownership(task, attrs) do
+    case validate_section_changes(task, attrs) do
       :ok -> run_task_update_transaction(task, attrs)
       error -> error
     end
@@ -281,14 +286,17 @@ defmodule Sacrum.Accounts.Tasks do
     :ok
   end
 
-  defp scoped_task(task, id) do
-    Repo.get_by(Task, id: id, project_id: task.project_id, user_id: task.user_id)
-  end
-
   defp translate_dependency_error(error) do
     case error do
       :ok ->
         :ok
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        if dependency_scope_error?(changeset) do
+          {:error, "one or more dependencies not found"}
+        else
+          {:error, changeset}
+        end
 
       {:error, :different_projects} ->
         {:error, "one or more dependencies not found"}
@@ -305,6 +313,17 @@ defmodule Sacrum.Accounts.Tasks do
       error ->
         error
     end
+  end
+
+  defp dependency_scope_error?(%Ecto.Changeset{} = changeset) do
+    Enum.any?(changeset.errors, fn
+      {field, {_message, opts}} when field in [:task_id, :depends_on_id] ->
+        opts[:constraint] == :foreign and
+          to_string(opts[:constraint_name]) in @dependency_scope_constraints
+
+      _error ->
+        false
+    end)
   end
 
   defp remove_stale_dependencies(task, to_remove) do
@@ -326,10 +345,7 @@ defmodule Sacrum.Accounts.Tasks do
   end
 
   defp remove_dependency_by_id(task, id) do
-    case scoped_task(task, id) do
-      nil -> :ok
-      dep -> remove_existing_dependency(task, dep)
-    end
+    remove_existing_dependency(task, dependency_reference(task, id))
   end
 
   defp remove_existing_dependency(task, dep) do
@@ -341,10 +357,7 @@ defmodule Sacrum.Accounts.Tasks do
   end
 
   defp add_dependency_by_id(task, id) do
-    case scoped_task(task, id) do
-      nil -> {:error, :not_found}
-      dep -> add_existing_dependency(task, dep)
-    end
+    add_existing_dependency(task, dependency_reference(task, id))
   end
 
   defp add_existing_dependency(task, dep) do
@@ -354,39 +367,11 @@ defmodule Sacrum.Accounts.Tasks do
     end
   end
 
-  defp validate_section_ownership(%Task{} = task, attrs) do
-    sections = Map.get(attrs, :sections)
-    deletion_ids = Map.get(attrs, :section_deletions, [])
+  defp validate_section_changes(%Task{} = task, attrs) do
+    incoming_ids = section_ids(Map.get(attrs, :sections, []))
+    deletion_ids = Map.get(attrs, :section_deletions, []) || []
 
-    case sections do
-      nil ->
-        validate_section_ids(task, [], deletion_ids)
-
-      sections when is_list(sections) ->
-        existing_ids = Enum.map(task.sections, &to_string(&1.id))
-
-        incoming_ids =
-          sections
-          |> Enum.map(&Map.get(&1, :id))
-          |> Enum.reject(&is_nil/1)
-          |> Enum.map(&to_string/1)
-
-        foreign_ids = Enum.reject(incoming_ids, &(&1 in existing_ids))
-
-        if foreign_ids == [] do
-          validate_section_ids(task, incoming_ids, deletion_ids)
-        else
-          changeset =
-            task
-            |> Ecto.Changeset.change()
-            |> Ecto.Changeset.add_error(:sections, "contain IDs not belonging to this task")
-
-          {:error, changeset}
-        end
-
-      _ ->
-        validate_section_ids(task, [], deletion_ids)
-    end
+    validate_section_ids(task, incoming_ids, deletion_ids)
   end
 
   @spec validate_section_ids(Task.t(), [String.t()], term()) ::
@@ -418,39 +403,27 @@ defmodule Sacrum.Accounts.Tasks do
 
   defp validate_section_ids(_task, _incoming_ids, _deletion_ids), do: :ok
 
+  defp section_ids(sections) when is_list(sections) do
+    sections
+    |> Enum.map(&Map.get(&1, :id))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.map(&to_string/1)
+  end
+
+  defp section_ids(_sections), do: []
+
   defp upsert_task_sections(_task, []), do: :ok
 
   defp upsert_task_sections(task, sections) do
     Enum.reduce_while(sections, :ok, fn attrs, :ok ->
-      case upsert_task_section(task, attrs) do
+      case TaskSections.upsert(task, attrs) do
         {:ok, _section} -> {:cont, :ok}
         error -> {:halt, error}
       end
     end)
   end
 
-  defp upsert_task_section(task, attrs) do
-    case Map.get(attrs, :id) do
-      nil -> TaskSections.upsert(task, attrs)
-      id -> update_task_section(task, id, attrs)
-    end
-  end
-
-  defp update_task_section(task, section_id, attrs) do
-    with {:ok, section} <- find_task_section(task, section_id) do
-      TaskSections.update(section, Map.delete(attrs, :id))
-    end
-  end
-
-  defp find_task_section(task, section_id) do
-    section =
-      Enum.find(task.sections, fn section ->
-        to_string(section.id) == to_string(section_id)
-      end)
-
-    case section do
-      nil -> {:error, :not_found}
-      section -> {:ok, section}
-    end
+  defp dependency_reference(%Task{} = task, id) do
+    %Task{id: id, project_id: task.project_id, user_id: task.user_id}
   end
 end

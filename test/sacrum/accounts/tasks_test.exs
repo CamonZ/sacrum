@@ -2,7 +2,9 @@ defmodule Sacrum.Accounts.TasksTest do
   use Sacrum.DataCase, async: true
 
   alias Sacrum.Accounts.Tasks
+  alias Sacrum.Accounts.Sections
   alias Sacrum.Accounts.Projects
+  alias Sacrum.Repo.TaskDependencies
   alias Sacrum.Repo.Users
   alias Sacrum.Repo.Schemas.Task
 
@@ -207,6 +209,48 @@ defmodule Sacrum.Accounts.TasksTest do
       {:ok, _task} = Tasks.insert(user.id, project.id, %{title: "My Task"})
 
       assert {:error, :not_found} = Tasks.find(user.id, "xabc123")
+    end
+  end
+
+  describe "section and dependency scope" do
+    test "rejects updating a section from another task without partial changes" do
+      user = create_user()
+      project = create_project(user)
+      {:ok, task} = Tasks.insert(user.id, project.id, %{title: "Original"})
+      {:ok, other_task} = Tasks.insert(user.id, project.id, %{title: "Other"})
+
+      {:ok, foreign_section} =
+        Sections.insert(user.id, %{
+          task_id: other_task.id,
+          project_id: project.id,
+          section_type: "context",
+          content: "Original context"
+        })
+
+      assert {:error, :not_found} =
+               Tasks.update(task, %{
+                 title: "Should rollback",
+                 sections: [%{id: foreign_section.id, content: "Should not update"}]
+               })
+
+      {:ok, found_task} = Tasks.find(user.id, task.id)
+      {:ok, found_section} = Sections.get_by(user.id, conditions: [id: foreign_section.id])
+      assert found_task.title == "Original"
+      assert found_section.content == "Original context"
+    end
+
+    test "dependency synchronization rolls back when a target is missing" do
+      user = create_user()
+      project = create_project(user)
+      {:ok, task} = Tasks.insert(user.id, project.id, %{title: "Task"})
+      {:ok, blocker} = Tasks.insert(user.id, project.id, %{title: "Blocker"})
+      {:ok, _dependency} = Tasks.add_dependency(task, blocker)
+
+      assert {:error, "one or more dependencies not found"} =
+               Tasks.sync_dependencies(task, [Ecto.UUID.generate()])
+
+      assert [%{id: blocker_id}] = TaskDependencies.get_direct_blockers(task)
+      assert blocker_id == blocker.id
     end
   end
 
