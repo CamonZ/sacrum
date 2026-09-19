@@ -19,6 +19,8 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
 
   alias Ecto.Multi
 
+  alias Sacrum.Accounts.StepExecutions
+
   alias Sacrum.Orchestrator.{
     AsyncStepExecutionSupervisor,
     ExecutionHistory,
@@ -183,7 +185,19 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   defp commit_and_broadcast_dispatch(task, step, task_run, handoff, rendered) do
     case insert_and_stamp(task, step, task_run, handoff, rendered) do
       {:ok, %{execution: execution, task: task, task_run: updated_task_run}} ->
-        broadcast_dispatch(task, step, execution, rendered, updated_task_run)
+        case broadcast_dispatch(task, step, execution, rendered, updated_task_run) do
+          {:ok, _execution} = result ->
+            result
+
+          {:error, reason} ->
+            StepExecutions.update(execution, %{
+              status: "failed",
+              output: "dispatch failed: #{inspect(reason)}"
+            })
+
+            mark_dispatch_failure(updated_task_run, reason)
+            {:error, reason}
+        end
 
       {:error, _op, reason, _changes} ->
         Logger.error("[ExecutionDispatcher] create_and_dispatch failed: #{inspect(reason)}")
@@ -278,19 +292,20 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
           String.t(),
           TaskRun.t()
         ) ::
-          {:ok, StepExecution.t()}
+          {:ok, StepExecution.t()} | {:error, term()}
   defp broadcast_dispatch(task, step, execution, rendered, task_run) do
     Logger.info(
       "[ExecutionDispatcher] Dispatching execution=#{execution.id} step=#{step.name} " <>
         "task=#{task.id} task_run=#{task_run.id} prompt_length=#{String.length(rendered)}"
     )
 
-    CommandBroadcaster.broadcast_run_step(
-      %{execution: execution, step: step, task: task, rendered_prompt: rendered},
-      task.project_id
-    )
-
-    {:ok, execution}
+    with :ok <-
+           CommandBroadcaster.broadcast_run_step(
+             %{execution: execution, step: step, task: task, rendered_prompt: rendered},
+             Task.workspace_daemon(task)
+           ) do
+      {:ok, execution}
+    end
   end
 
   @spec validate_task_run(TaskRun.t(), Task.t()) :: {:ok, TaskRun.t()} | {:error, term()}

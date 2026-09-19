@@ -380,30 +380,20 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
                  conditions: [id: step_id],
                  preloads: [:workflow]
                ),
-             :ok <- ExecutionDispatcher.validate_step(step),
-             :ok <- check_daemon_presence(task) do
+             :ok <- ExecutionDispatcher.validate_step(step) do
           with {:ok, task_run} <- Root.get_or_create(task),
-               :ok <- validate_manual_step_dispatch(task_run) do
+               :ok <- validate_manual_step_dispatch(task_run),
+               {:ok, task, admission_opts} <-
+                 TaskRunPlacement.resolve_admission_options(task, task_run) do
             ExecutionDispatcher.create_and_queue(
               task,
               step,
               task_run,
-              TaskRunPlacement.admission_options(task, task_run)
+              admission_opts
             )
           end
         end
       end)
-    end
-
-    @spec check_daemon_presence(Task.t()) :: :ok | {:error, String.t()}
-    defp check_daemon_presence(%Task{project_id: project_id} = task) do
-      if Application.get_env(:sacrum, :daemon_presence_required, false) and
-           is_nil(Task.workspace_daemon(task)) and
-           not Sacrum.DaemonRegistry.daemon_connected?(project_id) do
-        {:error, "No daemon is currently connected for this project"}
-      else
-        :ok
-      end
     end
 
     defp validate_manual_step_dispatch(task_run) do
@@ -469,16 +459,18 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
               Accounts.StepExecutions.update(execution, %{status: "cancelled"})
 
             status when status in ["pending", "started", "in_progress"] ->
-              # Update the execution status to cancelling
-              with {:ok, updated_execution} <-
-                     Accounts.StepExecutions.update(execution, %{status: "cancelling"}) do
-                # After status update, broadcast the cancel_step event to the daemon
-                CommandBroadcaster.broadcast_cancel_step(
-                  updated_execution,
-                  updated_execution.project_id
-                )
-
+              with daemon_id when is_binary(daemon_id) <-
+                     TaskRunPlacement.daemon_id_for_execution(execution),
+                   {:ok, updated_execution} <-
+                     Accounts.StepExecutions.update(execution, %{status: "cancelling"}),
+                   :ok <-
+                     CommandBroadcaster.broadcast_cancel_step(
+                       updated_execution,
+                       daemon_id
+                     ) do
                 {:ok, updated_execution}
+              else
+                {:error, reason} -> {:error, inspect(reason)}
               end
 
             _ ->

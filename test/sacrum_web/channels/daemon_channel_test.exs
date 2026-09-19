@@ -4,6 +4,8 @@ defmodule SacrumWeb.DaemonChannelTest do
   import Phoenix.ChannelTest
 
   alias Sacrum.Auth
+  alias Sacrum.Accounts
+  alias Sacrum.Realtime.CommandBroadcaster
   alias Sacrum.Repo.Users
   alias SacrumWeb.UserSocket
 
@@ -219,7 +221,6 @@ defmodule SacrumWeb.DaemonChannelTest do
 
   test "reconnect survives bootstrap expiry and channel process restart" do
     {_user, daemon, token, _} = setup_daemon("restart")
-    import Ecto.Query
 
     Repo.update_all(
       from(c in Sacrum.Repo.Schemas.DaemonCredential,
@@ -242,7 +243,6 @@ defmodule SacrumWeb.DaemonChannelTest do
   test "join refuses reconnect that expired after socket authentication" do
     {_user, daemon, token, _} = setup_daemon("expiry")
     {:ok, socket} = connect(UserSocket, %{"daemon_id" => daemon.id, "reconnect_token" => token})
-    import Ecto.Query
 
     Repo.update_all(
       from(c in Sacrum.Repo.Schemas.DaemonCredential,
@@ -325,5 +325,62 @@ defmodule SacrumWeb.DaemonChannelTest do
     end
 
     assert Sacrum.DaemonConnectionRegistry.metrics(daemon.id) == nil
+  end
+
+  test "delivers a run command only to the assigned daemon" do
+    {user, daemon, token, socket} = setup_daemon("execution_delivery")
+
+    {:ok, project} = Accounts.Projects.insert(user.id, %{name: "Execution Delivery"})
+
+    {:ok, workflow} =
+      Accounts.Workflows.insert(user.id, project.id, %{name: "Execution Workflow"})
+
+    {:ok, step} =
+      Accounts.WorkflowSteps.insert(user.id, %{
+        "name" => "Execute",
+        "step_order" => 1,
+        "workflow_id" => workflow.id,
+        "project_id" => project.id,
+        "prompt" => "Run the assigned work"
+      })
+
+    {:ok, task} =
+      Accounts.Tasks.insert(user.id, project.id, %{
+        title: "Execution Task",
+        workflow_id: workflow.id,
+        workspace: %{daemon_id: daemon.id, worktree_path: "/tmp/execution"}
+      })
+
+    {:ok, task} = Sacrum.Repo.TaskWorkflows.assign_workflow(task, workflow)
+    {:ok, task_run} = Accounts.TaskRuns.insert(user.id, project.id, task.id, %{status: :queued})
+
+    {:ok, execution} =
+      Accounts.StepExecutions.insert(user.id, %{
+        task_id: task.id,
+        task_run_id: task_run.id,
+        project_id: project.id,
+        workflow_id: workflow.id,
+        step_id: step.id,
+        step_name: step.name,
+        status: "started",
+        prompt: step.prompt
+      })
+
+    {:ok, _reply, _channel} =
+      subscribe_and_join(socket, "daemon:#{daemon.id}", %{"enrollment_token" => token})
+
+    :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "daemon:#{daemon.id}")
+
+    data = %{task: task, step: step, execution: execution, rendered_prompt: step.prompt}
+    assert :ok = CommandBroadcaster.broadcast_run_step(data, daemon.id)
+
+    assert_receive %Phoenix.Socket.Broadcast{
+      topic: "daemon:" <> _,
+      event: "run_step",
+      payload: %{id: execution_id, project_id: project_id}
+    }
+
+    assert execution_id == execution.id
+    assert project_id == project.id
   end
 end

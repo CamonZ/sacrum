@@ -14,6 +14,21 @@ defmodule Sacrum.TestWorkspace do
     {:ok, task} =
       Accounts.Tasks.update(task, %{workspace: %{daemon_id: daemon.id, worktree_path: path}})
 
+    :ok = connect_daemon(Task.workspace_daemon(task), user_id)
     task
+  end
+
+  def connect_daemon(daemon_id, user_id) do
+    case Sacrum.DaemonConnectionRegistry.lookup(daemon_id) do
+      [] ->
+        Sacrum.DaemonConnectionRegistry.register(daemon_id, %{
+          user_id: user_id,
+          credential_id: Ecto.UUID.generate(),
+          metrics: nil
+        })
+
+      [{pid, %{user_id: ^user_id}}] when pid == self() ->
+        :ok
+    end
   end
 end

@@ -60,6 +60,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
     }
 
     {:ok, task} = Accounts.Tasks.insert(user.id, project.id, Map.merge(default_attrs, attrs))
+    :ok = connect_daemon(Sacrum.Repo.Schemas.Task.workspace_daemon(task), user.id)
     task
   end
 
@@ -106,8 +107,10 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
     end
   end
 
-  defp subscribe_to_project(project) do
-    Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
+  defp subscribe_to_daemon(task) do
+    daemon_id = Sacrum.Repo.Schemas.Task.workspace_daemon(task)
+    :ok = connect_daemon(daemon_id, task.user_id)
+    Phoenix.PubSub.subscribe(Sacrum.PubSub, "daemon:#{daemon_id}")
   end
 
   defp create_task_run(ctx, task) do
@@ -137,6 +140,24 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
   describe "create_and_dispatch/3 — Liquid template rendering" do
     setup [:setup_dispatch_context]
 
+    test "still dispatches when the assigned daemon disconnects", ctx do
+      step = create_step(ctx.user, ctx.workflow, %{})
+      task = create_task(ctx.user, ctx.project) |> assign_workflow(ctx.workflow)
+      task_run = create_task_run(ctx, task)
+      subscribe_to_daemon(task)
+
+      :ok =
+        Sacrum.DaemonConnectionRegistry.unregister(
+          Sacrum.Repo.Schemas.Task.workspace_daemon(task)
+        )
+
+      assert {:ok, execution} =
+               ExecutionDispatcher.create_and_dispatch(task, step, task_run)
+
+      assert execution.status == "started"
+      assert_receive %Phoenix.Socket.Broadcast{event: "run_step"}
+    end
+
     test "persists the source workflow step_type on dispatched executions", ctx do
       step =
         create_step(ctx.user, ctx.workflow, %{
@@ -148,6 +169,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       task = create_task(ctx.user, ctx.project)
       task = assign_workflow(task, ctx.workflow)
       task = PromptRenderer.preload_for_rendering(task)
+      subscribe_to_daemon(task)
 
       {:ok, exec} = create_and_dispatch(ctx, task, step)
 
@@ -231,7 +253,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       task = PromptRenderer.preload_for_rendering(task)
       _execution = create_previous_execution(ctx.user, task, step)
 
-      subscribe_to_project(ctx.project)
+      subscribe_to_daemon(task)
 
       {:ok, _exec} = create_and_dispatch(ctx, task, step)
 
@@ -279,7 +301,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
                )
 
       assert artifact_id == task_artifact.id
-      subscribe_to_project(ctx.project)
+      subscribe_to_daemon(task)
 
       {:ok, dispatched} = create_and_dispatch(ctx, task, step)
 
@@ -311,7 +333,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
         )
 
       task = PromptRenderer.preload_for_rendering(task)
-      subscribe_to_project(ctx.project)
+      subscribe_to_daemon(task)
 
       {:ok, dispatched} =
         ExecutionDispatcher.create_and_dispatch(task, step, task_run)
@@ -337,7 +359,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       task = PromptRenderer.preload_for_rendering(task)
       _execution = create_previous_execution(ctx.user, task, step)
 
-      subscribe_to_project(ctx.project)
+      subscribe_to_daemon(task)
 
       {:ok, _exec} = create_and_dispatch(ctx, task, step)
 
@@ -379,7 +401,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       task = PromptRenderer.preload_for_rendering(task)
       _execution = create_previous_execution(ctx.user, task, step)
 
-      subscribe_to_project(ctx.project)
+      subscribe_to_daemon(task)
 
       {:ok, _exec} = create_and_dispatch(ctx, task, step)
 
@@ -403,7 +425,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       task = PromptRenderer.preload_for_rendering(task)
       _execution = create_previous_execution(ctx.user, task, step)
 
-      subscribe_to_project(ctx.project)
+      subscribe_to_daemon(task)
 
       {:ok, _exec} = create_and_dispatch(ctx, task, step)
 
@@ -426,7 +448,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       task = PromptRenderer.preload_for_rendering(task)
       _execution = create_previous_execution(ctx.user, task, step)
 
-      subscribe_to_project(ctx.project)
+      subscribe_to_daemon(task)
 
       {:ok, _exec} = create_and_dispatch(ctx, task, step)
 
@@ -468,7 +490,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
       task = PromptRenderer.preload_for_rendering(task)
 
-      subscribe_to_project(ctx.project)
+      subscribe_to_daemon(task)
 
       {:ok, _exec} = create_and_dispatch_with_run(ctx, task, step, task_run)
 
@@ -494,7 +516,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
       _execution = create_previous_execution(ctx.user, task, step, task_run)
 
-      subscribe_to_project(ctx.project)
+      subscribe_to_daemon(task)
 
       {:ok, _exec} = create_and_dispatch_with_run(ctx, task, step, task_run)
 
@@ -544,7 +566,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
       task = PromptRenderer.preload_for_rendering(task)
 
-      subscribe_to_project(ctx.project)
+      subscribe_to_daemon(task)
 
       {:ok, _exec} = create_and_dispatch_with_run(ctx, task, step, task_run)
 
@@ -567,7 +589,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       task = assign_workflow(task, ctx.workflow)
       task = PromptRenderer.preload_for_rendering(task)
 
-      subscribe_to_project(ctx.project)
+      subscribe_to_daemon(task)
 
       {:ok, _exec} =
         create_and_dispatch(ctx, task, step, %{
@@ -628,7 +650,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
       task = PromptRenderer.preload_for_rendering(task)
 
-      subscribe_to_project(ctx.project)
+      subscribe_to_daemon(task)
 
       {:ok, _exec} = create_and_dispatch_with_run(ctx, task, current_step, task_run)
 
@@ -670,7 +692,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
       task = PromptRenderer.preload_for_rendering(task)
 
-      subscribe_to_project(ctx.project)
+      subscribe_to_daemon(task)
 
       {:ok, _exec} = create_and_dispatch_with_run(ctx, task, current_step, task_run)
 
@@ -722,7 +744,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
       task = PromptRenderer.preload_for_rendering(task)
 
-      subscribe_to_project(ctx.project)
+      subscribe_to_daemon(task)
 
       {:ok, _exec} = create_and_dispatch_with_run(ctx, task, current_step, task_run)
 
@@ -779,7 +801,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
       task = PromptRenderer.preload_for_rendering(task)
 
-      subscribe_to_project(ctx.project)
+      subscribe_to_daemon(task)
 
       {:ok, _exec} = create_and_dispatch_with_run(ctx, task, current_step, task_run)
 
@@ -853,7 +875,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
       task = PromptRenderer.preload_for_rendering(task)
 
-      subscribe_to_project(ctx.project)
+      subscribe_to_daemon(task)
 
       {:ok, _exec} = create_and_dispatch_with_run(ctx, task, current_step, task_run)
 
@@ -895,7 +917,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
       task = PromptRenderer.preload_for_rendering(task)
 
-      subscribe_to_project(ctx.project)
+      subscribe_to_daemon(task)
 
       {:ok, _exec} = create_and_dispatch_with_run(ctx, task, current_step, task_run)
 
@@ -1017,7 +1039,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
   defp dispatch_prompt(ctx, task, step, task_run) do
     task = PromptRenderer.preload_for_rendering(task)
-    subscribe_to_project(ctx.project)
+    subscribe_to_daemon(task)
 
     {:ok, _exec} = create_and_dispatch_with_run(ctx, task, step, task_run)
 
@@ -1038,7 +1060,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       task = PromptRenderer.preload_for_rendering(task)
       task_run = create_task_run(ctx, task)
 
-      subscribe_to_project(ctx.project)
+      subscribe_to_daemon(task)
 
       {:ok, dispatched} =
         ExecutionDispatcher.create_and_dispatch(task, step, task_run)
@@ -1078,7 +1100,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       task = create_task(ctx.user, ctx.project) |> assign_workflow(ctx.workflow)
 
       task = PromptRenderer.preload_for_rendering(task)
-      subscribe_to_project(ctx.project)
+      subscribe_to_daemon(task)
 
       {:ok, dispatched} = create_and_dispatch(ctx, task, step)
 

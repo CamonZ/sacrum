@@ -17,7 +17,8 @@ defmodule Sacrum.Orchestrator do
     AsyncStepExecutionSupervisor,
     ExecutionEvents,
     TaskFSMSupervisor,
-    TaskRegistry
+    TaskRegistry,
+    TaskRunPlacement
   }
 
   alias Sacrum.Orchestrator.TaskRuns.{Lookup, StateTransitions}
@@ -74,8 +75,8 @@ defmodule Sacrum.Orchestrator do
 
         case commit_stop(active_task_run, in_flight_execution) do
           {:ok, changes} ->
-            broadcast_cancelled_execution(changes)
             terminate_fsm_child(pid)
+            broadcast_cancelled_execution(changes)
             {:ok, changes}
 
           {:error, reason} ->
@@ -119,7 +120,8 @@ defmodule Sacrum.Orchestrator do
     end)
   end
 
-  @spec maybe_stop_task_run(active_task_run(), map()) :: {:ok, map()} | {:error, term()}
+  @spec maybe_stop_task_run(active_task_run(), map()) ::
+          {:ok, map()} | {:error, term()}
   defp maybe_stop_task_run({:ok, task_run}, changes) do
     attrs = %{stop_requested_at: task_run.stop_requested_at || DateTime.utc_now()}
 
@@ -129,7 +131,8 @@ defmodule Sacrum.Orchestrator do
     |> put_transaction_change(changes, :task_run)
   end
 
-  defp maybe_stop_task_run({:error, :not_found}, changes), do: {:ok, changes}
+  defp maybe_stop_task_run({:error, :not_found}, changes),
+    do: {:ok, changes}
 
   @spec maybe_cancel_execution(in_flight_execution(), map()) :: {:ok, map()} | {:error, term()}
   defp maybe_cancel_execution({:ok, execution}, changes) do
@@ -183,7 +186,9 @@ defmodule Sacrum.Orchestrator do
   defp broadcast_cancelled_execution(%{execution: execution}) do
     Logger.info("[Orchestrator.stop] Marked execution #{execution.id} as cancelled")
     ExecutionEvents.broadcast_status_changed(execution)
+
     AsyncStepExecutionSupervisor.cancel_execution(execution.id)
+
     broadcast_cancel_step(execution)
   end
 
@@ -193,15 +198,12 @@ defmodule Sacrum.Orchestrator do
   defp broadcast_cancel_step(execution) do
     Logger.info("[Orchestrator.stop] Broadcasting cancel_step for execution #{execution.id}")
 
-    task = Repo.get(Sacrum.Repo.Schemas.Task, execution.task_id)
+    case TaskRunPlacement.daemon_id_for_execution(execution) do
+      daemon_id when is_binary(daemon_id) ->
+        CommandBroadcaster.broadcast_cancel_step(execution, daemon_id)
 
-    if task do
-      task = Repo.preload(task, :project)
-
-      case task.project do
-        %{id: project_id} -> CommandBroadcaster.broadcast_cancel_step(execution, project_id)
-        _ -> :ok
-      end
+      error ->
+        error
     end
   end
 

@@ -169,6 +169,15 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildrenTest do
     {:ok, child} = Accounts.Tasks.insert(ctx.user.id, ctx.project.id, %{title: title})
     child = assign_workspace(child, ctx.user.id)
     {:ok, child} = Accounts.Tasks.update(child, %{parent_id: parent.id})
+
+    {:ok, child} =
+      Accounts.Tasks.update(child, %{
+        workspace: %{
+          daemon_id: Sacrum.Repo.Schemas.Task.workspace_daemon(parent),
+          worktree_path: Sacrum.Repo.Schemas.Task.workspace_worktree(child)
+        }
+      })
+
     assign_workflow(child, ctx.child_workflow)
   end
 

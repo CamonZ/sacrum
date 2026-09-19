@@ -88,6 +88,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     }
 
     {:ok, task} = Accounts.Tasks.insert(user.id, project.id, Map.merge(default_attrs, attrs))
+    :ok = connect_daemon(Sacrum.Repo.Schemas.Task.workspace_daemon(task), user.id)
     task
   end
 
@@ -398,6 +399,15 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
     child = create_task(user, project, %{title: title})
     {:ok, child} = Accounts.Tasks.update(child, %{parent_id: parent.id})
+
+    {:ok, child} =
+      Accounts.Tasks.update(child, %{
+        workspace: %{
+          daemon_id: Sacrum.Repo.Schemas.Task.workspace_daemon(parent),
+          worktree_path: Sacrum.Repo.Schemas.Task.workspace_worktree(child)
+        }
+      })
+
     assign_workflow_to_task(child, workflow)
   end
 
@@ -453,6 +463,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       ref = Process.monitor(pid)
       :ok = :gen_statem.stop(pid)
       assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 2000
+
       assert ExecutionPool.pool_status().in_use_by_scope == %{}
     end
   end
@@ -2753,8 +2764,17 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     defp create_child_task(user, project, parent_task) do
       task = create_task(user, project, %{title: "Child Task"})
 
-      Accounts.Tasks.update(task, %{parent_id: parent_task.id})
-      |> elem(1)
+      {:ok, task} = Accounts.Tasks.update(task, %{parent_id: parent_task.id})
+
+      {:ok, task} =
+        Accounts.Tasks.update(task, %{
+          workspace: %{
+            daemon_id: Sacrum.Repo.Schemas.Task.workspace_daemon(parent_task),
+            worktree_path: Sacrum.Repo.Schemas.Task.workspace_worktree(task)
+          }
+        })
+
+      task
     end
 
     defp setup_wait_children_parent do

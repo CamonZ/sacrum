@@ -143,12 +143,17 @@ Daemon status remains `pending` or `active`; hard deletion is represented by
 `daemon_deleted`. Credential plaintext, token hashes, and credential rows are
 never projected.
 
-## Intentionally unsupported
+## Execution delivery
 
-- Daemon sockets do not execute or observe project work. Execution events on
-  `daemon:*` topics reply `unsupported_operation`; the authenticated `report`
-  and `heartbeat` events are limited to fleet telemetry and are not a source of
-  project execution truth.
+- Execution commands are transient `run_step` and `cancel_step` broadcasts on the
+  authenticated `daemon:<daemon_id>` topic.
+- Commands are not replayed on reconnect. `StepExecution` remains the durable
+  execution and reporting record, but it is not a command queue.
+- Execution reports still use the existing account-authenticated API. Receiving
+  execution reports with standalone daemon credentials is a separate follow-up;
+  the daemon channel currently accepts telemetry, not execution results.
+- The existing task API still locks workspace changes during an active run.
+  Updating a worktree path from an executing daemon is also separate follow-up work.
 - The server advertises no endpoints. Daemon base URLs and socket endpoints
   come from client configuration and remain authoritative.
 - Standalone credentials never expand into account, project or management
