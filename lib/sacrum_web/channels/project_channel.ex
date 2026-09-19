@@ -289,26 +289,6 @@ defmodule SacrumWeb.ProjectChannel do
     )
   end
 
-  # Daemon broadcasts
-
-  @spec broadcast_run_step(String.t(), map()) :: :ok | {:error, term()}
-  def broadcast_run_step(project_id, data) do
-    SacrumWeb.Endpoint.broadcast(
-      "project:#{project_id}",
-      "run_step",
-      run_step_payload(data)
-    )
-  end
-
-  @spec broadcast_cancel_step(String.t(), map()) :: :ok | {:error, term()}
-  def broadcast_cancel_step(project_id, data) do
-    SacrumWeb.Endpoint.broadcast(
-      "project:#{project_id}",
-      "cancel_step",
-      cancel_step_payload(data)
-    )
-  end
-
   # Session log broadcasts
 
   @spec broadcast_session_log_created(String.t(), map()) :: :ok | {:error, term()}
@@ -811,34 +791,5 @@ defmodule SacrumWeb.ProjectChannel do
 
   defp metadata_value(metadata, key) do
     Map.get(metadata, key, Map.get(metadata, Atom.to_string(key)))
-  end
-
-  defp run_step_payload(data) do
-    payload = %{
-      id: data.execution.id,
-      task_id: data.execution.task_id,
-      prompt: data.rendered_prompt,
-      agent_config: data.step.agent_config,
-      worktree: Task.workspace_worktree(data.task)
-    }
-
-    payload =
-      case data.step.output_schema do
-        nil -> payload
-        schema -> Map.put(payload, :output_schema, schema)
-      end
-
-    # Field omitted when false so older daemons (pre-flag) see an unchanged payload shape.
-    case data.step.verbose_daemon_logging do
-      true -> Map.put(payload, :verbose_daemon_logging, true)
-      _ -> payload
-    end
-  end
-
-  defp cancel_step_payload(data) do
-    %{
-      step_execution_id: data.step_execution_id,
-      task_id: data.task_id
-    }
   end
 end

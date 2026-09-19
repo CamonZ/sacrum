@@ -289,26 +289,13 @@ test "cannot join another user's project" do
 end
 ```
 
-### Testing Client Type Filtering
+### Testing Execution Delivery
 
-```elixir
-test "daemon client receives run_step event" do
-  {_user, project, socket} = setup_socket()
-  {:ok, _reply, _socket} =
-    subscribe_and_join(socket, "project:#{project.id}", %{"client_type" => "daemon"})
-
-  SacrumWeb.ProjectChannel.broadcast_run_step(project.id, data)
-  assert_push "run_step", payload
-end
-
-test "default client does NOT receive run_step event" do
-  {_user, project, socket} = setup_socket()
-  {:ok, _reply, _socket} = subscribe_and_join(socket, "project:#{project.id}", %{})
-
-  SacrumWeb.ProjectChannel.broadcast_run_step(project.id, data)
-  refute_push "run_step", _payload
-end
-```
+Execution commands use the authenticated `daemon:<daemon_id>` channel. See
+`test/sacrum_web/channels/daemon_channel_test.exs` for socket authentication and
+command delivery, and `test/sacrum/realtime/command_broadcaster_test.exs` for
+payloads, target isolation, and the zero-query broadcast boundary. Project
+channels continue to carry state updates, not execution commands.
 
 ### Testing Broadcasts from Repo Operations
 

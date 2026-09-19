@@ -3983,7 +3983,10 @@ defmodule SacrumWeb.Graphql.SchemaTest do
           %{subject_type: "task_run", subject_id: task_run.id, logical_name: "result"}
         )
 
-      Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project.id}")
+      Phoenix.PubSub.subscribe(
+        Sacrum.PubSub,
+        "daemon:#{Sacrum.Repo.Schemas.Task.workspace_daemon(task)}"
+      )
 
       result =
         conn
@@ -4284,7 +4287,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       # but not returned in the GraphQL response (context is no longer populated)
     end
 
-    test "runStep succeeds when daemon_presence_required is false (default)", %{
+    test "runStep queues work on its connected workspace daemon", %{
       conn: conn,
       user: user,
       project: project
@@ -4313,18 +4316,11 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["id"] != nil
     end
 
-    test "runStep returns error when no daemon connected and daemon_presence_required is true", %{
+    test "runStep returns error when no daemon is available for placement", %{
       conn: conn,
       user: user,
       project: project
     } do
-      # Enable daemon presence requirement
-      Application.put_env(:sacrum, :daemon_presence_required, true)
-
-      on_exit(fn ->
-        Application.put_env(:sacrum, :daemon_presence_required, false)
-      end)
-
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
       {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "step_1", goal: "Do something"})
@@ -4345,7 +4341,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert result["errors"] != nil
 
       assert Enum.any?(result["errors"], fn error ->
-               String.contains?(error["message"], "No daemon is currently connected")
+               error["message"] == "daemon_unavailable"
              end)
     end
 
