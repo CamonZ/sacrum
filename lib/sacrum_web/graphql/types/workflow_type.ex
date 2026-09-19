@@ -64,10 +64,8 @@ defmodule SacrumWeb.Graphql.Types.WorkflowType do
       arg(:project_id, non_null(:uuid4))
 
       resolve(fn %{project_id: project_id}, %{context: %{current_user: user}} ->
-        with {:ok, _project} <- Accounts.Projects.get_by(user.id, conditions: [id: project_id]) do
-          workflows = Accounts.Workflows.list_by(user.id, conditions: [project_id: project_id])
-          {:ok, workflows}
-        end
+        workflows = Accounts.Workflows.list_by(user.id, conditions: [project_id: project_id])
+        {:ok, workflows}
       end)
     end
 
@@ -126,10 +124,8 @@ defmodule SacrumWeb.Graphql.Types.WorkflowType do
       resolve(fn args, %{context: %{current_user: user}} ->
         project_id = Map.get(args, :project_id)
 
-        with {:ok, _project} <- Accounts.Projects.get_by(user.id, conditions: [id: project_id]) do
-          attrs = Map.put(args, :project_id, project_id)
-          Accounts.Workflows.insert(user.id, project_id, attrs)
-        end
+        attrs = Map.drop(args, [:project_id])
+        Accounts.Workflows.insert(user.id, project_id, attrs)
       end)
     end
 

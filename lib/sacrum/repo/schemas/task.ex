@@ -12,6 +12,7 @@ defmodule Sacrum.Repo.Schemas.Task do
 
   @valid_levels ["epic", "ticket", "task"]
   @valid_priorities ["low", "medium", "high", "critical"]
+  @project_scope_constraint "tasks_project_scope_fkey"
   @parent_scope_constraint "tasks_parent_scope_fkey"
   @parent_scope_error "parent task must belong to the same project and user"
 
@@ -105,7 +106,7 @@ defmodule Sacrum.Repo.Schemas.Task do
         |> Ecto.Changeset.put_change(:project_id, project_id)
       end
     )
-    |> foreign_key_constraint(:project_id)
+    |> foreign_key_constraint(:project_id, name: @project_scope_constraint)
     |> foreign_key_constraint(:parent_id,
       name: @parent_scope_constraint,
       message: @parent_scope_error

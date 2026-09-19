@@ -129,6 +129,38 @@ defmodule Sacrum.Repo.WorkflowsTest do
     end
   end
 
+  describe "project ownership" do
+    test "accepts an explicit user and project pair" do
+      project = create_project()
+
+      assert {:ok, %Workflow{} = workflow} =
+               Workflows.insert(project.id, project.user_id, %{name: "Explicit Scope Workflow"})
+
+      assert workflow.user_id == project.user_id
+      assert workflow.project_id == project.id
+    end
+
+    test "rejects a missing project reference" do
+      user = create_user()
+
+      assert {:error, changeset} =
+               Workflows.insert(Ecto.UUID.generate(), user.id, %{name: "Missing Project Workflow"})
+
+      assert %{project_id: ["does not exist"]} = errors_on(changeset)
+    end
+
+    test "rejects a project owned by another user" do
+      owner = create_user()
+      {:ok, project} = Projects.insert(owner, @valid_project_attrs)
+      caller = create_user(%{email: "caller@example.com", username: "caller"})
+
+      assert {:error, changeset} =
+               Workflows.insert(project.id, caller.id, %{name: "Cross User Workflow"})
+
+      assert %{project_id: ["does not exist"]} = errors_on(changeset)
+    end
+  end
+
   describe "all/1" do
     test "returns workflows for a given project" do
       project = create_project()
