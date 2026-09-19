@@ -185,11 +185,15 @@ defmodule Sacrum.Accounts.Tasks do
     |> Ecto.Multi.run(:result, &task_update_result/2)
   end
 
-  defp prepare_task_update_step(_repo, %{placement: placement}, task, attrs) do
-    case prepare_task_update(task, attrs, placement) do
-      {:ok, task_for_update, task_attrs} -> {:ok, {task_for_update, task_attrs}}
-      error -> error
-    end
+  defp prepare_task_update_step(_repo, %{placement: placement}, _task, attrs) do
+    %{task: task_for_update, workspace: workspace} = placement
+
+    task_attrs = Map.drop(attrs, [:sections, :section_deletions, :workspace, :worktree])
+
+    task_attrs =
+      if workspace == :not_set, do: task_attrs, else: Map.put(task_attrs, :workspace, workspace)
+
+    {:ok, {task_for_update, task_attrs}}
   end
 
   defp task_update_changeset(%{prepare_task: {task_for_update, task_attrs}}) do
@@ -212,33 +216,6 @@ defmodule Sacrum.Accounts.Tasks do
 
   defp task_update_result(_repo, %{dependencies: updated_task}) do
     {:ok, Repo.preload(updated_task, :sections, force: true)}
-  end
-
-  defp prepare_task_update(_task, attrs, %{task: task_for_update, workspace: workspace}) do
-    task_attrs = Map.drop(attrs, [:sections, :section_deletions, :workspace, :worktree])
-
-    task_attrs =
-      if workspace == :not_set, do: task_attrs, else: Map.put(task_attrs, :workspace, workspace)
-
-    with {:ok, task_attrs} <- prepare_parent_task_update(task_for_update, task_attrs, attrs) do
-      {:ok, task_for_update, task_attrs}
-    end
-  end
-
-  defp prepare_parent_task_update(task, task_attrs, attrs) do
-    case Map.fetch(attrs, :parent_id) do
-      :error ->
-        {:ok, task_attrs}
-
-      {:ok, nil} ->
-        {:ok, Map.put(task_attrs, :parent_id, nil)}
-
-      {:ok, parent_id} ->
-        case scoped_task(task, parent_id) do
-          nil -> {:error, :not_found}
-          parent -> {:ok, Map.put(task_attrs, :parent_id, parent.id)}
-        end
-    end
   end
 
   defp maybe_update_dependencies(task, attrs)

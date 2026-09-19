@@ -397,7 +397,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: step.id})
 
     child = create_task(user, project, %{title: title})
-    {:ok, child} = Repo.TaskHierarchy.set_parent(child, parent)
+    {:ok, child} = Accounts.Tasks.update(child, %{parent_id: parent.id})
     assign_workflow_to_task(child, workflow)
   end
 
@@ -2753,7 +2753,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     defp create_child_task(user, project, parent_task) do
       task = create_task(user, project, %{title: "Child Task"})
 
-      Sacrum.Repo.TaskHierarchy.set_parent(task, parent_task)
+      Accounts.Tasks.update(task, %{parent_id: parent_task.id})
       |> elem(1)
     end
 

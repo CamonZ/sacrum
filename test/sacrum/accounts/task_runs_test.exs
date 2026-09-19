@@ -466,7 +466,7 @@ defmodule Sacrum.Accounts.TaskRunsTest do
       {project, parent_task, workflow} = create_task_with_workflow(user)
       {:ok, child_task} = Tasks.insert(user.id, project.id, %{title: "Manual child"})
       child_task = assign_workspace(child_task, user.id)
-      {:ok, child_task} = Sacrum.Repo.TaskHierarchy.set_parent(child_task, parent_task)
+      {:ok, child_task} = Tasks.update(child_task, %{parent_id: parent_task.id})
 
       {:ok, parent_run} = TaskRuns.insert(user.id, project.id, parent_task.id)
       {:ok, manual_child_run} = Root.get_or_create(child_task)
@@ -501,7 +501,7 @@ defmodule Sacrum.Accounts.TaskRunsTest do
       user = create_user()
       {project, parent_task, workflow} = create_task_with_workflow(user)
       {:ok, child_task} = Tasks.insert(user.id, project.id, %{title: "Child with stale trigger"})
-      {:ok, _child_task} = Sacrum.Repo.TaskHierarchy.set_parent(child_task, parent_task)
+      {:ok, _child_task} = Tasks.update(child_task, %{parent_id: parent_task.id})
 
       {:ok, parent_run} = TaskRuns.insert(user.id, project.id, parent_task.id)
 

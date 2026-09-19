@@ -1205,6 +1205,33 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["parent"]["title"] == "Parent Task"
     end
 
+    test "rejects a task parent from another project", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, parent} = Accounts.Tasks.insert(user.id, project.id, %{title: "Parent"})
+      {:ok, other_project} = Accounts.Projects.insert(user.id, %{name: "Other Project"})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createTask(
+              projectId: "#{other_project.id}"
+              title: "Child"
+              parentId: "#{parent.id}"
+            ) { id }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["createTask"] == nil
+      assert [%{"message" => message}] = result["errors"]
+      assert message =~ "parent task"
+    end
+
     test "createTask with explicit workflow_id assigns that workflow and seeds initial step", %{
       conn: conn,
       user: user,
@@ -1413,10 +1440,42 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert result["data"]["updateTask"]["parentId"] == parent.id
     end
 
+    test "rejects updating a task with a parent from another project", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, parent} = Accounts.Tasks.insert(user.id, project.id, %{title: "Parent"})
+      {:ok, other_project} = Accounts.Projects.insert(user.id, %{name: "Other Project"})
+      {:ok, child} = Accounts.Tasks.insert(user.id, other_project.id, %{title: "Child"})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            updateTask(
+              id: "#{child.id}"
+              title: "Changed"
+              parentId: "#{parent.id}"
+            ) { id title parentId }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["updateTask"] == nil
+      assert [%{"message" => message}] = result["errors"]
+      assert message =~ "parent task"
+
+      {:ok, reloaded} = Accounts.Tasks.find(user.id, child.id)
+      assert reloaded.title == "Child"
+      assert reloaded.parent_id == nil
+    end
+
     test "removes parent_id via updateTask", %{conn: conn, user: user, project: project} do
       {:ok, parent} = Accounts.Tasks.insert(user.id, project.id, %{title: "Parent"})
       {:ok, child} = Accounts.Tasks.insert(user.id, project.id, %{title: "Child"})
-      {:ok, _} = Sacrum.Repo.TaskHierarchy.set_parent(child, parent)
+      {:ok, _} = Accounts.Tasks.update(child, %{parent_id: parent.id})
 
       result =
         conn
@@ -5177,7 +5236,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
     } do
       {:ok, root} = Accounts.Tasks.insert(user.id, project.id, %{title: "Root Task"})
       {:ok, child} = Accounts.Tasks.insert(user.id, project.id, %{title: "Child Task"})
-      {:ok, _} = Sacrum.Repo.TaskHierarchy.set_parent(child, root)
+      {:ok, _} = Accounts.Tasks.update(child, %{parent_id: root.id})
 
       result =
         conn
@@ -5334,8 +5393,8 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       {:ok, child1} = Accounts.Tasks.insert(user.id, project.id, %{title: "Child 1"})
       {:ok, child2} = Accounts.Tasks.insert(user.id, project.id, %{title: "Child 2"})
 
-      {:ok, _} = Sacrum.Repo.TaskHierarchy.set_parent(child1, parent)
-      {:ok, _} = Sacrum.Repo.TaskHierarchy.set_parent(child2, parent)
+      {:ok, _} = Accounts.Tasks.update(child1, %{parent_id: parent.id})
+      {:ok, _} = Accounts.Tasks.update(child2, %{parent_id: parent.id})
 
       # Verify children exist
       result =
@@ -6020,7 +6079,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
     test "filters by parent_id", %{conn: conn, user: user, project: project} do
       {:ok, parent} = Accounts.Tasks.insert(user.id, project.id, %{title: "Parent"})
       {:ok, child} = Accounts.Tasks.insert(user.id, project.id, %{title: "Child"})
-      {:ok, _} = Sacrum.Repo.TaskHierarchy.set_parent(child, parent)
+      {:ok, _} = Accounts.Tasks.update(child, %{parent_id: parent.id})
       {:ok, _orphan} = Accounts.Tasks.insert(user.id, project.id, %{title: "Orphan"})
 
       result =
@@ -6254,7 +6313,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
     test "filters by root_only: true", %{conn: conn, user: user, project: project} do
       {:ok, parent} = Accounts.Tasks.insert(user.id, project.id, %{title: "Root"})
       {:ok, child} = Accounts.Tasks.insert(user.id, project.id, %{title: "Child"})
-      {:ok, _} = Sacrum.Repo.TaskHierarchy.set_parent(child, parent)
+      {:ok, _} = Accounts.Tasks.update(child, %{parent_id: parent.id})
 
       result =
         conn
@@ -6876,7 +6935,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
     test "resolves task -> parent", %{conn: conn, user: user, project: project} do
       {:ok, parent} = Accounts.Tasks.insert(user.id, project.id, %{title: "Parent"})
       {:ok, child} = Accounts.Tasks.insert(user.id, project.id, %{title: "Child"})
-      {:ok, _} = Sacrum.Repo.TaskHierarchy.set_parent(child, parent)
+      {:ok, _} = Accounts.Tasks.update(child, %{parent_id: parent.id})
 
       result =
         conn
@@ -6891,7 +6950,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
     test "resolves task -> children", %{conn: conn, user: user, project: project} do
       {:ok, parent} = Accounts.Tasks.insert(user.id, project.id, %{title: "Parent"})
       {:ok, child} = Accounts.Tasks.insert(user.id, project.id, %{title: "Child"})
-      {:ok, _} = Sacrum.Repo.TaskHierarchy.set_parent(child, parent)
+      {:ok, _} = Accounts.Tasks.update(child, %{parent_id: parent.id})
 
       result =
         conn
@@ -7999,7 +8058,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
     } do
       {:ok, parent} = Accounts.Tasks.insert(user.id, project.id, %{title: "Parent"})
       {:ok, child} = Accounts.Tasks.insert(user.id, project.id, %{title: "Child"})
-      {:ok, _} = Sacrum.Repo.TaskHierarchy.set_parent(child, parent)
+      {:ok, _} = Accounts.Tasks.update(child, %{parent_id: parent.id})
 
       result =
         conn

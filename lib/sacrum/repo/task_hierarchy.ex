@@ -2,39 +2,20 @@ defmodule Sacrum.Repo.TaskHierarchy do
   @moduledoc """
   Functions for managing task parent-child hierarchy.
 
-  ## Error Contract
-
-  - `set_parent/2` returns `{:ok, task}` or `{:error, changeset}`
-  - `remove_parent/1` returns `{:ok, task}` or `{:error, :not_found}`
-  - `get_parent/1` returns `{:ok, parent_task}` or `{:error, :not_found}`
+  This module retains the read helpers used by orchestration and routing. Task
+  writes go through `Sacrum.Accounts.Tasks.update/2` so the task changeset and
+  database constraints enforce parent scope consistently.
 
   ## Preload Strategy
 
   Preloading is managed by callers. No automatic preloads are applied in this module.
-  Functions like `get_children/1`, `get_ancestors/1`, and `get_descendants/1` return
+  Functions like `get_children/1` and `get_descendants/1` return
   task structs but do not automatically preload associations.
   """
 
   import Ecto.Query
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.Task
-
-  @spec set_parent(Task.t(), Task.t()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
-  def set_parent(%Task{} = child, %Task{} = parent) do
-    child
-    |> Ecto.Changeset.change(parent_id: parent.id)
-    |> Repo.update()
-  end
-
-  @spec remove_parent(Task.t()) ::
-          {:ok, Task.t()} | {:error, :not_found} | {:error, Ecto.Changeset.t()}
-  def remove_parent(%Task{parent_id: nil}), do: {:error, :not_found}
-
-  def remove_parent(%Task{} = task) do
-    task
-    |> Ecto.Changeset.change(parent_id: nil)
-    |> Repo.update()
-  end
 
   @spec get_parent(Task.t()) :: {:ok, Task.t()} | {:error, :not_found}
   def get_parent(%Task{parent_id: nil}), do: {:error, :not_found}
@@ -54,31 +35,6 @@ defmodule Sacrum.Repo.TaskHierarchy do
         order_by: [asc: t.inserted_at]
       )
     )
-  end
-
-  @spec get_ancestors(Task.t()) :: [Task.t()]
-  def get_ancestors(%Task{parent_id: nil}), do: []
-
-  def get_ancestors(%Task{} = task) do
-    ancestor_cte =
-      Task
-      |> where([t], t.id == ^task.parent_id)
-      |> select([t], %{id: t.id, parent_id: t.parent_id, depth: fragment("1")})
-      |> union_all(
-        ^from(t in Task,
-          join: a in fragment("ancestors"),
-          on: t.id == a.parent_id,
-          select: %{id: t.id, parent_id: t.parent_id, depth: fragment("? + 1", a.depth)}
-        )
-      )
-
-    Task
-    |> with_cte("ancestors", as: ^ancestor_cte)
-    |> recursive_ctes(true)
-    |> join(:inner, [t], a in fragment("ancestors"), on: t.id == a.id)
-    |> order_by([t, a], asc: a.depth)
-    |> select([t], t)
-    |> Repo.all()
   end
 
   @spec get_descendants(Task.t()) :: [Task.t()]
@@ -102,19 +58,5 @@ defmodule Sacrum.Repo.TaskHierarchy do
     |> select([t], t)
     |> order_by([t], asc: t.inserted_at)
     |> Repo.all()
-  end
-
-  @doc """
-  Builds a recursive tree structure from a root task.
-  Returns a map with the task data and a :children list.
-  """
-  @spec build_tree(Task.t()) :: %{task: Task.t(), children: list()}
-  def build_tree(%Task{} = task) do
-    children = get_children(task)
-
-    %{
-      task: task,
-      children: Enum.map(children, &build_tree/1)
-    }
   end
 end
