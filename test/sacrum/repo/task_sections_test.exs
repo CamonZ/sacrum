@@ -3,6 +3,7 @@ defmodule Sacrum.Repo.TaskSectionsTest do
 
   alias Sacrum.Repo.Users
   alias Sacrum.Repo.Projects
+  alias Sacrum.Repo.Schemas.TaskSection
   alias Sacrum.Repo.Tasks
   alias Sacrum.Repo.TaskSections
 
@@ -165,6 +166,41 @@ defmodule Sacrum.Repo.TaskSectionsTest do
     end
   end
 
+  describe "task scope constraint" do
+    test "maps a missing task to task_id" do
+      task = setup_task()
+
+      assert {:error, changeset} =
+               insert_with_scope(Ecto.UUID.generate(), task.project_id, task.user_id)
+
+      assert %{task_id: ["task must belong to the same project and user"]} =
+               errors_on(changeset)
+    end
+
+    test "maps a cross-project task to task_id" do
+      task = setup_task()
+      {:ok, project} = Projects.insert(task.user_id, %{name: "Other Project"})
+      {:ok, other_task} = Tasks.insert(project, %{title: "Other Task"})
+
+      assert {:error, changeset} =
+               insert_with_scope(other_task.id, task.project_id, task.user_id)
+
+      assert %{task_id: ["task must belong to the same project and user"]} =
+               errors_on(changeset)
+    end
+
+    test "maps a cross-user task to task_id" do
+      task = setup_task()
+      other_task = setup_task()
+
+      assert {:error, changeset} =
+               insert_with_scope(other_task.id, task.project_id, task.user_id)
+
+      assert %{task_id: ["task must belong to the same project and user"]} =
+               errors_on(changeset)
+    end
+  end
+
   describe "all/1" do
     test "returns sections belonging to the given task" do
       task = setup_task()
@@ -191,6 +227,36 @@ defmodule Sacrum.Repo.TaskSectionsTest do
       {:ok, updated} = TaskSections.update(section, %{content: "Updated", section_order: 5})
       assert updated.content == "Updated"
       assert updated.section_order == 5
+    end
+  end
+
+  describe "upsert/2" do
+    test "updates a section by id" do
+      task = setup_task()
+
+      {:ok, section} =
+        TaskSections.insert(task, %{section_type: "checklist_item", content: "Original"})
+
+      assert {:ok, updated} =
+               TaskSections.upsert(task, %{id: section.id, content: "Updated"})
+
+      assert updated.id == section.id
+      assert updated.content == "Updated"
+      assert updated.section_type == "checklist_item"
+    end
+
+    test "does not update a section belonging to another task" do
+      task = setup_task()
+      other_task = setup_task()
+
+      {:ok, section} =
+        TaskSections.insert(other_task, %{section_type: "checklist_item", content: "Original"})
+
+      assert {:error, :not_found} =
+               TaskSections.upsert(task, %{id: section.id, content: "Should not update"})
+
+      {:ok, unchanged} = TaskSections.get(section.id)
+      assert unchanged.content == "Original"
     end
   end
 
@@ -252,5 +318,11 @@ defmodule Sacrum.Repo.TaskSectionsTest do
       assert section.content == "This is a plain text assumption for the task"
       assert section.task_id == task.id
     end
+  end
+
+  defp insert_with_scope(task_id, project_id, user_id) do
+    %TaskSection{task_id: task_id, project_id: project_id, user_id: user_id}
+    |> TaskSection.changeset(%{section_type: "goal", content: "Scoped section"})
+    |> Sacrum.Repo.insert()
   end
 end

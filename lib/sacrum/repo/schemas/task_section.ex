@@ -5,6 +5,8 @@ defmodule Sacrum.Repo.Schemas.TaskSection do
   @type t :: %__MODULE__{}
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
+  @task_scope_constraint "task_sections_task_scope_fkey"
+  @task_scope_error "task must belong to the same project and user"
 
   @fields [:section_type, :content, :section_order, :done, :done_at]
   @allowed_section_types [
@@ -44,7 +46,10 @@ defmodule Sacrum.Repo.Schemas.TaskSection do
     |> cast(attrs, @fields)
     |> validate_required([:section_type, :content])
     |> validate_inclusion(:section_type, @allowed_section_types)
-    |> foreign_key_constraint(:task_id)
+    |> foreign_key_constraint(:task_id,
+      name: @task_scope_constraint,
+      message: @task_scope_error
+    )
     |> foreign_key_constraint(:project_id)
     |> unique_constraint(:section_order,
       name: :task_sections_unique_order_per_task_and_type

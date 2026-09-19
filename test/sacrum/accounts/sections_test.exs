@@ -44,6 +44,24 @@ defmodule Sacrum.Accounts.SectionsTest do
       assert section.content == "Some content"
       assert section.section_order == 0
     end
+
+    test "rejects a task from another project through the composite task scope" do
+      user = create_user()
+      {project, _task} = create_task(user)
+      {:ok, other_project} = Projects.insert(user.id, %{name: "Other Project"})
+      {:ok, other_task} = Tasks.insert(user.id, other_project.id, %{title: "Other Task"})
+
+      assert {:error, changeset} =
+               Sections.insert(user.id, %{
+                 "task_id" => other_task.id,
+                 "project_id" => project.id,
+                 "section_type" => "context",
+                 "content" => "Out of scope"
+               })
+
+      assert %{task_id: ["task must belong to the same project and user"]} =
+               errors_on(changeset)
+    end
   end
 
   describe "get_by/2" do

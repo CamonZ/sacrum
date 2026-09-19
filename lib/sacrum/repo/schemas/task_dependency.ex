@@ -5,6 +5,10 @@ defmodule Sacrum.Repo.Schemas.TaskDependency do
   @type t :: %__MODULE__{}
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
+  @task_scope_constraint "task_dependencies_task_scope_fkey"
+  @depends_on_scope_constraint "task_dependencies_depends_on_scope_fkey"
+  @task_scope_error "task must belong to the same project and user"
+  @depends_on_scope_error "dependency task must belong to the same project and user"
 
   schema "task_dependencies" do
     belongs_to :task, Sacrum.Repo.Schemas.Task
@@ -24,8 +28,14 @@ defmodule Sacrum.Repo.Schemas.TaskDependency do
       name: :no_self_dependency,
       message: "a task cannot depend on itself"
     )
-    |> foreign_key_constraint(:task_id)
-    |> foreign_key_constraint(:depends_on_id)
+    |> foreign_key_constraint(:task_id,
+      name: @task_scope_constraint,
+      message: @task_scope_error
+    )
+    |> foreign_key_constraint(:depends_on_id,
+      name: @depends_on_scope_constraint,
+      message: @depends_on_scope_error
+    )
     |> foreign_key_constraint(:project_id)
   end
 end
