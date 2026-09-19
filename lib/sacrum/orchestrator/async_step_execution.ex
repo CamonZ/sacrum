@@ -9,7 +9,7 @@ defmodule Sacrum.Orchestrator.AsyncStepExecution do
   alias Sacrum.Orchestrator.{ExecutionEvents, ExecutionPool}
   alias Sacrum.Realtime.CommandBroadcaster
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.StepExecution
+  alias Sacrum.Repo.Schemas.{StepExecution, Task}
 
   @terminal_statuses ~w(completed failed cancelled stopped)
 
@@ -159,7 +159,7 @@ defmodule Sacrum.Orchestrator.AsyncStepExecution do
         task: execution.task,
         rendered_prompt: execution.prompt
       },
-      execution.project_id
+      Task.workspace_daemon(execution.task)
     )
   end
 

@@ -295,9 +295,9 @@ derives the account from the socket and routes internally through
 user through join parameters. The payload contains only sanitized daemon
 identity, lifecycle, concurrency, freshness, and capability fields. Row updates
 arrive as complete `daemon_updated` replacement payloads, while hard deletion
-arrives as `daemon_deleted`; the existing `daemon:<daemon_id>`
-registration/revalidation channel remains the authenticated report path and
-project-scoped work commands remain separate. See
+arrives as `daemon_deleted`; the existing `daemon:<daemon_id>` channel is also
+the authenticated transport for transient execution commands. Project clients
+do not receive those imperative work commands. See
 [Daemon Telemetry Contract](daemon-telemetry-contract.md).
 
 ### Event Types
@@ -319,8 +319,8 @@ project-scoped work commands remain separate. See
 | `session_log_updated` | Log fields, including nullable `logical_key` | Existing logical-key log row updated in place |
 | `section_created` / `section_updated` / `section_deleted` | Section fields | Task section changes |
 | `code_ref_created` / `code_ref_updated` / `code_ref_deleted` | Code reference fields: task/section owner, path, line range, name, description, timestamps | Task detail and evidence reference changes |
-| `run_step` | Execution + step config | **Daemon only** — Run a step |
-| `cancel_step` | Execution ID, task ID | **Daemon only** — Cancel running step |
+| `run_step` | Execution + step config, project ID | **Daemon channel only** — Run a step |
+| `cancel_step` | Execution ID, task ID, project ID | **Daemon channel only** — Cancel running step |
 
 > **Implementation:** See `Sacrum.Realtime.Cdc.Projector`, `SacrumWeb.ProjectChannel`, and `Sacrum.Realtime.CommandBroadcaster` for daemon-only commands.
 

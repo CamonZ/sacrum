@@ -19,7 +19,9 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContractTest do
              Enum.sort(non_daemon_events)
 
     intercepted_events = ProjectChannel.intercepted_event_names()
-    assert Enum.sort(intercepted_events) == Enum.sort(runtime_channel_event_names())
+    # Legacy command events remain intercepted so they cannot reach default clients,
+    # but ProjectChannel no longer exposes functions that broadcast those commands.
+    assert Enum.sort(intercepted_events) == Enum.sort(non_daemon_events ++ daemon_events)
     assert length(intercepted_events) == length(Enum.uniq(intercepted_events))
 
     for event <- non_daemon_events do

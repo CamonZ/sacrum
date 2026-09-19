@@ -35,12 +35,11 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     WorkflowGraph
   }
 
-  alias Sacrum.Accounts.TaskRuns
   alias Sacrum.Orchestrator.ExecutionEvents
   alias Sacrum.Orchestrator.Routing.{HumanInput, RouteRecovery, RouteStep, WaitChildren}
   alias Sacrum.Orchestrator.TaskRuns.{Failure, Lookup, Root}
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.{Daemon, StepExecution, Task, TaskRun}
+  alias Sacrum.Repo.Schemas.{StepExecution, Task, TaskRun}
   alias Sacrum.Repo.TaskHierarchy
   alias Sacrum.Repo.TaskWorkflows
   alias Sacrum.Routing.RouteMode
@@ -92,26 +91,28 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
       task ->
         with {:ok, task_run_id} <- ensure_task_run_id(task, task_run_id),
              {:ok, task_run} <- Lookup.fetch(task_run_id),
-             {:ok, concurrency_scope} <- TaskRuns.get_concurrency_scope(task_run) do
-          daemon_id = TaskRunPlacement.daemon_id(task, concurrency_scope)
-          daemon_max_concurrency = daemon_max_concurrency(daemon_id)
+             {:ok, placed_task, placement_options} <-
+               TaskRunPlacement.resolve_admission_options(task, task_run) do
+          daemon_id = Keyword.fetch!(placement_options, :daemon_id)
+          daemon_max_concurrency = Keyword.fetch!(placement_options, :daemon_max_concurrency)
+          concurrency_scope = concurrency_scope(placement_options)
           current_execution = active_execution(task_run)
 
           data = %FSMData{
             user_id: user_id,
-            task: task,
+            task: placed_task,
             task_run: task_run,
             task_run_id: task_run_id,
             concurrency_scope: concurrency_scope,
             daemon_id: daemon_id,
             daemon_max_concurrency: daemon_max_concurrency,
-            project_id: task.project_id,
+            project_id: placed_task.project_id,
             current_execution: current_execution,
             current_execution_id: current_execution && current_execution.id
           }
 
           Logger.info(
-            "[TaskOrchestrator:#{task_id}] Starting user=#{user_id} project=#{task.project_id} task_run=#{task_run_id} workflow=#{inspect(task.workflow_id)} step=#{inspect(task.current_step_id)}"
+            "[TaskOrchestrator:#{task_id}] Starting user=#{user_id} project=#{placed_task.project_id} task_run=#{task_run_id} workflow=#{inspect(placed_task.workflow_id)} step=#{inspect(placed_task.current_step_id)}"
           )
 
           {:ok, :initializing, data}
@@ -160,6 +161,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     end
 
     if data.slot_id, do: ExecutionPool.release_slot(data.slot_id)
+
     :ok
   end
 
@@ -858,6 +860,16 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
 
   defp execution_slot_options(%{concurrency_scope: %{id: id}}), do: [task_group_id: id]
 
+  defp concurrency_scope(options) do
+    case Keyword.get(options, :task_group_id) do
+      id when is_binary(id) ->
+        %{id: id, max_concurrency: Keyword.get(options, :max_concurrency)}
+
+      _ ->
+        nil
+    end
+  end
+
   defp next_attempt_id(%{current_execution_id: execution_id}) when is_binary(execution_id) do
     case Repo.get(StepExecution, execution_id) do
       %StepExecution{status: status} when status in ["queued", "started", "in_progress"] ->
@@ -869,15 +881,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   end
 
   defp next_attempt_id(_data), do: Ecto.UUID.generate()
-
-  defp daemon_max_concurrency(nil), do: nil
-
-  defp daemon_max_concurrency(daemon_id) do
-    case Repo.get(Daemon, daemon_id) do
-      %Daemon{max_concurrency: max_concurrency} -> max_concurrency
-      _ -> nil
-    end
-  end
 
   defp active_execution(%TaskRun{latest_step_execution_id: execution_id})
        when is_binary(execution_id) do

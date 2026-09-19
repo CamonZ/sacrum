@@ -223,8 +223,9 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
 
   # ===== Orchestration helpers =====
 
-  defp subscribe_project(project_id) do
-    :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project_id}")
+  defp subscribe_daemon(task) do
+    daemon_id = Sacrum.Repo.Schemas.Task.workspace_daemon(task)
+    :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "daemon:#{daemon_id}")
   end
 
   defp start_orchestrator(task, user, opts \\ []) do
@@ -430,11 +431,11 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
 
   describe "fresh orchestration with no prior executions" do
     test "creates the first started execution and broadcasts run_step for the current step" do
-      %{user: user, project: project, steps: [s1 | _], task: task} =
+      %{user: user, project: _project, steps: [s1 | _], task: task} =
         setup_linear_workflow(step_count: 3)
 
       assert executions_for_task(task.id) == []
-      subscribe_project(project.id)
+      subscribe_daemon(task)
 
       pid = start_orchestrator(task, user)
       wait_for_state(pid, :executing)
@@ -512,11 +513,11 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
     end
 
     test "entering a human_input step parks the run without daemon dispatch" do
-      %{user: user, project: project, human_step: human_step, task: task} =
+      %{user: user, project: _project, human_step: human_step, task: task} =
         setup_human_input_workflow(next_final?: true)
 
       in_use_before = ExecutionPool.pool_status().in_use_count
-      subscribe_project(project.id)
+      subscribe_daemon(task)
 
       pid = start_orchestrator(task, user)
       wait_for_exit(pid)
@@ -546,7 +547,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
     test "valid human output completes the waiting execution and resumes the same TaskRun" do
       %{
         user: user,
-        project: project,
+        project: _project,
         next_step: next_step,
         task: task
       } =
@@ -554,7 +555,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
           next_prompt: "Approved: {{ execution.previous_output.approved }}"
         )
 
-      subscribe_project(project.id)
+      subscribe_daemon(task)
 
       pid = start_orchestrator(task, user)
       wait_for_exit(pid)
@@ -596,10 +597,10 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
     end
 
     test "invalid human output leaves the StepExecution and TaskRun waiting" do
-      %{user: user, project: project, task: task} =
+      %{user: user, project: _project, task: task} =
         setup_human_input_workflow(next_final?: true)
 
-      subscribe_project(project.id)
+      subscribe_daemon(task)
 
       pid = start_orchestrator(task, user)
       wait_for_exit(pid)
@@ -681,7 +682,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
       %{user: user, project: project, steps: [_s1, s2, _s3], task: task} =
         setup_linear_workflow(step_count: 3)
 
-      subscribe_project(project.id)
+      subscribe_daemon(task)
 
       pid = start_orchestrator(task, user)
       wait_for_state(pid, :executing)
@@ -717,7 +718,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
         task: task
       } = setup_stop_boundary_workflow()
 
-      subscribe_project(project.id)
+      subscribe_daemon(task)
 
       first_pid = start_orchestrator(task, user)
       wait_for_state(first_pid, :executing)
@@ -775,10 +776,10 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
 
   describe "stop then restart" do
     test "marks in-flight execution cancelled, leaves current_step intact, and re-dispatches the same step on restart" do
-      %{user: user, project: project, steps: [s1 | _], task: task} =
+      %{user: user, project: _project, steps: [s1 | _], task: task} =
         setup_linear_workflow(step_count: 3)
 
-      subscribe_project(project.id)
+      subscribe_daemon(task)
 
       pid = start_orchestrator(task, user)
       wait_for_state(pid, :executing)
@@ -851,7 +852,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
         )
 
       first_expected = "Retry task=#{artifact.id} previous= older="
-      subscribe_project(project.id)
+      subscribe_daemon(task)
 
       pid = start_orchestrator(task, user, task_run_id: task_run.id)
       wait_for_state(pid, :executing)
@@ -917,7 +918,10 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
 
       assert_receive %Phoenix.Socket.Broadcast{
                        event: "run_step",
-                       payload: %{id: second_retry_id, prompt: ^second_retry_expected}
+                       payload: %{
+                         id: second_retry_id,
+                         prompt: ^second_retry_expected
+                       }
                      },
                      1500
 
@@ -930,7 +934,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
       %{user: user, project: project, steps: [s1 | _], task: task} =
         setup_linear_workflow(step_count: 1, finish_last_step: false)
 
-      subscribe_project(project.id)
+      subscribe_daemon(task)
 
       pid = start_orchestrator(task, user)
       wait_for_state(pid, :executing)
@@ -967,7 +971,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
       %{user: user, project: project, task: task} =
         setup_linear_workflow(step_count: 1, finish_last_step: false)
 
-      subscribe_project(project.id)
+      subscribe_daemon(task)
 
       pid = start_orchestrator(task, user)
       wait_for_state(pid, :executing)

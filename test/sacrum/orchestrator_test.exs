@@ -361,7 +361,11 @@ defmodule Sacrum.OrchestratorTest do
       {pool, pool_pid} = start_test_pool()
       slot = reserve_pool_slot(pool)
       execution = create_direct_execution(ctx.task, ctx.step, ctx.task_run, ctx.user.id)
-      Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{ctx.project.id}")
+
+      Phoenix.PubSub.subscribe(
+        Sacrum.PubSub,
+        "daemon:#{Sacrum.Repo.Schemas.Task.workspace_daemon(ctx.task)}"
+      )
 
       {:ok, worker} =
         AsyncStepExecutionSupervisor.start_execution(
