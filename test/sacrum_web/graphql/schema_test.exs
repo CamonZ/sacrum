@@ -3022,6 +3022,148 @@ defmodule SacrumWeb.Graphql.SchemaTest do
     end
   end
 
+  describe "composite project ownership" do
+    test "creates a task for a valid project reference", %{conn: conn} do
+      user = create_user()
+      {:ok, project} = Accounts.Projects.insert(user.id, %{name: "Valid Task Project"})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createTask(projectId: "#{project.id}", title: "Scoped Task") {
+              id
+              projectId
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] == nil
+      assert result["data"]["createTask"]["projectId"] == project.id
+    end
+
+    test "rejects a task for a missing project reference", %{conn: conn} do
+      user = create_user()
+      {:ok, project} = Accounts.Projects.insert(user.id, %{name: "Task Workflow Project"})
+
+      default_workflow =
+        Sacrum.Repo.get_by!(Sacrum.Repo.Schemas.Workflow,
+          project_id: project.id,
+          is_default: true
+        )
+
+      missing_project_id = Ecto.UUID.generate()
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createTask(
+              projectId: "#{missing_project_id}"
+              title: "Missing Project Task"
+              workflowId: "#{default_workflow.id}"
+            ) {
+              id
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["createTask"] == nil
+      assert [%{"message" => message}] = result["errors"]
+      assert message =~ "project"
+    end
+
+    test "rejects a task for another user's project", %{conn: conn} do
+      owner = create_user(%{email: "task-owner@example.com", username: "task_owner"})
+      caller = create_user(%{email: "task-caller@example.com", username: "task_caller"})
+      {:ok, project} = Accounts.Projects.insert(owner.id, %{name: "Private Task Project"})
+
+      result =
+        conn
+        |> authenticate(caller)
+        |> graphql("""
+          mutation {
+            createTask(projectId: "#{project.id}", title: "Cross User Task") {
+              id
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["createTask"] == nil
+      assert [%{"message" => message}] = result["errors"]
+      assert message =~ "project"
+    end
+
+    test "creates a workflow for a valid project reference", %{conn: conn} do
+      user = create_user()
+      {:ok, project} = Accounts.Projects.insert(user.id, %{name: "Valid Workflow Project"})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createWorkflow(projectId: "#{project.id}", name: "Scoped Workflow") {
+              id
+              projectId
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] == nil
+      assert result["data"]["createWorkflow"]["projectId"] == project.id
+    end
+
+    test "rejects a workflow for a missing project reference", %{conn: conn} do
+      user = create_user()
+      missing_project_id = Ecto.UUID.generate()
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createWorkflow(projectId: "#{missing_project_id}", name: "Missing Project Workflow") {
+              id
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["createWorkflow"] == nil
+      assert [%{"message" => message}] = result["errors"]
+      assert message =~ "project"
+    end
+
+    test "rejects a workflow for another user's project", %{conn: conn} do
+      owner = create_user(%{email: "workflow-owner@example.com", username: "workflow_owner"})
+      caller = create_user(%{email: "workflow-caller@example.com", username: "workflow_caller"})
+      {:ok, project} = Accounts.Projects.insert(owner.id, %{name: "Private Workflow Project"})
+
+      result =
+        conn
+        |> authenticate(caller)
+        |> graphql("""
+          mutation {
+            createWorkflow(projectId: "#{project.id}", name: "Cross User Workflow") {
+              id
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["createWorkflow"] == nil
+      assert [%{"message" => message}] = result["errors"]
+      assert message =~ "project"
+    end
+  end
+
   describe "workflow step queries" do
     setup [:setup_user_and_project]
 
@@ -7754,7 +7896,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert result["errors"] != nil
     end
 
-    test "listReady with another user's project returns error", %{
+    test "listReady with another user's project returns no tasks", %{
       conn: conn,
       user: user,
       project: project,
@@ -7768,7 +7910,8 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         |> graphql(~s|{ listReady(projectId: "#{project.id}") { id } }|)
         |> json_response(200)
 
-      assert result["errors"] != nil
+      assert result["errors"] == nil
+      assert result["data"]["listReady"] == []
     end
   end
 

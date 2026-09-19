@@ -5,6 +5,7 @@ defmodule Sacrum.Repo.Schemas.Workflow do
   @type t :: %__MODULE__{}
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
+  @project_scope_constraint "workflows_project_scope_fkey"
 
   schema "workflows" do
     field :name, :string
@@ -38,7 +39,7 @@ defmodule Sacrum.Repo.Schemas.Workflow do
     |> cast(attrs, @create_fields)
     |> validate_required([:name])
     |> validate_length(:name, min: 1, max: 255)
-    |> foreign_key_constraint(:project_id)
+    |> foreign_key_constraint(:project_id, name: @project_scope_constraint)
     |> unique_constraint(:is_default, name: :workflows_unique_default_per_project)
   end
 

@@ -124,6 +124,61 @@ defmodule Sacrum.Repo.TasksTest do
     end
   end
 
+  describe "project ownership" do
+    test "accepts an explicit user and project pair" do
+      user = create_user()
+      project = create_project(user)
+
+      assert {:ok, %Task{} = task} =
+               Tasks.insert(project.id, user.id, %{title: "Explicit Scope Task"})
+
+      assert task.user_id == user.id
+      assert task.project_id == project.id
+    end
+
+    test "rejects a missing project reference" do
+      user = create_user()
+      project = create_project(user)
+
+      workflow =
+        Sacrum.Repo.get_by!(Sacrum.Repo.Schemas.Workflow,
+          project_id: project.id,
+          is_default: true
+        )
+
+      task = %Task{
+        project_id: Ecto.UUID.generate(),
+        user_id: user.id,
+        workflow_id: workflow.id,
+        current_step_id: workflow.initial_step_id
+      }
+
+      changeset = Task.create_changeset(task, %{title: "Missing Project Task"})
+
+      assert {:error, changeset} =
+               Tasks.insert(changeset)
+
+      assert %{project_id: ["does not exist"]} = errors_on(changeset)
+    end
+
+    test "rejects a project owned by another user" do
+      owner = create_user()
+      project = create_project(owner)
+
+      caller =
+        create_user(%{
+          email: "caller@example.com",
+          username: "caller",
+          password: "password123"
+        })
+
+      assert {:error, changeset} =
+               Tasks.insert(project.id, caller.id, %{title: "Cross User Task"})
+
+      assert %{project_id: ["does not exist"]} = errors_on(changeset)
+    end
+  end
+
   describe "get/1" do
     test "get/1 returns task by id" do
       user = create_user()

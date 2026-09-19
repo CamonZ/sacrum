@@ -149,29 +149,27 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
         project_id = Map.get(args, :project_id)
         include_archived = Map.get(args, :include_archived, false)
 
-        with {:ok, _project} <- Accounts.Projects.get_by(user.id, conditions: [id: project_id]) do
-          conditions =
-            Enum.reject(
-              [
-                project_id: project_id,
-                level: Map.get(args, :level),
-                priority: Map.get(args, :priority),
-                parent_id: Map.get(args, :parent_id),
-                status: Map.get(args, :status),
-                step_id: Map.get(args, :step_id),
-                tags: Map.get(args, :tags),
-                search: Map.get(args, :search),
-                workflow_id: Map.get(args, :workflow_id),
-                root_only: Map.get(args, :root_only),
-                blocked: Map.get(args, :blocked),
-                archived: if(include_archived, do: nil, else: false)
-              ],
-              fn {_k, v} -> is_nil(v) end
-            )
+        conditions =
+          Enum.reject(
+            [
+              project_id: project_id,
+              level: Map.get(args, :level),
+              priority: Map.get(args, :priority),
+              parent_id: Map.get(args, :parent_id),
+              status: Map.get(args, :status),
+              step_id: Map.get(args, :step_id),
+              tags: Map.get(args, :tags),
+              search: Map.get(args, :search),
+              workflow_id: Map.get(args, :workflow_id),
+              root_only: Map.get(args, :root_only),
+              blocked: Map.get(args, :blocked),
+              archived: if(include_archived, do: nil, else: false)
+            ],
+            fn {_k, v} -> is_nil(v) end
+          )
 
-          tasks = Accounts.Tasks.list_tasks(user.id, conditions: conditions)
-          {:ok, tasks}
-        end
+        tasks = Accounts.Tasks.list_tasks(user.id, conditions: conditions)
+        {:ok, tasks}
       end)
     end
 
@@ -190,10 +188,8 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
       arg(:project_id, non_null(:uuid4))
 
       resolve(fn %{project_id: project_id}, %{context: %{current_user: user}} ->
-        with {:ok, _project} <- Accounts.Projects.get_by(user.id, conditions: [id: project_id]) do
-          tasks = Accounts.Tasks.ready(user.id, project_id)
-          {:ok, tasks}
-        end
+        tasks = Accounts.Tasks.ready(user.id, project_id)
+        {:ok, tasks}
       end)
     end
 
@@ -202,11 +198,9 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
       arg(:prefix, non_null(:string))
 
       resolve(fn %{project_id: project_id, prefix: prefix}, %{context: %{current_user: user}} ->
-        with {:ok, _project} <- Accounts.Projects.get_by(user.id, conditions: [id: project_id]) do
-          user.id
-          |> Accounts.Tasks.resolve_short_id(project_id, prefix)
-          |> ShortIdErrors.format("task", prefix)
-        end
+        user.id
+        |> Accounts.Tasks.resolve_short_id(project_id, prefix)
+        |> ShortIdErrors.format("task", prefix)
       end)
     end
 
@@ -239,10 +233,8 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
       resolve(fn args, %{context: %{current_user: user}} ->
         project_id = Map.get(args, :project_id)
 
-        with {:ok, _project} <- Accounts.Projects.get_by(user.id, conditions: [id: project_id]) do
-          attrs = Map.drop(args, [:project_id])
-          Accounts.Tasks.insert(user.id, project_id, attrs)
-        end
+        attrs = Map.drop(args, [:project_id])
+        Accounts.Tasks.insert(user.id, project_id, attrs)
       end)
     end
 
