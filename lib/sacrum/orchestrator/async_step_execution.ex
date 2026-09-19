@@ -13,20 +13,26 @@ defmodule Sacrum.Orchestrator.AsyncStepExecution do
 
   @terminal_statuses ~w(completed failed cancelled stopped)
 
-  @spec child_spec({binary(), binary(), binary(), binary(), GenServer.server()}) ::
+  @spec child_spec(tuple()) ::
           Supervisor.child_spec()
   def child_spec({execution_id, user_id, project_id, task_run_id, pool}) do
+    child_spec({execution_id, user_id, project_id, task_run_id, pool, []})
+  end
+
+  def child_spec(
+        {execution_id, _user_id, _project_id, _task_run_id, _pool, _admission_opts} = args
+      ) do
     %{
       id: {__MODULE__, execution_id},
-      start: {__MODULE__, :start_link, [{execution_id, user_id, project_id, task_run_id, pool}]},
+      start: {__MODULE__, :start_link, [args]},
       restart: :temporary,
       type: :worker
     }
   end
 
-  @spec start_link({binary(), binary(), binary(), binary(), GenServer.server()}) ::
+  @spec start_link(tuple()) ::
           GenServer.on_start()
-  def start_link({execution_id, _user_id, _project_id, _task_run_id, _pool} = args) do
+  def start_link({execution_id, _user_id, _project_id, _task_run_id, _pool, _opts} = args) do
     GenServer.start_link(
       __MODULE__,
       args,
@@ -35,7 +41,7 @@ defmodule Sacrum.Orchestrator.AsyncStepExecution do
   end
 
   @impl true
-  def init({execution_id, user_id, project_id, task_run_id, pool}) do
+  def init({execution_id, user_id, project_id, task_run_id, pool, admission_opts}) do
     Registry.update_value(
       Sacrum.Orchestrator.AsyncStepExecutionRegistry,
       execution_id,
@@ -49,13 +55,20 @@ defmodule Sacrum.Orchestrator.AsyncStepExecution do
        project_id: project_id,
        task_run_id: task_run_id,
        pool: pool,
+       admission_opts: admission_opts,
        slot_id: nil
      }, {:continue, :run}}
   end
 
   @impl true
   def handle_continue(:run, state) do
-    case ExecutionPool.request_slot(state.pool, self(), :infinity) do
+    opts =
+      Keyword.merge(state.admission_opts,
+        attempt_id: state.execution_id,
+        execution_id: state.execution_id
+      )
+
+    case ExecutionPool.request_slot(state.pool, self(), :infinity, opts) do
       {:ok, slot_id} -> run_started(%{state | slot_id: slot_id})
       {:error, :cancelled} -> finish(state)
       {:error, reason} -> fail(state, reason)

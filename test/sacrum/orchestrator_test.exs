@@ -111,13 +111,18 @@ defmodule Sacrum.OrchestratorTest do
   end
 
   defp reserve_pool_slot(pool) do
-    {:ok, slot} = ExecutionPool.request_slot(pool, self(), :infinity)
+    {:ok, slot} =
+      ExecutionPool.request_slot(pool, self(), :infinity,
+        daemon_id: "test-daemon",
+        daemon_max_concurrency: 1
+      )
+
     slot
   end
 
   defp start_test_pool do
     pool = String.to_atom("async_step_test_pool_#{System.unique_integer([:positive])}")
-    {:ok, pool_pid} = ExecutionPool.start_link(name: pool, max_concurrent: 1)
+    {:ok, pool_pid} = ExecutionPool.start_link(name: pool)
     {pool, pool_pid}
   end
 
@@ -317,7 +322,9 @@ defmodule Sacrum.OrchestratorTest do
           ctx.user.id,
           ctx.project.id,
           ctx.task_run.id,
-          pool
+          pool,
+          daemon_id: "test-daemon",
+          daemon_max_concurrency: 1
         )
 
       on_exit(fn ->
@@ -340,7 +347,13 @@ defmodule Sacrum.OrchestratorTest do
       assert ExecutionPool.pool_status(pool).in_use_count == 1
 
       assert :ok = ExecutionPool.release_slot(pool, slot)
-      assert {:ok, replacement} = ExecutionPool.request_slot(pool, self(), 1_000)
+
+      assert {:ok, replacement} =
+               ExecutionPool.request_slot(pool, self(), 1_000,
+                 daemon_id: "test-daemon",
+                 daemon_max_concurrency: 1
+               )
+
       assert :ok = ExecutionPool.release_slot(pool, replacement)
     end
 
@@ -356,7 +369,9 @@ defmodule Sacrum.OrchestratorTest do
           ctx.user.id,
           ctx.project.id,
           ctx.task_run.id,
-          pool
+          pool,
+          daemon_id: "test-daemon",
+          daemon_max_concurrency: 1
         )
 
       on_exit(fn ->
@@ -387,7 +402,12 @@ defmodule Sacrum.OrchestratorTest do
       assert ExecutionPool.pool_status(pool).queue_length == 0
       assert ExecutionPool.pool_status(pool).in_use_count == 0
 
-      assert {:ok, replacement} = ExecutionPool.request_slot(pool, self(), 1_000)
+      assert {:ok, replacement} =
+               ExecutionPool.request_slot(pool, self(), 1_000,
+                 daemon_id: "test-daemon",
+                 daemon_max_concurrency: 1
+               )
+
       assert :ok = ExecutionPool.release_slot(pool, replacement)
     end
   end

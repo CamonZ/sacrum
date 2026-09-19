@@ -62,10 +62,22 @@ unknown identity.
 ## Execution concurrency
 
 `maxConcurrency` is an optional positive integer controlling the daemon's
-client-side execution budget. A `null` value leaves the daemon unlimited from
-its own configuration perspective. Owners can set or clear the value with
+in-memory step-admission budget. A `null` value leaves the daemon unlimited
+from its own configuration perspective. The orchestration coordinator pins a
+task-run tree to its assigned daemon, and each active step temporarily consumes
+one slot from that daemon. Waiting human-input and child steps release their
+active slot while retaining the task-tree placement. Accepted work on one
+daemon does not consume capacity on another daemon. Owners can set or clear the value with
 `setDaemonMaxConcurrency(id:, maxConcurrency:)` and
 `clearDaemonMaxConcurrency(id:)`; both mutations are owner-scoped.
+
+Admission status has three meanings: `configured` is the current positive
+limit or `null` for unlimited, `in_use` is the number of active step slots
+tracked by the in-memory coordinator, and `available` is the remaining
+capacity or `null` when unlimited. Lowering a limit does not interrupt existing
+steps; it only pauses new admission until occupancy falls below the new limit.
+The occupancy map is process-local and is rebuilt as orchestration processes
+request and release slots; it is not a durable step-attempt ledger.
 
 ## Owner management surface (GraphQL)
 

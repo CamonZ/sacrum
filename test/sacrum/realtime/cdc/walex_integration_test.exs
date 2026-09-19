@@ -420,7 +420,7 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
       :ok = subscribe_project(project.id)
 
       {:ok, execution} =
-        ExecutionDispatcher.create_and_dispatch(user.id, task, step.id, task_run)
+        ExecutionDispatcher.create_and_dispatch(task, step, task_run)
 
       assert_receive %Phoenix.Socket.Broadcast{event: "step_execution_created"}, 1_000
 
@@ -1430,7 +1430,8 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
 
     {:ok, workflow} = Workflows.update(workflow, %{initial_step_id: first_step.id})
 
-    {Map.put(workflow, :user_id, user.id), first_step, second_step}
+    workflow = Map.put(workflow, :user_id, user.id)
+    {workflow, Repo.preload(first_step, :workflow), Repo.preload(second_step, :workflow)}
   end
 
   defp create_task(project, title, attrs) do

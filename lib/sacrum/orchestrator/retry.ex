@@ -10,7 +10,7 @@ defmodule Sacrum.Orchestrator.Retry do
 
   require Logger
 
-  alias Sacrum.Orchestrator.{ExecutionDispatcher, ExecutionEvents, FSMData, WorkflowGraph}
+  alias Sacrum.Orchestrator.{ExecutionPool, FSMData}
   alias Sacrum.Orchestrator.TaskRuns.RetryExhaustion
   alias Sacrum.Repo.Schemas.TaskRun
 
@@ -32,41 +32,13 @@ defmodule Sacrum.Orchestrator.Retry do
       "[TaskOrchestrator:#{data.task.id}] Execution #{execution_id} failed attempt=#{attempt}/#{@max_retries}"
     )
 
-    if attempt < @max_retries,
-      do: create_retry_execution_and_dispatch(data),
-      else: exhaust_retries(execution_id, data, attempt)
-  end
+    if attempt < @max_retries do
+      if data.slot_id, do: ExecutionPool.release_slot(data.slot_id)
 
-  @spec create_retry_execution_and_dispatch(FSMData.t()) ::
-          {:keep_state, FSMData.t()} | {:next_state, :failed, FSMData.t()}
-  defp create_retry_execution_and_dispatch(data) do
-    task_id = data.task.id
-    attempt = data.run_retry_attempt + 1
-
-    with {:ok, current_step} <- WorkflowGraph.get_current_step(data),
-         {:ok, execution} <-
-           ExecutionDispatcher.create_and_dispatch(
-             data.user_id,
-             data.task,
-             current_step.id,
-             data.task_run_id
-           ) do
-      :ok = ExecutionEvents.subscribe(execution.id)
-
-      new_data = %{data | current_execution_id: execution.id, run_retry_attempt: attempt}
-
-      Logger.info(
-        "[TaskOrchestrator:#{task_id}] Retry execution #{execution.id} step=#{current_step.id} (#{current_step.name}) attempt=#{attempt}/#{@max_retries}"
-      )
-
-      {:keep_state, new_data}
+      {:next_state, :awaiting_execution,
+       %{data | slot_id: nil, current_execution_id: execution_id, run_retry_attempt: attempt}}
     else
-      {:error, reason} ->
-        Logger.error(
-          "[TaskOrchestrator:#{task_id}] Failed to create retry execution: #{inspect(reason)}"
-        )
-
-        {:next_state, :failed, data}
+      exhaust_retries(execution_id, data, attempt)
     end
   end
 

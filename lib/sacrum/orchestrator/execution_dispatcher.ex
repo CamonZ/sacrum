@@ -18,7 +18,6 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   require Logger
 
   alias Ecto.Multi
-  alias Sacrum.Accounts
 
   alias Sacrum.Orchestrator.{
     AsyncStepExecutionSupervisor,
@@ -33,18 +32,9 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   alias Sacrum.Repo.Schemas.{StepExecution, Task, TaskRun, WorkflowStep}
   alias Sacrum.Routing.RouteMode
   alias Sacrum.TaskRuns.Status, as: TaskRunStatus
-  alias Sacrum.Tasks.Placement
   alias Sacrum.Tasks.Status
 
   @typep handoff :: map() | nil
-
-  defguardp task_run_lookup_error(reason)
-            when reason in [
-                   :task_run_not_found,
-                   :task_run_user_mismatch,
-                   :task_run_project_mismatch,
-                   :task_run_task_mismatch
-                 ]
 
   @doc """
   Creates a "started" StepExecution for the current step and broadcasts run_step
@@ -55,47 +45,54 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   orchestrator from FSMData after a route step).
   """
   @spec create_and_dispatch(
-          String.t(),
-          struct(),
-          String.t(),
-          String.t() | TaskRun.t(),
-          map() | nil
+          Task.t(),
+          WorkflowStep.t(),
+          TaskRun.t(),
+          map() | nil,
+          keyword()
         ) ::
           {:ok, StepExecution.t()} | {:error, term()}
-  def create_and_dispatch(user_id, task, step_id, task_run_or_id, handoff \\ nil) do
-    with {:ok, task} <- Placement.resolve_for_dispatch(task),
-         {:ok, step} <- fetch_step(user_id, step_id),
+  def create_and_dispatch(task, step, task_run, handoff \\ nil, opts \\ []) do
+    with :ok <- validate_dispatch_context(task, step, task_run),
          :ok <- validate_dispatchable_step(step),
          :ok <- validate_workflow(task),
-         {:ok, task_run} <- fetch_and_validate_task_run(task_run_or_id, task) do
-      {:ok, rendered} = render_dispatch_prompt(task, step, task_run, handoff)
-      commit_and_broadcast_dispatch(task, step, task_run, handoff, rendered)
+         {:ok, _task_run} <- validate_task_run(task_run, task) do
+      case Keyword.get(opts, :reuse_active, false) &&
+             reusable_active_execution(Keyword.get(opts, :active_execution), task_run, step) do
+        %StepExecution{} = execution ->
+          {:ok, execution}
+
+        _ ->
+          {:ok, rendered} = render_dispatch_prompt(task, step, task_run, handoff)
+          commit_and_broadcast_dispatch(task, step, task_run, handoff, rendered)
+      end
     else
       {:error, reason} = err ->
         Logger.error("[ExecutionDispatcher] create_and_dispatch failed: #{inspect(reason)}")
-        mark_dispatch_failure(task_run_or_id, reason)
+        mark_dispatch_failure(task_run, reason)
         err
     end
   end
 
   @doc "Persists a queued direct run and starts its supervised asynchronous worker."
-  @spec create_and_queue(String.t(), Task.t(), String.t(), TaskRun.t()) ::
+  @spec create_and_queue(Task.t(), WorkflowStep.t(), TaskRun.t(), keyword()) ::
           {:ok, StepExecution.t()} | {:error, term()}
-  def create_and_queue(user_id, task, step_id, task_run) do
-    with {:ok, task} <- Placement.resolve_for_dispatch(task),
-         {:ok, step} <- fetch_step(user_id, step_id),
+  def create_and_queue(task, step, task_run, admission_opts \\ []) do
+    with :ok <- validate_dispatch_context(task, step, task_run),
          :ok <- validate_dispatchable_step(step),
          :ok <- validate_workflow(task),
-         {:ok, task_run} <- fetch_and_validate_task_run(task_run, task),
+         {:ok, _task_run} <- validate_task_run(task_run, task),
          {:ok, rendered} <- render_dispatch_prompt(task, step, task_run, nil),
          {:ok, %{execution: execution}} <-
            insert_and_stamp(task, step, task_run, nil, rendered, "queued"),
          {:ok, _pid} <-
            AsyncStepExecutionSupervisor.start_execution(
              execution.id,
-             user_id,
+             task.user_id,
              task.project_id,
-             task_run.id
+             task_run.id,
+             Sacrum.Orchestrator.ExecutionPool,
+             admission_opts
            ) do
       {:ok, execution}
     else
@@ -106,26 +103,28 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
     end
   end
 
+  defp reusable_active_execution(
+         %StepExecution{
+           task_run_id: task_run_id,
+           step_id: step_id,
+           status: status
+         } = execution,
+         %TaskRun{id: task_run_id},
+         %WorkflowStep{id: step_id}
+       )
+       when status in ["queued", "started", "in_progress"],
+       do: execution
+
+  defp reusable_active_execution(_execution, _task_run, _step), do: nil
+
   @doc """
   Validate that a workflow step may be dispatched directly by a client.
 
   Stop steps are orchestrator-owned run boundaries. They are reached through
   workflow transitions and are never dispatched to a daemon.
   """
-  @spec validate_step(String.t(), String.t()) :: :ok | {:error, term()}
-  def validate_step(user_id, step_id) do
-    with {:ok, step} <- fetch_step(user_id, step_id) do
-      validate_dispatchable_step(step)
-    end
-  end
-
-  @spec fetch_step(binary(), binary()) :: {:ok, WorkflowStep.t()} | {:error, term()}
-  defp fetch_step(user_id, step_id) do
-    Accounts.WorkflowSteps.get_by(user_id,
-      conditions: [id: step_id],
-      preloads: [:workflow]
-    )
-  end
+  @spec validate_step(WorkflowStep.t()) :: :ok | {:error, term()}
+  def validate_step(%WorkflowStep{} = step), do: validate_dispatchable_step(step)
 
   defp validate_dispatchable_step(%WorkflowStep{step_type: :stop}),
     do: {:error, :stop_step_not_dispatchable}
@@ -146,6 +145,22 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   @spec validate_workflow(map()) :: :ok | {:error, :no_workflow}
   defp validate_workflow(%{workflow_id: nil}), do: {:error, :no_workflow}
   defp validate_workflow(_task), do: :ok
+
+  @spec validate_dispatch_context(Task.t(), WorkflowStep.t(), TaskRun.t()) ::
+          :ok | {:error, term()}
+  defp validate_dispatch_context(
+         %Task{} = task,
+         %WorkflowStep{} = step,
+         %TaskRun{} = task_run
+       ) do
+    cond do
+      task.user_id != step.user_id -> {:error, :step_user_mismatch}
+      task.user_id != task_run.user_id -> {:error, :task_run_user_mismatch}
+      task.project_id != task_run.project_id -> {:error, :task_run_project_mismatch}
+      task.id != task_run.task_id -> {:error, :task_run_task_mismatch}
+      true -> :ok
+    end
+  end
 
   @spec render_dispatch_prompt(Task.t(), WorkflowStep.t(), TaskRun.t(), handoff()) ::
           {:ok, String.t()} | {:error, term()}
@@ -278,19 +293,6 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
     {:ok, execution}
   end
 
-  @spec fetch_and_validate_task_run(TaskRun.t() | binary(), Task.t()) ::
-          {:ok, TaskRun.t()} | {:error, term()}
-  defp fetch_and_validate_task_run(%TaskRun{} = task_run, task) do
-    validate_task_run(task_run, task)
-  end
-
-  defp fetch_and_validate_task_run(task_run_id, task) when is_binary(task_run_id) do
-    case Repo.get(TaskRun, task_run_id) do
-      nil -> {:error, :task_run_not_found}
-      task_run -> validate_task_run(task_run, task)
-    end
-  end
-
   @spec validate_task_run(TaskRun.t(), Task.t()) :: {:ok, TaskRun.t()} | {:error, term()}
   defp validate_task_run(%TaskRun{} = task_run, task) do
     cond do
@@ -313,8 +315,13 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
 
   @spec mark_dispatch_failure(term(), term()) ::
           :ok | {:ok, TaskRun.t() | :unchanged} | {:error, term()}
-  defp mark_dispatch_failure(_task_run_or_id, reason)
-       when task_run_lookup_error(reason),
+  defp mark_dispatch_failure(_task_run, reason)
+       when reason in [
+              :step_user_mismatch,
+              :task_run_user_mismatch,
+              :task_run_project_mismatch,
+              :task_run_task_mismatch
+            ],
        do: :ok
 
   defp mark_dispatch_failure(_task_run_or_id, {:task_run_not_dispatchable, _status}), do: :ok
@@ -325,25 +332,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
 
   defp mark_dispatch_failure(_task_run_or_id, :route_not_configured), do: :ok
 
-  defp mark_dispatch_failure(task_run_or_id, reason) do
-    case fetch_task_run_for_failure(task_run_or_id) do
-      {:ok, task_run} ->
-        Failure.mark_if_active(task_run, {:dispatch_failed, reason})
-
-      {:error, _reason} ->
-        :ok
-    end
+  defp mark_dispatch_failure(%TaskRun{} = task_run, reason) do
+    Failure.mark_if_active(task_run, {:dispatch_failed, reason})
   end
-
-  @spec fetch_task_run_for_failure(term()) :: {:ok, TaskRun.t()} | {:error, term()}
-  defp fetch_task_run_for_failure(%TaskRun{} = task_run), do: {:ok, task_run}
-
-  defp fetch_task_run_for_failure(task_run_id) when is_binary(task_run_id) do
-    case Repo.get(TaskRun, task_run_id) do
-      nil -> {:error, :not_found}
-      task_run -> {:ok, task_run}
-    end
-  end
-
-  defp fetch_task_run_for_failure(_task_run), do: {:error, :invalid_task_run}
 end

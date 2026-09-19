@@ -134,17 +134,20 @@ TaskRun tree. A child run does not get a separate budget: its
 `rootTaskRunId` identifies the shared scope, and its `maxConcurrency` read is
 the effective inherited root limit.
 
-The limit is evaluated together with Sacrum's global execution-pool limit, so
-setting a root limit does not increase the global capacity. Omit
-`maxConcurrency` or pass `null` to use only the global pool limit. The root
-limit is chosen when the active root run is created and is not changed by
-reusing that run.
+The limit is evaluated together with the selected daemon's in-memory admission
+limit. The task-run tree remains pinned to that daemon for the lifetime of the
+coordinator.
+There is no implicit fleet-wide execution-pool limit. Omit
+`maxConcurrency` or pass `null` to use only daemon admission. The root limit is
+chosen when the active root run is created and is not changed by reusing that
+run. Admission occupancy is process-local; it is not persisted as a separate
+step-attempt ledger.
 
 Clients should start limited runs through `runWorkflow`; they should not send
 `parentTaskRunId` or `rootTaskRunId` when creating a run. A direct `runStep`
 dispatch is rejected when the selected active run has a custom root limit, so
 that work cannot bypass the hierarchical budget. Existing runs without a
-custom limit retain the legacy global-only behavior.
+custom limit use in-memory daemon admission only.
 
 ## Task Status Compatibility
 

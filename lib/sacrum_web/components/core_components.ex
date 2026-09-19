@@ -578,8 +578,8 @@ defmodule SacrumWeb.CoreComponents do
   @doc """
   Pulse strip component for the Command Center.
 
-  Renders four rolling 24h metrics in mono typography:
-  - Concurrency vs cap
+  Renders rolling 24h metrics in mono typography:
+  - Current admitted step attempts
   - Spend (USD and tokens)
   - Throughput
   - P50 time-to-terminal-step
@@ -587,7 +587,7 @@ defmodule SacrumWeb.CoreComponents do
   Greys out when the LiveView socket disconnects.
   """
   attr :concurrency, :integer, default: 0
-  attr :cap, :integer, default: 4
+  attr :concurrency_by_daemon, :map, default: %{}
   attr :spend_usd, :any, default: Decimal.new(0)
   attr :spend_tokens, :integer, default: 0
   attr :throughput, :integer, default: 0
@@ -604,7 +604,7 @@ defmodule SacrumWeb.CoreComponents do
     ]}>
       <div class="flex items-center gap-3">
         <span class="text-text-muted text-xs uppercase tracking-wide">CONC</span>
-        <span class="font-mono text-text-primary font-medium">{@concurrency}/{@cap}</span>
+        <span class="font-mono text-text-primary font-medium">{@concurrency}</span>
       </div>
 
       <div class="flex items-center gap-3">
