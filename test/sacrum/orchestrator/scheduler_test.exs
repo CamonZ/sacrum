@@ -206,6 +206,47 @@ defmodule Sacrum.Orchestrator.SchedulerTest do
     end
   end
 
+  describe "schedule_task_run/2" do
+    test "admits an unassigned child through root daemon placement" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project)
+      step = create_step(user, workflow, %{name: "Child Step", step_order: 1})
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: step.id})
+
+      root = create_task(user, project, %{title: "Root"})
+
+      {:ok, child} =
+        Accounts.Tasks.insert(user.id, project.id, %{
+          title: "Child",
+          description: "Child description",
+          level: "task",
+          priority: "medium",
+          tags: [],
+          parent_id: root.id
+        })
+
+      child = assign_workflow_to_task(user, child, workflow)
+
+      {:ok, root_run} =
+        Accounts.TaskRuns.insert(user.id, project.id, root.id, %{status: :executing})
+
+      {:ok, child_run} =
+        Accounts.TaskRuns.insert(user.id, project.id, child.id, %{
+          status: :queued,
+          parent_task_run_id: root_run.id,
+          root_task_run_id: root_run.id
+        })
+
+      on_exit(fn -> Sacrum.Orchestrator.stop(child.id) end)
+
+      assert :ok = Scheduler.schedule_task_run(child.id, child_run.id)
+
+      placed_child = Repo.get!(Sacrum.Repo.Schemas.Task, child.id)
+      assert placed_child.workspace_daemon_id == root.workspace_daemon_id
+    end
+  end
+
   describe "notify_task_completed/2" do
     test "starts dependent task when all blockers complete" do
       user = create_user()
