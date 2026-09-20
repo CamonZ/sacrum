@@ -105,7 +105,7 @@ defmodule Sacrum.Orchestrator.Scheduler do
          :ok <- validate_no_active_fsm(task_id),
          {:ok, task_run} <- Lookup.fetch(task_run_id),
          :ok <- validate_task_run_matches(task_run, task_record),
-         {:ok, _task_record} <- Placement.resolve_for_dispatch(task_record),
+         :ok <- validate_existing_run_placement(task_record, task_run),
          {:ok, task_run} <- Root.validate_dispatchable(task_run) do
       Logger.info(
         "[Scheduler] Starting existing TaskRun task_id=#{task_id}, task_run_id=#{task_run.id}"
@@ -116,6 +116,21 @@ defmodule Sacrum.Orchestrator.Scheduler do
       {:error, reason} = err ->
         Logger.error("[Scheduler] validate_and_schedule_existing_run failed: #{inspect(reason)}")
         err
+    end
+  end
+
+  @spec validate_existing_run_placement(Task.t(), TaskRun.t()) :: :ok | {:error, term()}
+  defp validate_existing_run_placement(_task, %TaskRun{root_task_run_id: root_task_run_id})
+       when is_binary(root_task_run_id),
+       do: :ok
+
+  defp validate_existing_run_placement(task, _task_run),
+    do: validate_root_placement(task)
+
+  defp validate_root_placement(task) do
+    case Placement.resolve_for_dispatch(task) do
+      {:ok, _task} -> :ok
+      error -> error
     end
   end
 
