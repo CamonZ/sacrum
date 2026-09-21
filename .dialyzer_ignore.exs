@@ -6,6 +6,7 @@
   {"lib/sacrum/orchestrator/execution_dispatcher.ex", :call_without_opaque},
   {"lib/sacrum/repo/projects.ex", :call_without_opaque},
   {"lib/sacrum/repo/daemons.ex", :call_without_opaque},
+  {"lib/sacrum/repo/workflow_bundles.ex", :call_without_opaque},
   # MapSet opaque type passed through recursive calls
   {"lib/sacrum/repo/task_dependencies.ex", :call_without_opaque},
   {"lib/sacrum/repo/task_dependencies.ex", :call_with_opaque},
