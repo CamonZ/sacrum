@@ -4,8 +4,9 @@ defmodule Sacrum.Repo.WorkflowBundles do
 
   The operation owns the complete workflow graph mutation. It locks the
   destination project before checking conflicts, then executes one
-  `Ecto.Multi` so default replacement, graph creation, and final route
-  validation either all commit or all roll back.
+  `Ecto.Multi` so graph creation and final route validation either all commit
+  or all roll back. Imports are additive and never change the project's
+  default workflow.
   """
 
   import Ecto.Query
@@ -76,7 +77,6 @@ defmodule Sacrum.Repo.WorkflowBundles do
       |> Multi.run(:conflicts, fn repo, %{project: project} ->
         validate_conflicts(repo, project, prepared.bundle)
       end)
-      |> maybe_demote_default(prepared.bundle, project_id, user_id)
       |> add_workflow_inserts(prepared, user_id, project_id)
       |> Multi.run(:workflow_ids, fn _repo, _changes -> {:ok, prepared.workflow_ids} end)
       |> Multi.run(:step_ids, fn _repo, _changes -> {:ok, prepared.step_ids} end)
@@ -125,59 +125,30 @@ defmodule Sacrum.Repo.WorkflowBundles do
   defp validate_conflicts(repo, project, bundle) do
     names = Enum.map(bundle.workflows, & &1.name)
 
-    cond do
-      length(names) != length(Enum.uniq(names)) ->
-        {:error, bundle_error(%{path: "workflows", message: "workflow names must be unique"})}
-
-      imported_default_count(bundle) > 1 ->
-        {:error,
-         bundle_error(%{
-           path: "workflows",
-           message: "at most one imported workflow may be default"
-         })}
-
-      true ->
-        existing_names =
-          repo.all(
-            from(workflow in Workflow,
-              where:
-                workflow.project_id == ^project.id and workflow.user_id == ^project.user_id and
-                  workflow.name in ^names,
-              select: workflow.name
-            )
+    if length(names) != length(Enum.uniq(names)) do
+      {:error, bundle_error(%{path: "workflows", message: "workflow names must be unique"})}
+    else
+      existing_names =
+        repo.all(
+          from(workflow in Workflow,
+            where:
+              workflow.project_id == ^project.id and workflow.user_id == ^project.user_id and
+                workflow.name in ^names,
+            select: workflow.name
           )
-
-        case existing_names do
-          [] ->
-            {:ok, :validated}
-
-          [name | _] ->
-            {:error,
-             bundle_error(%{
-               path: "workflows",
-               message: "workflow name #{inspect(name)} already exists in the project"
-             })}
-        end
-    end
-  end
-
-  defp imported_default_count(bundle),
-    do: Enum.count(bundle.workflows, & &1.is_default)
-
-  defp maybe_demote_default(multi, bundle, project_id, user_id) do
-    if imported_default_count(bundle) == 1 do
-      query =
-        from(workflow in Workflow,
-          where:
-            workflow.project_id == ^project_id and workflow.user_id == ^user_id and
-              workflow.is_default == true
         )
 
-      Multi.update_all(multi, :demote_existing_default, query,
-        set: [is_default: false, updated_at: DateTime.utc_now()]
-      )
-    else
-      multi
+      case existing_names do
+        [] ->
+          {:ok, :validated}
+
+        [name | _] ->
+          {:error,
+           bundle_error(%{
+             path: "workflows",
+             message: "workflow name #{inspect(name)} already exists in the project"
+           })}
+      end
     end
   end
 
@@ -188,7 +159,7 @@ defmodule Sacrum.Repo.WorkflowBundles do
         description: workflow.description,
         metadata: workflow.metadata,
         display_order: workflow.display_order,
-        is_default: workflow.is_default,
+        is_default: false,
         kanban_column: workflow.kanban_column,
         factory_name: workflow.factory_name
       }

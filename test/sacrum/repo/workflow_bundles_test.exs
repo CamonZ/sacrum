@@ -8,7 +8,7 @@ defmodule Sacrum.Repo.WorkflowBundlesTest do
   alias Sacrum.Repo.Users
   alias Sacrum.Repo.Schemas.{StepTransition, Workflow, WorkflowStep, WorkflowTransition}
 
-  test "imports forward-referenced workflows and steps atomically" do
+  test "imports workflows without changing the project's default" do
     {user, project} = create_project()
 
     assert {:ok, result} = WorkflowBundles.import(user.id, project.id, successful_bundle())
@@ -25,7 +25,8 @@ defmodule Sacrum.Repo.WorkflowBundlesTest do
     assert length(workflows) == 3
     assert length(steps) == 5
     assert Enum.count(workflows, & &1.is_default) == 1
-    assert Enum.find(workflows, &(&1.name == "Build")).is_default
+    assert Enum.find(workflows, &(&1.name == "Backlog")).is_default
+    refute Enum.find(workflows, &(&1.name == "Build")).is_default
     assert Repo.aggregate(StepTransition, :count) == 2
     assert Repo.aggregate(WorkflowTransition, :count) == 2
 
@@ -39,7 +40,7 @@ defmodule Sacrum.Repo.WorkflowBundlesTest do
            ]
   end
 
-  test "rolls back imported rows and default demotion after final route validation fails" do
+  test "rolls back imported rows and preserves the existing default after route failure" do
     {user, project} = create_project()
 
     [existing_default] =
