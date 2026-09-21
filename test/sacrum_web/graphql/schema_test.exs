@@ -1422,6 +1422,48 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert result["data"]["updateTask"]["worktree"] == "/updated/worktree/path"
     end
 
+    test "updates and persists worktree during an active task run without changing its daemon", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Active Task"})
+      task = Sacrum.TestWorkspace.assign_workspace(task, user.id, "/tmp/graphql-original")
+      daemon_id = Sacrum.Repo.Schemas.Task.workspace_daemon(task)
+
+      {:ok, _task_run} =
+        Accounts.TaskRuns.insert(user.id, project.id, task.id, %{status: :executing})
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            updateTask(id: "#{task.id}", worktree: "/tmp/graphql-updated") {
+              id
+              worktree
+              workspace { daemonId worktreePath }
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["errors"] == nil
+
+      assert result["data"]["updateTask"] == %{
+               "id" => task.id,
+               "worktree" => "/tmp/graphql-updated",
+               "workspace" => %{
+                 "daemonId" => daemon_id,
+                 "worktreePath" => "/tmp/graphql-updated"
+               }
+             }
+
+      persisted = Sacrum.Repo.get!(Sacrum.Repo.Schemas.Task, task.id)
+      assert Sacrum.Repo.Schemas.Task.workspace_daemon(persisted) == daemon_id
+      assert Sacrum.Repo.Schemas.Task.workspace_worktree(persisted) == "/tmp/graphql-updated"
+    end
+
     test "sets parent_id via updateTask", %{conn: conn, user: user, project: project} do
       {:ok, parent} = Accounts.Tasks.insert(user.id, project.id, %{title: "Parent"})
       {:ok, child} = Accounts.Tasks.insert(user.id, project.id, %{title: "Child"})
