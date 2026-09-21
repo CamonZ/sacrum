@@ -170,7 +170,7 @@ defmodule Sacrum.Tasks.Placement do
           where: tr.task_id == ^task.id and tr.status in ^@active_statuses
       )
 
-    if active_run? and current_workspace(task) != TaskWorkspace.normalize(workspace) do
+    if active_run? and Task.workspace_daemon(task) != Task.workspace_daemon(workspace) do
       {:error, :workspace_locked}
     else
       :ok
@@ -247,13 +247,6 @@ defmodule Sacrum.Tasks.Placement do
 
   defp value_or_current(attrs, key, current) do
     Map.get(attrs, key, current)
-  end
-
-  defp current_workspace(task) do
-    TaskWorkspace.normalize(%{
-      daemon_id: Task.workspace_daemon(task),
-      worktree_path: Task.workspace_worktree(task)
-    })
   end
 
   defp lock_task!(%Task{user_id: user_id, id: task_id}) do
