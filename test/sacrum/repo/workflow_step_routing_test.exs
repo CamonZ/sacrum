@@ -20,18 +20,31 @@ defmodule Sacrum.Repo.WorkflowStepRoutingTest do
     step_order: 1
   }
 
-  test "requires route_config regardless of prompt content" do
+  test "creates and updates a route draft before setting its config" do
     workflow = create_workflow()
+    destination = create_step(workflow, "Destination", 2)
 
-    for prompt <- ["Choose a destination", nil, "", "   "] do
-      assert {:error, changeset} =
-               WorkflowSteps.insert(
-                 workflow,
-                 Map.merge(@valid_attrs, %{step_type: "route", prompt: prompt})
-               )
+    assert {:ok, route} =
+             WorkflowSteps.insert(
+               workflow,
+               Map.merge(@valid_attrs, %{step_type: "route", prompt: nil})
+             )
 
-      assert %{route_config: ["is required for route steps"]} = errors_on(changeset)
-    end
+    assert route.route_config == nil
+    assert route.prompt == nil
+
+    config = route_config(destination.id)
+    assert {:ok, configured} = WorkflowSteps.update(route, %{route_config: config})
+    assert configured.route_config == config
+    assert configured.step_type == :route
+
+    assert {:ok, draft} = WorkflowSteps.update(configured, %{route_config: nil})
+    assert draft.route_config == nil
+    assert draft.step_type == :route
+
+    assert {:ok, configured_again} = WorkflowSteps.update(draft, %{route_config: config})
+    assert configured_again.route_config == config
+    assert configured_again.step_type == :route
   end
 
   test "accepts a configured route while its graph edges are still being authored" do
@@ -44,7 +57,7 @@ defmodule Sacrum.Repo.WorkflowStepRoutingTest do
                workflow,
                Map.merge(@valid_attrs, %{
                  step_type: "route",
-                 prompt: "Prompt is independent of routing",
+                 prompt: nil,
                  route_config: config
                })
              )
@@ -53,7 +66,7 @@ defmodule Sacrum.Repo.WorkflowStepRoutingTest do
     assert route.output_schema == nil
   end
 
-  test "rejects malformed route_config even when a prompt is present" do
+  test "rejects malformed route_config" do
     workflow = create_workflow()
     destination = create_step(workflow, "Destination", 2)
 
@@ -62,7 +75,7 @@ defmodule Sacrum.Repo.WorkflowStepRoutingTest do
                workflow,
                Map.merge(@valid_attrs, %{
                  step_type: "route",
-                 prompt: "Choose a destination",
+                 prompt: nil,
                  route_config: Map.put(route_config(destination.id), "version", 2)
                })
              )
@@ -71,7 +84,7 @@ defmodule Sacrum.Repo.WorkflowStepRoutingTest do
     assert message =~ "$.version: only version 1 is supported"
   end
 
-  test "preserves an empty prompt without assigning a routing output schema" do
+  test "keeps route prompt and output schema nil" do
     workflow = create_workflow()
     destination = create_step(workflow, "Destination", 2)
     string_attrs = Map.new(@valid_attrs, fn {key, value} -> {to_string(key), value} end)
@@ -79,17 +92,17 @@ defmodule Sacrum.Repo.WorkflowStepRoutingTest do
     for attrs <- [
           Map.merge(@valid_attrs, %{
             step_type: "route",
-            prompt: "",
+            prompt: nil,
             route_config: route_config(destination.id)
           }),
           Map.merge(string_attrs, %{
             "step_type" => "route",
-            "prompt" => "",
+            "prompt" => nil,
             "route_config" => route_config(destination.id)
           })
         ] do
       assert {:ok, step} = WorkflowSteps.insert(workflow, attrs)
-      assert step.prompt == ""
+      assert step.prompt == nil
       assert step.output_schema == nil
     end
   end

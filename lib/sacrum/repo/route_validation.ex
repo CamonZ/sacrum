@@ -12,10 +12,11 @@ defmodule Sacrum.Repo.RouteValidation do
     applies the write, reloads support for the still-existing owners, and
     revalidates only those owners' routes.
 
-  Route insertion/type changes and step-transition inserts may defer only a
-  missing predecessor or configured intra-workflow target edge while the
-  editor connects the graph. Route configuration is still mandatory and
-  decodable, and runtime loads reject any graph that remains incomplete.
+  Authoring writes may save unconfigured route drafts. Writes that allow
+  incomplete graphs may defer missing predecessor and configured
+  intra-workflow target edges while the editor connects the graph. Supplied
+  route configurations must remain valid, and runtime loads reject routes
+  without a configuration.
 
   The pure validation semantics live in `Sacrum.Routing.RouteValidator`.
   """
@@ -54,9 +55,10 @@ defmodule Sacrum.Repo.RouteValidation do
   mutation here can invalidate. Support is owners plus their outgoing
   destinations. Owners and support are resolved **before** the write so a
   delete cannot drop the rows we need to lock; after the write, remaining
-  owners are revalidated against the post-write support graph. The optional
-  `allow_incomplete?` flag is reserved for route authoring writes that add a
-  route or a step edge.
+  owners are revalidated against the post-write support graph. Every authoring
+  write permits null-config route drafts. The optional `allow_incomplete?`
+  flag is reserved for route and step-edge authoring writes that may defer
+  missing graph connections for configured routes.
   """
   @spec mutate(
           [binary()],
@@ -210,12 +212,7 @@ defmodule Sacrum.Repo.RouteValidation do
       remaining ->
         snapshot = build_snapshot(support_ids(remaining))
 
-        validate =
-          if allow_incomplete?,
-            do: RouteValidator.validate_mutation_snapshot(snapshot, remaining),
-            else: RouteValidator.validate_snapshot(snapshot, remaining)
-
-        case validate do
+        case RouteValidator.validate_mutation_snapshot(snapshot, remaining, allow_incomplete?) do
           :ok -> result
           {:error, reason} -> Repo.rollback(reason)
         end

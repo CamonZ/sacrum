@@ -23,6 +23,70 @@ defmodule SacrumWeb.Graphql.WorkflowStepRouteConfigTest do
   describe "workflow step route_config contract" do
     setup [:setup_user_and_project]
 
+    test "creates a route draft and allows its configuration to be set and cleared", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      graph = unconfigured_route_graph(user, project)
+
+      create_result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createWorkflowStep(
+              workflowId: "#{graph.workflow.id}"
+              name: "Route draft"
+              stepType: "route"
+              prompt: null
+              stepOrder: 4
+            ) { id stepType prompt routeConfig }
+          }
+        """)
+        |> json_response(200)
+
+      assert create_result["errors"] == nil
+
+      assert %{
+               "id" => route_id,
+               "stepType" => "route",
+               "prompt" => nil,
+               "routeConfig" => nil
+             } = create_result["data"]["createWorkflowStep"]
+
+      config = routing_config(graph.destination.id)
+      set_result = update_route_config(conn, user, route_id, config)
+      assert set_result["errors"] == nil
+      assert set_result["data"]["updateWorkflowStep"]["routeConfig"] == config
+
+      clear_result =
+        conn
+        |> recycle()
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            updateWorkflowStep(id: "#{route_id}", routeConfig: null) {
+              id stepType prompt routeConfig
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert clear_result["errors"] == nil
+
+      assert clear_result["data"]["updateWorkflowStep"] == %{
+               "id" => route_id,
+               "stepType" => "route",
+               "prompt" => nil,
+               "routeConfig" => nil
+             }
+
+      set_again_result = update_route_config(conn, user, route_id, config)
+      assert set_again_result["errors"] == nil
+      assert set_again_result["data"]["updateWorkflowStep"]["routeConfig"] == config
+    end
+
     test "creates a configured route before its graph edges are connected", %{
       conn: conn,
       user: user,
@@ -39,7 +103,7 @@ defmodule SacrumWeb.Graphql.WorkflowStepRouteConfigTest do
               workflowId: "#{graph.workflow.id}"
               name: "Configured on create"
               stepType: "route"
-              prompt: "Keep this fallback"
+              prompt: null
               stepOrder: 4
               routeConfig: #{json_arg(routing_config(graph.destination.id))}
             ) { id prompt routeConfig }
@@ -51,7 +115,7 @@ defmodule SacrumWeb.Graphql.WorkflowStepRouteConfigTest do
 
       assert %{
                "id" => route_id,
-               "prompt" => "Keep this fallback",
+               "prompt" => nil,
                "routeConfig" => route_config
              } = result["data"]["createWorkflowStep"]
 
@@ -299,7 +363,7 @@ defmodule SacrumWeb.Graphql.WorkflowStepRouteConfigTest do
         name: "Route",
         step_order: 2,
         step_type: "route",
-        prompt: "Route prompt is independent",
+        prompt: nil,
         route_config: routing_config(destination.id)
       })
 

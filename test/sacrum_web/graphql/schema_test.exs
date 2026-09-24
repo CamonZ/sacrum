@@ -3476,7 +3476,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["prompt"] == "Updated prompt"
     end
 
-    test "round-trips route_config and keeps prompt mutations independent", %{
+    test "round-trips and clears route_config on a route step", %{
       conn: conn,
       user: user,
       project: project
@@ -3510,7 +3510,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
               workflowId: "#{wf.id}"
               name: "Route"
               stepType: "route"
-              prompt: "Legacy fallback"
+              prompt: null
               stepOrder: 2
               routeConfig: #{route_config_input}
             ) { id prompt routeConfig }
@@ -3520,7 +3520,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
       assert create_result["errors"] == nil
 
-      assert %{"id" => route_id, "prompt" => "Legacy fallback", "routeConfig" => ^route_config} =
+      assert %{"id" => route_id, "prompt" => nil, "routeConfig" => ^route_config} =
                create_result["data"]["createWorkflowStep"]
 
       {:ok, route} = Accounts.WorkflowSteps.get_by(user.id, conditions: [id: route_id])
@@ -3557,7 +3557,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
       assert update_result["data"]["updateWorkflowStep"] == %{
                "id" => route.id,
-               "prompt" => "Legacy fallback",
+               "prompt" => nil,
                "routeConfig" => route_config
              }
 
@@ -3569,39 +3569,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         |> json_response(200)
 
       assert query_result["data"]["workflowStep"] == %{
-               "prompt" => "Legacy fallback",
-               "routeConfig" => route_config
-             }
-
-      null_prompt_result =
-        conn
-        |> recycle()
-        |> authenticate(user)
-        |> graphql(
-          ~s|mutation { updateWorkflowStep(id: "#{route.id}", prompt: null) { prompt routeConfig } }|
-        )
-        |> json_response(200)
-
-      assert null_prompt_result["errors"] == nil
-
-      assert null_prompt_result["data"]["updateWorkflowStep"] == %{
                "prompt" => nil,
-               "routeConfig" => route_config
-             }
-
-      empty_prompt_result =
-        conn
-        |> recycle()
-        |> authenticate(user)
-        |> graphql(
-          ~s|mutation { updateWorkflowStep(id: "#{route.id}", prompt: "") { prompt routeConfig } }|
-        )
-        |> json_response(200)
-
-      assert empty_prompt_result["errors"] == nil
-
-      assert empty_prompt_result["data"]["updateWorkflowStep"] == %{
-               "prompt" => "",
                "routeConfig" => route_config
              }
 
@@ -3614,14 +3582,18 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         )
         |> json_response(200)
 
-      assert clear_config_result["data"]["updateWorkflowStep"] == nil
-      assert clear_config_result["errors"] != nil
+      assert clear_config_result["errors"] == nil
+
+      assert clear_config_result["data"]["updateWorkflowStep"] == %{
+               "prompt" => nil,
+               "routeConfig" => nil
+             }
 
       assert {:ok, unchanged} = Accounts.WorkflowSteps.get_by(user.id, conditions: [id: route.id])
-      assert unchanged.route_config == route_config
+      assert unchanged.route_config == nil
     end
 
-    test "returns the route_config validation path without using the prompt fallback", %{
+    test "rejects invalid route_config", %{
       conn: conn,
       user: user,
       project: project
@@ -3633,7 +3605,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         Accounts.WorkflowSteps.insert(wf, %{
           name: "Route",
           step_type: "route",
-          prompt: "Keep this prompt",
+          prompt: nil,
           route_config: valid_config
         })
 
@@ -3670,7 +3642,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert result["data"]["updateWorkflowStep"] == nil
       assert {:ok, unchanged} = Accounts.WorkflowSteps.get_by(user.id, conditions: [id: route.id])
       assert unchanged.route_config == valid_config
-      assert unchanged.prompt == "Keep this prompt"
+      assert unchanged.prompt == nil
     end
 
     test "createWorkflowStep returns formatted error message on invalid output_schema", %{

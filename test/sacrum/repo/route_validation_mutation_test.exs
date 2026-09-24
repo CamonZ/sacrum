@@ -106,6 +106,54 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
     assert Repo.get!(WorkflowStep, route.id).route_config == route.route_config
   end
 
+  test "unrelated authoring edits allow a route draft to remain unconfigured" do
+    user = create_user()
+    project = create_project(user)
+    workflow = create_workflow(user, project, "Route draft")
+    source = create_step(workflow, "source", 1)
+    route = create_step(workflow, "route", 2, step_type: "route", prompt: nil)
+
+    assert route.route_config == nil
+
+    assert {:ok, updated_source} =
+             Accounts.WorkflowSteps.update(source, %{goal: "Updated during authoring"})
+
+    assert updated_source.goal == "Updated during authoring"
+    assert Repo.get!(WorkflowStep, route.id).route_config == nil
+  end
+
+  test "saving a draft does not defer an invalid configured route" do
+    user = create_user()
+    project = create_project(user)
+    workflow = create_workflow(user, project, "Configured and draft routes")
+
+    source = create_step(workflow, "source", 1, output_schema: predecessor_schema(["approved"]))
+    destination = create_step(workflow, "destination", 2)
+
+    route =
+      create_step(workflow, "configured route", 3,
+        step_type: "route",
+        route_config: intra_route_config(destination.id)
+      )
+
+    create_step_transition(source, route)
+    destination_transition = create_step_transition(route, destination)
+    Repo.delete!(destination_transition)
+
+    assert {:error, changeset} =
+             Accounts.WorkflowSteps.insert(user.id, %{
+               name: "Draft route",
+               step_type: "route",
+               prompt: nil,
+               workflow_id: workflow.id,
+               project_id: project.id
+             })
+
+    assert %{route_config: [message]} = errors_on(changeset)
+    assert message =~ "$.rules[0].transition.step_id"
+    assert Repo.get!(WorkflowStep, route.id).route_config == route.route_config
+  end
+
   test "concurrent route update and predecessor deletion cannot commit an invalid graph" do
     {project_id, user_id, route_id, source_transition_id} =
       committed_db(fn ->
@@ -131,7 +179,7 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
             receive do
               :go ->
                 route = Repo.get!(WorkflowStep, route_id)
-                Accounts.WorkflowSteps.update(route, %{prompt: "Updated route prompt"})
+                Accounts.WorkflowSteps.update(route, %{goal: "Updated route goal"})
             end
           end)
         end)
@@ -264,7 +312,7 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
     route =
       create_step(workflow, "route", 3,
         step_type: "route",
-        prompt: "Route prompt is independent",
+        prompt: nil,
         route_config: intra_route_config(destination.id)
       )
 
@@ -341,7 +389,7 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
   defp create_step(workflow, name, order, attrs \\ []) do
     defaults = %{
       name: name,
-      prompt: "Prompt for #{name}",
+      prompt: nil,
       step_order: order,
       workflow_id: workflow.id,
       project_id: workflow.project_id

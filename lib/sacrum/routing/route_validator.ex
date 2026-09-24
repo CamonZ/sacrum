@@ -2,11 +2,12 @@ defmodule Sacrum.Routing.RouteValidator do
   @moduledoc """
   Pure graph-aware validation for persisted route configurations.
 
-  Every route step must have a valid `route_config` against every incoming
-  predecessor contract and every persisted destination edge, read from an
-  in-memory snapshot. Callers name the owner workflows whose routes to prove;
-  the snapshot also holds support data (outgoing destinations) that those
-  routes read.
+  Runtime validation proves every route step's `route_config` against incoming
+  predecessor contracts and persisted destination edges in an in-memory
+  snapshot. Authoring validation also checks every supplied configuration but
+  allows a route step with no configuration to be saved as a draft. Callers
+  name the owner workflows whose routes to prove; the snapshot also holds
+  support data (outgoing destinations) that those routes read.
 
   Loading snapshots and revalidating inside write transactions belongs to
   `Sacrum.Repo.RouteValidation`; this module performs no I/O.
@@ -50,29 +51,31 @@ defmodule Sacrum.Routing.RouteValidator do
   """
   @spec validate_snapshot(snapshot(), [binary()]) :: :ok | {:error, error()}
   def validate_snapshot(%{} = snapshot, owner_ids) when is_list(owner_ids) do
-    validate_owner_routes(snapshot, owner_ids, false)
+    validate_owner_routes(snapshot, owner_ids, false, false)
   end
 
   @doc """
   Validates route steps after an authoring write.
 
-  A route step must always carry a decodable configuration. While a workflow
-  is being assembled through separate writes, however, its predecessor edge
-  or configured intra-workflow target edges may not exist yet. Those two
-  missing-connection errors are deferred until the graph is complete; runtime
-  loads continue to use `validate_snapshot/2` and reject incomplete routes.
+  An unconfigured route may remain a draft during any authoring write. For
+  configured routes, predecessor or configured intra-workflow target edges
+  may be added in separate writes when `allow_incomplete?` is true; those
+  missing-connection errors are deferred until the graph is complete. Runtime
+  loads continue to use `validate_snapshot/2` and reject unconfigured routes.
   """
-  @spec validate_mutation_snapshot(snapshot(), [binary()]) :: :ok | {:error, error()}
-  def validate_mutation_snapshot(%{} = snapshot, owner_ids) when is_list(owner_ids) do
-    validate_owner_routes(snapshot, owner_ids, true)
+  @spec validate_mutation_snapshot(snapshot(), [binary()], boolean()) ::
+          :ok | {:error, error()}
+  def validate_mutation_snapshot(%{} = snapshot, owner_ids, allow_incomplete?)
+      when is_list(owner_ids) and is_boolean(allow_incomplete?) do
+    validate_owner_routes(snapshot, owner_ids, true, allow_incomplete?)
   end
 
-  defp validate_owner_routes(snapshot, owner_ids, allow_incomplete?) do
+  defp validate_owner_routes(snapshot, owner_ids, authoring?, allow_incomplete?) do
     owners = MapSet.new(owner_ids)
 
     snapshot.steps
     |> Enum.filter(fn {_id, step} ->
-      (step.step_type == :route or not is_nil(step.route_config)) and
+      route_requires_validation?(step, authoring?) and
         MapSet.member?(owners, step.workflow_id)
     end)
     |> Enum.reduce_while(:ok, fn {_id, step}, :ok ->
@@ -85,6 +88,11 @@ defmodule Sacrum.Routing.RouteValidator do
       end
     end)
   end
+
+  defp route_requires_validation?(%{step_type: :route, route_config: nil}, true), do: false
+
+  defp route_requires_validation?(step, _authoring?),
+    do: step.step_type == :route or not is_nil(step.route_config)
 
   defp defer_incomplete_error(step, snapshot, reason, _error, true) do
     if incomplete_authoring_error?(step, snapshot, reason),
