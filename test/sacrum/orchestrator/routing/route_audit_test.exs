@@ -27,15 +27,16 @@ defmodule Sacrum.Orchestrator.Routing.RouteAuditTest do
       user = create_user()
       project = create_project(user)
       workflow = create_workflow(user, project)
+      other_step = create_step(user, workflow, %{"name" => "other", "step_order" => 2})
 
       route =
         create_step(user, workflow, %{
           "name" => "route",
           "step_order" => 1,
-          "step_type" => "route"
+          "step_type" => "route",
+          "route_config" => route_config()
         })
 
-      other_step = create_step(user, workflow, %{"name" => "other", "step_order" => 2})
       task = create_task(user, project, workflow)
 
       first_run = create_task_run(user, task)
@@ -92,7 +93,8 @@ defmodule Sacrum.Orchestrator.Routing.RouteAuditTest do
         create_step(user, workflow, %{
           "name" => "route",
           "step_order" => 1,
-          "step_type" => "route"
+          "step_type" => "route",
+          "route_config" => route_config()
         })
 
       task = create_task(user, project, workflow)
@@ -170,11 +172,29 @@ defmodule Sacrum.Orchestrator.Routing.RouteAuditTest do
         "step_order" => Map.get(attrs, "step_order", 1),
         "step_type" => Map.get(attrs, "step_type", "execute"),
         "prompt" => "Run this step",
+        "route_config" => Map.get(attrs, "route_config"),
         "workflow_id" => workflow.id,
         "project_id" => workflow.project_id
       })
 
     step
+  end
+
+  defp route_config do
+    target_id = Ecto.UUID.generate()
+
+    %{
+      "version" => 1,
+      "match_policy" => "exactly_one",
+      "rules" => [
+        %{
+          "id" => "task-level",
+          "when" => %{"ref" => "task.level", "op" => "eq", "value" => "task"},
+          "transition" => %{"type" => "intra_workflow", "step_id" => target_id}
+        }
+      ],
+      "default" => %{"transition" => %{"type" => "intra_workflow", "step_id" => target_id}}
+    }
   end
 
   defp create_workflow(user, project) do

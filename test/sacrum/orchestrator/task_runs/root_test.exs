@@ -151,13 +151,16 @@ defmodule Sacrum.Orchestrator.TaskRuns.RootTest do
       create_step(user, workflow, "source", 1, output_schema: predecessor_schema(["approved"]))
 
     destination = create_step(user, workflow, "destination", 2)
-    route = create_step(user, workflow, "route", 3, step_type: "route", prompt: "Fallback")
+
+    route =
+      create_step(user, workflow, "route", 3,
+        step_type: "route",
+        prompt: "Route prompt is independent",
+        route_config: route_config(destination.id)
+      )
 
     create_transition(user, source, route)
     create_transition(user, route, destination)
-
-    {:ok, route} =
-      WorkflowSteps.update(route, %{route_config: route_config(destination.id)})
 
     {:ok, task} = TaskWorkflows.assign_workflow(task, workflow)
 

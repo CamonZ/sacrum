@@ -126,52 +126,25 @@ defmodule Sacrum.Orchestrator.WorkflowGraphTest do
           "output_schema" => predecessor_schema(["approved"])
         })
 
-      route =
-        create_step(user, workflow, %{
-          "name" => "route",
-          "step_order" => 2,
-          "step_type" => "route"
-        })
-
       destination =
         create_step(user, workflow, %{
           "name" => "destination",
           "step_order" => 3
         })
 
+      route =
+        create_step(user, workflow, %{
+          "name" => "route",
+          "step_order" => 2,
+          "step_type" => "route",
+          "route_config" => intra_route_config(destination.id)
+        })
+
       create_transition(user, source, route)
       route_transition = create_transition(user, route, destination)
 
-      # Persist a valid configuration, then break the graph behind the
-      # guarded write API: the route's only outgoing edge disappears, so its
-      # configured target is illegal.
-      {:ok, _route} =
-        Repo.update(
-          Ecto.Changeset.change(route, %{
-            route_config: %{
-              "version" => 1,
-              "match_policy" => "exactly_one",
-              "rules" => [
-                %{
-                  "id" => "approved",
-                  "when" => %{
-                    "ref" => "previous_output.route.result",
-                    "op" => "eq",
-                    "value" => "approved"
-                  },
-                  "transition" => %{
-                    "type" => "intra_workflow",
-                    "step_id" => destination.id
-                  }
-                }
-              ],
-              "default" => %{
-                "transition" => %{"type" => "intra_workflow", "step_id" => destination.id}
-              }
-            }
-          })
-        )
-
+      # Break the graph behind the guarded write API so runtime loading sees
+      # the configured target without its required outgoing edge.
       Repo.delete(route_transition)
 
       task = create_task(user, project, workflow)
@@ -195,24 +168,21 @@ defmodule Sacrum.Orchestrator.WorkflowGraphTest do
           "output_schema" => predecessor_schema(["approved"])
         })
 
-      route_b =
-        create_step(user, workflow_b, %{
-          "name" => "b-route",
-          "step_order" => 2,
-          "step_type" => "route"
-        })
-
       dest_c = create_step(user, workflow_c, %{"name" => "c-dest"})
 
-      create_transition(user, source_b, route_b)
       create_workflow_transition(user, workflow_a, workflow_b)
       create_workflow_transition(user, workflow_b, workflow_c)
       {:ok, _workflow_c} = Accounts.Workflows.update(workflow_c, %{initial_step_id: dest_c.id})
 
-      {:ok, _route_b} =
-        Accounts.WorkflowSteps.update(route_b, %{
-          route_config: inter_route_config(workflow_c.id)
+      route_b =
+        create_step(user, workflow_b, %{
+          "name" => "b-route",
+          "step_order" => 2,
+          "step_type" => "route",
+          "route_config" => inter_route_config(workflow_c.id)
         })
+
+      create_transition(user, source_b, route_b)
 
       task = create_task(user, project, workflow_a)
 
@@ -284,11 +254,18 @@ defmodule Sacrum.Orchestrator.WorkflowGraphTest do
           "output_schema" => predecessor_schema(["rejected", "retry"])
         })
 
+      destination =
+        create_step(user, workflow, %{
+          "name" => "destination",
+          "step_order" => 4
+        })
+
       route =
         create_step(user, workflow, %{
           "name" => "route",
           "step_order" => 3,
-          "step_type" => "route"
+          "step_type" => "route",
+          "route_config" => intra_route_config(destination.id)
         })
 
       approved_transition = create_transition(user, approved, route)
@@ -370,6 +347,25 @@ defmodule Sacrum.Orchestrator.WorkflowGraphTest do
       "default" => %{
         "transition" => %{"type" => "inter_workflow", "workflow_id" => workflow_id}
       }
+    }
+  end
+
+  defp intra_route_config(step_id) do
+    %{
+      "version" => 1,
+      "match_policy" => "exactly_one",
+      "rules" => [
+        %{
+          "id" => "approved",
+          "when" => %{
+            "ref" => "previous_output.route.result",
+            "op" => "eq",
+            "value" => "approved"
+          },
+          "transition" => %{"type" => "intra_workflow", "step_id" => step_id}
+        }
+      ],
+      "default" => %{"transition" => %{"type" => "intra_workflow", "step_id" => step_id}}
     }
   end
 

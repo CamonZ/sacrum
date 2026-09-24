@@ -469,14 +469,12 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflowTest do
         create_step(user, to_workflow, %{
           "name" => "route",
           "step_order" => 3,
-          "step_type" => "route"
+          "step_type" => "route",
+          "route_config" => route_config(destination.id)
         })
 
       create_step_transition(user, predecessor, route)
       create_step_transition(user, route, destination)
-
-      {:ok, _route} =
-        Accounts.WorkflowSteps.update(route, %{route_config: route_config(destination.id)})
 
       create_workflow_transition(user, from_workflow, to_workflow, %{
         "target_step_id" => predecessor.id

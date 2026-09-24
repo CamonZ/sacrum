@@ -103,15 +103,91 @@ defmodule Sacrum.Orchestrator.Routing.RouteRecoveryTest do
     user = create_user()
     project = create_project(user)
     workflow = create_workflow(user, project)
-    route = create_step(user, workflow, %{name: "route", step_order: 1, step_type: :route})
+
+    source =
+      create_step(user, workflow, %{
+        name: "source",
+        step_order: 1,
+        step_type: :execute,
+        output_schema: predecessor_schema()
+      })
 
     destination =
-      create_step(user, workflow, %{name: "destination", step_order: 2, step_type: :execute})
+      create_step(user, workflow, %{name: "destination", step_order: 3, step_type: :execute})
 
-    {:ok, workflow} = Accounts.Workflows.update(workflow, %{initial_step_id: route.id})
+    route =
+      create_step(user, workflow, %{
+        name: "route",
+        step_order: 2,
+        step_type: :route,
+        route_config: route_config(destination.id)
+      })
+
+    create_step_transition(user, source, route)
+    create_step_transition(user, route, destination)
+    {:ok, workflow} = Accounts.Workflows.update(workflow, %{initial_step_id: source.id})
     task = create_task(user, project, workflow)
 
-    %{user: user, project: project, task: task, route: route, destination: destination}
+    %{
+      user: user,
+      project: project,
+      task: task,
+      route: route,
+      source: source,
+      destination: destination
+    }
+  end
+
+  defp predecessor_schema do
+    %{
+      "type" => "object",
+      "properties" => %{
+        "route" => %{
+          "type" => "object",
+          "additionalProperties" => false,
+          "required" => ["result", "handoff"],
+          "properties" => %{
+            "result" => %{"type" => "string", "enum" => ["approved"]},
+            "handoff" => %{
+              "type" => "object",
+              "additionalProperties" => false,
+              "required" => [],
+              "properties" => %{}
+            }
+          }
+        }
+      },
+      "required" => ["route"],
+      "additionalProperties" => false
+    }
+  end
+
+  defp create_step_transition(user, from_step, to_step) do
+    {:ok, transition} =
+      Accounts.StepTransitions.insert(user.id, %{
+        from_step_id: from_step.id,
+        to_step_id: to_step.id,
+        project_id: from_step.project_id
+      })
+
+    transition
+  end
+
+  defp route_config(destination_id) do
+    %{
+      "version" => 1,
+      "match_policy" => "exactly_one",
+      "rules" => [
+        %{
+          "id" => "task-level",
+          "when" => %{"ref" => "task.level", "op" => "eq", "value" => "task"},
+          "transition" => %{"type" => "intra_workflow", "step_id" => destination_id}
+        }
+      ],
+      "default" => %{
+        "transition" => %{"type" => "intra_workflow", "step_id" => destination_id}
+      }
+    }
   end
 
   defp create_route_execution(user, task, route, task_run, destination_id, handoff, opts \\ %{}) do
@@ -177,6 +253,8 @@ defmodule Sacrum.Orchestrator.Routing.RouteRecoveryTest do
         step_order: attrs.step_order,
         step_type: attrs.step_type,
         prompt: "Run this step",
+        route_config: Map.get(attrs, :route_config),
+        output_schema: Map.get(attrs, :output_schema),
         workflow_id: workflow.id,
         project_id: workflow.project_id
       })

@@ -1,11 +1,11 @@
 defmodule Sacrum.Routing.Contract do
   @moduledoc """
-  Canonical JSON Schema for legacy route-step model output.
+  Historical JSON Schema for route decisions emitted by a daemon.
 
-  Route steps that still dispatch to a daemon must emit
-  `transition_to` / `transition_type` (and optional `handoff`). Deterministic
-  routes ignore this contract at runtime; persist-time validation still uses
-  it whenever an `output_schema` is supplied on a route step.
+  Route steps now require a valid `route_config`, are evaluated locally, and
+  neither consume nor produce this model-output contract. This module remains
+  available for callers that need to inspect or migrate legacy route schemas;
+  it no longer selects or validates the runtime behavior of route steps.
   """
 
   alias Sacrum.JsonSchema.Strict

@@ -2,12 +2,11 @@ defmodule Sacrum.Routing.RouteValidator do
   @moduledoc """
   Pure graph-aware validation for persisted route configurations.
 
-  A present `route_config` must be valid against every incoming predecessor
-  contract and every persisted destination edge, read from an in-memory
-  snapshot. Callers name the owner workflows whose routes to prove; the
-  snapshot also holds support data (outgoing destinations) that those routes
-  read. Prompt routing is outside this module: it is eligible only when
-  configuration is absent.
+  Every route step must have a valid `route_config` against every incoming
+  predecessor contract and every persisted destination edge, read from an
+  in-memory snapshot. Callers name the owner workflows whose routes to prove;
+  the snapshot also holds support data (outgoing destinations) that those
+  routes read.
 
   Loading snapshots and revalidating inside write transactions belongs to
   `Sacrum.Repo.RouteValidation`; this module performs no I/O.
@@ -43,7 +42,7 @@ defmodule Sacrum.Routing.RouteValidator do
         }
 
   @doc """
-  Validates configured route steps that belong to `owner_ids`.
+  Validates route steps and route configuration ownership in `owner_ids`.
 
   Destination workflows appear in the snapshot as support data so target
   checks can see their entry steps; their own routes are not subjects of
@@ -51,27 +50,111 @@ defmodule Sacrum.Routing.RouteValidator do
   """
   @spec validate_snapshot(snapshot(), [binary()]) :: :ok | {:error, error()}
   def validate_snapshot(%{} = snapshot, owner_ids) when is_list(owner_ids) do
+    validate_owner_routes(snapshot, owner_ids, false)
+  end
+
+  @doc """
+  Validates route steps after an authoring write.
+
+  A route step must always carry a decodable configuration. While a workflow
+  is being assembled through separate writes, however, its predecessor edge
+  or configured intra-workflow target edges may not exist yet. Those two
+  missing-connection errors are deferred until the graph is complete; runtime
+  loads continue to use `validate_snapshot/2` and reject incomplete routes.
+  """
+  @spec validate_mutation_snapshot(snapshot(), [binary()]) :: :ok | {:error, error()}
+  def validate_mutation_snapshot(%{} = snapshot, owner_ids) when is_list(owner_ids) do
+    validate_owner_routes(snapshot, owner_ids, true)
+  end
+
+  defp validate_owner_routes(snapshot, owner_ids, allow_incomplete?) do
     owners = MapSet.new(owner_ids)
 
     snapshot.steps
     |> Enum.filter(fn {_id, step} ->
-      step.route_config && MapSet.member?(owners, step.workflow_id)
+      (step.step_type == :route or not is_nil(step.route_config)) and
+        MapSet.member?(owners, step.workflow_id)
     end)
     |> Enum.reduce_while(:ok, fn {_id, step}, :ok ->
       case validate(step, snapshot) do
-        :ok -> {:cont, :ok}
-        {:error, _reason} = error -> {:halt, error}
+        :ok ->
+          {:cont, :ok}
+
+        {:error, reason} = error ->
+          defer_incomplete_error(step, snapshot, reason, error, allow_incomplete?)
       end
     end)
   end
 
+  defp defer_incomplete_error(step, snapshot, reason, _error, true) do
+    if incomplete_authoring_error?(step, snapshot, reason),
+      do: {:cont, :ok},
+      else: {:halt, {:error, reason}}
+  end
+
+  defp defer_incomplete_error(_step, _snapshot, _reason, error, _allow_incomplete?),
+    do: {:halt, error}
+
+  defp incomplete_authoring_error?(route_step, snapshot, %{
+         code: :route_input_invalid,
+         path: "$.predecessors"
+       }) do
+    predecessor_schemas(route_step, snapshot) == []
+  end
+
+  defp incomplete_authoring_error?(route_step, snapshot, %{
+         code: :route_target_invalid,
+         path: path
+       }) do
+    String.ends_with?(path, ".step_id") and missing_intra_workflow_targets?(route_step, snapshot)
+  end
+
+  defp incomplete_authoring_error?(_route_step, _snapshot, _reason), do: false
+
+  defp missing_intra_workflow_targets?(route_step, snapshot) do
+    case RouteConfig.decode(route_step.route_config) do
+      {:ok, program} ->
+        configured_targets =
+          (program.rules ++ List.wrap(program.default))
+          |> Enum.map(& &1.transition)
+          |> Enum.filter(&(&1.type == :intra_workflow))
+          |> Enum.map(& &1.step_id)
+          |> MapSet.new()
+
+        targets_exist_in_workflow? =
+          Enum.all?(configured_targets, &target_in_workflow?(&1, route_step, snapshot))
+
+        connected_targets =
+          snapshot.step_edges
+          |> Map.get(route_step.id, [])
+          |> MapSet.new(& &1.to_step_id)
+
+        targets_exist_in_workflow? and not MapSet.subset?(configured_targets, connected_targets)
+
+      {:error, _reason} ->
+        false
+    end
+  end
+
+  defp target_in_workflow?(target_id, route_step, snapshot) do
+    case Map.get(snapshot.steps, target_id) do
+      %{workflow_id: workflow_id} -> workflow_id == route_step.workflow_id
+      nil -> false
+    end
+  end
+
   @doc """
-  Validates one configured route step against the snapshot.
+  Validates one route step against the snapshot.
 
   A present configuration with no incoming predecessor edge is rejected:
   deterministic routing needs at least one declared result domain.
   """
   @spec validate(WorkflowStep.t(), snapshot()) :: :ok | {:error, error()}
+  def validate(%{step_type: :route, route_config: nil} = route_step, _snapshot) do
+    reason = error(:route_config_required, "$.route_config", "is required for route steps")
+    {:error, attach_route_step(reason, route_step)}
+  end
+
   def validate(%{route_config: nil}, _snapshot), do: :ok
 
   def validate(route_step, snapshot) do

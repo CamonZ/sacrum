@@ -5,7 +5,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
 
   alias Sacrum.JsonSchema.Strict
   alias Sacrum.Orchestrator.PersistenceOptions
-  alias Sacrum.Routing.{Contract, RouteConfig}
+  alias Sacrum.Routing.RouteConfig
 
   @type t :: %__MODULE__{}
   @primary_key {:id, :binary_id, autogenerate: true}
@@ -194,7 +194,6 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     changeset
     |> validate_route_config_scope()
     |> validate_route_config()
-    |> validate_route_output_schema()
   end
 
   defp validate_route_config_scope(changeset) do
@@ -214,6 +213,9 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
 
   defp validate_route_config(changeset) do
     case {get_field(changeset, :step_type), get_field(changeset, :route_config)} do
+      {:route, nil} ->
+        add_error(changeset, :route_config, "is required for route steps")
+
       {:route, route_config} when is_map(route_config) ->
         case RouteConfig.decode(route_config) do
           {:ok, _program} ->
@@ -221,37 +223,6 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
 
           {:error, %{path: path, message: message}} ->
             add_error(changeset, :route_config, "#{path}: #{message}")
-        end
-
-      _ ->
-        changeset
-    end
-  end
-
-  defp validate_route_output_schema(changeset) do
-    case {get_field(changeset, :step_type), get_field(changeset, :output_schema),
-          get_field(changeset, :route_config)} do
-      {:route, nil, nil} ->
-        if is_nil(get_field(changeset, :prompt)) do
-          changeset
-        else
-          put_change(changeset, :output_schema, Contract.output_schema())
-        end
-
-      {:route, nil, _route_config} ->
-        changeset
-
-      {:route, schema, _route_config} when is_map(schema) ->
-        case Contract.validate_output_schema(schema) do
-          :ok ->
-            changeset
-
-          {:error, reason} ->
-            add_error(
-              changeset,
-              :output_schema,
-              "route steps must use a strict routing contract schema: #{reason}"
-            )
         end
 
       _ ->

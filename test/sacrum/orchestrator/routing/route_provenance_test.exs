@@ -99,10 +99,33 @@ defmodule Sacrum.Orchestrator.Routing.RouteProvenanceTest do
     user = create_user()
     project = create_project(user)
     workflow = create_workflow(user, project)
-    source = create_step(user, workflow, %{name: "source", step_order: 1})
+
+    source =
+      create_step(user, workflow, %{
+        name: "source",
+        step_order: 1,
+        output_schema: predecessor_schema()
+      })
+
+    destination = create_step(user, workflow, %{name: "destination", step_order: 3})
+
+    {:ok, workflow} = Accounts.Workflows.update(workflow, %{initial_step_id: source.id})
 
     route =
-      create_step(user, workflow, %{name: "route", step_order: 2, step_type: :route, prompt: nil})
+      create_step(user, workflow, %{
+        name: "route",
+        step_order: 2,
+        step_type: :route,
+        prompt: nil,
+        route_config: route_config(destination.id)
+      })
+
+    {:ok, _outgoing_transition} =
+      Accounts.StepTransitions.insert(user.id, %{
+        from_step_id: route.id,
+        to_step_id: destination.id,
+        project_id: project.id
+      })
 
     {:ok, _transition} =
       Accounts.StepTransitions.insert(user.id, %{
@@ -111,11 +134,49 @@ defmodule Sacrum.Orchestrator.Routing.RouteProvenanceTest do
         project_id: project.id
       })
 
-    {:ok, workflow} = Accounts.Workflows.update(workflow, %{initial_step_id: source.id})
     task = create_task(user, project, workflow)
     {:ok, task} = Repo.update(Ecto.Changeset.change(task, current_step_id: route.id))
 
     %{user: user, project: project, workflow: workflow, task: task, source: source, route: route}
+  end
+
+  defp predecessor_schema do
+    %{
+      "type" => "object",
+      "properties" => %{
+        "route" => %{
+          "type" => "object",
+          "additionalProperties" => false,
+          "required" => ["result", "handoff"],
+          "properties" => %{
+            "result" => %{"type" => "string", "enum" => ["approved"]},
+            "handoff" => %{
+              "type" => "object",
+              "additionalProperties" => false,
+              "required" => [],
+              "properties" => %{}
+            }
+          }
+        }
+      },
+      "required" => ["route"],
+      "additionalProperties" => false
+    }
+  end
+
+  defp route_config(target_id) do
+    %{
+      "version" => 1,
+      "match_policy" => "exactly_one",
+      "rules" => [
+        %{
+          "id" => "task-level",
+          "when" => %{"ref" => "task.level", "op" => "eq", "value" => "task"},
+          "transition" => %{"type" => "intra_workflow", "step_id" => target_id}
+        }
+      ],
+      "default" => %{"transition" => %{"type" => "intra_workflow", "step_id" => target_id}}
+    }
   end
 
   defp fsm_data(user, project, task, task_run, source, route, transitions \\ nil) do
@@ -177,6 +238,8 @@ defmodule Sacrum.Orchestrator.Routing.RouteProvenanceTest do
         step_order: attrs.step_order,
         step_type: Map.get(attrs, :step_type, :execute),
         prompt: Map.get(attrs, :prompt, "Run this step"),
+        output_schema: Map.get(attrs, :output_schema),
+        route_config: Map.get(attrs, :route_config),
         workflow_id: workflow.id,
         project_id: workflow.project_id
       })

@@ -12,6 +12,11 @@ defmodule Sacrum.Repo.RouteValidation do
     applies the write, reloads support for the still-existing owners, and
     revalidates only those owners' routes.
 
+  Route insertion/type changes and step-transition inserts may defer only a
+  missing predecessor or configured intra-workflow target edge while the
+  editor connects the graph. Route configuration is still mandatory and
+  decodable, and runtime loads reject any graph that remains incomplete.
+
   The pure validation semantics live in `Sacrum.Routing.RouteValidator`.
   """
 
@@ -49,11 +54,23 @@ defmodule Sacrum.Repo.RouteValidation do
   mutation here can invalidate. Support is owners plus their outgoing
   destinations. Owners and support are resolved **before** the write so a
   delete cannot drop the rows we need to lock; after the write, remaining
-  owners are revalidated against the post-write support graph.
+  owners are revalidated against the post-write support graph. The optional
+  `allow_incomplete?` flag is reserved for route authoring writes that add a
+  route or a step edge.
   """
-  @spec mutate([binary()], Ecto.Changeset.t() | struct(), (-> {:ok, term()} | {:error, term()})) ::
+  @spec mutate(
+          [binary()],
+          Ecto.Changeset.t() | struct(),
+          (-> {:ok, term()} | {:error, term()})
+        ) ::
           {:ok, term()} | {:error, Ecto.Changeset.t() | term()}
-  def mutate(affected_workflow_ids, original, mutation_fn) do
+  @spec mutate(
+          [binary()],
+          Ecto.Changeset.t() | struct(),
+          (-> {:ok, term()} | {:error, term()}),
+          boolean()
+        ) :: {:ok, term()} | {:error, Ecto.Changeset.t() | term()}
+  def mutate(affected_workflow_ids, original, mutation_fn, allow_incomplete? \\ false) do
     affected = affected_workflow_ids |> Enum.filter(&is_binary/1) |> Enum.uniq()
 
     result =
@@ -62,7 +79,7 @@ defmodule Sacrum.Repo.RouteValidation do
         lock_workflows(graph.support)
 
         case mutation_fn.() do
-          {:ok, result} -> revalidate_owners(graph.owners, result)
+          {:ok, result} -> revalidate_owners(graph.owners, result, allow_incomplete?)
           {:error, reason} -> Repo.rollback(reason)
         end
       end)
@@ -185,7 +202,7 @@ defmodule Sacrum.Repo.RouteValidation do
   # Revalidation, locking, and error translation
   #
 
-  defp revalidate_owners(owners, result) do
+  defp revalidate_owners(owners, result, allow_incomplete?) do
     case existing_workflow_ids(owners) do
       [] ->
         result
@@ -193,7 +210,12 @@ defmodule Sacrum.Repo.RouteValidation do
       remaining ->
         snapshot = build_snapshot(support_ids(remaining))
 
-        case RouteValidator.validate_snapshot(snapshot, remaining) do
+        validate =
+          if allow_incomplete?,
+            do: RouteValidator.validate_mutation_snapshot(snapshot, remaining),
+            else: RouteValidator.validate_snapshot(snapshot, remaining)
+
+        case validate do
           :ok -> result
           {:error, reason} -> Repo.rollback(reason)
         end

@@ -219,12 +219,18 @@ The `Project.artifacts(limit: 50, offset: 0)` field returns the caller's project
 
 > **Implementation:** See `lib/sacrum_web/graphql/schema.ex` for the root schema and `lib/sacrum_web/graphql/types/*.ex` for type definitions. `!` denotes required arguments.
 
-`WorkflowStep.routeConfig` is inert, versioned JSON validated by the existing
-workflow-step changeset and route graph write path. Its presence selects
-deterministic routing; `prompt` remains an independent nullable fallback and is
-used only when `routeConfig` is absent. On updates, omitted fields are left
-unchanged, while `prompt: null`, `prompt: ""`, and a non-null prompt are distinct
-wire values. `routeConfig: null` explicitly clears the configuration.
+`WorkflowStep.routeConfig` is versioned JSON validated by the workflow-step
+changeset and route graph write path. Every route step must have a valid
+configuration; route decisions run locally and never dispatch the route
+step's prompt to a daemon. Prompts remain available to other step types. On
+updates, omitted fields are left unchanged, while `prompt: null`, `prompt: ""`,
+and a non-null prompt are distinct wire values. `routeConfig: null` is rejected
+while the step type is `route`, but can clear the configuration when the same
+update changes the step to a non-route type.
+
+Existing persisted route steps with no configuration are not migrated or
+reinterpreted as prompt-driven routes. Workflow graph validation rejects them,
+so they cannot run until an operator saves a valid `routeConfig`.
 
 ### Deterministic route handoff templates
 

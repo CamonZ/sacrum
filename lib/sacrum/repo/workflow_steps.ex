@@ -64,7 +64,8 @@ defmodule Sacrum.Repo.WorkflowSteps do
     RouteValidation.mutate(
       [Ecto.Changeset.get_field(changeset, :workflow_id)],
       changeset,
-      fn -> Repo.insert(changeset) end
+      fn -> Repo.insert(changeset) end,
+      Ecto.Changeset.get_field(changeset, :step_type) == :route
     )
   end
 
@@ -109,7 +110,20 @@ defmodule Sacrum.Repo.WorkflowSteps do
   def update(%Ecto.Changeset{data: %WorkflowStep{} = step} = changeset) do
     affected = Enum.uniq([step.workflow_id, Ecto.Changeset.get_field(changeset, :workflow_id)])
 
-    RouteValidation.mutate(affected, changeset, fn -> Repo.update(changeset) end)
+    adding_route_config? =
+      step.step_type == :route and is_nil(step.route_config) and
+        not is_nil(Ecto.Changeset.get_field(changeset, :route_config))
+
+    authoring_route? =
+      (step.step_type != :route and Ecto.Changeset.get_field(changeset, :step_type) == :route) or
+        adding_route_config?
+
+    RouteValidation.mutate(
+      affected,
+      changeset,
+      fn -> Repo.update(changeset) end,
+      authoring_route?
+    )
   end
 
   @spec update(WorkflowStep.t(), map()) :: {:ok, WorkflowStep.t()} | {:error, Ecto.Changeset.t()}

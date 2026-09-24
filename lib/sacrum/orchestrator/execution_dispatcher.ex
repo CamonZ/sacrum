@@ -1,15 +1,15 @@
 defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   @moduledoc """
-  Dispatches step executions to the daemon.
+  Dispatches daemon-backed step executions.
 
   Creates a StepExecution row in "started" status for the current step,
   renders the prompt using PromptRenderer with Liquid/Solid templates,
   and broadcasts a run_step event to the daemon.
 
   The dispatcher is the single source of StepExecution row creation for
-  execute/evaluate/route steps. Transitions (advance_to_step, move_to_step)
-  only update current_step_id; execution rows are created exclusively
-  at dispatch time.
+  execute/evaluate steps. Deterministic route executions are created locally
+  by the route handler. Transitions (advance_to_step, move_to_step) only update
+  current_step_id; daemon-backed execution rows are created at dispatch time.
 
   Used by both the GraphQL runStep resolver and the TaskOrchestrator to
   ensure consistent execution dispatch behavior.
@@ -40,8 +40,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
 
   @doc """
   Creates a "started" StepExecution for the current step and broadcasts run_step
-  to the daemon. The dispatcher is the single source of execution row creation
-  for execute/route/evaluate steps.
+  to the daemon. Route steps are evaluated locally and cannot be dispatched.
 
   `handoff` is attached to the new row when present (typically supplied by the
   orchestrator from FSMData after a route step).
@@ -131,13 +130,9 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   defp validate_dispatchable_step(%WorkflowStep{step_type: :stop}),
     do: {:error, :stop_step_not_dispatchable}
 
-  defp validate_dispatchable_step(%WorkflowStep{step_type: :route, route_config: route_config})
-       when not is_nil(route_config),
-       do: {:error, :configured_route_not_dispatchable}
-
   defp validate_dispatchable_step(%WorkflowStep{step_type: :route} = step) do
     case RouteMode.routing_mode(step) do
-      {:ok, {:legacy, _prompt}} -> :ok
+      {:ok, {:deterministic, _program}} -> {:error, :configured_route_not_dispatchable}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -345,7 +340,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
 
   defp mark_dispatch_failure(_task_run_or_id, :configured_route_not_dispatchable), do: :ok
 
-  defp mark_dispatch_failure(_task_run_or_id, :route_not_configured), do: :ok
+  defp mark_dispatch_failure(_task_run_or_id, :route_config_required), do: :ok
 
   defp mark_dispatch_failure(%TaskRun{} = task_run, reason) do
     Failure.mark_if_active(task_run, {:dispatch_failed, reason})

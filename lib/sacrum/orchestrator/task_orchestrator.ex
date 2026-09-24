@@ -352,8 +352,13 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   end
 
   @spec transition_current_step(FSMData.t(), struct()) :: fsm_transition()
-  defp transition_current_step(data, %{step_type: :route} = current_step) do
-    RouteStep.handle_route_step_transition(data, current_step)
+  defp transition_current_step(data, %{step_type: :route}) do
+    Logger.error(
+      "[TaskOrchestrator:#{data.task.id}] Route steps are local and cannot complete a daemon execution"
+    )
+
+    ExecutionPool.release_slot(data.slot_id)
+    {:next_state, :failed, %{data | slot_id: nil}}
   end
 
   defp transition_current_step(data, %{step_type: type} = current_step)
@@ -748,9 +753,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
         data
         |> RouteStep.handle_deterministic_route_step(route_step, program)
         |> schedule_deterministic_route_continuation()
-
-      {:ok, {:legacy, _prompt}} ->
-        continue_awaiting_execution(data.task.id, data)
 
       {:error, reason} ->
         Logger.error(

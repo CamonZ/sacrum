@@ -17,19 +17,19 @@ defmodule Sacrum.Routing.RouteValidatorTest do
     source = create_step(context, "source", 1, output_schema: predecessor_schema(["approved"]))
     destination = create_step(context, "destination", 2)
 
-    route = create_route(context, "route", 3)
-
-    create_step_transition(context.user, source, route)
-    create_step_transition(context.user, route, destination)
-
     route =
-      configure_route(
-        route,
+      create_route(
+        context,
+        "route",
+        3,
         route_config(
           [result_rule("approved", intra_target(destination.id))],
           intra_target(destination.id)
         )
       )
+
+    create_step_transition(context.user, source, route)
+    create_step_transition(context.user, route, destination)
 
     assert :ok = validate(route)
   end
@@ -38,18 +38,18 @@ defmodule Sacrum.Routing.RouteValidatorTest do
     source = create_step(context, "source", 1, output_schema: predecessor_schema(["approved"]))
     disconnected = create_step(context, "disconnected", 2)
 
-    route = create_route(context, "route", 3)
-
-    create_step_transition(context.user, source, route)
-
     route =
-      persist_invalid_route_config(
-        route,
+      create_route(
+        context,
+        "route",
+        3,
         route_config(
           [result_rule("approved", intra_target(disconnected.id))],
           intra_target(disconnected.id)
         )
       )
+
+    create_step_transition(context.user, source, route)
 
     assert {:error, %{code: :route_target_invalid, path: "$.rules[0].transition.step_id"}} =
              validate(route)
@@ -70,19 +70,17 @@ defmodule Sacrum.Routing.RouteValidatorTest do
     {:ok, destination_workflow} =
       Accounts.Workflows.update(destination_workflow, %{initial_step_id: destination.id})
 
-    route = create_route(context, "route", 2)
-
-    create_step_transition(context.user, source, route)
     create_workflow_transition(context.user, context.workflow, destination_workflow)
 
-    route =
-      configure_route(
-        route,
-        route_config(
-          [result_rule("approved", inter_target(destination_workflow.id))],
-          inter_target(destination_workflow.id)
-        )
+    inter_config =
+      route_config(
+        [result_rule("approved", inter_target(destination_workflow.id))],
+        inter_target(destination_workflow.id)
       )
+
+    route = create_route(context, "route", 2, inter_config)
+
+    create_step_transition(context.user, source, route)
 
     assert :ok = validate(route)
 
@@ -111,7 +109,7 @@ defmodule Sacrum.Routing.RouteValidatorTest do
 
     destination = create_step(context, "destination", 2)
 
-    route = create_route(context, "route", 3)
+    route = create_route(context, "route", 3, valid_route_config(destination.id))
 
     create_step_transition(context.user, source, route)
     create_step_transition(context.user, route, destination)
@@ -130,7 +128,7 @@ defmodule Sacrum.Routing.RouteValidatorTest do
     source = create_step(context, "source", 1, output_schema: predecessor_schema(["approved"]))
     destination = create_step(context, "destination", 2)
 
-    route = create_route(context, "route", 3)
+    route = create_route(context, "route", 3, valid_route_config(destination.id))
 
     create_step_transition(context.user, source, route)
     create_step_transition(context.user, route, destination)
@@ -193,14 +191,12 @@ defmodule Sacrum.Routing.RouteValidatorTest do
     step
   end
 
-  defp create_route(context, name, order) do
-    create_step(context, name, order, step_type: "route")
+  defp create_route(context, name, order, route_config) do
+    create_step(context, name, order, step_type: "route", route_config: route_config)
   end
 
-  defp configure_route(route, route_config) do
-    {:ok, route} = Accounts.WorkflowSteps.update(route, %{route_config: route_config})
-    route
-  end
+  defp valid_route_config(target_id),
+    do: route_config([level_rule("configured", intra_target(target_id))], intra_target(target_id))
 
   # Validator unit tests deliberately persist invalid states through the raw
   # Ecto repository so they can assert the validator's diagnostics. Production

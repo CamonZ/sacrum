@@ -247,27 +247,23 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
         "output_schema" => predecessor_schema(["review"])
       })
 
+    destination = create_step(user, workflow, %{"name" => "review", "step_order" => 3})
+
     route =
       create_step(user, workflow, %{
         "name" => "route",
         "step_order" => 2,
         "step_type" => "route",
-        "prompt" => nil
-      })
-
-    destination = create_step(user, workflow, %{"name" => "review", "step_order" => 3})
-
-    create_step_transition(user, source, route)
-    create_step_transition(user, route, destination)
-
-    {:ok, route} =
-      Accounts.WorkflowSteps.update(route, %{
-        route_config:
+        "prompt" => nil,
+        "route_config" =>
           route_config(
             %{"type" => "intra_workflow", "step_id" => destination.id},
             handoff_template
           )
       })
+
+    create_step_transition(user, route, destination)
+    create_step_transition(user, source, route)
 
     {:ok, _workflow} = Accounts.Workflows.update(workflow, %{initial_step_id: source.id})
     task = create_task(user, project, workflow)
@@ -310,14 +306,6 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
         "output_schema" => predecessor_schema(["review"])
       })
 
-    route =
-      create_step(user, workflow, %{
-        "name" => "route",
-        "step_order" => 2,
-        "step_type" => "route",
-        "prompt" => nil
-      })
-
     destination =
       create_step(user, destination_workflow, %{
         "name" => "done",
@@ -325,17 +313,22 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
         "prompt" => nil
       })
 
-    create_step_transition(user, source, route)
     create_workflow_transition(user, workflow, destination_workflow, destination)
 
-    {:ok, route} =
-      Accounts.WorkflowSteps.update(route, %{
-        route_config:
+    route =
+      create_step(user, workflow, %{
+        "name" => "route",
+        "step_order" => 2,
+        "step_type" => "route",
+        "prompt" => nil,
+        "route_config" =>
           route_config(
             %{"type" => "inter_workflow", "workflow_id" => destination_workflow.id},
             route_handoff_template()
           )
       })
+
+    create_step_transition(user, source, route)
 
     {:ok, _workflow} = Accounts.Workflows.update(workflow, %{initial_step_id: source.id})
     task = create_task(user, project, workflow)
@@ -576,6 +569,7 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
         "step_type" => Map.get(attrs, "step_type", "execute"),
         "prompt" => Map.get(attrs, "prompt", "Run this step"),
         "output_schema" => Map.get(attrs, "output_schema"),
+        "route_config" => Map.get(attrs, "route_config"),
         "workflow_id" => workflow.id,
         "project_id" => workflow.project_id
       })
