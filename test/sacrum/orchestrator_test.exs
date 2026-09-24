@@ -3,7 +3,6 @@ defmodule Sacrum.OrchestratorTest do
 
   alias Sacrum.Accounts
   alias Sacrum.Orchestrator
-  alias Sacrum.Orchestrator.{AsyncStepExecutionSupervisor, ExecutionPool}
   alias Sacrum.Orchestrator.TaskFSMSupervisor
   alias Sacrum.Orchestrator.TaskRegistry
   alias Sacrum.Repo
@@ -92,56 +91,6 @@ defmodule Sacrum.OrchestratorTest do
       Accounts.TaskRuns.insert(user_id, task.project_id, task.id, %{status: status})
 
     task_run
-  end
-
-  defp create_direct_execution(task, step, task_run, user_id, status \\ "queued") do
-    {:ok, execution} =
-      Accounts.StepExecutions.insert(user_id, %{
-        task_id: task.id,
-        task_run_id: task_run.id,
-        step_name: step.name,
-        step_type: step.step_type,
-        status: status,
-        workflow_id: task.workflow_id,
-        step_id: step.id,
-        project_id: task.project_id
-      })
-
-    execution
-  end
-
-  defp reserve_pool_slot(pool) do
-    {:ok, slot} =
-      ExecutionPool.request_slot(pool, self(), :infinity,
-        daemon_id: "test-daemon",
-        daemon_max_concurrency: 1
-      )
-
-    slot
-  end
-
-  defp start_test_pool do
-    pool = String.to_atom("async_step_test_pool_#{System.unique_integer([:positive])}")
-    {:ok, pool_pid} = ExecutionPool.start_link(name: pool)
-    {pool, pool_pid}
-  end
-
-  defp wait_until(fun, timeout \\ 2_000) do
-    deadline = System.monotonic_time(:millisecond) + timeout
-    do_wait_until(fun, deadline)
-  end
-
-  defp do_wait_until(fun, deadline) do
-    if fun.() do
-      :ok
-    else
-      if System.monotonic_time(:millisecond) >= deadline do
-        flunk("Timed out waiting for condition")
-      end
-
-      Process.sleep(10)
-      do_wait_until(fun, deadline)
-    end
   end
 
   describe "Orchestrator.stop/1" do
@@ -296,123 +245,6 @@ defmodule Sacrum.OrchestratorTest do
       assert {:ok, :stopped} = Orchestrator.stop(ctx.task.id)
 
       assert Repo.get!(StepExecution, execution.id).status == "cancelled"
-    end
-  end
-
-  describe "stopping direct runStep executions" do
-    setup do
-      user = create_user()
-      project = create_project(user)
-      workflow = create_workflow(user, project)
-      step = create_step(user, workflow, %{})
-      task = create_task(user, project) |> assign_workflow_to_task(workflow)
-      task_run = create_task_run(task, user.id)
-
-      %{user: user, project: project, task: task, step: step, task_run: task_run}
-    end
-
-    test "cancels a queued execution and releases its pool request", ctx do
-      {pool, pool_pid} = start_test_pool()
-      slot = reserve_pool_slot(pool)
-      execution = create_direct_execution(ctx.task, ctx.step, ctx.task_run, ctx.user.id)
-
-      {:ok, worker} =
-        AsyncStepExecutionSupervisor.start_execution(
-          execution.id,
-          ctx.user.id,
-          ctx.project.id,
-          ctx.task_run.id,
-          pool,
-          daemon_id: "test-daemon",
-          daemon_max_concurrency: 1
-        )
-
-      on_exit(fn ->
-        if Process.alive?(worker), do: Process.exit(worker, :kill)
-
-        if Process.alive?(pool_pid) do
-          ExecutionPool.release_slot(pool, slot)
-          GenServer.stop(pool_pid)
-        end
-      end)
-
-      wait_until(fn -> ExecutionPool.pool_status(pool).queue_length == 1 end)
-
-      assert {:ok, %TaskRun{status: :stopped}} = Orchestrator.stop_task_run(ctx.task_run)
-      wait_until(fn -> Repo.get!(StepExecution, execution.id).status == "cancelled" end)
-
-      wait_until(fn -> not Process.alive?(worker) end)
-
-      assert ExecutionPool.pool_status(pool).queue_length == 0
-      assert ExecutionPool.pool_status(pool).in_use_count == 1
-
-      assert :ok = ExecutionPool.release_slot(pool, slot)
-
-      assert {:ok, replacement} =
-               ExecutionPool.request_slot(pool, self(), 1_000,
-                 daemon_id: "test-daemon",
-                 daemon_max_concurrency: 1
-               )
-
-      assert :ok = ExecutionPool.release_slot(pool, replacement)
-    end
-
-    test "cancels an already-started execution and releases its pool slot", ctx do
-      {pool, pool_pid} = start_test_pool()
-      slot = reserve_pool_slot(pool)
-      execution = create_direct_execution(ctx.task, ctx.step, ctx.task_run, ctx.user.id)
-
-      Phoenix.PubSub.subscribe(
-        Sacrum.PubSub,
-        "daemon:#{Sacrum.Repo.Schemas.Task.workspace_daemon(ctx.task)}"
-      )
-
-      {:ok, worker} =
-        AsyncStepExecutionSupervisor.start_execution(
-          execution.id,
-          ctx.user.id,
-          ctx.project.id,
-          ctx.task_run.id,
-          pool,
-          daemon_id: "test-daemon",
-          daemon_max_concurrency: 1
-        )
-
-      on_exit(fn ->
-        if Process.alive?(worker), do: Process.exit(worker, :kill)
-
-        if Process.alive?(pool_pid) do
-          ExecutionPool.release_slot(pool, slot)
-          GenServer.stop(pool_pid)
-        end
-      end)
-
-      wait_until(fn -> ExecutionPool.pool_status(pool).queue_length == 1 end)
-      assert :ok = ExecutionPool.release_slot(pool, slot)
-      wait_until(fn -> Repo.get!(StepExecution, execution.id).status == "started" end)
-
-      assert_receive %Phoenix.Socket.Broadcast{
-                       event: "run_step",
-                       payload: %{id: execution_id}
-                     },
-                     1_000
-
-      assert execution_id == execution.id
-
-      assert {:ok, %TaskRun{status: :stopped}} = Orchestrator.stop_task_run(ctx.task_run)
-      wait_until(fn -> Repo.get!(StepExecution, execution.id).status == "cancelled" end)
-      wait_until(fn -> not Process.alive?(worker) end)
-
-      assert ExecutionPool.pool_status(pool).queue_length == 0
-      assert ExecutionPool.pool_status(pool).in_use_count == 0
-
-      assert {:ok, replacement} =
-               ExecutionPool.request_slot(pool, self(), 1_000,
-                 daemon_id: "test-daemon",
-                 daemon_max_concurrency: 1
-               )
-
-      assert :ok = ExecutionPool.release_slot(pool, replacement)
     end
   end
 end

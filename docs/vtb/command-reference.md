@@ -74,7 +74,6 @@
 
 | Command | Description |
 |---------|-------------|
-| `vtb run <id>` | Execute current daemon-backed step; rejects orchestration-only stop steps |
 | `vtb start-taskrun <id>` | Start a durable workflow run; a later invocation creates a new run after a stop boundary |
 | `vtb stop-taskrun <id>` | Stop the active durable workflow run |
 | `vtb execution create <id>` | Create execution record |

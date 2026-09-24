@@ -11,8 +11,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   by the route handler. Transitions (advance_to_step, move_to_step) only update
   current_step_id; daemon-backed execution rows are created at dispatch time.
 
-  Used by both the GraphQL runStep resolver and the TaskOrchestrator to
-  ensure consistent execution dispatch behavior.
+  Used by the TaskOrchestrator to dispatch workflow steps.
   """
 
   require Logger
@@ -21,12 +20,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
 
   alias Sacrum.Accounts.StepExecutions
 
-  alias Sacrum.Orchestrator.{
-    AsyncStepExecutionSupervisor,
-    ExecutionHistory,
-    PromptContext,
-    PromptRenderer
-  }
+  alias Sacrum.Orchestrator.{ExecutionHistory, PromptContext, PromptRenderer}
 
   alias Sacrum.Orchestrator.TaskRuns.Failure
   alias Sacrum.Realtime.CommandBroadcaster
@@ -75,35 +69,6 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
     end
   end
 
-  @doc "Persists a queued direct run and starts its supervised asynchronous worker."
-  @spec create_and_queue(Task.t(), WorkflowStep.t(), TaskRun.t(), keyword()) ::
-          {:ok, StepExecution.t()} | {:error, term()}
-  def create_and_queue(task, step, task_run, admission_opts \\ []) do
-    with :ok <- validate_dispatch_context(task, step, task_run),
-         :ok <- validate_dispatchable_step(step),
-         :ok <- validate_workflow(task),
-         {:ok, _task_run} <- validate_task_run(task_run, task),
-         {:ok, rendered} <- render_dispatch_prompt(task, step, task_run, nil),
-         {:ok, %{execution: execution}} <-
-           insert_and_stamp(task, step, task_run, nil, rendered, "queued"),
-         {:ok, _pid} <-
-           AsyncStepExecutionSupervisor.start_execution(
-             execution.id,
-             task.user_id,
-             task.project_id,
-             task_run.id,
-             Sacrum.Orchestrator.ExecutionPool,
-             admission_opts
-           ) do
-      {:ok, execution}
-    else
-      {:error, reason} = err ->
-        Logger.error("[ExecutionDispatcher] create_and_queue failed: #{inspect(reason)}")
-        mark_dispatch_failure(task_run, reason)
-        err
-    end
-  end
-
   defp reusable_active_execution(
          %StepExecution{
            task_run_id: task_run_id,
@@ -117,15 +82,6 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
        do: execution
 
   defp reusable_active_execution(_execution, _task_run, _step), do: nil
-
-  @doc """
-  Validate that a workflow step may be dispatched directly by a client.
-
-  Stop steps are orchestrator-owned run boundaries. They are reached through
-  workflow transitions and are never dispatched to a daemon.
-  """
-  @spec validate_step(WorkflowStep.t()) :: :ok | {:error, term()}
-  def validate_step(%WorkflowStep{} = step), do: validate_dispatchable_step(step)
 
   defp validate_dispatchable_step(%WorkflowStep{step_type: :stop}),
     do: {:error, :stop_step_not_dispatchable}

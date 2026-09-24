@@ -143,11 +143,10 @@ chosen when the active root run is created and is not changed by reusing that
 run. Admission occupancy is process-local; it is not persisted as a separate
 step-attempt ledger.
 
-Clients should start limited runs through `runWorkflow`; they should not send
-`parentTaskRunId` or `rootTaskRunId` when creating a run. A direct `runStep`
-dispatch is rejected when the selected active run has a custom root limit, so
-that work cannot bypass the hierarchical budget. Existing runs without a
-custom limit use in-memory daemon admission only.
+Clients should start runs through `runWorkflow`; they should not send
+`parentTaskRunId` or `rootTaskRunId` when creating a run. The TaskOrchestrator
+owns step dispatch and applies the root run's concurrency scope to every
+attempt.
 
 ## Task Status Compatibility
 
@@ -602,7 +601,6 @@ Update CLI commands as follows:
 
 - `list`: show a run state column from `runControls.activeRun.status`, not `Task.status`.
 - `status` / `show`: show both workflow position and active run state.
-- `run`: execute the current step only through the single-step `runStep` operation.
 - `start-taskrun`: call `runWorkflow(taskId)` to create/start a durable TaskRun.
 - `stop-taskrun`: call `stopRun(taskRunId)` when an active run is known; otherwise call `stopRun(taskId)`.
 - `trace`: use `taskRunTrace(rootTaskRunId)` for the selected `TaskRun` only.
