@@ -570,7 +570,8 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
           name: "CDC route",
           step_order: 3,
           step_type: "route",
-          prompt: nil
+          prompt: nil,
+          route_config: cdc_route_config(second_step.id, "before")
         })
 
       {:ok, _} =
@@ -1279,13 +1280,13 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
     }
   end
 
-  defp cdc_route_config(destination_id) do
+  defp cdc_route_config(destination_id, rule_id \\ "approved") do
     %{
       "version" => 1,
       "match_policy" => "exactly_one",
       "rules" => [
         %{
-          "id" => "approved",
+          "id" => rule_id,
           "when" => %{
             "ref" => "previous_output.route.result",
             "op" => "eq",
@@ -1312,7 +1313,8 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
         name: "CDC local route",
         step_order: 3,
         step_type: "route",
-        prompt: nil
+        prompt: nil,
+        route_config: cdc_route_config(destination.id)
       })
 
     {:ok, _} =
@@ -1329,7 +1331,6 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
         project_id: project.id
       })
 
-    {:ok, route} = WorkflowSteps.update(route, %{route_config: cdc_route_config(destination.id)})
     {:ok, _} = Workflows.update(workflow, %{initial_step_id: source.id})
 
     task = create_task(project, "CDC local route task", %{workflow_id: workflow.id})

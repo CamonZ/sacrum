@@ -20,7 +20,8 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
   end
 
   defp create_workflow(user) do
-    {:ok, project} = Projects.insert(user.id, %{name: "Test Project"})
+    suffix = System.unique_integer([:positive])
+    {:ok, project} = Projects.insert(user.id, %{name: "Test Project #{suffix}"})
     {:ok, workflow} = Workflows.insert(user.id, project.id, %{name: "Test Workflow"})
     {project, workflow}
   end
@@ -157,14 +158,24 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
 
     test "creates step with each valid step_type" do
       user = create_user()
-      {_project, workflow} = create_workflow(user)
 
       for type <- ~w(execute evaluate route finish) do
+        {_project, workflow} = create_workflow(user)
+
         attrs =
           case type do
-            "finish" -> %{prompt: nil}
-            "route" -> %{prompt: "Choose a destination"}
-            _ -> %{}
+            "finish" ->
+              %{prompt: nil}
+
+            "route" ->
+              %{
+                prompt: "Choose a destination",
+                route_config:
+                  route_config(%{"ref" => "task.level", "op" => "eq", "value" => "task"})
+              }
+
+            _ ->
+              %{}
           end
 
         assert {:ok, %WorkflowStep{} = step} =
@@ -195,7 +206,12 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
       assert step.step_type == :execute
 
       assert {:ok, updated} =
-               WorkflowSteps.update(step, %{step_type: "route", prompt: "Choose a destination"})
+               WorkflowSteps.update(step, %{
+                 step_type: "route",
+                 prompt: "Choose a destination",
+                 route_config:
+                   route_config(%{"ref" => "task.level", "op" => "eq", "value" => "task"})
+               })
 
       assert updated.step_type == :route
     end
@@ -307,36 +323,31 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
       end
     end
 
-    test "requires graph prerequisites for a promptless configured route" do
+    test "allows a configured route to be created before its graph edges are connected" do
       user = create_user()
       {_project, workflow} = create_workflow(user)
 
-      assert {:error, changeset} =
+      assert {:ok, route} =
                WorkflowSteps.insert(workflow, %{
                  name: "Route",
                  step_type: "route",
                  prompt: nil,
                  route_config:
-                   route_config(%{
-                     "ref" => "previous_output.route.result",
-                     "op" => "eq",
-                     "value" => "approved"
-                   })
+                   route_config(%{"ref" => "task.level", "op" => "eq", "value" => "task"})
                })
 
-      assert %{route_config: [message]} = errors_on(changeset)
-      assert message =~ "$.predecessors"
+      assert route.route_config != nil
+      assert route.prompt == nil
     end
 
-    test "allows a promptless unconfigured route as an authoring draft" do
+    test "rejects a promptless unconfigured route" do
       user = create_user()
       {_project, workflow} = create_workflow(user)
 
-      assert {:ok, draft} =
+      assert {:error, changeset} =
                WorkflowSteps.insert(workflow, %{name: "Route", step_type: "route", prompt: nil})
 
-      assert draft.route_config == nil
-      assert draft.output_schema == nil
+      assert %{route_config: ["is required for route steps"]} = errors_on(changeset)
     end
   end
 

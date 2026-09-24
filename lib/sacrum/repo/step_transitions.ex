@@ -44,7 +44,7 @@ defmodule Sacrum.Repo.StepTransitions do
       |> step_workflow_ids()
       |> Enum.concat(step_workflow_ids_after(changeset))
 
-    RouteValidation.mutate(affected, changeset, fn -> Repo.insert(changeset) end)
+    RouteValidation.mutate(affected, changeset, fn -> Repo.insert(changeset) end, true)
   end
 
   def insert(user_id, attrs) when is_binary(user_id) and is_map(attrs) do

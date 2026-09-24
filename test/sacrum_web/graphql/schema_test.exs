@@ -3498,6 +3498,9 @@ defmodule SacrumWeb.Graphql.SchemaTest do
           prompt: nil
         })
 
+      route_config = routing_config(destination.id)
+      route_config_input = Jason.encode!(Jason.encode!(route_config))
+
       create_result =
         conn
         |> authenticate(user)
@@ -3509,6 +3512,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
               stepType: "route"
               prompt: "Legacy fallback"
               stepOrder: 2
+              routeConfig: #{route_config_input}
             ) { id prompt routeConfig }
           }
         """)
@@ -3516,7 +3520,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
       assert create_result["errors"] == nil
 
-      assert %{"id" => route_id, "prompt" => "Legacy fallback", "routeConfig" => nil} =
+      assert %{"id" => route_id, "prompt" => "Legacy fallback", "routeConfig" => ^route_config} =
                create_result["data"]["createWorkflowStep"]
 
       {:ok, route} = Accounts.WorkflowSteps.get_by(user.id, conditions: [id: route_id])
@@ -3534,9 +3538,6 @@ defmodule SacrumWeb.Graphql.SchemaTest do
                  to_step_id: destination.id,
                  project_id: project.id
                })
-
-      route_config = routing_config(destination.id)
-      route_config_input = Jason.encode!(Jason.encode!(route_config))
 
       update_result =
         conn
@@ -3613,12 +3614,11 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         )
         |> json_response(200)
 
-      assert clear_config_result["errors"] == nil
+      assert clear_config_result["data"]["updateWorkflowStep"] == nil
+      assert clear_config_result["errors"] != nil
 
-      assert clear_config_result["data"]["updateWorkflowStep"] == %{
-               "prompt" => "",
-               "routeConfig" => nil
-             }
+      assert {:ok, unchanged} = Accounts.WorkflowSteps.get_by(user.id, conditions: [id: route.id])
+      assert unchanged.route_config == route_config
     end
 
     test "returns the route_config validation path without using the prompt fallback", %{
@@ -3627,12 +3627,14 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       project: project
     } do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "Invalid Routing WF"})
+      valid_config = routing_config(Ecto.UUID.generate())
 
       {:ok, route} =
         Accounts.WorkflowSteps.insert(wf, %{
           name: "Route",
           step_type: "route",
-          prompt: "Keep this fallback"
+          prompt: "Keep this prompt",
+          route_config: valid_config
         })
 
       invalid_config = %{
@@ -3667,8 +3669,8 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
       assert result["data"]["updateWorkflowStep"] == nil
       assert {:ok, unchanged} = Accounts.WorkflowSteps.get_by(user.id, conditions: [id: route.id])
-      assert unchanged.route_config == nil
-      assert unchanged.prompt == "Keep this fallback"
+      assert unchanged.route_config == valid_config
+      assert unchanged.prompt == "Keep this prompt"
     end
 
     test "createWorkflowStep returns formatted error message on invalid output_schema", %{
@@ -4067,44 +4069,6 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert reloaded_task_run.id == task_run.id
       assert reloaded_task_run.status == :executing
       assert reloaded_task_run.latest_step_execution_id == data["id"]
-    end
-
-    test "runStep persists and exposes a non-default workflow step type", %{
-      conn: conn,
-      user: user,
-      project: project
-    } do
-      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
-      task = assign_workspace(task, user.id)
-      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-
-      {:ok, step} =
-        Accounts.WorkflowSteps.insert(wf, %{
-          name: "Route decision",
-          step_type: "route",
-          prompt: "Choose a destination"
-        })
-
-      {:ok, _task} = Sacrum.Repo.TaskWorkflows.assign_workflow(task, wf)
-
-      result =
-        conn
-        |> authenticate(user)
-        |> graphql("""
-          mutation {
-            runStep(
-              taskId: "#{task.id}"
-              stepId: "#{step.id}"
-            ) { id stepName stepType status taskId }
-          }
-        """)
-        |> json_response(200)
-
-      data = result["data"]["runStep"]
-      assert data["stepName"] == "Route decision"
-      assert data["stepType"] == "route"
-      assert data["status"] == "queued"
-      assert data["taskId"] == task.id
     end
 
     test "runStep rejects stop steps without creating or changing a TaskRun", %{

@@ -23,7 +23,7 @@ defmodule SacrumWeb.Graphql.WorkflowStepRouteConfigTest do
   describe "workflow step route_config contract" do
     setup [:setup_user_and_project]
 
-    test "createWorkflowStep validates route_config through the changeset", %{
+    test "creates a configured route before its graph edges are connected", %{
       conn: conn,
       user: user,
       project: project
@@ -47,8 +47,16 @@ defmodule SacrumWeb.Graphql.WorkflowStepRouteConfigTest do
         """)
         |> json_response(200)
 
-      assert result["data"]["createWorkflowStep"] == nil
-      assert_route_config_error(result, "$.predecessors")
+      assert result["errors"] == nil
+
+      assert %{
+               "id" => route_id,
+               "prompt" => "Keep this fallback",
+               "routeConfig" => route_config
+             } = result["data"]["createWorkflowStep"]
+
+      assert route_id
+      assert route_config == routing_config(graph.destination.id)
     end
 
     test "rejects routeConfig read and mutation by another user", %{
@@ -137,6 +145,14 @@ defmodule SacrumWeb.Graphql.WorkflowStepRouteConfigTest do
         )
 
       assert_route_config_error(unknown_handoff_result, "$.rules[0].handoff.note")
+
+      Repo.delete_all(
+        from(transition in Sacrum.Repo.Schemas.StepTransition,
+          where:
+            transition.from_step_id == ^graph.source.id and
+              transition.to_step_id == ^graph.route.id
+        )
+      )
 
       predecessor_result = update_route_config(conn, user, graph.route.id, valid)
       assert_route_config_error(predecessor_result, "$.predecessors")
@@ -272,46 +288,40 @@ defmodule SacrumWeb.Graphql.WorkflowStepRouteConfigTest do
         output_schema: predecessor_schema()
       })
 
-    {:ok, route} =
-      Accounts.WorkflowSteps.insert(workflow, %{
-        name: "Route",
-        step_order: 2,
-        step_type: "route",
-        prompt: "Fallback"
-      })
-
     {:ok, destination} =
       Accounts.WorkflowSteps.insert(workflow, %{
         name: "Destination",
         step_order: 3
       })
 
+    {:ok, route} =
+      Accounts.WorkflowSteps.insert(workflow, %{
+        name: "Route",
+        step_order: 2,
+        step_type: "route",
+        prompt: "Route prompt is independent",
+        route_config: routing_config(destination.id)
+      })
+
+    {:ok, _} =
+      Accounts.StepTransitions.insert(user.id, %{
+        from_step_id: source.id,
+        to_step_id: route.id,
+        project_id: project.id
+      })
+
+    {:ok, _} =
+      Accounts.StepTransitions.insert(user.id, %{
+        from_step_id: route.id,
+        to_step_id: destination.id,
+        project_id: project.id
+      })
+
     %{workflow: workflow, source: source, route: route, destination: destination}
   end
 
   defp configured_route_graph(user, project) do
-    graph = unconfigured_route_graph(user, project)
-
-    {:ok, _} =
-      Accounts.StepTransitions.insert(user.id, %{
-        from_step_id: graph.source.id,
-        to_step_id: graph.route.id,
-        project_id: project.id
-      })
-
-    {:ok, _} =
-      Accounts.StepTransitions.insert(user.id, %{
-        from_step_id: graph.route.id,
-        to_step_id: graph.destination.id,
-        project_id: project.id
-      })
-
-    {:ok, route} =
-      Accounts.WorkflowSteps.update(graph.route, %{
-        route_config: routing_config(graph.destination.id)
-      })
-
-    %{graph | route: route}
+    unconfigured_route_graph(user, project)
   end
 
   defp commit_local_route(user, project) do

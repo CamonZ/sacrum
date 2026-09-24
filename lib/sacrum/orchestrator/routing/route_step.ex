@@ -1,16 +1,12 @@
 defmodule Sacrum.Orchestrator.Routing.RouteStep do
   @moduledoc """
-  Route-step orchestration for both local deterministic evaluation and the
-  isolated prompt-driven fallback.
+  Route-step orchestration for local deterministic evaluation.
 
-  Configured routes are entered from `:awaiting_execution` before any
-  execution-pool allocation. Unconfigured routes still complete through the
-  daemon path, then share the same plan/commit/continue spine.
+  Routes are entered from `:awaiting_execution` before any execution-pool
+  allocation and persist their audit and transition atomically.
   """
 
   require Logger
-
-  import Ecto.Query
 
   alias Sacrum.Orchestrator.{
     ExecutionPool,
@@ -39,30 +35,6 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
            {:next_state, atom(), FSMData.t()}
            | {:keep_state, FSMData.t()}
            | {:stop, atom(), FSMData.t()}
-
-  @doc """
-  Completes a prompt-driven route after daemon execution.
-  """
-  @spec handle_route_step_transition(FSMData.t(), struct()) :: fsm_transition()
-  def handle_route_step_transition(data, current_step) do
-    with {:ok, execution} <- get_latest_completed_execution(data.task.id),
-         {:ok, decoded} <- RouteDecision.parse_route_output(execution.output),
-         :ok <- OutputValidator.validate_routing_contract(decoded, current_step.output_schema),
-         {:ok, %{dest_id: dest_id, transition_type: transition_type, handoff: handoff}} <-
-           RouteDecision.extract_routing_data(decoded),
-         {:ok, route_plan} <- prepare_route_plan(data, dest_id, transition_type, handoff),
-         {:ok, committed} <-
-           commit_route_transition(
-             data,
-             route_plan,
-             {:update,
-              RouteDecision.route_decision_changeset(execution, dest_id, transition_type)}
-           ) do
-      complete_committed_route(data, committed, dest_id, transition_type, handoff, route_plan)
-    else
-      {:error, reason} -> fail_route(data, reason, "Error in route transition")
-    end
-  end
 
   @doc """
   Evaluates a configured route locally before any execution-pool allocation.
@@ -235,12 +207,6 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
     end)
   end
 
-  defp persist_route_execution({:update, changeset}) do
-    with {:ok, route_execution} <- Repo.update(changeset) do
-      {:ok, %{route_execution: route_execution}}
-    end
-  end
-
   defp persist_route_execution({:insert, changeset, task_run}) do
     with {:ok, route_execution} <- Repo.insert(changeset),
          {:ok, task_run} <- update_route_cursor(task_run, route_execution.id) do
@@ -321,21 +287,5 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
           {:ok, map()} | {:error, term()}
   defp maybe_finish_route_task_and_run(data, _updated_task, route_plan, changes) do
     TaskCompletion.maybe_mark_task_run_completed_for_decision(data, route_plan.decision, changes)
-  end
-
-  @spec get_latest_completed_execution(binary()) ::
-          {:ok, StepExecution.t()} | {:error, :no_completed_execution}
-  defp get_latest_completed_execution(task_id) do
-    query =
-      from(e in StepExecution,
-        where: e.task_id == ^task_id and e.status == "completed",
-        order_by: [desc: e.inserted_at],
-        limit: 1
-      )
-
-    case Repo.one(query) do
-      nil -> {:error, :no_completed_execution}
-      execution -> {:ok, execution}
-    end
   end
 end

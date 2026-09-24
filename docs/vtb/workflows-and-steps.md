@@ -109,7 +109,7 @@ steps do not produce a structured output execution.
 |------|-------------|
 | `execute` | Default. Runs the step's prompt and produces output. |
 | `evaluate` | Assesses output of a previous step. Emits structured JSON matching `output_schema`. |
-| `route` | Terminal-of-workflow decision step. Emits `{ transition_to, transition_type, handoff }` to direct to the next workflow/step. |
+| `route` | Local deterministic decision step. Requires a valid `route_config`; evaluates the preceding step output and task context to choose a declared intra- or inter-workflow transition, with an optional handoff. It does not run a prompt on a daemon. |
 | `wait_children` | Parks the parent run while child tasks execute, persists a child-state JSON snapshot on the `StepExecution.output`, then resumes when all children complete. |
 | `human_input` | Parks the run for generic human response. The submitted response is validated against `output_schema`, stored on the step execution, and then the same run resumes. |
 | `stop` | Ends the current TaskRun at a run boundary without completing the task. The next workflow run advances through its single outgoing transition before dispatching the next executable step. It is never sent to the daemon. |
@@ -117,6 +117,13 @@ steps do not produce a structured output execution.
 Stop steps must have exactly one outgoing transition. Configure the transition
 when authoring the workflow; a missing or ambiguous destination is rejected by
 the API and cannot be used as a run boundary.
+
+Route steps must be saved with a valid `routeConfig`. Their optional stored
+`prompt` is not used for routing. Creating or updating a route without a
+configuration, including explicitly clearing it to `null`, is rejected. Clear
+`routeConfig` in the same update that changes a route to another step type.
+Existing route records with no configuration are not converted: graph
+validation rejects them until a valid configuration is saved.
 
 ## Prompt Templates
 
@@ -156,7 +163,7 @@ Each list contains the raw section content strings in ordinal order. **Lists are
 
 | Field | Description |
 |-------|-------------|
-| `execution.previous_output` | Output of the immediately preceding step (string for execute, parsed object/list for evaluate/route). Nil on the first step. |
+| `execution.previous_output` | Output of the immediately preceding step (string for execute, parsed object/list for evaluate). Nil on the first step. |
 | `execution.handoff` | Map carried over from the previous workflow's route step (e.g. `{ feedback, pr_url, branch, needs_human, note, source_workflow }`). Nil if there is no inbound handoff. |
 | `execution.retry_count` | Times this step has retried in the current execution. |
 | `execution.run_count` | Total times this step has run for this task across all workflow iterations (ok + ko). |
@@ -210,7 +217,9 @@ Without the guards, the prompt will render bare section headers with empty bodie
 
 ### Reading prior step output
 
-Inside a workflow, each step sees the previous step's output via `execution.previous_output`. For `evaluate` and `route` steps that consume structured output, treat it as a string and let the model parse it:
+Inside a workflow, daemon-backed steps see the previous step's output via
+`execution.previous_output`. For an `evaluate` step that consumes structured
+output, treat it as a string and let the model parse it:
 
 ```liquid
 {% if execution.previous_output %}Input:
@@ -218,7 +227,7 @@ Inside a workflow, each step sees the previous step's output via `execution.prev
 {% endif %}
 ```
 
-For deeper history (e.g. a `route` step that needs the `pr` step's output two hops back), iterate `execution.history`:
+For deeper history, an evaluate prompt can iterate `execution.history`:
 
 ```liquid
 {% for h in execution.history %}{% if h.step_name == "pr" %}PR: {{ h.output }}{% endif %}{% endfor %}
@@ -239,9 +248,11 @@ A previous attempt was rejected. Address this first:
 {% endif %}
 ```
 
-### Telling evaluate/route steps to emit schema-conforming JSON
+### Telling evaluate steps to emit schema-conforming JSON
 
-Evaluate and route steps must emit JSON matching their `output_schema`. Include this directive in the prompt so the model knows what shape to produce:
+Evaluate steps can emit JSON matching their `output_schema`. Include this
+directive in the prompt so the model knows what shape to produce. Route steps
+are evaluated locally from `route_config` and do not emit model output.
 
 ```liquid
 {% if workflow.output_schema %}Output JSON matching:

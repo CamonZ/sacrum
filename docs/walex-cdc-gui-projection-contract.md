@@ -52,7 +52,7 @@ instead of silently applying a payload with an unsupported shape.
 | `workflow_created` | Entity projection | `workflows` insert after image. | Full workflow row including default state, ordering, metadata, `initial_step_id`, `kanban_column`, and `project_id`. |
 | `workflow_updated` | Entity projection | `workflows` update after image. | Same full workflow row for graph/list replacement. |
 | `workflow_deleted` | Entity projection | `workflows` delete before image. | `{id}` tombstone scoped by the project channel. |
-| `step_created` | Entity projection | `workflow_steps` insert after image. | Full step row including inert `route_config` JSON, prompt, output schema, step type, agent config, daemon logging flag, `workflow_id`, and `project_id`. |
+| `step_created` | Entity projection | `workflow_steps` insert after image. | Full step row including validated versioned `route_config` JSON, prompt, output schema, step type, agent config, daemon logging flag, `workflow_id`, and `project_id`. |
 | `step_updated` | Entity projection | `workflow_steps` update after image. | Same full step row, including lossless `route_config`, for workflow editor and pipeline graph replacement. |
 | `step_deleted` | Entity projection | `workflow_steps` delete before image. | `{id, workflow_id}` tombstone. |
 | `step_transition_created` | Relation change | `step_transitions` insert after image. | Full edge row: `id`, `from_step_id`, `to_step_id`, `label`, `project_id`, timestamps. |

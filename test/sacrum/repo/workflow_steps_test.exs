@@ -8,7 +8,6 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
   alias Sacrum.Repo.Users
   alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.Schemas.WorkflowStep
-  alias Sacrum.Routing.Contract
 
   @valid_user_attrs %{
     email: "test@example.com",
@@ -33,8 +32,17 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
   }
 
   defp create_workflow do
-    {:ok, user} = Users.insert(@valid_user_attrs)
-    {:ok, project} = Projects.insert(user, %{name: "My Project"})
+    suffix = System.unique_integer([:positive])
+
+    {:ok, user} =
+      Users.insert(
+        Map.merge(@valid_user_attrs, %{
+          email: "workflow_steps_#{suffix}@example.com",
+          username: "workflow_steps_#{suffix}"
+        })
+      )
+
+    {:ok, project} = Projects.insert(user, %{name: "My Project #{suffix}"})
     {:ok, workflow} = Workflows.insert(project, %{name: "Default"})
     workflow
   end
@@ -48,6 +56,23 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
     }
     |> Task.create_changeset(%{title: title})
     |> Repo.insert()
+  end
+
+  defp route_config(target) do
+    %{
+      "version" => 1,
+      "match_policy" => "exactly_one",
+      "rules" => [
+        %{
+          "id" => "task-level",
+          "when" => %{"ref" => "task.level", "op" => "eq", "value" => "task"},
+          "transition" => %{"type" => "intra_workflow", "step_id" => target}
+        }
+      ],
+      "default" => %{
+        "transition" => %{"type" => "intra_workflow", "step_id" => target}
+      }
+    }
   end
 
   describe "insert/2" do
@@ -82,11 +107,21 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
     end
 
     test "creates step with explicit step_type" do
-      workflow = create_workflow()
-
       for type <- ~w(execute evaluate route wait_children human_input stop finish) do
+        workflow = create_workflow()
         attrs = Map.put(@valid_attrs, :step_type, type)
         attrs = if type == "finish", do: Map.put(attrs, :prompt, nil), else: attrs
+
+        attrs =
+          if type == "route" do
+            {:ok, destination} =
+              WorkflowSteps.insert(workflow, %{name: "Destination", step_order: 2})
+
+            Map.put(attrs, :route_config, route_config(destination.id))
+          else
+            attrs
+          end
+
         assert {:ok, %WorkflowStep{} = step} = WorkflowSteps.insert(workflow, attrs)
         assert step.step_type == String.to_existing_atom(type)
       end
@@ -292,69 +327,6 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       assert %{output_schema: ["is invalid"]} = errors_on(changeset)
     end
 
-    test "route steps auto-set strict routing contract schema on create" do
-      workflow = create_workflow()
-
-      attrs = Map.merge(@valid_attrs, %{step_type: "route", prompt: "Legacy route"})
-
-      assert {:ok, %WorkflowStep{step_type: :route} = step} =
-               WorkflowSteps.insert(workflow, attrs)
-
-      assert step.output_schema == Contract.output_schema()
-      refute Map.has_key?(step.output_schema["properties"], "handoff")
-    end
-
-    test "route steps reject custom output_schema that doesn't match routing contract" do
-      workflow = create_workflow()
-
-      custom_schema = %{
-        "type" => "object",
-        "properties" => %{
-          "custom_field" => %{"type" => "string"}
-        }
-      }
-
-      attrs =
-        Map.merge(@valid_attrs, %{
-          step_type: "route",
-          prompt: "Legacy route",
-          output_schema: custom_schema
-        })
-
-      assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
-
-      assert_output_schema_error(changeset, "routing contract schema")
-    end
-
-    test "route steps accept correct routing contract schema" do
-      workflow = create_workflow()
-
-      correct_schema = %{
-        "type" => "object",
-        "properties" => %{
-          "transition_to" => %{"type" => "string"},
-          "transition_type" => %{
-            "type" => "string",
-            "enum" => ["intra_workflow", "inter_workflow"]
-          }
-        },
-        "required" => ["transition_to", "transition_type"],
-        "additionalProperties" => false
-      }
-
-      attrs =
-        Map.merge(@valid_attrs, %{
-          step_type: "route",
-          prompt: "Legacy route",
-          output_schema: correct_schema
-        })
-
-      assert {:ok, %WorkflowStep{output_schema: returned_schema}} =
-               WorkflowSteps.insert(workflow, attrs)
-
-      assert returned_schema == correct_schema
-    end
-
     test "allows nil output_schema" do
       workflow = create_workflow()
 
@@ -480,185 +452,6 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
 
       {:ok, updated} = WorkflowSteps.update(step, %{output_schema: updated_schema})
       assert updated.output_schema == updated_schema
-    end
-
-    test "route steps enforce routing contract on update" do
-      workflow = create_workflow()
-
-      {:ok, step} =
-        WorkflowSteps.insert(
-          workflow,
-          Map.merge(@valid_attrs, %{step_type: "route", prompt: "Legacy route"})
-        )
-
-      invalid_schema = %{
-        "type" => "object",
-        "properties" => %{
-          "invalid" => %{"type" => "string"}
-        }
-      }
-
-      assert {:error, changeset} = WorkflowSteps.update(step, %{output_schema: invalid_schema})
-      assert %{output_schema: _} = errors_on(changeset)
-    end
-
-    test "route steps accept routing contract schema with strict handoff property" do
-      workflow = create_workflow()
-
-      handoff_schema = %{
-        "type" => "object",
-        "properties" => %{
-          "summary" => %{"type" => "string"},
-          "notes" => %{"type" => "string"}
-        },
-        "required" => ["summary", "notes"],
-        "additionalProperties" => false
-      }
-
-      schema_with_handoff = Contract.output_schema(handoff_schema)
-
-      attrs =
-        Map.merge(@valid_attrs, %{
-          step_type: "route",
-          prompt: "Legacy route",
-          output_schema: schema_with_handoff
-        })
-
-      assert {:ok, %WorkflowStep{output_schema: returned_schema}} =
-               WorkflowSteps.insert(workflow, attrs)
-
-      assert returned_schema == schema_with_handoff
-    end
-
-    test "route steps reject handoff schema missing additionalProperties false" do
-      workflow = create_workflow()
-
-      invalid_schema =
-        Contract.output_schema(%{
-          "type" => "object",
-          "properties" => %{"summary" => %{"type" => "string"}},
-          "required" => ["summary"]
-        })
-
-      attrs =
-        Map.merge(@valid_attrs, %{
-          step_type: "route",
-          prompt: "Legacy route",
-          output_schema: invalid_schema
-        })
-
-      assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
-      assert_output_schema_error(changeset, "additionalProperties must be false")
-    end
-
-    test "route steps reject handoff schema missing required keys for declared properties" do
-      workflow = create_workflow()
-
-      invalid_schema =
-        Contract.output_schema(%{
-          "type" => "object",
-          "properties" => %{
-            "summary" => %{"type" => "string"},
-            "priority" => %{"type" => "string"}
-          },
-          "required" => ["summary"],
-          "additionalProperties" => false
-        })
-
-      attrs =
-        Map.merge(@valid_attrs, %{
-          step_type: "route",
-          prompt: "Legacy route",
-          output_schema: invalid_schema
-        })
-
-      assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
-      assert_output_schema_error(changeset, "required must list every declared property")
-    end
-
-    test "route steps reject object schemas inside handoff arrays unless they are strict" do
-      workflow = create_workflow()
-
-      invalid_schema =
-        Contract.output_schema(%{
-          "type" => "object",
-          "properties" => %{
-            "items" => %{
-              "type" => "array",
-              "items" => %{
-                "type" => "object",
-                "properties" => %{"summary" => %{"type" => "string"}},
-                "required" => ["summary"]
-              }
-            }
-          },
-          "required" => ["items"],
-          "additionalProperties" => false
-        })
-
-      attrs =
-        Map.merge(@valid_attrs, %{
-          step_type: "route",
-          prompt: "Legacy route",
-          output_schema: invalid_schema
-        })
-
-      assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
-
-      assert_output_schema_error(
-        changeset,
-        "handoff.items.items.additionalProperties must be false"
-      )
-    end
-
-    test "route steps reject nullable handoff type arrays" do
-      workflow = create_workflow()
-
-      schema_with_nullable_handoff =
-        Contract.output_schema(%{
-          "type" => ["null", "object"],
-          "properties" => %{"summary" => %{"type" => "string"}},
-          "required" => ["summary"],
-          "additionalProperties" => false
-        })
-
-      attrs =
-        Map.merge(@valid_attrs, %{
-          step_type: "route",
-          prompt: "Legacy route",
-          output_schema: schema_with_nullable_handoff,
-          agent_config: %{"provider" => "openai"}
-        })
-
-      assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
-      assert %{output_schema: [message]} = errors_on(changeset)
-      assert String.contains?(message, "Codex strict-compatible")
-      assert String.contains?(message, "type must be a single string")
-    end
-
-    test "route steps allow nullable handoff object schemas for non-Codex providers" do
-      workflow = create_workflow()
-
-      schema_with_nullable_handoff =
-        Contract.output_schema(%{
-          "type" => ["null", "object"],
-          "properties" => %{"summary" => %{"type" => "string"}},
-          "required" => ["summary"],
-          "additionalProperties" => false
-        })
-
-      attrs =
-        Map.merge(@valid_attrs, %{
-          step_type: "route",
-          prompt: "Legacy route",
-          output_schema: schema_with_nullable_handoff,
-          agent_config: %{"provider" => "anthropic"}
-        })
-
-      assert {:ok, %WorkflowStep{output_schema: returned_schema}} =
-               WorkflowSteps.insert(workflow, attrs)
-
-      assert returned_schema == schema_with_nullable_handoff
     end
 
     test "rejects schemas with const values" do
@@ -792,78 +585,6 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       assert String.contains?(message, "Codex strict-compatible")
       assert String.contains?(message, "additionalProperties must be false")
     end
-
-    test "route steps reject handoff property with wrong type in output schema" do
-      workflow = create_workflow()
-
-      invalid_schema = %{
-        "type" => "object",
-        "properties" => %{
-          "transition_to" => %{"type" => "string"},
-          "transition_type" => %{
-            "type" => "string",
-            "enum" => ["intra_workflow", "inter_workflow"]
-          },
-          "handoff" => %{"type" => "string"}
-        },
-        "required" => ["transition_to", "transition_type", "handoff"],
-        "additionalProperties" => false
-      }
-
-      attrs =
-        Map.merge(@valid_attrs, %{
-          step_type: "route",
-          prompt: "Legacy route",
-          output_schema: invalid_schema
-        })
-
-      assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
-      assert_output_schema_error(changeset, "routing contract schema")
-    end
-
-    test "route steps reject unknown properties even with handoff present" do
-      workflow = create_workflow()
-
-      invalid_schema = %{
-        "type" => "object",
-        "properties" => %{
-          "transition_to" => %{"type" => "string"},
-          "transition_type" => %{
-            "type" => "string",
-            "enum" => ["intra_workflow", "inter_workflow"]
-          },
-          "handoff" => %{"type" => "object"},
-          "unknown_field" => %{"type" => "string"}
-        },
-        "required" => ["transition_to", "transition_type", "handoff"],
-        "additionalProperties" => false
-      }
-
-      attrs =
-        Map.merge(@valid_attrs, %{
-          step_type: "route",
-          prompt: "Legacy route",
-          output_schema: invalid_schema
-        })
-
-      assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
-      assert_output_schema_error(changeset, "routing contract schema")
-    end
-
-    test "route steps auto-set strict schema stays consistent on update" do
-      workflow = create_workflow()
-
-      attrs = Map.merge(@valid_attrs, %{step_type: "route", prompt: "Legacy route"})
-      {:ok, step} = WorkflowSteps.insert(workflow, attrs)
-
-      expected_schema = Contract.output_schema()
-
-      assert step.output_schema == expected_schema
-
-      # Update other fields and verify schema remains intact
-      {:ok, updated} = WorkflowSteps.update(step, %{name: "Updated Route Step"})
-      assert updated.output_schema == expected_schema
-    end
   end
 
   describe "verbose_daemon_logging field" do
@@ -907,85 +628,5 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
 
       assert step.verbose_daemon_logging == false
     end
-  end
-
-  describe "routing contract schema without format key" do
-    test "output_schema/0 does not contain format key under transition_to" do
-      schema = Contract.output_schema()
-
-      assert schema["properties"]["transition_to"] == %{"type" => "string"}
-    end
-
-    test "route step persisted output_schema matches new canonical schema without format" do
-      workflow = create_workflow()
-      attrs = Map.merge(@valid_attrs, %{step_type: "route", prompt: "Legacy route"})
-      {:ok, step} = WorkflowSteps.insert(workflow, attrs)
-
-      {:ok, fetched_step} = WorkflowSteps.get(step.id)
-
-      assert fetched_step.output_schema == Contract.output_schema()
-      refute Map.has_key?(fetched_step.output_schema["properties"]["transition_to"], "format")
-    end
-
-    test "update_changeset accepts new canonical schema without format" do
-      workflow = create_workflow()
-      {:ok, step} = WorkflowSteps.insert(workflow, @valid_attrs)
-
-      canonical_schema = Contract.output_schema()
-      attrs = %{step_type: "route", prompt: "Legacy route", output_schema: canonical_schema}
-
-      assert {:ok, updated} = WorkflowSteps.update(step, attrs)
-      assert updated.output_schema == canonical_schema
-    end
-
-    test "update_changeset accepts routing contract schema without handoff" do
-      workflow = create_workflow()
-      {:ok, step} = WorkflowSteps.insert(workflow, @valid_attrs)
-
-      schema_without_handoff = %{
-        "type" => "object",
-        "properties" => %{
-          "transition_to" => %{"type" => "string"},
-          "transition_type" => %{
-            "type" => "string",
-            "enum" => ["intra_workflow", "inter_workflow"]
-          }
-        },
-        "required" => ["transition_to", "transition_type"],
-        "additionalProperties" => false
-      }
-
-      attrs = %{step_type: "route", prompt: "Legacy route", output_schema: schema_without_handoff}
-      assert {:ok, updated} = WorkflowSteps.update(step, attrs)
-      assert updated.output_schema == schema_without_handoff
-    end
-
-    test "update_changeset rejects schema that re-introduces format key" do
-      workflow = create_workflow()
-      {:ok, step} = WorkflowSteps.insert(workflow, @valid_attrs)
-
-      invalid_schema = %{
-        "type" => "object",
-        "properties" => %{
-          "transition_to" => %{"type" => "string", "format" => "uuid"},
-          "transition_type" => %{
-            "type" => "string",
-            "enum" => ["intra_workflow", "inter_workflow"]
-          }
-        },
-        "required" => ["transition_to", "transition_type"],
-        "additionalProperties" => false
-      }
-
-      attrs = %{step_type: "route", prompt: "Legacy route", output_schema: invalid_schema}
-      assert {:error, changeset} = WorkflowSteps.update(step, attrs)
-      assert %{output_schema: [message]} = errors_on(changeset)
-      assert String.contains?(message, "routing contract schema")
-    end
-  end
-
-  defp assert_output_schema_error(changeset, expected_message) do
-    assert %{output_schema: messages} = errors_on(changeset)
-    assert Enum.any?(messages, &String.contains?(&1, expected_message))
   end
 end

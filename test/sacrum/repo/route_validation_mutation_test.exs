@@ -106,7 +106,7 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
     assert Repo.get!(WorkflowStep, route.id).route_config == route.route_config
   end
 
-  test "concurrent route configuration and predecessor deletion cannot commit an invalid graph" do
+  test "concurrent route update and predecessor deletion cannot commit an invalid graph" do
     {project_id, user_id, route_id, source_transition_id} =
       committed_db(fn ->
         %{
@@ -126,16 +126,12 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
       configure_task =
         Task.async(fn ->
           committed_db(fn ->
-            send(parent, :configure_ready)
+            send(parent, :route_update_ready)
 
             receive do
               :go ->
                 route = Repo.get!(WorkflowStep, route_id)
-                destination = destination_for(route)
-
-                Accounts.WorkflowSteps.update(route, %{
-                  route_config: intra_route_config(destination.id)
-                })
+                Accounts.WorkflowSteps.update(route, %{prompt: "Updated route prompt"})
             end
           end)
         end)
@@ -153,7 +149,7 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
           end)
         end)
 
-      assert_receive :configure_ready
+      assert_receive :route_update_ready
       assert_receive :delete_ready
       send(configure_task.pid, :go)
       send(delete_task.pid, :go)
@@ -163,7 +159,7 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
       assert Enum.count(results, &match?({:ok, _}, &1)) == 1
       assert Enum.count(results, &match?({:error, %Ecto.Changeset{}}, &1)) == 1
 
-      {configured?, predecessor_exists?} =
+      {config_exists?, predecessor_exists?} =
         committed_db(fn ->
           route = Repo.get!(WorkflowStep, route_id)
 
@@ -171,7 +167,8 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
            not is_nil(Repo.get(StepTransition, source_transition_id))}
         end)
 
-      refute configured? and not predecessor_exists?
+      assert config_exists?
+      assert predecessor_exists?
     after
       cleanup_committed_project(project_id, user_id)
     end
@@ -189,18 +186,19 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
     source_b =
       create_step(workflow_b, "b-source", 1, output_schema: predecessor_schema(["approved"]))
 
-    route_b = create_step(workflow_b, "b-route", 2, step_type: "route")
     dest_c = create_step(workflow_c, "c-dest", 1)
 
     {:ok, workflow_c} = Accounts.Workflows.update(workflow_c, %{initial_step_id: dest_c.id})
-    create_step_transition(source_b, route_b)
     create_workflow_transition(workflow_a, workflow_b)
     create_workflow_transition(workflow_b, workflow_c)
 
-    {:ok, _route_b} =
-      Accounts.WorkflowSteps.update(route_b, %{
+    route_b =
+      create_step(workflow_b, "b-route", 2,
+        step_type: "route",
         route_config: inter_route_config(workflow_c.id)
-      })
+      )
+
+    create_step_transition(source_b, route_b)
 
     assert {:ok, _step} =
              Accounts.WorkflowSteps.insert(user.id, %{
@@ -227,19 +225,20 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
     source_i =
       create_step(workflow_i, "i-source", 1, output_schema: predecessor_schema(["approved"]))
 
-    route_i = create_step(workflow_i, "i-route", 2, step_type: "route")
     _step_a = create_step(workflow_a, "a-step", 1)
     dest_z = create_step(workflow_z, "z-dest", 1)
 
     {:ok, _workflow_z} = Accounts.Workflows.update(workflow_z, %{initial_step_id: dest_z.id})
-    create_step_transition(source_i, route_i)
     create_workflow_transition(workflow_i, workflow_a)
     create_workflow_transition(workflow_i, workflow_z)
 
-    {:ok, _route_i} =
-      Accounts.WorkflowSteps.update(route_i, %{
+    route_i =
+      create_step(workflow_i, "i-route", 2,
+        step_type: "route",
         route_config: inter_route_config(workflow_z.id)
-      })
+      )
+
+    create_step_transition(source_i, route_i)
 
     assert {:ok, _step} =
              Accounts.WorkflowSteps.insert(user.id, %{
@@ -252,14 +251,7 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
   end
 
   defp configured_intra_route do
-    route_data = unconfigured_intra_route()
-
-    {:ok, route} =
-      Accounts.WorkflowSteps.update(route_data.route, %{
-        route_config: intra_route_config(route_data.destination.id)
-      })
-
-    %{route_data | route: route}
+    unconfigured_intra_route()
   end
 
   defp unconfigured_intra_route do
@@ -268,7 +260,14 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
     workflow = create_workflow(user, project, "Intra route")
     source = create_step(workflow, "source", 1, output_schema: predecessor_schema(["approved"]))
     destination = create_step(workflow, "destination", 2)
-    route = create_step(workflow, "route", 3, step_type: "route", prompt: "Legacy fallback")
+
+    route =
+      create_step(workflow, "route", 3,
+        step_type: "route",
+        prompt: "Route prompt is independent",
+        route_config: intra_route_config(destination.id)
+      )
+
     source_transition = create_step_transition(source, route)
     create_step_transition(route, destination)
 
@@ -292,19 +291,20 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
     source =
       create_step(source_workflow, "source", 1, output_schema: predecessor_schema(["approved"]))
 
-    route = create_step(source_workflow, "route", 2, step_type: "route")
     destination = create_step(destination_workflow, "destination", 1)
-    create_step_transition(source, route)
 
     {:ok, destination_workflow} =
       Accounts.Workflows.update(destination_workflow, %{initial_step_id: destination.id})
 
     workflow_transition = create_workflow_transition(source_workflow, destination_workflow)
 
-    {:ok, route} =
-      Accounts.WorkflowSteps.update(route, %{
+    route =
+      create_step(source_workflow, "route", 2,
+        step_type: "route",
         route_config: inter_route_config(destination_workflow.id)
-      })
+      )
+
+    create_step_transition(source, route)
 
     %{
       destination: destination,
@@ -373,17 +373,6 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
       })
 
     transition
-  end
-
-  defp destination_for(route) do
-    Repo.one!(
-      from(transition in StepTransition,
-        join: destination in WorkflowStep,
-        on: destination.id == transition.to_step_id,
-        where: transition.from_step_id == ^route.id,
-        select: destination
-      )
-    )
   end
 
   defp intra_route_config(destination_id) do

@@ -5,8 +5,6 @@ defmodule Sacrum.Orchestrator.OutputValidator do
 
   require Logger
 
-  alias Sacrum.Routing.Contract
-
   @doc """
   Validates output against a step's output schema.
 
@@ -35,25 +33,6 @@ defmodule Sacrum.Orchestrator.OutputValidator do
 
   def validate_output(_output, _schema) do
     {:error, {:invalid_schema_type, "schema must be a map"}}
-  end
-
-  @doc """
-  Validates routing contract output for route steps using either the step's
-  persisted route schema or the canonical no-handoff route schema.
-  """
-  @spec validate_routing_contract(any(), map() | nil) :: :ok | {:error, term()}
-  def validate_routing_contract(output, schema \\ Contract.output_schema())
-
-  def validate_routing_contract(output, schema) when is_map(output) and is_map(schema) do
-    validate_output(output, schema)
-  end
-
-  def validate_routing_contract(output, nil) when is_map(output) do
-    validate_output(output, Contract.output_schema())
-  end
-
-  def validate_routing_contract(_output, _schema) do
-    {:error, {:invalid_output_type, "routing contract output must be a map"}}
   end
 
   @doc """

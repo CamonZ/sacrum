@@ -202,15 +202,9 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       step =
         create_step(ctx.user, ctx.workflow, %{
           "name" => "Configured route",
-          "step_type" => "route"
+          "step_type" => "route",
+          "route_config" => valid_route_config()
         })
-
-      {:ok, step} =
-        Sacrum.Repo.update(
-          Ecto.Changeset.change(step, %{
-            route_config: %{"version" => 999}
-          })
-        )
 
       task = create_task(ctx.user, ctx.project) |> assign_workflow(ctx.workflow)
       task_run = create_task_run(ctx, task)
@@ -225,25 +219,17 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
              ) == nil
     end
 
-    test "rejects an unconfigured promptless route before creating daemon work", ctx do
-      step =
-        create_step(ctx.user, ctx.workflow, %{
-          "name" => "Unconfigured route",
-          "step_type" => "route",
-          "prompt" => nil
-        })
+    test "rejects route step creation without route_config", ctx do
+      assert {:error, changeset} =
+               Accounts.WorkflowSteps.insert(ctx.user.id, %{
+                 name: "Unconfigured route",
+                 step_type: "route",
+                 prompt: nil,
+                 workflow_id: ctx.workflow.id,
+                 project_id: ctx.project.id
+               })
 
-      task = create_task(ctx.user, ctx.project) |> assign_workflow(ctx.workflow)
-      task_run = create_task_run(ctx, task)
-
-      assert {:error, :route_not_configured} =
-               ExecutionDispatcher.create_and_dispatch(task, step, task_run)
-
-      assert Sacrum.Repo.get!(Sacrum.Repo.Schemas.TaskRun, task_run.id).status == :queued
-
-      assert Sacrum.Repo.get_by(Sacrum.Repo.Schemas.StepExecution,
-               task_run_id: task_run.id
-             ) == nil
+      assert %{route_config: ["is required for route steps"]} = errors_on(changeset)
     end
 
     test "renders {{ task.title }} in step prompt", ctx do
@@ -459,6 +445,25 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
       assert prompt == "Hello !"
     end
+  end
+
+  defp valid_route_config do
+    target_id = Ecto.UUID.generate()
+
+    %{
+      "version" => 1,
+      "match_policy" => "exactly_one",
+      "rules" => [
+        %{
+          "id" => "task-level",
+          "when" => %{"ref" => "task.level", "op" => "eq", "value" => "task"},
+          "transition" => %{"type" => "intra_workflow", "step_id" => target_id}
+        }
+      ],
+      "default" => %{
+        "transition" => %{"type" => "intra_workflow", "step_id" => target_id}
+      }
+    }
   end
 
   describe "prior output exposure via execution data" do

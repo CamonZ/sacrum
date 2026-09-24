@@ -15,17 +15,11 @@ defmodule Sacrum.Routing.RouteModeTest do
     end
   end
 
-  test "selects legacy routing when no configuration is present" do
-    assert {:ok, {:legacy, "Choose a destination"}} =
-             RouteMode.routing_mode(%{
-               prompt: "Choose a destination",
-               route_config: nil
-             })
-  end
-
-  test "requires configuration when no compiled route or prompt is present" do
-    assert {:error, :route_not_configured} =
-             RouteMode.routing_mode(%{prompt: nil, route_config: nil})
+  test "requires configuration regardless of prompt content" do
+    for prompt <- ["Choose a destination", nil, "", "   "] do
+      assert {:error, :route_config_required} =
+               RouteMode.routing_mode(%{prompt: prompt, route_config: nil})
+    end
   end
 
   test "fails closed when a present configuration cannot compile" do
