@@ -409,6 +409,38 @@ the selected rule/default `handoff` template. An omitted template or `{}` means
 no destination `execution.handoff`; transition target metadata remains only in
 `transitionResult`, never in the handoff object.
 
+### Workflow Step Type and Config
+
+`WorkflowStep.stepType` and `StepExecution.stepType` report `llm_inference` for
+every former `execute`/`evaluate` step; the two were behaviorally identical and
+neither name is accepted or reported any more. Clients must treat
+`llm_inference` as the daemon-driven work step.
+
+Type-specific settings are exposed as the typed `config` union (see
+`docs/domain-model.md`, "Step types and step configuration"):
+
+```graphql
+currentStep {
+  id
+  stepType
+  config {
+    ... on LlmInferenceStepConfig { version prompt outputSchema agents skills agentConfig }
+    ... on RouteStepConfig { version routeConfig }
+    ... on WaitChildrenStepConfig { version outputSchema }
+  }
+}
+```
+
+`config` is `null` for `human_input`, `stop`, and `finish`. The former flat
+`prompt`, `outputSchema`, `agents`, `skills`, `agentConfig`, and `routeConfig`
+fields and mutation arguments (and `clearOutputSchema`) are gone. Writes send
+`config` (snake_case JSON keys); updates change only the fields sent, and
+`stepType` cannot be changed after creation. Validation errors for step
+settings arrive per embedded field (for example
+`config.route_config: $.version: only version 1 is supported`); graph-level
+route validation errors still arrive on `route_config`. `step_created` and
+`step_updated` channel payloads carry `config` in place of the flat fields.
+
 ## WebSocket Contract
 
 For the complete WalEx CDC mapping, payload completeness rules, daemon-event
@@ -588,7 +620,7 @@ Clients may display a waiting human gate when:
 
 Recommended v1 behavior:
 
-- Show the task, current step, rendered prompt, output schema, execution ID, and run ID.
+- Show the task, current step, execution ID, and run ID. `human_input` steps have a null `config`, so there is no prompt or output schema to display until their semantics are defined.
 - Do not render an Approve/Reject/Submit action yet.
 - Allow Stop if `runControls.stoppable == true`.
 - Link the future work to the platform discovery ticket `ca564fec` and GUI research ticket `8f2b4c7c`.

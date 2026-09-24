@@ -111,19 +111,16 @@ steps do not produce a structured output execution.
 | `evaluate` | Assesses output of a previous step. Emits structured JSON matching `output_schema`. |
 | `route` | Local deterministic decision step. Requires a valid `route_config`; evaluates the preceding step output and task context to choose a declared intra- or inter-workflow transition, with an optional handoff. It does not run a prompt on a daemon. |
 | `wait_children` | Parks the parent run while child tasks execute, persists a child-state JSON snapshot on the `StepExecution.output`, then resumes when all children complete. |
-| `human_input` | Parks the run for generic human response. The submitted response is validated against `output_schema`, stored on the step execution, and then the same run resumes. |
+| `human_input` | Parks the run for generic human response. It has no config yet: the submitted response is stored on the step execution without schema validation, and then the same run resumes. |
 | `stop` | Ends the current TaskRun at a run boundary without completing the task. The next workflow run advances through its single outgoing transition before dispatching the next executable step. It is never sent to the daemon. |
 
 Stop steps must have exactly one outgoing transition. Configure the transition
 when authoring the workflow; a missing or ambiguous destination is rejected by
 the API and cannot be used as a run boundary.
 
-Route steps must be saved with a valid `routeConfig`. Their optional stored
-`prompt` is not used for routing. Creating or updating a route without a
-configuration, including explicitly clearing it to `null`, is rejected. Clear
-`routeConfig` in the same update that changes a route to another step type.
-Existing route records with no configuration are not converted: graph
-validation rejects them until a valid configuration is saved.
+A route step's `config` holds only `route_config`. A route may be saved
+without one while it is being authored, but graph validation rejects an
+unconfigured route, so it cannot run until a valid `route_config` is saved.
 
 ## Prompt Templates
 

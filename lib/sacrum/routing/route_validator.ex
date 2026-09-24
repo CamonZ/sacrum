@@ -89,10 +89,13 @@ defmodule Sacrum.Routing.RouteValidator do
     end)
   end
 
-  defp route_requires_validation?(%{step_type: :route, route_config: nil}, true), do: false
-
-  defp route_requires_validation?(step, _authoring?),
-    do: step.step_type == :route or not is_nil(step.route_config)
+  defp route_requires_validation?(step, authoring?) do
+    case {step.step_type, route_config(step)} do
+      {:route, nil} -> not authoring?
+      {:route, _route_config} -> true
+      {_step_type, route_config} -> not is_nil(route_config)
+    end
+  end
 
   defp defer_incomplete_error(step, snapshot, reason, _error, true) do
     if incomplete_authoring_error?(step, snapshot, reason),
@@ -120,7 +123,7 @@ defmodule Sacrum.Routing.RouteValidator do
   defp incomplete_authoring_error?(_route_step, _snapshot, _reason), do: false
 
   defp missing_intra_workflow_targets?(route_step, snapshot) do
-    case RouteConfig.decode(route_step.route_config) do
+    case RouteConfig.decode(route_config(route_step)) do
       {:ok, program} ->
         configured_targets =
           (program.rules ++ List.wrap(program.default))
@@ -158,16 +161,23 @@ defmodule Sacrum.Routing.RouteValidator do
   deterministic routing needs at least one declared result domain.
   """
   @spec validate(WorkflowStep.t(), snapshot()) :: :ok | {:error, error()}
-  def validate(%{step_type: :route, route_config: nil} = route_step, _snapshot) do
-    reason = error(:route_config_required, "$.route_config", "is required for route steps")
-    {:error, attach_route_step(reason, route_step)}
+  def validate(route_step, snapshot) do
+    case {route_step.step_type, route_config(route_step)} do
+      {:route, nil} ->
+        reason = error(:route_config_required, "$.route_config", "is required for route steps")
+        {:error, attach_route_step(reason, route_step)}
+
+      {_step_type, nil} ->
+        :ok
+
+      {_step_type, route_config} ->
+        validate_configured(route_step, route_config, snapshot)
+    end
   end
 
-  def validate(%{route_config: nil}, _snapshot), do: :ok
-
-  def validate(route_step, snapshot) do
+  defp validate_configured(route_step, route_config, snapshot) do
     with :ok <- validate_route_step_type(route_step),
-         {:ok, program} <- RouteConfig.decode(route_step.route_config),
+         {:ok, program} <- RouteConfig.decode(route_config),
          {:ok, type_environment} <-
            RoutePredecessors.derive_type_environment(predecessor_schemas(route_step, snapshot)),
          :ok <- RoutePredecessors.validate(program, type_environment),
@@ -178,6 +188,8 @@ defmodule Sacrum.Routing.RouteValidator do
       {:error, reason} -> {:error, attach_route_step(reason, route_step)}
     end
   end
+
+  defp route_config(step), do: WorkflowStep.config_value(step, :route_config)
 
   defp validate_route_step_type(%{step_type: :route}), do: :ok
 
@@ -200,7 +212,7 @@ defmodule Sacrum.Routing.RouteValidator do
         transition_id: edge.transition_id,
         source_step_id: edge.from_step_id,
         destination_step_id: route_step.id,
-        output_schema: source && source.output_schema
+        output_schema: source && WorkflowStep.config_value(source, :output_schema)
       }
     end)
   end

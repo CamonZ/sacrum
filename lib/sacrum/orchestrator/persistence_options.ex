@@ -3,7 +3,7 @@ defmodule Sacrum.Orchestrator.PersistenceOptions do
   Validates and reads workflow-step persistence configuration.
 
   The persisted value is configuration, not the output contract itself. The
-  output contract remains on `WorkflowStep.output_schema`.
+  output contract remains on `WorkflowStep.config.output_schema`.
   """
 
   alias Sacrum.Orchestrator.OutputValidator

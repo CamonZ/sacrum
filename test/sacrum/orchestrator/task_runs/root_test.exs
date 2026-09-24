@@ -148,15 +148,16 @@ defmodule Sacrum.Orchestrator.TaskRuns.RootTest do
     {:ok, workflow} = Workflows.insert(user.id, project.id, %{name: "Route workflow"})
 
     source =
-      create_step(user, workflow, "source", 1, output_schema: predecessor_schema(["approved"]))
+      create_step(user, workflow, "source", 1,
+        config: %{"output_schema" => predecessor_schema(["approved"])}
+      )
 
     destination = create_step(user, workflow, "destination", 2)
 
     route =
       create_step(user, workflow, "route", 3,
         step_type: "route",
-        prompt: "Route prompt is independent",
-        route_config: route_config(destination.id)
+        config: %{"route_config" => route_config(destination.id)}
       )
 
     create_transition(user, source, route)
@@ -170,13 +171,23 @@ defmodule Sacrum.Orchestrator.TaskRuns.RootTest do
   defp create_step(user, workflow, name, order, attrs \\ []) do
     defaults = %{
       name: name,
-      prompt: "Prompt for #{name}",
       step_order: order,
       workflow_id: workflow.id,
       project_id: workflow.project_id
     }
 
-    {:ok, step} = WorkflowSteps.insert(user.id, Map.merge(defaults, Map.new(attrs)))
+    attrs = Map.merge(defaults, Map.new(attrs))
+
+    # llm_inference steps get a default prompt under any config the caller supplies.
+    attrs =
+      if Map.get(attrs, :step_type, "llm_inference") == "llm_inference" do
+        default = %{"prompt" => "Prompt for #{name}"}
+        Map.update(attrs, :config, default, &Map.merge(default, &1))
+      else
+        attrs
+      end
+
+    {:ok, step} = WorkflowSteps.insert(user.id, attrs)
     step
   end
 
@@ -193,8 +204,11 @@ defmodule Sacrum.Orchestrator.TaskRuns.RootTest do
 
   defp invalidate_source_schema(source) do
     Repo.update_all(
-      from(step in WorkflowStep, where: step.id == ^source.id),
-      set: [output_schema: nil]
+      from(step in WorkflowStep,
+        where: step.id == ^source.id,
+        update: [set: [config: fragment("jsonb_set(?, '{output_schema}', 'null')", step.config)]]
+      ),
+      []
     )
   end
 

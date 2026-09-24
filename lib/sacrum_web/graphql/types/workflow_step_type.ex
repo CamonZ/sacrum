@@ -8,19 +8,22 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
 
   alias Sacrum.Accounts
   alias Sacrum.Repo.Schemas.WorkflowStep
+  alias Sacrum.Repo.Schemas.WorkflowStep.Config
   alias SacrumWeb.Graphql.ChangesetErrors
   alias SacrumWeb.Graphql.ShortIdErrors
 
   @empty_task_counts %{epic: 0, ticket: 0, task: 0}
+  @config_types %{
+    Config.LlmInference => :llm_inference_step_config,
+    Config.Route => :route_step_config,
+    Config.WaitChildren => :wait_children_step_config
+  }
   @empty_pipeline_counts Map.put(@empty_task_counts, :active, 0)
 
   object :workflow_step do
     field :id, :id
     field :name, :string
     field :goal, :string
-    field :agents, list_of(:string)
-    field :skills, list_of(:string)
-    field :agent_config, :json
     field :step_order, :integer
 
     field :step_type, :string do
@@ -29,14 +32,13 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
       end)
     end
 
-    field :prompt, :string
-    field :output_schema, :json
-    field :persistence_options, :json
-
-    field :route_config, :json do
-      description("Versioned deterministic routing configuration; required for route steps.")
+    field :config, :workflow_step_config do
+      description(
+        "stepType-specific configuration; null for human_input, stop, and finish steps."
+      )
     end
 
+    field :persistence_options, :json
     field :verbose_daemon_logging, :boolean
     field :inserted_at, :datetime
     field :updated_at, :datetime
@@ -112,6 +114,35 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
     end
   end
 
+  union :workflow_step_config do
+    types([
+      :llm_inference_step_config,
+      :route_step_config,
+      :wait_children_step_config
+    ])
+
+    resolve_type(fn %module{}, _resolution -> Map.fetch!(@config_types, module) end)
+  end
+
+  object :llm_inference_step_config do
+    field :version, non_null(:integer)
+    field :prompt, :string
+    field :output_schema, :json
+    field :agents, list_of(:string)
+    field :skills, list_of(:string)
+    field :agent_config, :json
+  end
+
+  object :route_step_config do
+    field :version, non_null(:integer)
+    field :route_config, :json
+  end
+
+  object :wait_children_step_config do
+    field :version, non_null(:integer)
+    field :output_schema, :json
+  end
+
   object :workflow_step_queries do
     field :workflow_steps, list_of(:workflow_step) do
       arg(:workflow_id, non_null(:uuid4))
@@ -160,18 +191,10 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
       arg(:workflow_id, non_null(:uuid4))
       arg(:name, non_null(:string))
       arg(:goal, :string)
-      arg(:agents, list_of(:string))
-      arg(:skills, list_of(:string))
-      arg(:agent_config, :json)
       arg(:step_order, :integer)
       arg(:step_type, :string)
-      arg(:prompt, :string)
-      arg(:output_schema, :json)
+      arg(:config, :json)
       arg(:persistence_options, :json)
-
-      arg(:route_config, :json,
-        description: "Optional deterministic routing configuration for route steps."
-      )
 
       resolve(fn args, %{context: %{current_user: user}} ->
         workflow_id = Map.get(args, :workflow_id)
@@ -189,33 +212,14 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
       arg(:id, non_null(:uuid4))
       arg(:name, :string)
       arg(:goal, :string)
-      arg(:agents, list_of(:string))
-      arg(:skills, list_of(:string))
-      arg(:agent_config, :json)
       arg(:step_order, :integer)
       arg(:step_type, :string)
-      arg(:prompt, :string)
-      arg(:output_schema, :json)
+      arg(:config, :json)
       arg(:persistence_options, :json)
-
-      arg(:route_config, :json,
-        description: "Optional deterministic routing configuration for route steps."
-      )
-
-      arg(:clear_output_schema, :boolean)
 
       resolve(fn %{id: id} = args, %{context: %{current_user: user}} ->
         with {:ok, step} <- Accounts.WorkflowSteps.get_by(user.id, conditions: [id: id]) do
-          attrs =
-            args
-            |> Map.drop([:id, :clear_output_schema])
-            |> then(fn attrs ->
-              if Map.get(args, :clear_output_schema, false),
-                do: Map.put(attrs, :output_schema, nil),
-                else: attrs
-            end)
-
-          case Accounts.WorkflowSteps.update(step, attrs) do
+          case Accounts.WorkflowSteps.update(step, Map.delete(args, :id)) do
             {:ok, step} -> {:ok, step}
             {:error, changeset} -> {:error, ChangesetErrors.format(changeset)}
           end

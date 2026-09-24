@@ -6,12 +6,21 @@ defmodule SacrumWeb.Graphql.ChangesetErrors do
   @spec format(Ecto.Changeset.t()) :: String.t()
   def format(%Ecto.Changeset{} = changeset) do
     changeset
-    |> Ecto.Changeset.traverse_errors(&format_message/1)
-    |> Enum.flat_map(fn {field, errors} ->
-      Enum.map(errors, &"#{field}: #{&1}")
-    end)
+    |> PolymorphicEmbed.traverse_errors(&format_message/1)
+    |> flatten()
     |> Enum.join(", ")
   end
+
+  # Nested embed errors read as `config.route_config: ...`.
+  defp flatten(errors, prefix \\ nil) do
+    Enum.flat_map(errors, fn
+      {field, nested} when is_map(nested) -> flatten(nested, path(prefix, field))
+      {field, messages} -> Enum.map(messages, &"#{path(prefix, field)}: #{&1}")
+    end)
+  end
+
+  defp path(nil, field), do: to_string(field)
+  defp path(prefix, field), do: "#{prefix}.#{field}"
 
   @spec format_message({String.t(), keyword()}) :: String.t()
   def format_message({msg, opts}) do

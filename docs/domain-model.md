@@ -172,8 +172,8 @@ The `Project.artifacts(limit: 50, offset: 0)` field returns the caller's project
 **`workflow_step_type.ex`** — 4 mutations (all via `Accounts.WorkflowSteps`)
 | Mutation | Arguments | Returns |
 |----------|-----------|---------|
-| `createWorkflowStep` | `workflow_id!`, `name!`, `goal`, `agents`, `skills`, `agent_config`, `step_order`, `prompt`, `output_schema`, `persistence_options`, `route_config` | `:workflow_step` |
-| `updateWorkflowStep` | `id!`, `name`, `goal`, `agents`, `skills`, `agent_config`, `step_order`, `prompt`, `output_schema`, `persistence_options`, `route_config` | `:workflow_step` |
+| `createWorkflowStep` | `workflow_id!`, `name!`, `goal`, `step_order`, `step_type`, `config`, `persistence_options` | `:workflow_step` |
+| `updateWorkflowStep` | `id!`, `name`, `goal`, `step_order`, `step_type`, `config`, `persistence_options` | `:workflow_step` |
 | `deleteWorkflowStep` | `id!` | `:workflow_step` |
 | `syncStepTransitions` | `id!`, `transitions!` (list of `StepTransitionInput`) | `:workflow_step` |
 
@@ -218,18 +218,45 @@ The `Project.artifacts(limit: 50, offset: 0)` field returns the caller's project
 
 > **Implementation:** See `lib/sacrum_web/graphql/schema.ex` for the root schema and `lib/sacrum_web/graphql/types/*.ex` for type definitions. `!` denotes required arguments.
 
-`WorkflowStep.routeConfig` is versioned JSON validated by the workflow-step
-changeset and route graph write path. Every route step must have a valid
-configuration; route decisions run locally and never dispatch the route
-step's prompt to a daemon. Prompts remain available to other step types. On
-updates, omitted fields are left unchanged, while `prompt: null`, `prompt: ""`,
-and a non-null prompt are distinct wire values. `routeConfig: null` is rejected
-while the step type is `route`, but can clear the configuration when the same
-update changes the step to a non-route type.
+### Step types and step configuration
 
-Existing persisted route steps with no configuration are not migrated or
-reinterpreted as prompt-driven routes. Workflow graph validation rejects them,
-so they cannot run until an operator saves a valid `routeConfig`.
+`WorkflowStep.stepType` is one of `llm_inference`, `route`, `wait_children`,
+`human_input`, `stop`, or `finish`. The former `execute` and `evaluate` types
+behaved identically and were merged into `llm_inference`; neither name is
+accepted any more. A step's type is fixed when it is created; updates that
+change it are rejected, so a different kind of step is a new step.
+
+Type-specific settings live in one closed, versioned `config` object, a
+polymorphic embedded schema whose variant is selected by `stepType`:
+
+| `stepType` | GraphQL type | Fields (besides `version: 1`) |
+|------------|--------------|-------------------------------|
+| `llm_inference` | `LlmInferenceStepConfig` | `prompt`, `output_schema`, `agents`, `skills`, `agent_config` |
+| `route` | `RouteStepConfig` | `route_config` |
+| `wait_children` | `WaitChildrenStepConfig` | `output_schema` (for artifact persistence) |
+| `human_input`, `stop`, `finish` | — | `config` is `null` |
+
+`human_input` has no defined prompt or response contract yet: its waiting
+execution renders an empty prompt and its response is not schema-validated.
+
+`WorkflowStep.config` is the `WorkflowStepConfig` union of those types. The
+`config` mutation argument is a JSON object with snake_case keys. On create,
+omitted fields get their defaults (`agents`/`skills` `[]`, `agent_config` `{}`,
+others `null`); on update, only the fields sent change, so clearing a field
+means sending it as `null`. Fields the variant does not declare are rejected
+(`config: $.temperature: is not supported for llm_inference steps`), only
+`version: 1` is accepted, and field errors are reported per embedded field, for
+example `config.route_config: $.rules[0].when.op: ...`. `config` must be null
+for `human_input`, `stop`, and `finish`. The stored JSON also records the
+variant as `__type__`, which the embed needs to load it.
+
+`route_config` is versioned JSON validated by the workflow-step changeset and
+route graph write path. Route decisions run locally from it and never dispatch
+to a daemon. A route step may be saved without one while it is being authored,
+but workflow graph validation rejects an unconfigured route, so it cannot run
+until a valid `route_config` is saved. The daemon `run_step` payload (`prompt`,
+`agent_config`, `output_schema`, `worktree`, `verbose_daemon_logging`) is
+unchanged.
 
 ### Deterministic route handoff templates
 
@@ -313,7 +340,7 @@ do not receive those imperative work commands. See
 | `task_parent_changed` | `{schema_version, task_id, project_id, from_parent_id, to_parent_id, level}` | Explicit task hierarchy move for tree UIs |
 | `task_dependency_created` / `task_dependency_deleted` | Dependency edge fields: `id`, `task_id`, `depends_on_id`, `project_id`, timestamps | Blocker/dependency relation changes |
 | `workflow_created` / `workflow_updated` / `workflow_deleted` | Workflow fields | Workflow lifecycle |
-| `step_created` / `step_updated` / `step_deleted` | Step fields including lossless `route_config` | WorkflowStep lifecycle |
+| `step_created` / `step_updated` / `step_deleted` | Step fields including `step_type`, and the lossless `config` document | WorkflowStep lifecycle |
 | `step_transition_created` / `step_transition_deleted` | Transition fields | Step-to-step edges |
 | `step_execution_created` | Execution fields | New execution started |
 | `step_execution_status_changed` | Execution fields including `context.route`, `transition_result`, and `handoff` | Status update (entered, completed, etc.) |

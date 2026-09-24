@@ -7,6 +7,13 @@ defmodule Sacrum.Orchestrator.TaskCompletionTest do
 
   # ===== Setup helpers =====
 
+  @default_config %{
+    "agents" => ["test"],
+    "skills" => ["test_skill"],
+    "agent_config" => %{"model" => "test-model"},
+    "prompt" => "default prompt"
+  }
+
   defp create_user do
     {:ok, user} =
       Repo.Users.insert(%{
@@ -38,16 +45,25 @@ defmodule Sacrum.Orchestrator.TaskCompletionTest do
     default_attrs = %{
       "name" => "Test Step",
       "step_order" => 1,
-      "agents" => ["test"],
-      "skills" => ["test_skill"],
-      "agent_config" => %{"model" => "test-model"},
       "workflow_id" => workflow.id,
-      "project_id" => workflow.project_id,
-      "prompt" => "default prompt"
+      "project_id" => workflow.project_id
     }
 
-    {:ok, step} = Accounts.WorkflowSteps.insert(user.id, Map.merge(default_attrs, attrs))
+    {:ok, step} =
+      Accounts.WorkflowSteps.insert(
+        user.id,
+        default_attrs |> Map.merge(attrs) |> put_default_config()
+      )
+
     step
+  end
+
+  # llm_inference steps get the default agent settings under any config the
+  # caller supplies.
+  defp put_default_config(attrs) do
+    if to_string(attrs["step_type"] || "llm_inference") == "llm_inference",
+      do: Map.update(attrs, "config", @default_config, &Map.merge(@default_config, &1)),
+      else: attrs
   end
 
   defp create_task(user, project, workflow) do
@@ -112,7 +128,7 @@ defmodule Sacrum.Orchestrator.TaskCompletionTest do
       user = create_user()
       project = create_project(user)
       workflow = create_workflow(user, project)
-      next_step = create_step(user, workflow, %{"prompt" => nil})
+      next_step = create_step(user, workflow, %{"config" => %{"prompt" => nil}})
       task = create_task(user, project, workflow)
 
       data = %{
@@ -184,10 +200,7 @@ defmodule Sacrum.Orchestrator.TaskCompletionTest do
       workflow = create_workflow(user, project, %{})
 
       final_step =
-        create_step(user, workflow, %{
-          "step_type" => "finish",
-          "prompt" => nil
-        })
+        create_step(user, workflow, %{"step_type" => "finish"})
 
       task = create_task(user, project, workflow)
       task_run = create_task_run(user, project, task)
@@ -212,10 +225,7 @@ defmodule Sacrum.Orchestrator.TaskCompletionTest do
       workflow = create_workflow(user, project)
 
       stop_step =
-        create_step(user, workflow, %{
-          "step_type" => "stop",
-          "prompt" => nil
-        })
+        create_step(user, workflow, %{"step_type" => "stop"})
 
       task = create_task(user, project, workflow)
       task_run = create_task_run(user, project, task)
@@ -260,8 +270,7 @@ defmodule Sacrum.Orchestrator.TaskCompletionTest do
         next_step =
           create_step(user, workflow, %{
             "name" => "#{step_type} destination",
-            "step_type" => step_type,
-            "prompt" => nil
+            "step_type" => step_type
           })
 
         task = create_task(user, project, workflow)
@@ -284,7 +293,7 @@ defmodule Sacrum.Orchestrator.TaskCompletionTest do
       user = create_user()
       project = create_project(user)
       workflow = create_workflow(user, project)
-      next_step = create_step(user, workflow, %{"prompt" => " \n\t "})
+      next_step = create_step(user, workflow, %{"config" => %{"prompt" => " \n\t "}})
       task = create_task(user, project, workflow)
       task_run = create_task_run(user, project, task)
 

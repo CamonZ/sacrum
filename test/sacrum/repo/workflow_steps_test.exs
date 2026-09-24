@@ -18,10 +18,12 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
   @valid_attrs %{
     name: "Review",
     goal: "Review the implementation",
-    agents: ["reviewer"],
-    skills: ["code-review"],
-    agent_config: %{"timeout" => 300},
-    step_order: 1
+    step_order: 1,
+    config: %{
+      "agents" => ["reviewer"],
+      "skills" => ["code-review"],
+      "agent_config" => %{"timeout" => 300}
+    }
   }
 
   @structured_output_schema %{
@@ -81,9 +83,9 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       assert {:ok, %WorkflowStep{} = step} = WorkflowSteps.insert(workflow, @valid_attrs)
       assert step.name == "Review"
       assert step.goal == "Review the implementation"
-      assert step.agents == ["reviewer"]
-      assert step.skills == ["code-review"]
-      assert step.agent_config == %{"timeout" => 300}
+      assert step.config.agents == ["reviewer"]
+      assert step.config.skills == ["code-review"]
+      assert step.config.agent_config == %{"timeout" => 300}
       assert step.step_order == 1
       assert step.workflow_id == workflow.id
     end
@@ -100,24 +102,23 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
                )
     end
 
-    test "defaults step_type to execute" do
+    test "defaults step_type to llm_inference" do
       workflow = create_workflow()
       assert {:ok, %WorkflowStep{} = step} = WorkflowSteps.insert(workflow, @valid_attrs)
-      assert step.step_type == :execute
+      assert step.step_type == :llm_inference
     end
 
     test "creates step with explicit step_type" do
-      for type <- ~w(execute evaluate route wait_children human_input stop finish) do
+      for type <- ~w(llm_inference route wait_children human_input stop finish) do
         workflow = create_workflow()
-        attrs = Map.put(@valid_attrs, :step_type, type)
-        attrs = if type == "finish", do: Map.put(attrs, :prompt, nil), else: attrs
+        attrs = %{name: "Step #{type}", step_type: type}
 
         attrs =
           if type == "route" do
             {:ok, destination} =
               WorkflowSteps.insert(workflow, %{name: "Destination", step_order: 2})
 
-            Map.put(attrs, :route_config, route_config(destination.id))
+            Map.put(attrs, :config, %{"route_config" => route_config(destination.id)})
           else
             attrs
           end
@@ -137,8 +138,11 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
     test "accepts finish as a promptless step and persists its string value" do
       workflow = create_workflow()
 
-      assert {:ok, %WorkflowStep{step_type: :finish, prompt: nil} = step} =
-               WorkflowSteps.insert(workflow, Map.merge(@valid_attrs, %{step_type: "finish"}))
+      assert {:ok, %WorkflowStep{step_type: :finish, config: nil} = step} =
+               WorkflowSteps.insert(
+                 workflow,
+                 Map.merge(@valid_attrs, %{step_type: "finish", config: nil})
+               )
 
       assert %{rows: [["finish"]]} =
                Repo.query!("SELECT step_type FROM workflow_steps WHERE id = $1", [
@@ -146,16 +150,17 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
                ])
     end
 
-    test "rejects a nonblank prompt on a finish step" do
+    test "rejects a config on a finish step" do
       workflow = create_workflow()
 
       assert {:error, changeset} =
-               WorkflowSteps.insert(
-                 workflow,
-                 Map.merge(@valid_attrs, %{step_type: "finish", prompt: "Done"})
-               )
+               WorkflowSteps.insert(workflow, %{
+                 name: "Done",
+                 step_type: "finish",
+                 config: %{"prompt" => "Done"}
+               })
 
-      assert %{prompt: ["must be blank for finish steps"]} = errors_on(changeset)
+      assert %{config: ["must be null for finish steps"]} = errors_on(changeset)
     end
 
     test "rejects missing name" do
@@ -253,13 +258,12 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       assert updated.goal == "New goal"
     end
 
-    test "updates step_type" do
+    test "accepts an unchanged step_type" do
       workflow = create_workflow()
       {:ok, step} = WorkflowSteps.insert(workflow, @valid_attrs)
-      assert step.step_type == :execute
 
-      assert {:ok, updated} = WorkflowSteps.update(step, %{step_type: "evaluate"})
-      assert updated.step_type == :evaluate
+      assert {:ok, updated} = WorkflowSteps.update(step, %{step_type: "llm_inference"})
+      assert updated.step_type == :llm_inference
     end
 
     test "rejects invalid step_type on update" do
@@ -311,9 +315,13 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
         "additionalProperties" => false
       }
 
-      attrs = Map.merge(@valid_attrs, %{step_type: "evaluate", output_schema: schema})
+      attrs =
+        Map.merge(@valid_attrs, %{
+          step_type: "llm_inference",
+          config: %{"output_schema" => schema}
+        })
 
-      assert {:ok, %WorkflowStep{output_schema: returned_schema}} =
+      assert {:ok, %WorkflowStep{config: %{output_schema: returned_schema}}} =
                WorkflowSteps.insert(workflow, attrs)
 
       assert returned_schema == schema
@@ -322,16 +330,18 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
     test "rejects non-map output_schema" do
       workflow = create_workflow()
 
-      attrs = Map.merge(@valid_attrs, %{output_schema: "not a map"})
+      attrs = Map.merge(@valid_attrs, %{config: %{"output_schema" => "not a map"}})
       assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
-      assert %{output_schema: ["is invalid"]} = errors_on(changeset)
+      assert %{config: %{output_schema: ["is invalid"]}} = errors_on(changeset)
     end
 
     test "allows nil output_schema" do
       workflow = create_workflow()
 
-      attrs = Map.merge(@valid_attrs, %{output_schema: nil})
-      assert {:ok, %WorkflowStep{output_schema: nil}} = WorkflowSteps.insert(workflow, attrs)
+      attrs = Map.merge(@valid_attrs, %{config: %{"output_schema" => nil}})
+
+      assert {:ok, %WorkflowStep{config: %{output_schema: nil}}} =
+               WorkflowSteps.insert(workflow, attrs)
     end
 
     test "accepts artifact persistence options with an output schema" do
@@ -339,8 +349,8 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
 
       attrs =
         Map.merge(@valid_attrs, %{
-          output_schema: @structured_output_schema,
-          persistence_options: %{"artifact" => %{"logical_name" => "step_result"}}
+          persistence_options: %{"artifact" => %{"logical_name" => "step_result"}},
+          config: %{"output_schema" => @structured_output_schema}
         })
 
       assert {:ok, %WorkflowStep{persistence_options: persistence_options}} =
@@ -356,14 +366,14 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
         attrs =
           Map.merge(@valid_attrs, %{
             step_type: step_type,
-            output_schema: @structured_output_schema,
+            config: nil,
             persistence_options: %{"artifact" => %{"logical_name" => "step_result"}}
           })
 
         assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
 
-        assert %{persistence_options: [message | _]} = errors_on(changeset)
-        assert message == "artifact persistence is not supported for #{step_type} steps"
+        assert %{persistence_options: messages} = errors_on(changeset)
+        assert "artifact persistence is not supported for #{step_type} steps" in messages
       end
     end
 
@@ -386,8 +396,8 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
 
       attrs =
         Map.merge(@valid_attrs, %{
-          output_schema: @structured_output_schema,
-          persistence_options: %{"unknown" => true}
+          persistence_options: %{"unknown" => true},
+          config: %{"output_schema" => @structured_output_schema}
         })
 
       assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
@@ -399,8 +409,8 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
 
       attrs =
         Map.merge(@valid_attrs, %{
-          output_schema: @structured_output_schema,
-          persistence_options: %{"artifact" => %{"logical_name" => "   "}}
+          persistence_options: %{"artifact" => %{"logical_name" => "   "}},
+          config: %{"output_schema" => @structured_output_schema}
         })
 
       assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
@@ -413,11 +423,12 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       {:ok, step} =
         WorkflowSteps.insert(workflow, %{
           name: "Persisted step",
-          output_schema: @structured_output_schema,
-          persistence_options: %{"artifact" => %{"logical_name" => "step_result"}}
+          persistence_options: %{"artifact" => %{"logical_name" => "step_result"}},
+          config: %{"output_schema" => @structured_output_schema}
         })
 
-      assert {:error, changeset} = WorkflowSteps.update(step, %{output_schema: nil})
+      assert {:error, changeset} =
+               WorkflowSteps.update(step, %{config: %{"output_schema" => nil}})
 
       assert %{persistence_options: ["artifact persistence requires output_schema"]} =
                errors_on(changeset)
@@ -438,7 +449,10 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       {:ok, step} =
         WorkflowSteps.insert(
           workflow,
-          Map.merge(@valid_attrs, %{step_type: "evaluate", output_schema: schema})
+          Map.merge(@valid_attrs, %{
+            step_type: "llm_inference",
+            config: %{"output_schema" => schema}
+          })
         )
 
       updated_schema = %{
@@ -450,8 +464,12 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
         "additionalProperties" => false
       }
 
-      {:ok, updated} = WorkflowSteps.update(step, %{output_schema: updated_schema})
-      assert updated.output_schema == updated_schema
+      {:ok, updated} =
+        WorkflowSteps.update(step, %{
+          config: %{"output_schema" => updated_schema}
+        })
+
+      assert updated.config.output_schema == updated_schema
     end
 
     test "rejects schemas with const values" do
@@ -468,13 +486,12 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
 
       attrs =
         Map.merge(@valid_attrs, %{
-          step_type: "evaluate",
-          output_schema: schema,
-          agent_config: %{"provider" => "codex"}
+          step_type: "llm_inference",
+          config: %{"output_schema" => schema, "agent_config" => %{"provider" => "codex"}}
         })
 
       assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
-      assert %{output_schema: [message]} = errors_on(changeset)
+      assert %{config: %{output_schema: [message]}} = errors_on(changeset)
       assert String.contains?(message, "Codex strict-compatible")
       assert String.contains?(message, "const is not supported")
     end
@@ -499,13 +516,12 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
 
       attrs =
         Map.merge(@valid_attrs, %{
-          step_type: "evaluate",
-          output_schema: schema,
-          agent_config: %{"provider" => "openai"}
+          step_type: "llm_inference",
+          config: %{"output_schema" => schema, "agent_config" => %{"provider" => "openai"}}
         })
 
       assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
-      assert %{output_schema: [message]} = errors_on(changeset)
+      assert %{config: %{output_schema: [message]}} = errors_on(changeset)
       assert String.contains?(message, "Codex strict-compatible")
       assert String.contains?(message, "schema.route_hint.type must be a string")
     end
@@ -524,13 +540,12 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
 
       attrs =
         Map.merge(@valid_attrs, %{
-          step_type: "evaluate",
-          output_schema: schema,
-          agent_config: %{"provider" => "openai"}
+          step_type: "llm_inference",
+          config: %{"output_schema" => schema, "agent_config" => %{"provider" => "openai"}}
         })
 
       assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
-      assert %{output_schema: [message]} = errors_on(changeset)
+      assert %{config: %{output_schema: [message]}} = errors_on(changeset)
       assert String.contains?(message, "Codex strict-compatible")
       assert String.contains?(message, "additionalProperties must be false")
     end
@@ -549,12 +564,11 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
 
       attrs =
         Map.merge(@valid_attrs, %{
-          step_type: "evaluate",
-          output_schema: schema,
-          agent_config: %{"provider" => "anthropic"}
+          step_type: "llm_inference",
+          config: %{"output_schema" => schema, "agent_config" => %{"provider" => "anthropic"}}
         })
 
-      assert {:ok, %WorkflowStep{output_schema: returned_schema}} =
+      assert {:ok, %WorkflowStep{config: %{output_schema: returned_schema}}} =
                WorkflowSteps.insert(workflow, attrs)
 
       assert returned_schema == schema
@@ -572,16 +586,17 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
         WorkflowSteps.insert(
           workflow,
           Map.merge(@valid_attrs, %{
-            step_type: "evaluate",
-            output_schema: schema,
-            agent_config: %{"provider" => "anthropic"}
+            step_type: "llm_inference",
+            config: %{"output_schema" => schema, "agent_config" => %{"provider" => "anthropic"}}
           })
         )
 
       assert {:error, changeset} =
-               WorkflowSteps.update(step, %{agent_config: %{"provider" => "openai"}})
+               WorkflowSteps.update(step, %{
+                 config: %{"agent_config" => %{"provider" => "openai"}}
+               })
 
-      assert %{output_schema: [message]} = errors_on(changeset)
+      assert %{config: %{output_schema: [message]}} = errors_on(changeset)
       assert String.contains?(message, "Codex strict-compatible")
       assert String.contains?(message, "additionalProperties must be false")
     end

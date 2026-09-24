@@ -118,7 +118,7 @@ defmodule Sacrum.WorkflowBundles.ManifestTest do
           "name" => "Build",
           "initial_step" => %{"workflow_ref" => "build", "step_ref" => "start"},
           "steps" => [
-            %{"step_ref" => "start", "name" => "Start", "step_type" => "execute"},
+            %{"step_ref" => "start", "name" => "Start", "step_type" => "llm_inference"},
             %{
               "step_ref" => "route",
               "name" => "Route",

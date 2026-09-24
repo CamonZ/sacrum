@@ -35,11 +35,13 @@ defmodule Sacrum.Orchestrator.SchedulerTest do
     default_attrs = %{
       "name" => "Test Step",
       "step_order" => 1,
-      "agents" => ["test"],
-      "skills" => ["test_skill"],
-      "agent_config" => %{"model" => "test-model"},
       "workflow_id" => workflow.id,
-      "project_id" => workflow.project_id
+      "project_id" => workflow.project_id,
+      "config" => %{
+        "agents" => ["test"],
+        "skills" => ["test_skill"],
+        "agent_config" => %{"model" => "test-model"}
+      }
     }
 
     merged_attrs = Map.merge(default_attrs, stringify_attrs(attrs))

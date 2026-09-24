@@ -25,7 +25,7 @@ defmodule Sacrum.Repo.AttentionTest do
       {:ok, execute_step} =
         WorkflowSteps.insert(workflow, %{
           name: "Execute Step",
-          step_type: "execute",
+          step_type: "llm_inference",
           step_order: 1
         })
 
@@ -39,7 +39,7 @@ defmodule Sacrum.Repo.AttentionTest do
       {:ok, final_step} =
         WorkflowSteps.insert(workflow, %{
           name: "Final Step",
-          step_type: "execute",
+          step_type: "llm_inference",
           step_order: 3
         })
 
@@ -200,7 +200,7 @@ defmodule Sacrum.Repo.AttentionTest do
       {:ok, execute_step} =
         WorkflowSteps.insert(workflow, %{
           name: "Execute Step",
-          step_type: "execute",
+          step_type: "llm_inference",
           step_order: 1
         })
 
@@ -324,7 +324,7 @@ defmodule Sacrum.Repo.AttentionTest do
       {:ok, other_step} =
         WorkflowSteps.insert(other_workflow, %{
           name: "Other Step",
-          step_type: "execute",
+          step_type: "llm_inference",
           step_order: 1
         })
 

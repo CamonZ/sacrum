@@ -4,7 +4,7 @@ defmodule Sacrum.Realtime.CommandBroadcaster do
   continue to carry client state projections, never execution commands.
   """
 
-  alias Sacrum.Repo.Schemas.Task
+  alias Sacrum.Repo.Schemas.{Task, WorkflowStep}
 
   @spec broadcast_run_step(map(), String.t() | nil) :: :ok | {:error, atom()}
   def broadcast_run_step(data, daemon_id) do
@@ -13,12 +13,12 @@ defmodule Sacrum.Realtime.CommandBroadcaster do
       task_id: data.execution.task_id,
       project_id: data.execution.project_id,
       prompt: data.rendered_prompt,
-      agent_config: data.step.agent_config,
+      agent_config: WorkflowStep.config_value(data.step, :agent_config),
       worktree: Task.workspace_worktree(data.task)
     }
 
     payload =
-      case data.step.output_schema do
+      case WorkflowStep.config_value(data.step, :output_schema) do
         nil -> payload
         schema -> Map.put(payload, :output_schema, schema)
       end

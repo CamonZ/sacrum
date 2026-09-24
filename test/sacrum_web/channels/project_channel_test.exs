@@ -671,23 +671,28 @@ defmodule SacrumWeb.ProjectChannelTest do
         "default" => nil
       }
 
-      step =
-        project
-        |> build_workflow_step()
-        |> Map.put(:output_schema, output_schema)
-        |> Map.put(:persistence_options, %{"artifact" => %{"logical_name" => "step_result"}})
-        |> Map.put(:route_config, route_config)
-        |> Map.put(:verbose_daemon_logging, true)
+      step = build_workflow_step(project)
+
+      step = %{
+        step
+        | step_type: :route,
+          config: %{
+            "output_schema" => output_schema,
+            "route_config" => route_config
+          },
+          persistence_options: %{"artifact" => %{"logical_name" => "step_result"}},
+          verbose_daemon_logging: true
+      }
 
       SacrumWeb.ProjectChannel.broadcast_step_updated(project.id, step)
 
       assert_push "step_updated", payload
       assert payload.id == step.id
       assert payload.project_id == project.id
-      assert payload.prompt == step.prompt
-      assert payload.output_schema == output_schema
       assert payload.persistence_options == step.persistence_options
-      assert payload.route_config == route_config
+      assert payload.config == step.config
+      assert payload.step_type == "route"
+      refute Map.has_key?(payload, :prompt)
       assert payload.verbose_daemon_logging == true
     end
 
@@ -945,7 +950,7 @@ defmodule SacrumWeb.ProjectChannelTest do
       step_id: Ecto.UUID.generate(),
       project_id: project.id,
       step_name: "Test Step",
-      step_type: "execute",
+      step_type: "llm_inference",
       status: "pending",
       context: nil,
       prompt: nil,
@@ -984,17 +989,19 @@ defmodule SacrumWeb.ProjectChannelTest do
       id: Ecto.UUID.generate(),
       name: "Test Step",
       goal: "Test goal",
-      agents: ["test_agent"],
-      skills: ["skill1"],
-      agent_config: %{},
       step_order: 1,
-      step_type: "execute",
+      step_type: :llm_inference,
+      config: %{
+        "version" => 1,
+        "prompt" => "Execute the test step",
+        "output_schema" => nil,
+        "agents" => ["test_agent"],
+        "skills" => ["skill1"],
+        "agent_config" => %{}
+      },
       workflow_id: Ecto.UUID.generate(),
       project_id: project.id,
-      prompt: "Execute the test step",
-      output_schema: nil,
       persistence_options: nil,
-      route_config: nil,
       verbose_daemon_logging: false,
       inserted_at: now,
       updated_at: now

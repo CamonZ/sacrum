@@ -57,7 +57,7 @@ defmodule Sacrum.Orchestrator.ExecutionHistory do
             e.status == "completed",
         order_by: [desc: e.inserted_at, desc: e.id],
         limit: 1,
-        select: {e.output, ws.output_schema}
+        select: {e.output, ws.config["output_schema"]}
       )
 
     query = exclude_current_execution(query, current_execution_id)

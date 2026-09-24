@@ -38,7 +38,7 @@ defmodule Sacrum.Repo.StepExecutionsTest do
                  task_id: task.id,
                  workflow_id: workflow.id,
                  step_name: "review",
-                 step_type: "evaluate",
+                 step_type: "llm_inference",
                  status: "completed",
                  model: "claude-3",
                  input_tokens: 100,
@@ -47,12 +47,12 @@ defmodule Sacrum.Repo.StepExecutionsTest do
 
       assert execution.task_id == task.id
       assert execution.step_name == "review"
-      assert execution.step_type == :evaluate
+      assert execution.step_type == :llm_inference
       assert execution.status == "completed"
       assert execution.model == "claude-3"
     end
 
-    test "defaults step_type to execute and rejects invalid values" do
+    test "defaults step_type to llm_inference and rejects invalid values" do
       {workflow, project, user} = create_workflow()
       task = create_task(project, user.id)
 
@@ -64,7 +64,7 @@ defmodule Sacrum.Repo.StepExecutionsTest do
                  step_name: "manual"
                })
 
-      assert execution.step_type == :execute
+      assert execution.step_type == :llm_inference
 
       assert {:error, changeset} =
                StepExecutions.insert(workflow.user_id, %{

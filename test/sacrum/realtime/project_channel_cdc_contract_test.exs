@@ -252,9 +252,7 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContractTest do
         :workflow_id,
         :project_id,
         :step_type,
-        :prompt,
-        :output_schema,
-        :route_config,
+        :config,
         :verbose_daemon_logging,
         :updated_at
       ])
@@ -299,7 +297,9 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContractTest do
     assert_payload_excludes("step_execution_status_changed", [:matched_rule_id, :dest_id])
 
     assert {:ok, step_contract} = ProjectChannelCdcContract.contract_for("step_updated")
-    assert :route_config in source_change(step_contract, "workflow_steps").after_image_fields
+    assert :config in source_change(step_contract, "workflow_steps").after_image_fields
+    assert :config in step_contract.payload_keys
+    refute :route_config in step_contract.payload_keys
 
     assert {:ok, execution_contract} =
              ProjectChannelCdcContract.contract_for("step_execution_status_changed")

@@ -1,29 +1,33 @@
 defmodule Sacrum.Repo.Schemas.WorkflowStep do
   use Ecto.Schema
   import Ecto.Changeset
-  require Logger
+  import PolymorphicEmbed
 
-  alias Sacrum.JsonSchema.Strict
   alias Sacrum.Orchestrator.PersistenceOptions
-  alias Sacrum.Routing.RouteConfig
+  alias Sacrum.Repo.Schemas.WorkflowStep.Config
 
   @type t :: %__MODULE__{}
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
-  @step_types [:execute, :evaluate, :route, :wait_children, :human_input, :stop, :finish]
+  @step_types [:llm_inference, :route, :wait_children, :human_input, :stop, :finish]
 
   schema "workflow_steps" do
     field :name, :string
     field :goal, :string
-    field :agents, {:array, :string}, default: []
-    field :skills, {:array, :string}, default: []
-    field :agent_config, :map, default: %{}
     field :step_order, :integer
-    field :step_type, Ecto.Enum, values: @step_types, default: :execute
-    field :prompt, :string
-    field :output_schema, :map
+    field :step_type, Ecto.Enum, values: @step_types, default: :llm_inference
+
+    polymorphic_embeds_one(:config,
+      types: [
+        llm_inference: Config.LlmInference,
+        route: Config.Route,
+        wait_children: Config.WaitChildren
+      ],
+      use_parent_field_for_type: :step_type,
+      on_replace: :update
+    )
+
     field :persistence_options, :map
-    field :route_config, :map
     field :verbose_daemon_logging, :boolean, default: false
 
     belongs_to :workflow, Sacrum.Repo.Schemas.Workflow
@@ -35,8 +39,8 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     timestamps(type: :utc_datetime_usec)
   end
 
-  @create_fields ~w(name goal agents skills agent_config step_order step_type prompt output_schema persistence_options route_config)a
-  @update_fields ~w(name goal agents skills agent_config step_order step_type prompt output_schema persistence_options route_config)a
+  @update_fields ~w(name goal step_order persistence_options)a
+  @create_fields [:step_type | @update_fields]
 
   @spec step_types() :: [atom()]
   def step_types, do: @step_types
@@ -49,12 +53,10 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
   @spec create_changeset(t(), map()) :: Ecto.Changeset.t()
   def create_changeset(step, attrs) do
     step
-    |> cast_step(attrs, @create_fields)
+    |> cast(attrs, @create_fields)
+    |> cast_config(attrs)
     |> validate_required([:name])
     |> validate_length(:name, min: 1, max: 255)
-    |> validate_finish_step_prompt()
-    |> validate_output_schema()
-    |> validate_route_step()
     |> validate_persistence_options()
     |> foreign_key_constraint(:workflow_id)
     |> foreign_key_constraint(:project_id)
@@ -63,20 +65,83 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
   @spec update_changeset(t(), map()) :: Ecto.Changeset.t()
   def update_changeset(step, attrs) do
     step
-    |> cast_step(attrs, @update_fields)
+    |> cast(attrs, @update_fields)
+    |> validate_step_type_unchanged(attrs)
+    |> cast_config(attrs)
     |> validate_length(:name, min: 1, max: 255)
-    |> validate_finish_step_prompt()
-    |> validate_output_schema()
-    |> validate_route_step()
     |> validate_persistence_options()
   end
 
-  # Keep omit / null / "" distinct for prompt without changing empty-value
-  # handling for the rest of the schema.
-  defp cast_step(step, attrs, fields) do
-    step
-    |> cast(attrs, fields -- [:prompt])
-    |> cast(attrs, [:prompt], empty_values: [])
+  @doc "Reads `key` from the step's config, or nil when the variant has no such field."
+  @spec config_value(%{config: Config.t()}, atom()) :: term()
+  def config_value(%{config: config}, key), do: config && Map.get(config, key)
+
+  # A step's type is fixed at creation; a different kind of step is a new step.
+  defp validate_step_type_unchanged(changeset, attrs) do
+    case fetch_attr(attrs, :step_type) do
+      {:ok, step_type} -> compare_step_type(changeset, step_type)
+      :error -> changeset
+    end
+  end
+
+  defp compare_step_type(changeset, step_type) do
+    case Ecto.Type.cast(__schema__(:type, :step_type), step_type) do
+      {:ok, unchanged} when unchanged == changeset.data.step_type ->
+        changeset
+
+      {:ok, _changed} ->
+        add_error(changeset, :step_type, "cannot be changed; create a new step instead")
+
+      _invalid ->
+        add_error(changeset, :step_type, "is invalid")
+    end
+  end
+
+  # Variant types cast `config` into their embedded schema, with defaults when
+  # a new step omits it; null-config types reject any config.
+  defp cast_config(changeset, attrs) do
+    step_type = get_field(changeset, :step_type)
+
+    case {Config.module(step_type), fetch_attr(attrs, :config)} do
+      {nil, {:ok, config}} when not is_nil(config) ->
+        add_error(changeset, :config, "must be null for #{step_type} steps")
+
+      {nil, _config} ->
+        changeset
+
+      {_module, {:ok, config}} when not is_map(config) ->
+        add_error(changeset, :config, "must be an object")
+
+      {module, {:ok, config}} ->
+        cast_variant(changeset, module, step_type, config)
+
+      {module, :error} when is_nil(changeset.data.config) ->
+        cast_variant(changeset, module, step_type, %{})
+
+      {_module, :error} ->
+        changeset
+    end
+  end
+
+  defp cast_variant(changeset, module, step_type, config) do
+    allowed = Enum.map(module.__schema__(:fields), &Atom.to_string/1)
+
+    case config |> Map.keys() |> Enum.map(&to_string/1) |> Enum.reject(&(&1 in allowed)) do
+      [] ->
+        # An empty map would leave a new step without a config.
+        params = if config == %{}, do: %{"version" => 1}, else: config
+
+        changeset = %{changeset | params: Map.put(changeset.params || %{}, "config", params)}
+        cast_polymorphic_embed(changeset, :config, required: true)
+
+      unknown ->
+        key = unknown |> Enum.sort() |> hd()
+        add_error(changeset, :config, "$.#{key}: is not supported for #{step_type} steps")
+    end
+  end
+
+  defp fetch_attr(attrs, key) do
+    with :error <- Map.fetch(attrs, key), do: Map.fetch(attrs, Atom.to_string(key))
   end
 
   defp validate_persistence_options(changeset) do
@@ -108,7 +173,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
 
   defp validate_persistence_output_schema(changeset, persistence_options) do
     if not is_nil(PersistenceOptions.artifact_logical_name(persistence_options)) and
-         is_nil(get_field(changeset, :output_schema)) do
+         is_nil(config_field(changeset, :output_schema)) do
       add_error(
         changeset,
         :persistence_options,
@@ -119,111 +184,11 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     end
   end
 
-  defp validate_finish_step_prompt(changeset) do
-    if get_field(changeset, :step_type) == :finish and
-         not is_nil(get_field(changeset, :prompt)) do
-      add_error(changeset, :prompt, "must be blank for finish steps")
-    else
-      changeset
-    end
-  end
-
-  defp validate_output_schema(changeset) do
-    case get_field(changeset, :output_schema) do
-      nil ->
-        changeset
-
-      schema when is_map(schema) ->
-        try do
-          ExJsonSchema.Schema.resolve(schema)
-          validate_provider_output_schema(changeset, schema)
-        rescue
-          exception ->
-            Logger.error(
-              "Failed to resolve output_schema: #{Exception.format(:error, exception, __STACKTRACE__)}"
-            )
-
-            add_error(changeset, :output_schema, "must be a valid JSON Schema")
-        end
-
-      _ ->
-        add_error(changeset, :output_schema, "must be a map or null")
-    end
-  end
-
-  defp validate_provider_output_schema(changeset, schema) do
-    if codex_strict_provider?(get_field(changeset, :agent_config)) do
-      case Strict.validate(schema) do
-        :ok ->
-          changeset
-
-        {:error, reason} ->
-          add_error(changeset, :output_schema, "must be Codex strict-compatible: #{reason}")
-      end
-    else
-      changeset
-    end
-  end
-
-  defp codex_strict_provider?(agent_config) when is_map(agent_config) do
-    provider =
-      agent_config
-      |> Map.get("provider", Map.get(agent_config, :provider))
-      |> normalize_provider()
-
-    provider in ["openai", "codex"]
-  end
-
-  defp codex_strict_provider?(_agent_config), do: false
-
-  defp normalize_provider(provider) when is_atom(provider) do
-    provider
-    |> Atom.to_string()
-    |> normalize_provider()
-  end
-
-  defp normalize_provider(provider) when is_binary(provider) do
-    provider
-    |> String.trim()
-    |> String.downcase()
-  end
-
-  defp normalize_provider(_provider), do: nil
-
-  defp validate_route_step(changeset) do
-    changeset
-    |> validate_route_config_scope()
-    |> validate_route_config()
-  end
-
-  defp validate_route_config_scope(changeset) do
-    case {get_field(changeset, :step_type), get_field(changeset, :route_config)} do
-      {_step_type, nil} ->
-        changeset
-
-      {:route, _route_config} ->
-        changeset
-
-      {_step_type, _route_config} ->
-        add_error(changeset, :route_config, "is only supported for route steps")
-    end
-  end
-
-  defp validate_route_config(%{valid?: false} = changeset), do: changeset
-
-  defp validate_route_config(changeset) do
-    case {get_field(changeset, :step_type), get_field(changeset, :route_config)} do
-      {:route, route_config} when is_map(route_config) ->
-        case RouteConfig.decode(route_config) do
-          {:ok, _program} ->
-            changeset
-
-          {:error, %{path: path, message: message}} ->
-            add_error(changeset, :route_config, "#{path}: #{message}")
-        end
-
-      _ ->
-        changeset
+  defp config_field(changeset, key) do
+    case get_field(changeset, :config) do
+      %Ecto.Changeset{} = config -> get_field(config, key)
+      nil -> nil
+      config -> Map.get(config, key)
     end
   end
 end

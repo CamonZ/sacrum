@@ -14,6 +14,13 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
   # ===== Setup helpers =====
 
+  @default_config %{
+    "agents" => ["test"],
+    "skills" => ["test_skill"],
+    "agent_config" => %{"model" => "test-model"},
+    "prompt" => "Run step for task {task_id}"
+  }
+
   defp create_user(attrs \\ %{}) do
     default_attrs = %{
       email: "test@example.com",
@@ -43,17 +50,21 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     default_attrs = %{
       "name" => "Test Step",
       "step_order" => 1,
-      "agents" => ["test"],
-      "skills" => ["test_skill"],
-      "agent_config" => %{"model" => "test-model"},
       "workflow_id" => workflow.id,
-      "project_id" => workflow.project_id,
-      "prompt" => "Run step for task {task_id}"
+      "project_id" => workflow.project_id
     }
 
-    merged_attrs = Map.merge(default_attrs, stringify_attrs(attrs))
+    merged_attrs = default_attrs |> Map.merge(stringify_attrs(attrs)) |> put_default_config()
     {:ok, step} = Accounts.WorkflowSteps.insert(user.id, merged_attrs)
     step
+  end
+
+  # llm_inference steps get the default agent settings under any config the
+  # caller supplies.
+  defp put_default_config(attrs) do
+    if to_string(attrs["step_type"] || "llm_inference") == "llm_inference",
+      do: Map.update(attrs, "config", @default_config, &Map.merge(@default_config, &1)),
+      else: attrs
   end
 
   defp stringify_attrs(map) when is_map(map) do
@@ -190,7 +201,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "step_#{i}",
           step_order: i,
-          step_type: if(i == step_count and finish_last_step, do: "finish", else: "execute"),
+          step_type:
+            if(i == step_count and finish_last_step, do: "finish", else: "llm_inference"),
           prompt: prompt
         })
       end
@@ -375,16 +387,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
     )
   end
 
-  defp latest_waiting_execution(task_id) do
-    Repo.one!(
-      from(e in StepExecution,
-        where: e.task_id == ^task_id and e.status == "waiting",
-        order_by: [desc: e.inserted_at, desc: e.id],
-        limit: 1
-      )
-    )
-  end
-
   # ===== Tests =====
 
   describe "single-step workflow" do
@@ -445,10 +447,13 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       }
 
       assert {:ok, _updated_step} =
-               Accounts.WorkflowSteps.update(s1, %{
-                 output_schema: output_schema,
-                 persistence_options: %{"artifact" => %{"logical_name" => "step_result"}}
-               })
+               Accounts.WorkflowSteps.update(
+                 s1,
+                 %{
+                   config: %{"output_schema" => output_schema},
+                   persistence_options: %{"artifact" => %{"logical_name" => "step_result"}}
+                 }
+               )
 
       pid = start_orchestrator(task, user)
       wait_for_state(pid, :executing)
@@ -470,59 +475,6 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       :gen_statem.stop(pid)
     end
 
-    test "persists completed human input output before advancing" do
-      user = create_user()
-      project = create_project(user)
-      workflow = create_workflow(user, project)
-
-      output_schema = %{
-        "type" => "object",
-        "properties" => %{"result" => %{"type" => "string"}},
-        "required" => ["result"],
-        "additionalProperties" => false
-      }
-
-      human_step =
-        create_step(user, workflow, %{
-          name: "human_input",
-          step_order: 1,
-          step_type: "human_input",
-          output_schema: output_schema,
-          persistence_options: %{"artifact" => %{"logical_name" => "human_result"}}
-        })
-
-      finish_step =
-        create_step(user, workflow, %{
-          name: "finish",
-          step_order: 2,
-          step_type: "finish",
-          prompt: nil
-        })
-
-      create_transition(user, human_step, finish_step)
-      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: human_step.id})
-
-      task = create_task(user, project) |> assign_workflow_to_task(workflow)
-      pid = start_orchestrator(task, user)
-      wait_for_exit(pid)
-
-      waiting_execution = latest_waiting_execution(task.id)
-
-      assert {:ok, _completed_execution} =
-               Sacrum.Orchestrator.Routing.HumanInput.resume(
-                 user.id,
-                 waiting_execution.id,
-                 %{"result" => "approved"}
-               )
-
-      wait_for_task_step(task, finish_step.id)
-
-      assert [%{logical_name: "human_result", filename: "human_result.json", body: body}] =
-               Accounts.Artifacts.list_for_subject(user.id, project.id, "task", task.id)
-
-      assert Jason.decode!(body) == %{"result" => "approved"}
-    end
-
     test "fails without advancing when configured structured output cannot be persisted" do
       %{user: user, project: _project, steps: [s1, _s2], task: task} =
         setup_linear_workflow(step_count: 2, finish_last_step: false)
@@ -535,10 +487,13 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       }
 
       assert {:ok, _updated_step} =
-               Accounts.WorkflowSteps.update(s1, %{
-                 output_schema: output_schema,
-                 persistence_options: %{"artifact" => %{"logical_name" => "step_result"}}
-               })
+               Accounts.WorkflowSteps.update(
+                 s1,
+                 %{
+                   config: %{"output_schema" => output_schema},
+                   persistence_options: %{"artifact" => %{"logical_name" => "step_result"}}
+                 }
+               )
 
       pid = start_orchestrator(task, user)
       wait_for_state(pid, :executing)
@@ -562,10 +517,13 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       }
 
       assert {:ok, _updated_step} =
-               Accounts.WorkflowSteps.update(s1, %{
-                 output_schema: output_schema,
-                 persistence_options: %{"artifact" => %{"logical_name" => "step_result"}}
-               })
+               Accounts.WorkflowSteps.update(
+                 s1,
+                 %{
+                   config: %{"output_schema" => output_schema},
+                   persistence_options: %{"artifact" => %{"logical_name" => "step_result"}}
+                 }
+               )
 
       assert {:ok, _existing} =
                Accounts.Artifacts.create_and_link(
@@ -714,12 +672,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         })
 
       final_step =
-        create_step(user, workflow, %{
-          name: "final_step",
-          step_order: 2,
-          step_type: "finish",
-          prompt: nil
-        })
+        create_step(user, workflow, %{name: "final_step", step_order: 2, step_type: "finish"})
 
       create_transition(user, wait_step, final_step)
       {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: wait_step.id})
@@ -749,24 +702,19 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "work_step",
           step_order: 1,
-          step_type: "execute",
-          prompt: "Do the work"
+          step_type: "llm_inference",
+          config: %{"prompt" => "Do the work"}
         })
 
       stop_step =
-        create_step(user, workflow, %{
-          name: "stop_boundary",
-          step_order: 2,
-          step_type: "stop",
-          prompt: nil
-        })
+        create_step(user, workflow, %{name: "stop_boundary", step_order: 2, step_type: "stop"})
 
       loop_start =
         create_step(user, workflow, %{
           name: "loop_start",
           step_order: 3,
-          step_type: "execute",
-          prompt: "Start the next iteration"
+          step_type: "llm_inference",
+          config: %{"prompt" => "Start the next iteration"}
         })
 
       create_transition(user, work_step, stop_step)
@@ -863,16 +811,11 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "active_step",
           step_order: 1,
-          prompt: "Run active step"
+          config: %{"prompt" => "Run active step"}
         })
 
       sink_step =
-        create_step(user, workflow, %{
-          name: "done_sink",
-          step_order: 2,
-          step_type: "finish",
-          prompt: nil
-        })
+        create_step(user, workflow, %{name: "done_sink", step_order: 2, step_type: "finish"})
 
       create_transition(user, active_step, sink_step)
       {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: active_step.id})
@@ -928,24 +871,18 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "source",
           step_order: 1,
-          output_schema: predecessor_schema(["approved"])
+          config: %{"output_schema" => predecessor_schema(["approved"])}
         })
 
       destination =
-        create_step(user, workflow, %{
-          name: "finish",
-          step_order: 3,
-          step_type: "finish",
-          prompt: nil
-        })
+        create_step(user, workflow, %{name: "finish", step_order: 3, step_type: "finish"})
 
       route =
         create_step(user, workflow, %{
           name: "configured route",
           step_order: 2,
           step_type: "route",
-          prompt: "This prompt must not be rendered",
-          route_config: intra_route_config(destination.id)
+          config: %{"route_config" => intra_route_config(destination.id)}
         })
 
       create_transition(user, source, route)
@@ -1015,31 +952,25 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "source",
           step_order: 1,
-          output_schema: predecessor_schema(["approved"])
+          config: %{"output_schema" => predecessor_schema(["approved"])}
         })
 
       destination =
         create_step(user, workflow, %{
           name: "destination",
           step_order: 3,
-          step_type: "execute"
+          step_type: "llm_inference"
         })
 
       finish =
-        create_step(user, workflow, %{
-          name: "finish",
-          step_order: 4,
-          step_type: "finish",
-          prompt: nil
-        })
+        create_step(user, workflow, %{name: "finish", step_order: 4, step_type: "finish"})
 
       route =
         create_step(user, workflow, %{
           name: "configured route",
           step_order: 2,
           step_type: "route",
-          prompt: nil,
-          route_config: intra_route_config(destination.id)
+          config: %{"route_config" => intra_route_config(destination.id)}
         })
 
       create_transition(user, source, route)
@@ -1083,22 +1014,21 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, source_workflow, %{
           name: "source",
           step_order: 1,
-          output_schema: predecessor_schema(["approved"])
+          config: %{"output_schema" => predecessor_schema(["approved"])}
         })
 
       destination =
         create_step(user, destination_workflow, %{
           name: "destination",
           step_order: 1,
-          step_type: "execute"
+          step_type: "llm_inference"
         })
 
       finish =
         create_step(user, destination_workflow, %{
           name: "finish",
           step_order: 2,
-          step_type: "finish",
-          prompt: nil
+          step_type: "finish"
         })
 
       create_transition(user, destination, finish)
@@ -1116,8 +1046,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
           name: "configured route",
           step_order: 2,
           step_type: "route",
-          prompt: nil,
-          route_config: inter_route_config(destination_workflow.id)
+          config: %{"route_config" => inter_route_config(destination_workflow.id)}
         })
 
       create_transition(user, source, route)
@@ -1164,23 +1093,18 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, workflow, %{
           name: "source",
           step_order: 1,
-          output_schema: predecessor_schema(["approved"])
+          config: %{"output_schema" => predecessor_schema(["approved"])}
         })
 
       destination =
-        create_step(user, workflow, %{
-          name: "destination",
-          step_order: 2,
-          step_type: "finish",
-          prompt: nil
-        })
+        create_step(user, workflow, %{name: "destination", step_order: 2, step_type: "finish"})
 
       route =
         create_step(user, workflow, %{
           name: "route",
           step_order: 3,
           step_type: "route",
-          route_config: intra_route_config(destination.id)
+          config: %{"route_config" => intra_route_config(destination.id)}
         })
 
       create_transition(user, source, route)
@@ -1265,7 +1189,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
           wait_for_exit(pid)
         end)
 
-      assert logs =~ "step_type=execute"
+      assert logs =~ "step_type=llm_inference"
     end
   end
 
@@ -1313,12 +1237,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       wait_step = create_wait_children_step(user, workflow)
 
       final_step =
-        create_step(user, workflow, %{
-          name: "final_step",
-          step_order: 2,
-          step_type: "finish",
-          prompt: nil
-        })
+        create_step(user, workflow, %{name: "final_step", step_order: 2, step_type: "finish"})
 
       create_transition(user, wait_step, final_step)
 
@@ -1346,12 +1265,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       wait_step = create_wait_children_step(user, workflow)
 
       final_step =
-        create_step(user, workflow, %{
-          name: "final_step",
-          step_order: 2,
-          step_type: "finish",
-          prompt: nil
-        })
+        create_step(user, workflow, %{name: "final_step", step_order: 2, step_type: "finish"})
 
       create_transition(user, wait_step, final_step)
 
@@ -1428,12 +1342,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       wait_step = create_wait_children_step(user, workflow)
 
       final_step =
-        create_step(user, workflow, %{
-          name: "final_step",
-          step_order: 2,
-          step_type: "finish",
-          prompt: nil
-        })
+        create_step(user, workflow, %{name: "final_step", step_order: 2, step_type: "finish"})
 
       create_transition(user, wait_step, final_step)
 
@@ -1477,12 +1386,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       wait_step = create_wait_children_step(user, workflow)
 
       final_step =
-        create_step(user, workflow, %{
-          name: "final_step",
-          step_order: 2,
-          step_type: "finish",
-          prompt: nil
-        })
+        create_step(user, workflow, %{name: "final_step", step_order: 2, step_type: "finish"})
 
       create_transition(user, wait_step, final_step)
 
@@ -2015,17 +1919,12 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
 
       wait_step =
         create_wait_children_step(user, workflow, %{
-          output_schema: %{"type" => "object"},
-          persistence_options: %{"artifact" => %{"logical_name" => "children_result"}}
+          persistence_options: %{"artifact" => %{"logical_name" => "children_result"}},
+          config: %{"output_schema" => %{"type" => "object"}}
         })
 
       final_step =
-        create_step(user, workflow, %{
-          name: "final_step",
-          step_order: 2,
-          step_type: "finish",
-          prompt: nil
-        })
+        create_step(user, workflow, %{name: "final_step", step_order: 2, step_type: "finish"})
 
       create_transition(user, wait_step, final_step)
 
@@ -2171,7 +2070,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
         create_step(user, source_workflow, %{
           name: "source_step",
           step_order: 1,
-          output_schema: predecessor_schema(["approved"])
+          config: %{"output_schema" => predecessor_schema(["approved"])}
         })
 
       {:ok, _} = Accounts.Workflows.update(source_workflow, %{initial_step_id: source_step.id})
@@ -2198,7 +2097,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
           name: "route_step",
           step_order: 2,
           step_type: "route",
-          route_config: inter_route_config(dest_workflow.id)
+          config: %{"route_config" => inter_route_config(dest_workflow.id)}
         })
 
       create_transition(user, source_step, route_step)

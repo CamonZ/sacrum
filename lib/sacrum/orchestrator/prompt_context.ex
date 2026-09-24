@@ -10,6 +10,7 @@ defmodule Sacrum.Orchestrator.PromptContext do
 
   alias Sacrum.Accounts.Artifacts
   alias Sacrum.Repo.Schemas.Task
+  alias Sacrum.Repo.Schemas.WorkflowStep
 
   @section_type_map %{
     "testing_criterion" => "testing_criteria",
@@ -252,7 +253,7 @@ defmodule Sacrum.Orchestrator.PromptContext do
           "step_count" => count_workflow_steps(workflow)
         }
 
-        case workflow_step.output_schema do
+        case WorkflowStep.config_value(workflow_step, :output_schema) do
           nil -> context
           schema -> Map.put(context, "output_schema", schema)
         end

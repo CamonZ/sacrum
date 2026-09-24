@@ -100,7 +100,7 @@ defmodule Sacrum.Repo.WorkflowBundlesTest do
           "is_default" => true,
           "initial_step" => address("build", "start"),
           "steps" => [
-            %{"step_ref" => "start", "name" => "Build start", "step_type" => "execute"},
+            %{"step_ref" => "start", "name" => "Build start", "step_type" => "llm_inference"},
             %{"step_ref" => "finish", "name" => "Build finish", "step_type" => "finish"}
           ]
         },
@@ -109,7 +109,7 @@ defmodule Sacrum.Repo.WorkflowBundlesTest do
           "name" => "Review",
           "initial_step" => address("review", "start"),
           "steps" => [
-            %{"step_ref" => "start", "name" => "Review start", "step_type" => "execute"},
+            %{"step_ref" => "start", "name" => "Review start", "step_type" => "llm_inference"},
             %{"step_ref" => "done", "name" => "Review done", "step_type" => "finish"}
           ]
         }

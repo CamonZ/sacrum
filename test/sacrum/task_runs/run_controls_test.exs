@@ -148,7 +148,7 @@ defmodule Sacrum.TaskRuns.RunControlsTest do
       workflow_id: task.workflow_id,
       project_id: task.project_id,
       step_name: "execute",
-      step_type: "execute",
+      step_type: "llm_inference",
       status: status
     })
   end

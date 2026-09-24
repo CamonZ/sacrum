@@ -63,7 +63,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteRecoveryTest do
       create_step(user, destination_workflow, %{
         name: "next",
         step_order: 1,
-        step_type: :execute
+        step_type: :llm_inference
       })
 
     task_run = create_task_run(user, task)
@@ -108,19 +108,19 @@ defmodule Sacrum.Orchestrator.Routing.RouteRecoveryTest do
       create_step(user, workflow, %{
         name: "source",
         step_order: 1,
-        step_type: :execute,
-        output_schema: predecessor_schema()
+        step_type: :llm_inference,
+        config: %{"output_schema" => predecessor_schema()}
       })
 
     destination =
-      create_step(user, workflow, %{name: "destination", step_order: 3, step_type: :execute})
+      create_step(user, workflow, %{name: "destination", step_order: 3, step_type: :llm_inference})
 
     route =
       create_step(user, workflow, %{
         name: "route",
         step_order: 2,
         step_type: :route,
-        route_config: route_config(destination.id)
+        config: %{"route_config" => route_config(destination.id)}
       })
 
     create_step_transition(user, source, route)
@@ -247,20 +247,30 @@ defmodule Sacrum.Orchestrator.Routing.RouteRecoveryTest do
   end
 
   defp create_step(user, workflow, attrs) do
-    {:ok, step} =
-      Accounts.WorkflowSteps.insert(user.id, %{
+    step_type = Map.get(attrs, :step_type, :llm_inference)
+
+    step_attrs =
+      %{
         name: attrs.name,
         step_order: attrs.step_order,
-        step_type: attrs.step_type,
-        prompt: "Run this step",
-        route_config: Map.get(attrs, :route_config),
-        output_schema: Map.get(attrs, :output_schema),
+        step_type: step_type,
         workflow_id: workflow.id,
         project_id: workflow.project_id
-      })
+      }
+      |> Map.merge(Map.take(attrs, [:config]))
+      |> put_default_config(step_type)
 
+    {:ok, step} = Accounts.WorkflowSteps.insert(user.id, step_attrs)
     step
   end
+
+  # llm_inference steps get a default prompt under any config the caller supplies.
+  defp put_default_config(attrs, :llm_inference) do
+    default = %{"prompt" => "Run this step"}
+    Map.update(attrs, :config, default, &Map.merge(default, &1))
+  end
+
+  defp put_default_config(attrs, _step_type), do: attrs
 
   defp create_workflow(user, project) do
     {:ok, workflow} =

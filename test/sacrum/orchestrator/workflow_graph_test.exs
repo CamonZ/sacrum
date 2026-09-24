@@ -7,6 +7,13 @@ defmodule Sacrum.Orchestrator.WorkflowGraphTest do
 
   # ===== Setup helpers =====
 
+  @default_config %{
+    "agents" => ["test"],
+    "skills" => ["test_skill"],
+    "agent_config" => %{"model" => "test-model"},
+    "prompt" => "default prompt"
+  }
+
   defp create_user do
     unique_suffix = :erlang.unique_integer([:positive])
 
@@ -42,16 +49,25 @@ defmodule Sacrum.Orchestrator.WorkflowGraphTest do
     default_attrs = %{
       "name" => "Test Step",
       "step_order" => 1,
-      "agents" => ["test"],
-      "skills" => ["test_skill"],
-      "agent_config" => %{"model" => "test-model"},
       "workflow_id" => workflow.id,
-      "project_id" => workflow.project_id,
-      "prompt" => "default prompt"
+      "project_id" => workflow.project_id
     }
 
-    {:ok, step} = Accounts.WorkflowSteps.insert(user.id, Map.merge(default_attrs, attrs))
+    {:ok, step} =
+      Accounts.WorkflowSteps.insert(
+        user.id,
+        default_attrs |> Map.merge(attrs) |> put_default_config()
+      )
+
     step
+  end
+
+  # llm_inference steps get the default agent settings under any config the
+  # caller supplies.
+  defp put_default_config(attrs) do
+    if to_string(attrs["step_type"] || "llm_inference") == "llm_inference",
+      do: Map.update(attrs, "config", @default_config, &Map.merge(@default_config, &1)),
+      else: attrs
   end
 
   defp create_transition(user, from_step, to_step) do
@@ -123,7 +139,7 @@ defmodule Sacrum.Orchestrator.WorkflowGraphTest do
       source =
         create_step(user, workflow, %{
           "name" => "source",
-          "output_schema" => predecessor_schema(["approved"])
+          "config" => %{"output_schema" => predecessor_schema(["approved"])}
         })
 
       destination =
@@ -137,7 +153,7 @@ defmodule Sacrum.Orchestrator.WorkflowGraphTest do
           "name" => "route",
           "step_order" => 2,
           "step_type" => "route",
-          "route_config" => intra_route_config(destination.id)
+          "config" => %{"route_config" => intra_route_config(destination.id)}
         })
 
       create_transition(user, source, route)
@@ -165,7 +181,7 @@ defmodule Sacrum.Orchestrator.WorkflowGraphTest do
       source_b =
         create_step(user, workflow_b, %{
           "name" => "b-source",
-          "output_schema" => predecessor_schema(["approved"])
+          "config" => %{"output_schema" => predecessor_schema(["approved"])}
         })
 
       dest_c = create_step(user, workflow_c, %{"name" => "c-dest"})
@@ -179,7 +195,7 @@ defmodule Sacrum.Orchestrator.WorkflowGraphTest do
           "name" => "b-route",
           "step_order" => 2,
           "step_type" => "route",
-          "route_config" => inter_route_config(workflow_c.id)
+          "config" => %{"route_config" => inter_route_config(workflow_c.id)}
         })
 
       create_transition(user, source_b, route_b)
@@ -244,14 +260,14 @@ defmodule Sacrum.Orchestrator.WorkflowGraphTest do
       approved =
         create_step(user, workflow, %{
           "name" => "approved",
-          "output_schema" => predecessor_schema(["approved"])
+          "config" => %{"output_schema" => predecessor_schema(["approved"])}
         })
 
       rejected =
         create_step(user, workflow, %{
           "name" => "rejected",
           "step_order" => 2,
-          "output_schema" => predecessor_schema(["rejected", "retry"])
+          "config" => %{"output_schema" => predecessor_schema(["rejected", "retry"])}
         })
 
       destination =
@@ -265,7 +281,7 @@ defmodule Sacrum.Orchestrator.WorkflowGraphTest do
           "name" => "route",
           "step_order" => 3,
           "step_type" => "route",
-          "route_config" => intra_route_config(destination.id)
+          "config" => %{"route_config" => intra_route_config(destination.id)}
         })
 
       approved_transition = create_transition(user, approved, route)

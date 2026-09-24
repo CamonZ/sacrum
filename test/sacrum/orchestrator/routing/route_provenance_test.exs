@@ -104,7 +104,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteProvenanceTest do
       create_step(user, workflow, %{
         name: "source",
         step_order: 1,
-        output_schema: predecessor_schema()
+        config: %{"output_schema" => predecessor_schema()}
       })
 
     destination = create_step(user, workflow, %{name: "destination", step_order: 3})
@@ -116,8 +116,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteProvenanceTest do
         name: "route",
         step_order: 2,
         step_type: :route,
-        prompt: nil,
-        route_config: route_config(destination.id)
+        config: %{"route_config" => route_config(destination.id)}
       })
 
     {:ok, _outgoing_transition} =
@@ -232,20 +231,30 @@ defmodule Sacrum.Orchestrator.Routing.RouteProvenanceTest do
   end
 
   defp create_step(user, workflow, attrs) do
-    {:ok, step} =
-      Accounts.WorkflowSteps.insert(user.id, %{
+    step_type = Map.get(attrs, :step_type, :llm_inference)
+
+    step_attrs =
+      %{
         name: attrs.name,
         step_order: attrs.step_order,
-        step_type: Map.get(attrs, :step_type, :execute),
-        prompt: Map.get(attrs, :prompt, "Run this step"),
-        output_schema: Map.get(attrs, :output_schema),
-        route_config: Map.get(attrs, :route_config),
+        step_type: step_type,
         workflow_id: workflow.id,
         project_id: workflow.project_id
-      })
+      }
+      |> Map.merge(Map.take(attrs, [:config]))
+      |> put_default_config(step_type)
 
+    {:ok, step} = Accounts.WorkflowSteps.insert(user.id, step_attrs)
     step
   end
+
+  # llm_inference steps get a default prompt under any config the caller supplies.
+  defp put_default_config(attrs, :llm_inference) do
+    default = %{"prompt" => "Run this step"}
+    Map.update(attrs, :config, default, &Map.merge(default, &1))
+  end
+
+  defp put_default_config(attrs, _step_type), do: attrs
 
   defp create_workflow(user, project) do
     {:ok, workflow} =

@@ -527,7 +527,7 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
         WorkflowSteps.insert(workflow, %{
           name: "CDC created step",
           step_order: 3,
-          step_type: "execute"
+          step_type: "llm_inference"
         })
 
       _created_payload =
@@ -563,15 +563,16 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
       {workflow, first_step, second_step} = create_workflow_with_steps(user, project)
 
       {:ok, first_step} =
-        WorkflowSteps.update(first_step, %{output_schema: cdc_predecessor_schema()})
+        WorkflowSteps.update(first_step, %{
+          config: %{"output_schema" => cdc_predecessor_schema()}
+        })
 
       {:ok, route} =
         WorkflowSteps.insert(workflow, %{
           name: "CDC route",
           step_order: 3,
           step_type: "route",
-          prompt: nil,
-          route_config: cdc_route_config(second_step.id, "before")
+          config: %{"route_config" => cdc_route_config(second_step.id, "before")}
         })
 
       {:ok, _} =
@@ -591,13 +592,16 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
       route_config = cdc_route_config(second_step.id)
       :ok = subscribe_project(project.id)
 
-      {:ok, _updated_step} = WorkflowSteps.update(route, %{route_config: route_config})
+      {:ok, updated_step} =
+        WorkflowSteps.update(route, %{config: %{"route_config" => route_config}})
+
+      assert updated_step.config.route_config == route_config
 
       assert_project_broadcast(
         "step_updated",
         %{
           id: route.id,
-          route_config: route_config,
+          config: %{"__type__" => "route", "version" => 1, "route_config" => route_config},
           workflow_id: workflow.id,
           project_id: project.id
         },
@@ -614,7 +618,7 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
         WorkflowSteps.insert(workflow, %{
           name: "CDC step delete",
           step_order: 3,
-          step_type: "execute"
+          step_type: "llm_inference"
         })
 
       :ok = subscribe_project(project.id)
@@ -1306,15 +1310,17 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
   defp commit_local_route(user, project) do
     {workflow, source, destination} = create_workflow_with_steps(user, project)
 
-    {:ok, source} = WorkflowSteps.update(source, %{output_schema: cdc_predecessor_schema()})
+    {:ok, source} =
+      WorkflowSteps.update(source, %{
+        config: %{"output_schema" => cdc_predecessor_schema()}
+      })
 
     {:ok, route} =
       WorkflowSteps.insert(workflow, %{
         name: "CDC local route",
         step_order: 3,
         step_type: "route",
-        prompt: nil,
-        route_config: cdc_route_config(destination.id)
+        config: %{"route_config" => cdc_route_config(destination.id)}
       })
 
     {:ok, _} =
@@ -1347,7 +1353,7 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
         task_run_id: task_run.id,
         step_id: source.id,
         step_name: source.name,
-        step_type: :execute,
+        step_type: :llm_inference,
         status: "completed",
         output:
           Jason.encode!(%{"route" => %{"result" => "approved", "handoff" => source_handoff}})
@@ -1358,7 +1364,7 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
       |> TaskRun.update_changeset(%{latest_step_execution_id: source_execution.id})
       |> Repo.update()
 
-    {:ok, program} = RouteConfig.decode(route.route_config)
+    {:ok, program} = RouteConfig.decode(route.config.route_config)
 
     data = %FSMData{
       user_id: user.id,
@@ -1419,14 +1425,14 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
       WorkflowSteps.insert(workflow, %{
         name: "CDC support first #{suffix}",
         step_order: 1,
-        step_type: "execute"
+        step_type: "llm_inference"
       })
 
     {:ok, second_step} =
       WorkflowSteps.insert(workflow, %{
         name: "CDC support second #{suffix}",
         step_order: 2,
-        step_type: "execute"
+        step_type: "llm_inference"
       })
 
     {:ok, workflow} = Workflows.update(workflow, %{initial_step_id: first_step.id})

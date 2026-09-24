@@ -25,6 +25,13 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
 
   # ===== Setup helpers =====
 
+  @default_config %{
+    "agents" => ["test"],
+    "skills" => ["test_skill"],
+    "agent_config" => %{"model" => "test-model"},
+    "prompt" => "Run step for task {task_id}"
+  }
+
   defp create_user do
     {:ok, user} =
       Repo.Users.insert(%{
@@ -54,17 +61,25 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
     default_attrs = %{
       "name" => "step",
       "step_order" => 1,
-      "agents" => ["test"],
-      "skills" => ["test_skill"],
-      "agent_config" => %{"model" => "test-model"},
       "workflow_id" => workflow.id,
-      "project_id" => workflow.project_id,
-      "prompt" => "Run step for task {task_id}"
+      "project_id" => workflow.project_id
     }
 
-    merged = Map.merge(default_attrs, Map.new(attrs, fn {k, v} -> {to_string(k), v} end))
+    merged =
+      default_attrs
+      |> Map.merge(Map.new(attrs, fn {k, v} -> {to_string(k), v} end))
+      |> put_default_config()
+
     {:ok, step} = Accounts.WorkflowSteps.insert(user.id, merged)
     step
+  end
+
+  # llm_inference steps get the default agent settings under any config the
+  # caller supplies.
+  defp put_default_config(attrs) do
+    if to_string(attrs["step_type"] || "llm_inference") == "llm_inference",
+      do: Map.update(attrs, "config", @default_config, &Map.merge(@default_config, &1)),
+      else: attrs
   end
 
   defp create_transition(user, from_step, to_step) do
@@ -100,12 +115,15 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
 
     steps =
       for i <- 1..step_count do
-        create_step(user, workflow, %{
-          name: "step_#{i}",
-          step_order: i,
-          step_type: if(i == step_count and finish_last_step, do: "finish", else: "execute"),
-          prompt: if(i == step_count and finish_last_step, do: nil, else: first_prompt)
-        })
+        if i == step_count and finish_last_step do
+          create_step(user, workflow, %{name: "step_#{i}", step_order: i, step_type: "finish"})
+        else
+          create_step(user, workflow, %{
+            name: "step_#{i}",
+            step_order: i,
+            config: %{"prompt" => first_prompt}
+          })
+        end
       end
 
     steps
@@ -124,37 +142,32 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
   defp setup_human_input_workflow(opts) do
     next_final? = Keyword.get(opts, :next_final?, false)
     next_prompt = Keyword.get(opts, :next_prompt, "After human input")
-    human_prompt = Keyword.get(opts, :human_prompt, "Approve {{ task.title }}")
 
     user = create_user()
     project = create_project(user)
     workflow = create_workflow(user, project)
 
-    schema = %{
-      "type" => "object",
-      "properties" => %{
-        "approved" => %{"type" => "boolean"}
-      },
-      "required" => ["approved"],
-      "additionalProperties" => false
-    }
-
     human_step =
       create_step(user, workflow, %{
         name: "human_input",
         step_order: 1,
-        step_type: "human_input",
-        output_schema: schema,
-        prompt: human_prompt
+        step_type: "human_input"
       })
 
     next_step =
-      create_step(user, workflow, %{
-        name: "after_human_input",
-        step_order: 2,
-        step_type: if(next_final?, do: "finish", else: "execute"),
-        prompt: if(next_final?, do: nil, else: next_prompt)
-      })
+      if next_final? do
+        create_step(user, workflow, %{
+          name: "after_human_input",
+          step_order: 2,
+          step_type: "finish"
+        })
+      else
+        create_step(user, workflow, %{
+          name: "after_human_input",
+          step_order: 2,
+          config: %{"prompt" => next_prompt}
+        })
+      end
 
     create_transition(user, human_step, next_step)
     {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: human_step.id})
@@ -168,8 +181,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
       workflow: workflow,
       human_step: human_step,
       next_step: next_step,
-      task: task,
-      schema: schema
+      task: task
     }
   end
 
@@ -182,24 +194,19 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
       create_step(user, workflow, %{
         name: "work",
         step_order: 1,
-        step_type: "execute",
-        prompt: "Do one iteration"
+        step_type: "llm_inference",
+        config: %{"prompt" => "Do one iteration"}
       })
 
     stop_step =
-      create_step(user, workflow, %{
-        name: "run_boundary",
-        step_order: 2,
-        step_type: "stop",
-        prompt: nil
-      })
+      create_step(user, workflow, %{name: "run_boundary", step_order: 2, step_type: "stop"})
 
     loop_step =
       create_step(user, workflow, %{
         name: "loop_start",
         step_order: 3,
-        step_type: "execute",
-        prompt: "Continue the next iteration"
+        step_type: "llm_inference",
+        config: %{"prompt" => "Continue the next iteration"}
       })
 
     create_transition(user, work_step, stop_step)
@@ -452,66 +459,6 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
   end
 
   describe "human_input orchestration" do
-    test "renders task artifact IDs in the persisted human_input prompt" do
-      %{user: user, human_step: human_step, task: task} =
-        setup_human_input_workflow(
-          next_final?: true,
-          human_prompt:
-            ~s|Approve artifact {{ artifacts["task_run"]["result"].id }} prior={{ artifacts["step_execution"]["history"][0]["prior"].id }}|
-        )
-
-      {:ok, task_run} =
-        Accounts.TaskRuns.insert(user.id, task.project_id, task.id, %{status: :queued})
-
-      {:ok, prior_execution} =
-        Accounts.StepExecutions.insert(user.id, %{
-          task_id: task.id,
-          project_id: task.project_id,
-          task_run_id: task_run.id,
-          workflow_id: human_step.workflow_id,
-          step_name: "prior",
-          status: "completed"
-        })
-
-      {:ok, %{artifact: prior_artifact}} =
-        Accounts.Artifacts.create_and_link(
-          user.id,
-          task.project_id,
-          %{filename: "human-prior-result.json", body: "private human prior body"},
-          %{
-            subject_type: "step_execution",
-            subject_id: prior_execution.id,
-            logical_name: "prior"
-          }
-        )
-
-      {:ok, %{artifact: artifact}} =
-        Accounts.Artifacts.create_and_link(
-          user.id,
-          task.project_id,
-          %{filename: "human-task-run-result.json", body: "private human task-run body"},
-          %{subject_type: "task_run", subject_id: task_run.id, logical_name: "result"}
-        )
-
-      pid = start_orchestrator(task, user, task_run_id: task_run.id)
-      wait_for_exit(pid)
-
-      [prior, execution] = executions_for_task(task.id)
-
-      assert %StepExecution{
-               step_id: step_id,
-               status: "waiting",
-               prompt: prompt
-             } = execution
-
-      assert step_id == human_step.id
-      assert prompt == "Approve artifact #{artifact.id} prior=#{prior_artifact.id}"
-      assert execution.prompt == prompt
-      assert prior.id == prior_execution.id
-      refute prompt =~ "private human task-run body"
-      refute prompt =~ "private human prior body"
-    end
-
     test "entering a human_input step parks the run without daemon dispatch" do
       %{user: user, project: _project, human_step: human_step, task: task} =
         setup_human_input_workflow(next_final?: true)
@@ -531,7 +478,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
                  step_type: :human_input,
                  status: "waiting",
                  output: nil,
-                 prompt: "Approve Integration Task"
+                 prompt: nil
                } = execution
              ] = executions_for_task(task.id)
 
@@ -551,9 +498,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
         next_step: next_step,
         task: task
       } =
-        setup_human_input_workflow(
-          next_prompt: "Approved: {{ execution.previous_output.approved }}"
-        )
+        setup_human_input_workflow(next_prompt: "Received: {{ execution.previous_output }}")
 
       subscribe_daemon(task)
 
@@ -586,7 +531,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
 
       assert_receive %Phoenix.Socket.Broadcast{
                        event: "run_step",
-                       payload: %{id: next_execution_id, prompt: "Approved: true"}
+                       payload: %{id: next_execution_id, prompt: ~s(Received: {"approved":true})}
                      },
                      1500
 
@@ -594,34 +539,6 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
 
       assert {:ok, :stopped} = Orchestrator.stop(task.id)
       wait_for_registry_clear(task.id)
-    end
-
-    test "invalid human output leaves the StepExecution and TaskRun waiting" do
-      %{user: user, project: _project, task: task} =
-        setup_human_input_workflow(next_final?: true)
-
-      subscribe_daemon(task)
-
-      pid = start_orchestrator(task, user)
-      wait_for_exit(pid)
-      [waiting_execution] = executions_for_task(task.id)
-      drain_run_step_broadcasts()
-
-      assert {:error, {:invalid_human_input, {:validation_failed, errors}}} =
-               HumanInput.resume(user.id, waiting_execution.id, %{"approved" => "yes"})
-
-      assert [_ | _] = errors
-
-      reloaded_execution = Repo.get!(StepExecution, waiting_execution.id)
-      assert reloaded_execution.status == "waiting"
-      assert reloaded_execution.output == nil
-
-      task_run = Repo.one!(from(run in TaskRun, where: run.task_id == ^task.id))
-      assert task_run.status == :waiting
-      assert task_run.latest_step_execution_id == waiting_execution.id
-
-      assert Registry.lookup(TaskRegistry, task.id) == []
-      refute_receive %Phoenix.Socket.Broadcast{event: "run_step"}, 100
     end
 
     test "resume from another user is rejected and leaves the run waiting" do
@@ -724,7 +641,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
       wait_for_state(first_pid, :executing)
       first_execution = latest_started_execution(task.id)
       assert first_execution.step_id == work_step.id
-      assert first_execution.step_type == :execute
+      assert first_execution.step_type == :llm_inference
       assert_run_step_for(first_execution.id, "work")
 
       simulate_daemon_completion(task.id, project.id, "iteration complete")
@@ -752,7 +669,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
       wait_for_state(second_pid, :executing)
       second_execution = latest_started_execution(task.id)
       assert second_execution.step_id == loop_step.id
-      assert second_execution.step_type == :execute
+      assert second_execution.step_type == :llm_inference
       assert second_execution.task_run_id != first_run.id
       assert_run_step_for(second_execution.id, "loop_start")
 

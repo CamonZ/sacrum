@@ -31,7 +31,7 @@ defmodule Sacrum.Orchestrator.OutputArtifactTest do
 
   defp step do
     %WorkflowStep{
-      output_schema: @output_schema,
+      config: %WorkflowStep.Config.LlmInference{output_schema: @output_schema},
       persistence_options: %{"artifact" => %{"logical_name" => "step_result"}}
     }
   end
@@ -97,7 +97,7 @@ defmodule Sacrum.Orchestrator.OutputArtifactTest do
   test "does not persist when the step has no artifact configuration" do
     %{user: user, project: project, task: task} = create_scope()
     data = %FSMData{user_id: user.id, project_id: project.id, task: task}
-    step = %WorkflowStep{output_schema: @output_schema}
+    step = %WorkflowStep{config: %WorkflowStep.Config.LlmInference{output_schema: @output_schema}}
 
     assert :ok = OutputArtifact.persist(data, step, execution("not json"))
     assert [] = Artifacts.list_for_subject(user.id, project.id, "task", task.id)

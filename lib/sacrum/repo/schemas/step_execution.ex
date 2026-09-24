@@ -9,7 +9,7 @@ defmodule Sacrum.Repo.Schemas.StepExecution do
 
   schema "step_executions" do
     field :step_name, :string
-    field :step_type, Ecto.Enum, values: @step_types, default: :execute
+    field :step_type, Ecto.Enum, values: @step_types, default: :llm_inference
     field :status, :string
     field :context, :map, default: %{}
     field :prompt, :string
