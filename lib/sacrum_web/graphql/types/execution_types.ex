@@ -10,8 +10,7 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
   import Absinthe.Resolution.Helpers
 
   alias Sacrum.Accounts
-  alias Sacrum.Orchestrator.{ExecutionDispatcher, Scheduler, TaskRunPlacement}
-  alias Sacrum.Orchestrator.TaskRuns.Root
+  alias Sacrum.Orchestrator.{Scheduler, TaskRunPlacement}
   alias Sacrum.Realtime.CommandBroadcaster
   alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.Schemas.TaskRun
@@ -360,54 +359,6 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
           Accounts.SessionLogs.insert(user.id, attrs)
         end
       end)
-    end
-
-    field :run_step, :step_execution do
-      arg(:task_id, non_null(:uuid4))
-      arg(:step_id, non_null(:uuid4))
-
-      resolve(fn args, %{context: %{current_user: user}} ->
-        task_id = Map.get(args, :task_id)
-        step_id = Map.get(args, :step_id)
-
-        with {:ok, task} <-
-               Accounts.Tasks.get_by(user.id,
-                 conditions: [id: task_id],
-                 preloads: [:sections, :code_refs, :workflow, :current_step]
-               ),
-             {:ok, step} <-
-               Accounts.WorkflowSteps.get_by(user.id,
-                 conditions: [id: step_id],
-                 preloads: [:workflow]
-               ),
-             :ok <- ExecutionDispatcher.validate_step(step) do
-          with {:ok, task_run} <- Root.get_or_create(task),
-               :ok <- validate_manual_step_dispatch(task_run),
-               {:ok, task, admission_opts} <-
-                 TaskRunPlacement.resolve_admission_options(task, task_run) do
-            ExecutionDispatcher.create_and_queue(
-              task,
-              step,
-              task_run,
-              admission_opts
-            )
-          end
-        end
-      end)
-    end
-
-    defp validate_manual_step_dispatch(task_run) do
-      case Accounts.TaskRuns.get_concurrency_scope(task_run) do
-        {:ok, %{max_concurrency: nil}} ->
-          :ok
-
-        {:ok, %{max_concurrency: limit}} ->
-          {:error,
-           "runStep cannot dispatch into a TaskRun with maxConcurrency=#{limit}; use runWorkflow"}
-
-        {:error, :not_found} ->
-          {:error, "TaskRun concurrency scope not found"}
-      end
     end
 
     defp stop_run(%{task_id: task_id, task_run_id: task_run_id}, _user)

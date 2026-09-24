@@ -4,7 +4,7 @@ defmodule Sacrum.Orchestrator do
 
   Stopping a TaskRun cancels any in-flight step execution:
   - Marks queued, started, in-progress, and waiting executions as "cancelled"
-  - Releases queued execution-pool requests and notifies direct workers
+  - Releases queued execution-pool requests
   - Broadcasts cancel_step to the daemon (fire-and-forget)
   - Terminates the FSM child when one is present
   """
@@ -13,13 +13,7 @@ defmodule Sacrum.Orchestrator do
 
   import Ecto.Query
 
-  alias Sacrum.Orchestrator.{
-    AsyncStepExecutionSupervisor,
-    ExecutionEvents,
-    TaskFSMSupervisor,
-    TaskRegistry,
-    TaskRunPlacement
-  }
+  alias Sacrum.Orchestrator.{ExecutionEvents, TaskFSMSupervisor, TaskRegistry, TaskRunPlacement}
 
   alias Sacrum.Orchestrator.TaskRuns.{Lookup, StateTransitions}
   alias Sacrum.Realtime.CommandBroadcaster
@@ -186,8 +180,6 @@ defmodule Sacrum.Orchestrator do
   defp broadcast_cancelled_execution(%{execution: execution}) do
     Logger.info("[Orchestrator.stop] Marked execution #{execution.id} as cancelled")
     ExecutionEvents.broadcast_status_changed(execution)
-
-    AsyncStepExecutionSupervisor.cancel_execution(execution.id)
 
     broadcast_cancel_step(execution)
   end
