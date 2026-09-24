@@ -69,8 +69,8 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
   @workflow_event_payload_keys [:schema_version | @workflow_payload_keys]
 
   @step_payload_keys ~w(
-    id name goal agents skills agent_config step_order step_type prompt output_schema persistence_options
-    route_config verbose_daemon_logging workflow_id project_id inserted_at updated_at
+    id name goal step_order step_type config persistence_options verbose_daemon_logging workflow_id
+    project_id inserted_at updated_at
   )a
 
   @step_event_payload_keys [:schema_version | @step_payload_keys]
@@ -371,7 +371,7 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
       payload_keys: @step_event_payload_keys,
       schema_version: @schema_version,
       completeness:
-        "Complete workflow step projection, including route_config plus prompt/schema fields needed by workflow editors and human-input displays."
+        "Complete workflow step projection, including the step_type-discriminated config needed by workflow editors."
     },
     %{
       event: "step_updated",
@@ -387,7 +387,7 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
       payload_keys: @step_event_payload_keys,
       schema_version: @schema_version,
       completeness:
-        "Complete workflow step projection, including route_config, for in-place graph/editor updates."
+        "Complete workflow step projection, including config, for in-place graph/editor updates."
     },
     %{
       event: "step_deleted",

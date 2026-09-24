@@ -34,7 +34,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteAuditTest do
           "name" => "route",
           "step_order" => 1,
           "step_type" => "route",
-          "route_config" => route_config()
+          "config" => %{"route_config" => route_config()}
         })
 
       task = create_task(user, project, workflow)
@@ -94,7 +94,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteAuditTest do
           "name" => "route",
           "step_order" => 1,
           "step_type" => "route",
-          "route_config" => route_config()
+          "config" => %{"route_config" => route_config()}
         })
 
       task = create_task(user, project, workflow)
@@ -166,19 +166,30 @@ defmodule Sacrum.Orchestrator.Routing.RouteAuditTest do
   end
 
   defp create_step(user, workflow, attrs) do
-    {:ok, step} =
-      Accounts.WorkflowSteps.insert(user.id, %{
+    step_type = Map.get(attrs, "step_type", "llm_inference")
+
+    step_attrs =
+      %{
         "name" => Map.fetch!(attrs, "name"),
         "step_order" => Map.get(attrs, "step_order", 1),
-        "step_type" => Map.get(attrs, "step_type", "execute"),
-        "prompt" => "Run this step",
-        "route_config" => Map.get(attrs, "route_config"),
+        "step_type" => step_type,
         "workflow_id" => workflow.id,
         "project_id" => workflow.project_id
-      })
+      }
+      |> Map.merge(Map.take(attrs, ["config"]))
+      |> put_default_config(step_type)
 
+    {:ok, step} = Accounts.WorkflowSteps.insert(user.id, step_attrs)
     step
   end
+
+  # llm_inference steps get a default prompt under any config the caller supplies.
+  defp put_default_config(attrs, "llm_inference") do
+    default = %{"prompt" => "Run this step"}
+    Map.update(attrs, "config", default, &Map.merge(default, &1))
+  end
+
+  defp put_default_config(attrs, _step_type), do: attrs
 
   defp route_config do
     target_id = Ecto.UUID.generate()

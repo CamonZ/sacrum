@@ -92,7 +92,7 @@ defmodule Sacrum.Accounts.StepExecutionsTest do
         "workflow_id" => workflow.id,
         "step_id" => step.id,
         "step_name" => "Human Input",
-        "step_type" => "execute"
+        "step_type" => "llm_inference"
       }
 
       assert {:error, changeset} = StepExecutions.insert(user.id, attrs)
@@ -107,8 +107,8 @@ defmodule Sacrum.Accounts.StepExecutionsTest do
       {:ok, other_step} =
         WorkflowSteps.insert(other_workflow, %{
           name: "Other Step",
-          step_type: "execute",
-          prompt: "Choose a destination"
+          step_type: "llm_inference",
+          config: %{"prompt" => "Choose a destination"}
         })
 
       assert {:error, changeset} =

@@ -66,7 +66,7 @@ defmodule Sacrum.Repo.WorkflowSteps do
       changeset,
       fn -> Repo.insert(changeset) end,
       Ecto.Changeset.get_field(changeset, :step_type) == :route and
-        not is_nil(Ecto.Changeset.get_field(changeset, :route_config))
+        not is_nil(route_config(changeset))
     )
   end
 
@@ -111,13 +111,14 @@ defmodule Sacrum.Repo.WorkflowSteps do
   def update(%Ecto.Changeset{data: %WorkflowStep{} = step} = changeset) do
     affected = Enum.uniq([step.workflow_id, Ecto.Changeset.get_field(changeset, :workflow_id)])
 
+    configured? = not is_nil(route_config(changeset))
+
     adding_route_config? =
-      step.step_type == :route and is_nil(step.route_config) and
-        not is_nil(Ecto.Changeset.get_field(changeset, :route_config))
+      step.step_type == :route and is_nil(WorkflowStep.config_value(step, :route_config)) and
+        configured?
 
     adding_configured_route? =
-      Ecto.Changeset.get_field(changeset, :step_type) == :route and
-        not is_nil(Ecto.Changeset.get_field(changeset, :route_config)) and
+      Ecto.Changeset.get_field(changeset, :step_type) == :route and configured? and
         step.step_type != :route
 
     allow_incomplete? = adding_configured_route? or adding_route_config?
@@ -286,5 +287,12 @@ defmodule Sacrum.Repo.WorkflowSteps do
     step
     |> Ecto.Changeset.change(verbose_daemon_logging: enabled)
     |> Repo.update()
+  end
+
+  defp route_config(changeset) do
+    case Ecto.Changeset.get_field(changeset, :config) do
+      %WorkflowStep.Config.Route{route_config: route_config} -> route_config
+      _config -> nil
+    end
   end
 end

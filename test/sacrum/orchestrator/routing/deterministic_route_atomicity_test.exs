@@ -244,7 +244,7 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
       create_step(user, workflow, %{
         "name" => "source",
         "step_order" => 1,
-        "output_schema" => predecessor_schema(["review"])
+        "config" => %{"output_schema" => predecessor_schema(["review"])}
       })
 
     destination = create_step(user, workflow, %{"name" => "review", "step_order" => 3})
@@ -254,12 +254,13 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
         "name" => "route",
         "step_order" => 2,
         "step_type" => "route",
-        "prompt" => nil,
-        "route_config" =>
-          route_config(
-            %{"type" => "intra_workflow", "step_id" => destination.id},
-            handoff_template
-          )
+        "config" => %{
+          "route_config" =>
+            route_config(
+              %{"type" => "intra_workflow", "step_id" => destination.id},
+              handoff_template
+            )
+        }
       })
 
     create_step_transition(user, route, destination)
@@ -277,7 +278,7 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
 
     task_run = update_cursor(task_run, source_execution.id)
 
-    {:ok, program} = RouteConfig.decode(route.route_config)
+    {:ok, program} = RouteConfig.decode(route.config.route_config)
 
     %{
       data: fsm_data(user, project, task, task_run, workflow, source, route, destination),
@@ -303,15 +304,11 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
       create_step(user, workflow, %{
         "name" => "source",
         "step_order" => 1,
-        "output_schema" => predecessor_schema(["review"])
+        "config" => %{"output_schema" => predecessor_schema(["review"])}
       })
 
     destination =
-      create_step(user, destination_workflow, %{
-        "name" => "done",
-        "step_type" => "finish",
-        "prompt" => nil
-      })
+      create_step(user, destination_workflow, %{"name" => "done", "step_type" => "finish"})
 
     create_workflow_transition(user, workflow, destination_workflow, destination)
 
@@ -320,12 +317,13 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
         "name" => "route",
         "step_order" => 2,
         "step_type" => "route",
-        "prompt" => nil,
-        "route_config" =>
-          route_config(
-            %{"type" => "inter_workflow", "workflow_id" => destination_workflow.id},
-            route_handoff_template()
-          )
+        "config" => %{
+          "route_config" =>
+            route_config(
+              %{"type" => "inter_workflow", "workflow_id" => destination_workflow.id},
+              route_handoff_template()
+            )
+        }
       })
 
     create_step_transition(user, source, route)
@@ -342,7 +340,7 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
 
     task_run = update_cursor(task_run, source_execution.id)
 
-    {:ok, program} = RouteConfig.decode(route.route_config)
+    {:ok, program} = RouteConfig.decode(route.config.route_config)
 
     %{
       data: fsm_data(user, project, task, task_run, workflow, source, route),
@@ -462,7 +460,7 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
         task_run_id: task_run.id,
         step_id: source.id,
         step_name: source.name,
-        step_type: :execute,
+        step_type: :llm_inference,
         status: "completed",
         output: Jason.encode!(%{"route" => %{"result" => "approved", "handoff" => handoff}})
       })
@@ -562,20 +560,30 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
   end
 
   defp create_step(user, workflow, attrs) do
-    {:ok, step} =
-      Accounts.WorkflowSteps.insert(user.id, %{
+    step_type = Map.get(attrs, "step_type", "llm_inference")
+
+    step_attrs =
+      %{
         "name" => Map.fetch!(attrs, "name"),
         "step_order" => Map.get(attrs, "step_order", 1),
-        "step_type" => Map.get(attrs, "step_type", "execute"),
-        "prompt" => Map.get(attrs, "prompt", "Run this step"),
-        "output_schema" => Map.get(attrs, "output_schema"),
-        "route_config" => Map.get(attrs, "route_config"),
+        "step_type" => step_type,
         "workflow_id" => workflow.id,
         "project_id" => workflow.project_id
-      })
+      }
+      |> Map.merge(Map.take(attrs, ["config"]))
+      |> put_default_config(step_type)
 
+    {:ok, step} = Accounts.WorkflowSteps.insert(user.id, step_attrs)
     Repo.preload(step, :workflow)
   end
+
+  # llm_inference steps get a default prompt under any config the caller supplies.
+  defp put_default_config(attrs, "llm_inference") do
+    default = %{"prompt" => "Run this step"}
+    Map.update(attrs, "config", default, &Map.merge(default, &1))
+  end
+
+  defp put_default_config(attrs, _step_type), do: attrs
 
   defp create_step_transition(user, source, destination) do
     {:ok, _transition} =

@@ -38,11 +38,16 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
              )
            )
 
-    assert {:error, changeset} = Accounts.WorkflowSteps.update(source, %{output_schema: nil})
+    assert {:error, changeset} =
+             Accounts.WorkflowSteps.update(source, %{
+               config: %{"output_schema" => nil}
+             })
+
     assert %{route_config: [message]} = errors_on(changeset)
     assert message =~ "$.predecessors[#{source_transition.id}]"
 
-    assert Repo.get!(WorkflowStep, source.id).output_schema == source.output_schema
+    assert Repo.get!(WorkflowStep, source.id).config.output_schema ==
+             source.config.output_schema
 
     assert {:error, changeset} = Accounts.StepTransitions.delete(source_transition)
     assert %{route_config: [message]} = errors_on(changeset)
@@ -53,7 +58,9 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
     assert %{route_config: [message]} = errors_on(changeset)
     assert message =~ "$.rules[0].transition.step_id"
     assert Repo.get!(WorkflowStep, destination.id).id == destination.id
-    assert Repo.get!(WorkflowStep, route.id).route_config == route.route_config
+
+    assert Repo.get!(WorkflowStep, route.id).config.route_config ==
+             route.config.route_config
   end
 
   test "revalidates workflow transition targets, syncs, initial steps, and workflow deletion" do
@@ -103,7 +110,9 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
     assert %{route_config: [message]} = errors_on(changeset)
     assert message =~ "$.rules[0].transition.workflow_id"
     assert Repo.get!(Workflow, destination_workflow.id).id == destination_workflow.id
-    assert Repo.get!(WorkflowStep, route.id).route_config == route.route_config
+
+    assert Repo.get!(WorkflowStep, route.id).config.route_config ==
+             route.config.route_config
   end
 
   test "unrelated authoring edits allow a route draft to remain unconfigured" do
@@ -111,15 +120,15 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
     project = create_project(user)
     workflow = create_workflow(user, project, "Route draft")
     source = create_step(workflow, "source", 1)
-    route = create_step(workflow, "route", 2, step_type: "route", prompt: nil)
+    route = create_step(workflow, "route", 2, step_type: "route")
 
-    assert route.route_config == nil
+    assert route.config.route_config == nil
 
     assert {:ok, updated_source} =
              Accounts.WorkflowSteps.update(source, %{goal: "Updated during authoring"})
 
     assert updated_source.goal == "Updated during authoring"
-    assert Repo.get!(WorkflowStep, route.id).route_config == nil
+    assert Repo.get!(WorkflowStep, route.id).config.route_config == nil
   end
 
   test "saving a draft does not defer an invalid configured route" do
@@ -127,13 +136,17 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
     project = create_project(user)
     workflow = create_workflow(user, project, "Configured and draft routes")
 
-    source = create_step(workflow, "source", 1, output_schema: predecessor_schema(["approved"]))
+    source =
+      create_step(workflow, "source", 1,
+        config: %{"output_schema" => predecessor_schema(["approved"])}
+      )
+
     destination = create_step(workflow, "destination", 2)
 
     route =
       create_step(workflow, "configured route", 3,
         step_type: "route",
-        route_config: intra_route_config(destination.id)
+        config: %{"route_config" => intra_route_config(destination.id)}
       )
 
     create_step_transition(source, route)
@@ -144,14 +157,15 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
              Accounts.WorkflowSteps.insert(user.id, %{
                name: "Draft route",
                step_type: "route",
-               prompt: nil,
                workflow_id: workflow.id,
                project_id: project.id
              })
 
     assert %{route_config: [message]} = errors_on(changeset)
     assert message =~ "$.rules[0].transition.step_id"
-    assert Repo.get!(WorkflowStep, route.id).route_config == route.route_config
+
+    assert Repo.get!(WorkflowStep, route.id).config.route_config ==
+             route.config.route_config
   end
 
   test "concurrent route update and predecessor deletion cannot commit an invalid graph" do
@@ -211,7 +225,7 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
         committed_db(fn ->
           route = Repo.get!(WorkflowStep, route_id)
 
-          {not is_nil(route.route_config),
+          {not is_nil(route.config.route_config),
            not is_nil(Repo.get(StepTransition, source_transition_id))}
         end)
 
@@ -232,7 +246,9 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
     _step_a = create_step(workflow_a, "a-step", 1)
 
     source_b =
-      create_step(workflow_b, "b-source", 1, output_schema: predecessor_schema(["approved"]))
+      create_step(workflow_b, "b-source", 1,
+        config: %{"output_schema" => predecessor_schema(["approved"])}
+      )
 
     dest_c = create_step(workflow_c, "c-dest", 1)
 
@@ -243,7 +259,7 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
     route_b =
       create_step(workflow_b, "b-route", 2,
         step_type: "route",
-        route_config: inter_route_config(workflow_c.id)
+        config: %{"route_config" => inter_route_config(workflow_c.id)}
       )
 
     create_step_transition(source_b, route_b)
@@ -251,10 +267,10 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
     assert {:ok, _step} =
              Accounts.WorkflowSteps.insert(user.id, %{
                name: "harmless",
-               prompt: "Prompt",
                step_order: 2,
                workflow_id: workflow_a.id,
-               project_id: project.id
+               project_id: project.id,
+               config: %{"prompt" => "Prompt"}
              })
 
     assert {:error, changeset} = Accounts.Workflows.delete(workflow_c)
@@ -271,7 +287,9 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
     workflow_z = create_workflow(user, project, "Z")
 
     source_i =
-      create_step(workflow_i, "i-source", 1, output_schema: predecessor_schema(["approved"]))
+      create_step(workflow_i, "i-source", 1,
+        config: %{"output_schema" => predecessor_schema(["approved"])}
+      )
 
     _step_a = create_step(workflow_a, "a-step", 1)
     dest_z = create_step(workflow_z, "z-dest", 1)
@@ -283,7 +301,7 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
     route_i =
       create_step(workflow_i, "i-route", 2,
         step_type: "route",
-        route_config: inter_route_config(workflow_z.id)
+        config: %{"route_config" => inter_route_config(workflow_z.id)}
       )
 
     create_step_transition(source_i, route_i)
@@ -291,10 +309,10 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
     assert {:ok, _step} =
              Accounts.WorkflowSteps.insert(user.id, %{
                name: "harmless",
-               prompt: "Prompt",
                step_order: 2,
                workflow_id: workflow_a.id,
-               project_id: project.id
+               project_id: project.id,
+               config: %{"prompt" => "Prompt"}
              })
   end
 
@@ -306,14 +324,18 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
     user = create_user()
     project = create_project(user)
     workflow = create_workflow(user, project, "Intra route")
-    source = create_step(workflow, "source", 1, output_schema: predecessor_schema(["approved"]))
+
+    source =
+      create_step(workflow, "source", 1,
+        config: %{"output_schema" => predecessor_schema(["approved"])}
+      )
+
     destination = create_step(workflow, "destination", 2)
 
     route =
       create_step(workflow, "route", 3,
         step_type: "route",
-        prompt: nil,
-        route_config: intra_route_config(destination.id)
+        config: %{"route_config" => intra_route_config(destination.id)}
       )
 
     source_transition = create_step_transition(source, route)
@@ -337,7 +359,9 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
     destination_workflow = create_workflow(user, project, "Destination")
 
     source =
-      create_step(source_workflow, "source", 1, output_schema: predecessor_schema(["approved"]))
+      create_step(source_workflow, "source", 1,
+        config: %{"output_schema" => predecessor_schema(["approved"])}
+      )
 
     destination = create_step(destination_workflow, "destination", 1)
 
@@ -349,7 +373,7 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
     route =
       create_step(source_workflow, "route", 2,
         step_type: "route",
-        route_config: inter_route_config(destination_workflow.id)
+        config: %{"route_config" => inter_route_config(destination_workflow.id)}
       )
 
     create_step_transition(source, route)
@@ -389,14 +413,16 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
   defp create_step(workflow, name, order, attrs \\ []) do
     defaults = %{
       name: name,
-      prompt: nil,
       step_order: order,
       workflow_id: workflow.id,
       project_id: workflow.project_id
     }
 
     {:ok, step} =
-      Accounts.WorkflowSteps.insert(workflow.user_id, Map.merge(defaults, Map.new(attrs)))
+      Accounts.WorkflowSteps.insert(
+        workflow.user_id,
+        Map.merge(defaults, Map.new(attrs))
+      )
 
     step
   end

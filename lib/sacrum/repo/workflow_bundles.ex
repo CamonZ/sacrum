@@ -18,6 +18,8 @@ defmodule Sacrum.Repo.WorkflowBundles do
   alias Sacrum.Routing.RouteValidator
   alias Sacrum.WorkflowBundles.Manifest
 
+  @step_config_fields ~w(prompt output_schema agents skills agent_config route_config)a
+
   @type result :: %{
           workflows: [Workflow.t()],
           workflow_steps: [WorkflowStep.t()],
@@ -181,19 +183,17 @@ defmodule Sacrum.Repo.WorkflowBundles do
   defp add_step_inserts(multi, prepared, user_id, project_id) do
     Enum.reduce(prepared.bundle.workflows, multi, fn workflow, multi ->
       Enum.reduce(workflow.steps, multi, fn step, multi ->
-        attrs = %{
-          name: step.name,
-          goal: step.goal,
-          agents: step.agents,
-          skills: step.skills,
-          agent_config: step.agent_config,
-          step_order: step.step_order,
-          step_type: step.step_type,
-          prompt: step.prompt,
-          output_schema: step.output_schema,
-          persistence_options: step.persistence_options,
-          route_config: step.route_config
-        }
+        attrs =
+          put_step_config(
+            %{
+              name: step.name,
+              goal: step.goal,
+              step_order: step.step_order,
+              step_type: step.step_type,
+              persistence_options: step.persistence_options
+            },
+            step
+          )
 
         changeset =
           WorkflowStep.create_changeset(
@@ -209,6 +209,19 @@ defmodule Sacrum.Repo.WorkflowBundles do
         Multi.insert(multi, {:step, workflow.workflow_ref, step.step_ref}, changeset)
       end)
     end)
+  end
+
+  # V1 manifests carry step settings as flat fields; non-blank ones become the
+  # step's config, so fields the step type does not declare are rejected.
+  defp put_step_config(attrs, step) do
+    config =
+      for key <- @step_config_fields,
+          value = Map.fetch!(step, key),
+          value not in [nil, [], %{}, ""],
+          into: %{},
+          do: {Atom.to_string(key), value}
+
+    if config == %{}, do: attrs, else: Map.put(attrs, :config, config)
   end
 
   defp add_initial_step_updates(multi, prepared) do

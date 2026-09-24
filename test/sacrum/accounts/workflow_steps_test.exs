@@ -146,32 +146,30 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
   end
 
   describe "step_type field" do
-    test "defaults to execute when not specified" do
+    test "defaults to llm_inference when not specified" do
       user = create_user()
       {_project, workflow} = create_workflow(user)
 
       assert {:ok, %WorkflowStep{} = step} =
                WorkflowSteps.insert(workflow, %{name: "Draft"})
 
-      assert step.step_type == :execute
+      assert step.step_type == :llm_inference
     end
 
     test "creates step with each valid step_type" do
       user = create_user()
 
-      for type <- ~w(execute evaluate route finish) do
+      for type <- ~w(llm_inference route finish) do
         {_project, workflow} = create_workflow(user)
 
         attrs =
           case type do
-            "finish" ->
-              %{prompt: nil}
-
             "route" ->
               %{
-                prompt: nil,
-                route_config:
-                  route_config(%{"ref" => "task.level", "op" => "eq", "value" => "task"})
+                config: %{
+                  "route_config" =>
+                    route_config(%{"ref" => "task.level", "op" => "eq", "value" => "task"})
+                }
               }
 
             _ ->
@@ -198,22 +196,14 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
       assert %{step_type: ["is invalid"]} = errors_on(changeset)
     end
 
-    test "updates step_type" do
+    test "rejects changing step_type" do
       user = create_user()
       {_project, workflow} = create_workflow(user)
 
       {:ok, step} = WorkflowSteps.insert(workflow, %{name: "Draft"})
-      assert step.step_type == :execute
 
-      assert {:ok, updated} =
-               WorkflowSteps.update(step, %{
-                 step_type: "route",
-                 prompt: nil,
-                 route_config:
-                   route_config(%{"ref" => "task.level", "op" => "eq", "value" => "task"})
-               })
-
-      assert updated.step_type == :route
+      assert {:error, changeset} = WorkflowSteps.update(step, %{step_type: "route"})
+      assert %{step_type: ["cannot be changed; create a new step instead"]} = errors_on(changeset)
     end
   end
 
@@ -225,10 +215,10 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
       assert {:ok, %WorkflowStep{} = step} =
                WorkflowSteps.insert(workflow, %{
                  name: "Review",
-                 prompt: "Please review the following content"
+                 config: %{"prompt" => "Please review the following content"}
                })
 
-      assert step.prompt == "Please review the following content"
+      assert step.config.prompt == "Please review the following content"
     end
 
     test "updates step with prompt" do
@@ -239,10 +229,10 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
 
       assert {:ok, updated_step} =
                WorkflowSteps.update(step, %{
-                 prompt: "Updated prompt"
+                 config: %{"prompt" => "Updated prompt"}
                })
 
-      assert updated_step.prompt == "Updated prompt"
+      assert updated_step.config.prompt == "Updated prompt"
     end
 
     test "handles optional prompt field" do
@@ -251,13 +241,13 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
 
       # Create without prompt
       assert {:ok, step} = WorkflowSteps.insert(workflow, %{name: "Review"})
-      assert is_nil(step.prompt)
+      assert is_nil(step.config.prompt)
 
       # Update to add it
       assert {:ok, updated_step} =
-               WorkflowSteps.update(step, %{prompt: "New prompt"})
+               WorkflowSteps.update(step, %{config: %{"prompt" => "New prompt"}})
 
-      assert updated_step.prompt == "New prompt"
+      assert updated_step.config.prompt == "New prompt"
     end
   end
 
@@ -270,29 +260,30 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
                WorkflowSteps.insert(workflow, %{
                  name: "Route",
                  step_type: "route",
-                 prompt: nil,
-                 route_config: %{
-                   "version" => 2,
-                   "match_policy" => "exactly_one",
-                   "rules" => [
-                     %{
-                       "id" => "approved",
-                       "when" => %{
-                         "ref" => "previous_output.route.result",
-                         "op" => "eq",
-                         "value" => "approved"
-                       },
-                       "transition" => %{
-                         "type" => "intra_workflow",
-                         "step_id" => "00000000-0000-0000-0000-000000000001"
+                 config: %{
+                   "route_config" => %{
+                     "version" => 2,
+                     "match_policy" => "exactly_one",
+                     "rules" => [
+                       %{
+                         "id" => "approved",
+                         "when" => %{
+                           "ref" => "previous_output.route.result",
+                           "op" => "eq",
+                           "value" => "approved"
+                         },
+                         "transition" => %{
+                           "type" => "intra_workflow",
+                           "step_id" => "00000000-0000-0000-0000-000000000001"
+                         }
                        }
-                     }
-                   ]
+                     ]
+                   }
                  }
                })
 
-      assert %{route_config: [message]} = errors_on(changeset)
-      assert message =~ "$.version: only version 1 is supported"
+      assert %{config: %{route_config: ["$.version: only version 1 is supported"]}} =
+               errors_on(changeset)
     end
 
     test "rejects ill-typed staged configurations" do
@@ -314,11 +305,10 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
                  WorkflowSteps.insert(workflow, %{
                    name: "Route",
                    step_type: "route",
-                   prompt: nil,
-                   route_config: route_config(condition, default)
+                   config: %{"route_config" => route_config(condition, default)}
                  })
 
-        assert %{route_config: [message]} = errors_on(changeset)
+        assert %{config: %{route_config: [message]}} = errors_on(changeset)
         assert message =~ expected_path
       end
     end
@@ -331,13 +321,13 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
                WorkflowSteps.insert(workflow, %{
                  name: "Route",
                  step_type: "route",
-                 prompt: nil,
-                 route_config:
-                   route_config(%{"ref" => "task.level", "op" => "eq", "value" => "task"})
+                 config: %{
+                   "route_config" =>
+                     route_config(%{"ref" => "task.level", "op" => "eq", "value" => "task"})
+                 }
                })
 
-      assert route.route_config != nil
-      assert route.prompt == nil
+      assert route.config.route_config != nil
     end
 
     test "creates a promptless route draft without configuration" do
@@ -345,11 +335,10 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
       {_project, workflow} = create_workflow(user)
 
       assert {:ok, route} =
-               WorkflowSteps.insert(workflow, %{name: "Route", step_type: "route", prompt: nil})
+               WorkflowSteps.insert(workflow, %{name: "Route", step_type: "route"})
 
       assert route.step_type == :route
-      assert route.prompt == nil
-      assert route.route_config == nil
+      assert route.config.route_config == nil
     end
   end
 

@@ -14,7 +14,11 @@ defmodule Sacrum.Routing.RouteValidatorTest do
 
   test "accepts a route with a legal predecessor, exhaustive finite result branch, and intra target",
        context do
-    source = create_step(context, "source", 1, output_schema: predecessor_schema(["approved"]))
+    source =
+      create_step(context, "source", 1,
+        config: %{"output_schema" => predecessor_schema(["approved"])}
+      )
+
     destination = create_step(context, "destination", 2)
 
     route =
@@ -43,7 +47,11 @@ defmodule Sacrum.Routing.RouteValidatorTest do
   end
 
   test "rejects an existing but unconnected intra-workflow destination", context do
-    source = create_step(context, "source", 1, output_schema: predecessor_schema(["approved"]))
+    source =
+      create_step(context, "source", 1,
+        config: %{"output_schema" => predecessor_schema(["approved"])}
+      )
+
     disconnected = create_step(context, "disconnected", 2)
 
     route =
@@ -65,7 +73,11 @@ defmodule Sacrum.Routing.RouteValidatorTest do
 
   test "validates inter-workflow transition targets and destination entry configuration",
        context do
-    source = create_step(context, "source", 1, output_schema: predecessor_schema(["approved"]))
+    source =
+      create_step(context, "source", 1,
+        config: %{"output_schema" => predecessor_schema(["approved"])}
+      )
+
     destination_workflow = create_workflow(context.user, context.project, "Destination")
 
     destination =
@@ -112,7 +124,7 @@ defmodule Sacrum.Routing.RouteValidatorTest do
   test "rejects uncovered finite result and task-level combinations", context do
     source =
       create_step(context, "source", 1,
-        output_schema: predecessor_schema(["approved", "rejected"])
+        config: %{"output_schema" => predecessor_schema(["approved", "rejected"])}
       )
 
     destination = create_step(context, "destination", 2)
@@ -133,7 +145,11 @@ defmodule Sacrum.Routing.RouteValidatorTest do
   end
 
   test "rejects statically overlapping closed-domain rules", context do
-    source = create_step(context, "source", 1, output_schema: predecessor_schema(["approved"]))
+    source =
+      create_step(context, "source", 1,
+        config: %{"output_schema" => predecessor_schema(["approved"])}
+      )
+
     destination = create_step(context, "destination", 2)
 
     route = create_route(context, "route", 3, valid_route_config(destination.id))
@@ -181,19 +197,23 @@ defmodule Sacrum.Routing.RouteValidatorTest do
   end
 
   defp create_step(%{user: user, workflow: workflow}, name, order, opts \\ []) do
-    attrs = %{
-      "name" => name,
-      "step_order" => order,
-      "prompt" => "Prompt for #{name}",
-      "workflow_id" => workflow.id,
-      "project_id" => workflow.project_id
-    }
-
     attrs =
-      opts
-      |> Enum.into(%{})
-      |> Map.new(fn {key, value} -> {to_string(key), value} end)
-      |> then(&Map.merge(attrs, &1))
+      %{
+        "name" => name,
+        "step_order" => order,
+        "workflow_id" => workflow.id,
+        "project_id" => workflow.project_id
+      }
+      |> Map.merge(Map.new(opts, fn {key, value} -> {to_string(key), value} end))
+
+    # llm_inference steps get a default prompt under any config the caller supplies.
+    attrs =
+      if Map.get(attrs, "step_type", "llm_inference") == "llm_inference" do
+        default = %{"prompt" => "Prompt for #{name}"}
+        Map.update(attrs, "config", default, &Map.merge(default, &1))
+      else
+        attrs
+      end
 
     {:ok, step} = Accounts.WorkflowSteps.insert(user.id, attrs)
     step
@@ -202,8 +222,7 @@ defmodule Sacrum.Routing.RouteValidatorTest do
   defp create_route(context, name, order, route_config) do
     create_step(context, name, order,
       step_type: "route",
-      prompt: nil,
-      route_config: route_config
+      config: %{"route_config" => route_config}
     )
   end
 
@@ -214,7 +233,11 @@ defmodule Sacrum.Routing.RouteValidatorTest do
   # Ecto repository so they can assert the validator's diagnostics. Production
   # mutations go through the guarded repository APIs.
   defp persist_invalid_route_config(route, route_config) do
-    {:ok, route} = Repo.update(Ecto.Changeset.change(route, %{route_config: route_config}))
+    {:ok, route} =
+      Repo.update(
+        Ecto.Changeset.change(route, %{config: %{route.config | route_config: route_config}})
+      )
+
     route
   end
 

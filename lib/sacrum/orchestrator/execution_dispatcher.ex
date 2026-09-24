@@ -7,7 +7,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   and broadcasts a run_step event to the daemon.
 
   The dispatcher is the single source of StepExecution row creation for
-  execute/evaluate steps. Deterministic route executions are created locally
+  llm_inference steps. Deterministic route executions are created locally
   by the route handler. Transitions (advance_to_step, move_to_step) only update
   current_step_id; daemon-backed execution rows are created at dispatch time.
 
@@ -122,7 +122,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
     execution_data = ExecutionHistory.build_execution_data(task, execution, task_run)
     context = PromptContext.build_context(task, execution_data, step, task_run)
 
-    PromptRenderer.render(step.prompt, context)
+    PromptRenderer.render(WorkflowStep.config_value(step, :prompt), context)
   end
 
   @spec commit_and_broadcast_dispatch(

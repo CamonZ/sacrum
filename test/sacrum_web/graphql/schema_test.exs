@@ -7,6 +7,10 @@ defmodule SacrumWeb.Graphql.SchemaTest do
   alias Sacrum.Repo.ArtifactLinks
   alias Sacrum.Repo.Artifacts, as: ArtifactsRepo
 
+  @route_config_fields "config { ... on RouteStepConfig { routeConfig } }"
+
+  defp json_arg(value), do: Jason.encode!(Jason.encode!(value))
+
   defp graphql(conn, query) do
     post(conn, "/graphql", %{"query" => query})
   end
@@ -3276,8 +3280,12 @@ defmodule SacrumWeb.Graphql.SchemaTest do
     } do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
 
-      output_schema =
-        ~S|{\"type\":\"object\",\"properties\":{\"result\":{\"type\":\"string\"}},\"required\":[\"result\"],\"additionalProperties\":false}|
+      output_schema = %{
+        "type" => "object",
+        "properties" => %{"result" => %{"type" => "string"}},
+        "required" => ["result"],
+        "additionalProperties" => false
+      }
 
       persistence_options = ~S|{\"artifact\":{\"logical_name\":\"step_result\"}}|
 
@@ -3289,16 +3297,16 @@ defmodule SacrumWeb.Graphql.SchemaTest do
             createWorkflowStep(
               workflowId: "#{wf.id}"
               name: "Persisted step"
-              outputSchema: "#{output_schema}"
+              config: #{json_arg(%{"output_schema" => output_schema})}
               persistenceOptions: "#{persistence_options}"
-            ) { id outputSchema persistenceOptions }
+            ) { id config { ... on LlmInferenceStepConfig { outputSchema } } persistenceOptions }
           }
         """)
         |> json_response(200)
 
       assert create_result["errors"] == nil
       step_data = create_result["data"]["createWorkflowStep"]
-      assert step_data["outputSchema"]["required"] == ["result"]
+      assert step_data["config"]["outputSchema"]["required"] == ["result"]
 
       assert step_data["persistenceOptions"] == %{
                "artifact" => %{"logical_name" => "step_result"}
@@ -3425,33 +3433,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert found_task_two.title == "Task two"
     end
 
-    test "creates workflow step with prompt", %{
-      conn: conn,
-      user: user,
-      project: project
-    } do
-      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-
-      result =
-        conn
-        |> authenticate(user)
-        |> graphql("""
-          mutation {
-            createWorkflowStep(
-              workflowId: "#{wf.id}"
-              name: "Review Step"
-              prompt: "Please review the content"
-            ) { id name prompt }
-          }
-        """)
-        |> json_response(200)
-
-      data = result["data"]["createWorkflowStep"]
-      assert data["name"] == "Review Step"
-      assert data["prompt"] == "Please review the content"
-    end
-
-    test "updates workflow step with prompt", %{
+    test "updates workflow step config", %{
       conn: conn,
       user: user,
       project: project
@@ -3466,14 +3448,16 @@ defmodule SacrumWeb.Graphql.SchemaTest do
           mutation {
             updateWorkflowStep(
               id: "#{step.id}"
-              prompt: "Updated prompt"
-            ) { id prompt }
+              config: #{json_arg(%{"prompt" => "Updated prompt", "agents" => ["updated"]})}
+            ) { id config { ... on LlmInferenceStepConfig { prompt agents } } }
           }
         """)
         |> json_response(200)
 
-      data = result["data"]["updateWorkflowStep"]
-      assert data["prompt"] == "Updated prompt"
+      assert result["data"]["updateWorkflowStep"]["config"] == %{
+               "prompt" => "Updated prompt",
+               "agents" => ["updated"]
+             }
     end
 
     test "round-trips and clears route_config on a route step", %{
@@ -3487,19 +3471,17 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         Accounts.WorkflowSteps.insert(wf, %{
           name: "Source",
           step_order: 1,
-          output_schema: routing_predecessor_schema()
+          config: %{"output_schema" => routing_predecessor_schema()}
         })
 
       {:ok, destination} =
         Accounts.WorkflowSteps.insert(wf, %{
           name: "Destination",
           step_order: 3,
-          step_type: "finish",
-          prompt: nil
+          step_type: "finish"
         })
 
       route_config = routing_config(destination.id)
-      route_config_input = Jason.encode!(Jason.encode!(route_config))
 
       create_result =
         conn
@@ -3510,17 +3492,16 @@ defmodule SacrumWeb.Graphql.SchemaTest do
               workflowId: "#{wf.id}"
               name: "Route"
               stepType: "route"
-              prompt: null
               stepOrder: 2
-              routeConfig: #{route_config_input}
-            ) { id prompt routeConfig }
+              config: #{json_arg(%{"route_config" => route_config})}
+            ) { id #{@route_config_fields} }
           }
         """)
         |> json_response(200)
 
       assert create_result["errors"] == nil
 
-      assert %{"id" => route_id, "prompt" => nil, "routeConfig" => ^route_config} =
+      assert %{"id" => route_id, "config" => %{"routeConfig" => ^route_config}} =
                create_result["data"]["createWorkflowStep"]
 
       {:ok, route} = Accounts.WorkflowSteps.get_by(user.id, conditions: [id: route_id])
@@ -3547,8 +3528,8 @@ defmodule SacrumWeb.Graphql.SchemaTest do
           mutation {
             updateWorkflowStep(
               id: "#{route.id}"
-              routeConfig: #{route_config_input}
-            ) { id prompt routeConfig }
+              config: #{json_arg(%{"route_config" => route_config})}
+            ) { id #{@route_config_fields} }
           }
         """)
         |> json_response(200)
@@ -3557,20 +3538,18 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
       assert update_result["data"]["updateWorkflowStep"] == %{
                "id" => route.id,
-               "prompt" => nil,
-               "routeConfig" => route_config
+               "config" => %{"routeConfig" => route_config}
              }
 
       query_result =
         conn
         |> recycle()
         |> authenticate(user)
-        |> graphql(~s|{ workflowStep(id: "#{route.id}") { prompt routeConfig } }|)
+        |> graphql(~s|{ workflowStep(id: "#{route.id}") { #{@route_config_fields} } }|)
         |> json_response(200)
 
       assert query_result["data"]["workflowStep"] == %{
-               "prompt" => nil,
-               "routeConfig" => route_config
+               "config" => %{"routeConfig" => route_config}
              }
 
       clear_config_result =
@@ -3578,19 +3557,18 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         |> recycle()
         |> authenticate(user)
         |> graphql(
-          ~s|mutation { updateWorkflowStep(id: "#{route.id}", routeConfig: null) { prompt routeConfig } }|
+          ~s|mutation { updateWorkflowStep(id: "#{route.id}", config: #{json_arg(%{"route_config" => nil})}) { #{@route_config_fields} } }|
         )
         |> json_response(200)
 
       assert clear_config_result["errors"] == nil
 
       assert clear_config_result["data"]["updateWorkflowStep"] == %{
-               "prompt" => nil,
-               "routeConfig" => nil
+               "config" => %{"routeConfig" => nil}
              }
 
       assert {:ok, unchanged} = Accounts.WorkflowSteps.get_by(user.id, conditions: [id: route.id])
-      assert unchanged.route_config == nil
+      assert unchanged.config.route_config == nil
     end
 
     test "rejects invalid route_config", %{
@@ -3605,8 +3583,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         Accounts.WorkflowSteps.insert(wf, %{
           name: "Route",
           step_type: "route",
-          prompt: nil,
-          route_config: valid_config
+          config: %{"route_config" => valid_config}
         })
 
       invalid_config = %{
@@ -3628,21 +3605,19 @@ defmodule SacrumWeb.Graphql.SchemaTest do
           mutation {
             updateWorkflowStep(
               id: "#{route.id}"
-              routeConfig: #{Jason.encode!(Jason.encode!(invalid_config))}
-            ) { id prompt routeConfig }
+              config: #{json_arg(%{"route_config" => invalid_config})}
+            ) { id }
           }
         """)
         |> json_response(200)
 
       assert Enum.any?(result["errors"], fn error ->
-               error["message"] =~ "route_config" and
-                 error["message"] =~ "$.rules[0].when.ref"
+               error["message"] =~ "config.route_config: $.rules[0].when.ref"
              end)
 
       assert result["data"]["updateWorkflowStep"] == nil
       assert {:ok, unchanged} = Accounts.WorkflowSteps.get_by(user.id, conditions: [id: route.id])
-      assert unchanged.route_config == valid_config
-      assert unchanged.prompt == nil
+      assert unchanged.config.route_config == valid_config
     end
 
     test "createWorkflowStep returns formatted error message on invalid output_schema", %{
@@ -3651,17 +3626,17 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       project: project
     } do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-      invalid_schema = ~S|{\"type\":\"invalid_type_value\"}|
+      invalid_schema = %{"type" => "invalid_type_value"}
 
       result =
         conn
         |> authenticate(user)
-        |> graphql(~s"""
+        |> graphql("""
           mutation {
             createWorkflowStep(
               workflowId: "#{wf.id}"
               name: "Invalid Schema Step"
-              outputSchema: "#{invalid_schema}"
+              config: #{json_arg(%{"output_schema" => invalid_schema})}
             ) { id }
           }
         """)
@@ -3681,16 +3656,16 @@ defmodule SacrumWeb.Graphql.SchemaTest do
     } do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
       {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "Step"})
-      invalid_schema = ~S|{\"type\":\"invalid_type_value\"}|
+      invalid_schema = %{"type" => "invalid_type_value"}
 
       result =
         conn
         |> authenticate(user)
-        |> graphql(~s"""
+        |> graphql("""
           mutation {
             updateWorkflowStep(
               id: "#{step.id}"
-              outputSchema: "#{invalid_schema}"
+              config: #{json_arg(%{"output_schema" => invalid_schema})}
             ) { id }
           }
         """)
@@ -3730,7 +3705,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
              end)
     end
 
-    test "updateWorkflowStep clears output_schema with clearOutputSchema flag", %{
+    test "updateWorkflowStep clears output_schema by setting it to null", %{
       conn: conn,
       user: user,
       project: project
@@ -3740,15 +3715,17 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       {:ok, step} =
         Accounts.WorkflowSteps.insert(wf, %{
           name: "Step",
-          output_schema: %{
-            "type" => "object",
-            "properties" => %{"result" => %{"type" => "string"}},
-            "required" => ["result"],
-            "additionalProperties" => false
+          config: %{
+            "output_schema" => %{
+              "type" => "object",
+              "properties" => %{"result" => %{"type" => "string"}},
+              "required" => ["result"],
+              "additionalProperties" => false
+            }
           }
         })
 
-      assert step.output_schema != nil
+      assert step.config.output_schema != nil
 
       result =
         conn
@@ -3757,15 +3734,14 @@ defmodule SacrumWeb.Graphql.SchemaTest do
           mutation {
             updateWorkflowStep(
               id: "#{step.id}"
-              clearOutputSchema: true
-            ) { id outputSchema }
+              config: #{json_arg(%{"output_schema" => nil})}
+            ) { id config { ... on LlmInferenceStepConfig { outputSchema } } }
           }
         """)
         |> json_response(200)
 
       assert result["errors"] == nil
-      data = result["data"]["updateWorkflowStep"]
-      assert data["outputSchema"] == nil
+      assert result["data"]["updateWorkflowStep"]["config"] == %{"outputSchema" => nil}
     end
 
     test "createWorkflowStep rejects verboseDaemonLogging argument (not in schema)", %{
@@ -6372,127 +6348,6 @@ defmodule SacrumWeb.Graphql.SchemaTest do
     end
   end
 
-  describe "workflow step field coverage" do
-    setup [:setup_user_and_project]
-
-    test "returns agents, skills, agentConfig fields", %{
-      conn: conn,
-      user: user,
-      project: project
-    } do
-      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-
-      {:ok, step} =
-        Accounts.WorkflowSteps.insert(wf, %{
-          name: "S1",
-          step_order: 1,
-          agents: ["agent1", "agent2"],
-          skills: ["code", "test"],
-          agent_config: %{"model" => "claude"}
-        })
-
-      result =
-        conn
-        |> authenticate(user)
-        |> graphql("""
-          { workflowStep(id: "#{step.id}") { id agents skills agentConfig } }
-        """)
-        |> json_response(200)
-
-      data = result["data"]["workflowStep"]
-      assert data["agents"] == ["agent1", "agent2"]
-      assert data["skills"] == ["code", "test"]
-      assert data["agentConfig"] == %{"model" => "claude"}
-    end
-
-    test "createWorkflowStep with agents, skills, agentConfig", %{
-      conn: conn,
-      user: user,
-      project: project
-    } do
-      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-      agent_config = ~S|{\"model\":\"gpt\"}|
-
-      result =
-        conn
-        |> authenticate(user)
-        |> graphql(~s"""
-          mutation {
-            createWorkflowStep(
-              workflowId: "#{wf.id}"
-              name: "Full Step"
-              agents: ["a1"]
-              skills: ["s1"]
-              agentConfig: "#{agent_config}"
-              stepOrder: 1
-            ) { id name agents skills agentConfig }
-          }
-        """)
-        |> json_response(200)
-
-      data = result["data"]["createWorkflowStep"]
-      assert data["name"] == "Full Step"
-      assert data["agents"] == ["a1"]
-      assert data["skills"] == ["s1"]
-      assert data["agentConfig"] == %{"model" => "gpt"}
-    end
-
-    test "updateWorkflowStep with agents, skills, agentConfig", %{
-      conn: conn,
-      user: user,
-      project: project
-    } do
-      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-      {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "S1"})
-      agent_config = ~S|{\"key\":\"val\"}|
-
-      result =
-        conn
-        |> authenticate(user)
-        |> graphql(~s"""
-          mutation {
-            updateWorkflowStep(
-              id: "#{step.id}"
-              agents: ["updated"]
-              skills: ["new_skill"]
-              agentConfig: "#{agent_config}"
-            ) { id agents skills agentConfig }
-          }
-        """)
-        |> json_response(200)
-
-      data = result["data"]["updateWorkflowStep"]
-      assert data["agents"] == ["updated"]
-      assert data["skills"] == ["new_skill"]
-      assert data["agentConfig"] == %{"key" => "val"}
-    end
-
-    test "returns prompt field", %{
-      conn: conn,
-      user: user,
-      project: project
-    } do
-      {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-
-      {:ok, step} =
-        Accounts.WorkflowSteps.insert(wf, %{
-          name: "S1",
-          prompt: "Execute the task"
-        })
-
-      result =
-        conn
-        |> authenticate(user)
-        |> graphql("""
-          { workflowStep(id: "#{step.id}") { id prompt } }
-        """)
-        |> json_response(200)
-
-      data = result["data"]["workflowStep"]
-      assert data["prompt"] == "Execute the task"
-    end
-  end
-
   describe "step execution field coverage" do
     setup [:setup_user_and_project]
 
@@ -6576,7 +6431,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       {:ok, step} =
         Accounts.WorkflowSteps.insert(wf, %{
           name: "Snapshot step",
-          step_type: "evaluate"
+          step_type: "llm_inference"
         })
 
       {:ok, exec} =
@@ -6589,7 +6444,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
           status: "completed"
         })
 
-      {:ok, _updated_step} = Accounts.WorkflowSteps.update(step, %{step_type: "execute"})
+      {:ok, _updated_step} = Accounts.WorkflowSteps.update(step, %{name: "Renamed step"})
 
       result =
         conn
@@ -6601,7 +6456,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["id"] == exec.id
       assert data["stepId"] == step.id
       assert data["stepName"] == "Snapshot step"
-      assert data["stepType"] == "evaluate"
+      assert data["stepType"] == "llm_inference"
     end
 
     test "stepExecution field returns nil for handoff when not set", %{
@@ -8114,10 +7969,12 @@ defmodule SacrumWeb.Graphql.SchemaTest do
           "workflow_id" => workflow.id,
           "project_id" => project.id,
           "step_order" => 1,
-          "agents" => ["test"],
-          "skills" => ["test_skill"],
-          "agent_config" => %{"model" => "test-model"},
-          "prompt" => "Test prompt"
+          "config" => %{
+            "agents" => ["test"],
+            "skills" => ["test_skill"],
+            "agent_config" => %{"model" => "test-model"},
+            "prompt" => "Test prompt"
+          }
         })
 
       {:ok, step2} =
@@ -8126,10 +7983,12 @@ defmodule SacrumWeb.Graphql.SchemaTest do
           "workflow_id" => workflow.id,
           "project_id" => project.id,
           "step_order" => 2,
-          "agents" => ["test"],
-          "skills" => ["test_skill"],
-          "agent_config" => %{"model" => "test-model"},
-          "prompt" => "Test prompt"
+          "config" => %{
+            "agents" => ["test"],
+            "skills" => ["test_skill"],
+            "agent_config" => %{"model" => "test-model"},
+            "prompt" => "Test prompt"
+          }
         })
 
       # Create transition from step1 to step2

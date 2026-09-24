@@ -102,10 +102,9 @@ defmodule Sacrum.Orchestrator.Routing.HumanInput do
   end
 
   @spec human_input_output_schema(StepExecution.t()) :: {:ok, map() | nil} | {:error, term()}
-  defp human_input_output_schema(%StepExecution{
-         step: %WorkflowStep{step_type: :human_input, output_schema: output_schema}
-       }),
-       do: {:ok, output_schema}
+  # human_input steps have no config yet, so responses are not schema-validated.
+  defp human_input_output_schema(%StepExecution{step: %WorkflowStep{step_type: :human_input}}),
+    do: {:ok, nil}
 
   defp human_input_output_schema(%StepExecution{}), do: {:error, :not_human_input_execution}
 
@@ -214,7 +213,7 @@ defmodule Sacrum.Orchestrator.Routing.HumanInput do
     execution_data = ExecutionHistory.build_execution_data(task, execution, task_run)
     context = PromptContext.build_context(task, execution_data, step, task_run)
 
-    PromptRenderer.render(step.prompt, context)
+    PromptRenderer.render(nil, context)
   end
 
   defp maybe_put_handoff(attrs, handoff) when is_map(handoff),

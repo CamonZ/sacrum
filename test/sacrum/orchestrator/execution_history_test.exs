@@ -36,13 +36,15 @@ defmodule Sacrum.Orchestrator.ExecutionHistoryTest do
     default_attrs = %{
       "name" => "Test Step",
       "step_order" => 1,
-      "agents" => ["test"],
-      "skills" => ["test_skill"],
-      "agent_config" => %{"model" => "test-model"},
       "workflow_id" => workflow.id,
       "project_id" => workflow.project_id,
-      "prompt" => "default prompt",
-      "output_schema" => nil
+      "config" => %{
+        "agents" => ["test"],
+        "skills" => ["test_skill"],
+        "agent_config" => %{"model" => "test-model"},
+        "prompt" => "default prompt",
+        "output_schema" => nil
+      }
     }
 
     {:ok, step} = Accounts.WorkflowSteps.insert(user.id, Map.merge(default_attrs, attrs))

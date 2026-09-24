@@ -39,9 +39,8 @@ defmodule SacrumWeb.Graphql.WorkflowStepRouteConfigTest do
               workflowId: "#{graph.workflow.id}"
               name: "Route draft"
               stepType: "route"
-              prompt: null
               stepOrder: 4
-            ) { id stepType prompt routeConfig }
+            ) { id stepType config { ... on RouteStepConfig { routeConfig } } }
           }
         """)
         |> json_response(200)
@@ -51,14 +50,13 @@ defmodule SacrumWeb.Graphql.WorkflowStepRouteConfigTest do
       assert %{
                "id" => route_id,
                "stepType" => "route",
-               "prompt" => nil,
-               "routeConfig" => nil
+               "config" => %{"routeConfig" => nil}
              } = create_result["data"]["createWorkflowStep"]
 
       config = routing_config(graph.destination.id)
       set_result = update_route_config(conn, user, route_id, config)
       assert set_result["errors"] == nil
-      assert set_result["data"]["updateWorkflowStep"]["routeConfig"] == config
+      assert set_result["data"]["updateWorkflowStep"]["config"]["routeConfig"] == config
 
       clear_result =
         conn
@@ -66,8 +64,8 @@ defmodule SacrumWeb.Graphql.WorkflowStepRouteConfigTest do
         |> authenticate(user)
         |> graphql("""
           mutation {
-            updateWorkflowStep(id: "#{route_id}", routeConfig: null) {
-              id stepType prompt routeConfig
+            updateWorkflowStep(id: "#{route_id}", config: #{json_arg(%{"route_config" => nil})}) {
+              id stepType config { ... on RouteStepConfig { routeConfig } }
             }
           }
         """)
@@ -78,13 +76,12 @@ defmodule SacrumWeb.Graphql.WorkflowStepRouteConfigTest do
       assert clear_result["data"]["updateWorkflowStep"] == %{
                "id" => route_id,
                "stepType" => "route",
-               "prompt" => nil,
-               "routeConfig" => nil
+               "config" => %{"routeConfig" => nil}
              }
 
       set_again_result = update_route_config(conn, user, route_id, config)
       assert set_again_result["errors"] == nil
-      assert set_again_result["data"]["updateWorkflowStep"]["routeConfig"] == config
+      assert set_again_result["data"]["updateWorkflowStep"]["config"]["routeConfig"] == config
     end
 
     test "creates a configured route before its graph edges are connected", %{
@@ -103,10 +100,9 @@ defmodule SacrumWeb.Graphql.WorkflowStepRouteConfigTest do
               workflowId: "#{graph.workflow.id}"
               name: "Configured on create"
               stepType: "route"
-              prompt: null
               stepOrder: 4
-              routeConfig: #{json_arg(routing_config(graph.destination.id))}
-            ) { id prompt routeConfig }
+              config: #{json_arg(%{"route_config" => routing_config(graph.destination.id)})}
+            ) { id config { ... on RouteStepConfig { routeConfig } } }
           }
         """)
         |> json_response(200)
@@ -115,8 +111,7 @@ defmodule SacrumWeb.Graphql.WorkflowStepRouteConfigTest do
 
       assert %{
                "id" => route_id,
-               "prompt" => nil,
-               "routeConfig" => route_config
+               "config" => %{"routeConfig" => route_config}
              } = result["data"]["createWorkflowStep"]
 
       assert route_id
@@ -134,7 +129,9 @@ defmodule SacrumWeb.Graphql.WorkflowStepRouteConfigTest do
       query =
         conn
         |> authenticate(other)
-        |> graphql(~s|{ workflowStep(id: "#{graph.route.id}") { id routeConfig } }|)
+        |> graphql(
+          ~s|{ workflowStep(id: "#{graph.route.id}") { id config { ... on RouteStepConfig { routeConfig } } } }|
+        )
         |> json_response(200)
 
       assert query["data"]["workflowStep"] == nil
@@ -148,8 +145,8 @@ defmodule SacrumWeb.Graphql.WorkflowStepRouteConfigTest do
           mutation {
             updateWorkflowStep(
               id: "#{graph.route.id}"
-              routeConfig: #{json_arg(routing_config(graph.destination.id))}
-            ) { id routeConfig }
+              config: #{json_arg(%{"route_config" => routing_config(graph.destination.id)})}
+            ) { id config { ... on RouteStepConfig { routeConfig } } }
           }
         """)
         |> json_response(200)
@@ -160,7 +157,7 @@ defmodule SacrumWeb.Graphql.WorkflowStepRouteConfigTest do
       assert {:ok, unchanged} =
                Accounts.WorkflowSteps.get_by(user.id, conditions: [id: graph.route.id])
 
-      assert unchanged.route_config == graph.route.route_config
+      assert unchanged.config.route_config == graph.route.config.route_config
     end
 
     test "returns path-aware errors for invalid versions, keys, operators, handoffs, predecessors, and destinations",
@@ -293,7 +290,7 @@ defmodule SacrumWeb.Graphql.WorkflowStepRouteConfigTest do
           workflow_id: wf.id,
           project_id: project.id,
           step_name: "Execute",
-          step_type: "execute",
+          step_type: "llm_inference",
           status: "completed"
         })
 
@@ -323,8 +320,8 @@ defmodule SacrumWeb.Graphql.WorkflowStepRouteConfigTest do
       mutation {
         updateWorkflowStep(
           id: "#{route_id}"
-          routeConfig: #{json_arg(route_config)}
-        ) { id routeConfig }
+          config: #{json_arg(%{"route_config" => route_config})}
+        ) { id config { ... on RouteStepConfig { routeConfig } } }
       }
     """)
     |> json_response(200)
@@ -335,7 +332,10 @@ defmodule SacrumWeb.Graphql.WorkflowStepRouteConfigTest do
     assert data == nil
 
     assert Enum.any?(result["errors"], fn error ->
-             error["message"] =~ "route_config" and error["message"] =~ path
+             # Static decode errors nest under config ("config.route_config: $.version");
+             # graph-level errors stay on route_config ("route_config: $.predecessors").
+             error["message"] =~ "route_config" and
+               error["message"] =~ String.replace_prefix(path, "$", "")
            end)
   end
 
@@ -349,7 +349,7 @@ defmodule SacrumWeb.Graphql.WorkflowStepRouteConfigTest do
       Accounts.WorkflowSteps.insert(workflow, %{
         name: "Source",
         step_order: 1,
-        output_schema: predecessor_schema()
+        config: %{"output_schema" => predecessor_schema()}
       })
 
     {:ok, destination} =
@@ -363,8 +363,7 @@ defmodule SacrumWeb.Graphql.WorkflowStepRouteConfigTest do
         name: "Route",
         step_order: 2,
         step_type: "route",
-        prompt: nil,
-        route_config: routing_config(destination.id)
+        config: %{"route_config" => routing_config(destination.id)}
       })
 
     {:ok, _} =
@@ -409,7 +408,7 @@ defmodule SacrumWeb.Graphql.WorkflowStepRouteConfigTest do
         task_run_id: task_run.id,
         step_id: graph.source.id,
         step_name: graph.source.name,
-        step_type: :execute,
+        step_type: :llm_inference,
         status: "completed",
         output:
           Jason.encode!(%{"route" => %{"result" => "approved", "handoff" => source_handoff}})
@@ -420,7 +419,7 @@ defmodule SacrumWeb.Graphql.WorkflowStepRouteConfigTest do
       |> TaskRun.update_changeset(%{latest_step_execution_id: source_execution.id})
       |> Repo.update()
 
-    {:ok, program} = RouteConfig.decode(graph.route.route_config)
+    {:ok, program} = RouteConfig.decode(graph.route.config.route_config)
 
     data = %FSMData{
       user_id: user.id,

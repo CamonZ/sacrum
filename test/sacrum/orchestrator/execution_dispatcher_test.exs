@@ -4,6 +4,13 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
   alias Sacrum.Accounts
   alias Sacrum.Orchestrator.{ExecutionDispatcher, PromptContext, PromptRenderer}
 
+  @default_config %{
+    "agents" => ["test"],
+    "skills" => ["test_skill"],
+    "agent_config" => %{"model" => "test-model"},
+    "prompt" => "default prompt"
+  }
+
   defp create_user do
     {:ok, user} =
       Sacrum.Repo.Users.insert(%{
@@ -33,16 +40,25 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
     default_attrs = %{
       "name" => "Test Step",
       "step_order" => 1,
-      "agents" => ["test"],
-      "skills" => ["test_skill"],
-      "agent_config" => %{"model" => "test-model"},
       "workflow_id" => workflow.id,
-      "project_id" => workflow.project_id,
-      "prompt" => "default prompt"
+      "project_id" => workflow.project_id
     }
 
-    {:ok, step} = Accounts.WorkflowSteps.insert(user.id, Map.merge(default_attrs, attrs))
+    {:ok, step} =
+      Accounts.WorkflowSteps.insert(
+        user.id,
+        default_attrs |> Map.merge(attrs) |> put_default_config()
+      )
+
     Sacrum.Repo.preload(step, :workflow)
+  end
+
+  # llm_inference steps get the default agent settings under any config the
+  # caller supplies.
+  defp put_default_config(attrs) do
+    if to_string(attrs["step_type"] || "llm_inference") == "llm_inference",
+      do: Map.update(attrs, "config", @default_config, &Map.merge(@default_config, &1)),
+      else: attrs
   end
 
   defp create_task(user, project, attrs \\ %{}) do
@@ -162,8 +178,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       step =
         create_step(ctx.user, ctx.workflow, %{
           "name" => "Human approval",
-          "step_type" => "human_input",
-          "prompt" => "wait for human"
+          "step_type" => "human_input"
         })
 
       task = create_task(ctx.user, ctx.project)
@@ -179,11 +194,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
     test "rejects direct dispatch of a stop step without changing the TaskRun", ctx do
       step =
-        create_step(ctx.user, ctx.workflow, %{
-          "name" => "Run boundary",
-          "step_type" => "stop",
-          "prompt" => nil
-        })
+        create_step(ctx.user, ctx.workflow, %{"name" => "Run boundary", "step_type" => "stop"})
 
       task = create_task(ctx.user, ctx.project) |> assign_workflow(ctx.workflow)
       task_run = create_task_run(ctx, task)
@@ -203,8 +214,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
         create_step(ctx.user, ctx.workflow, %{
           "name" => "Configured route",
           "step_type" => "route",
-          "prompt" => nil,
-          "route_config" => valid_route_config()
+          "config" => %{"route_config" => valid_route_config()}
         })
 
       task = create_task(ctx.user, ctx.project) |> assign_workflow(ctx.workflow)
@@ -225,18 +235,20 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
                Accounts.WorkflowSteps.insert(ctx.user.id, %{
                  name: "Unconfigured route",
                  step_type: "route",
-                 prompt: nil,
                  workflow_id: ctx.workflow.id,
                  project_id: ctx.project.id
                })
 
       assert route.step_type == :route
-      assert route.prompt == nil
-      assert route.route_config == nil
+      assert route.config.route_config == nil
     end
 
     test "renders {{ task.title }} in step prompt", ctx do
-      step = create_step(ctx.user, ctx.workflow, %{"prompt" => "Working on: {{ task.title }}"})
+      step =
+        create_step(ctx.user, ctx.workflow, %{
+          "config" => %{"prompt" => "Working on: {{ task.title }}"}
+        })
+
       task = create_task(ctx.user, ctx.project)
       task = assign_workflow(task, ctx.workflow)
       task = PromptRenderer.preload_for_rendering(task)
@@ -257,8 +269,10 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
     test "renders project and task artifact IDs and persists/broadcasts the same prompt", ctx do
       step =
         create_step(ctx.user, ctx.workflow, %{
-          "prompt" =>
-            ~s|Project: {{ artifacts["project"]["result"].id }} Task: {{ artifacts["task"]["result"].id }}|
+          "config" => %{
+            "prompt" =>
+              ~s|Project: {{ artifacts["project"]["result"].id }} Task: {{ artifacts["task"]["result"].id }}|
+          }
         })
 
       task = create_task(ctx.user, ctx.project) |> assign_workflow(ctx.workflow)
@@ -307,7 +321,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
     test "renders the current TaskRun artifact ID without exposing its body", ctx do
       step =
         create_step(ctx.user, ctx.workflow, %{
-          "prompt" => ~s|Run artifact: {{ artifacts["task_run"]["result"].id }}|
+          "config" => %{"prompt" => ~s|Run artifact: {{ artifacts["task_run"]["result"].id }}|}
         })
 
       task = create_task(ctx.user, ctx.project) |> assign_workflow(ctx.workflow)
@@ -340,7 +354,9 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
     test "renders {{ task.description }} and {{ task.level }}", ctx do
       step =
         create_step(ctx.user, ctx.workflow, %{
-          "prompt" => "Level: {{ task.level }}, Description: {{ task.description }}"
+          "config" => %{
+            "prompt" => "Level: {{ task.level }}, Description: {{ task.description }}"
+          }
         })
 
       task = create_task(ctx.user, ctx.project)
@@ -363,7 +379,9 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
     test "renders {% for constraint in task.constraints %} from task sections", ctx do
       step =
         create_step(ctx.user, ctx.workflow, %{
-          "prompt" => "Constraints:{% for c in task.constraints %}\n- {{ c }}{% endfor %}"
+          "config" => %{
+            "prompt" => "Constraints:{% for c in task.constraints %}\n- {{ c }}{% endfor %}"
+          }
         })
 
       task = create_task(ctx.user, ctx.project)
@@ -406,7 +424,9 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
     test "renders {{ workflow.name }} and {{ workflow.current_step }}", ctx do
       step =
         create_step(ctx.user, ctx.workflow, %{
-          "prompt" => "Workflow: {{ workflow.name }}, Step: {{ workflow.current_step }}"
+          "config" => %{
+            "prompt" => "Workflow: {{ workflow.name }}, Step: {{ workflow.current_step }}"
+          }
         })
 
       task = create_task(ctx.user, ctx.project)
@@ -429,7 +449,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
     test "undefined variables render as empty", ctx do
       step =
         create_step(ctx.user, ctx.workflow, %{
-          "prompt" => "Hello {{ undefined_variable }}!"
+          "config" => %{"prompt" => "Hello {{ undefined_variable }}!"}
         })
 
       task = create_task(ctx.user, ctx.project)
@@ -475,7 +495,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
     test "renders {{ execution.previous_output }} when prior completion exists", ctx do
       step =
         create_step(ctx.user, ctx.workflow, %{
-          "prompt" => "Prior output was: {{ execution.previous_output }}"
+          "config" => %{"prompt" => "Prior output was: {{ execution.previous_output }}"}
         })
 
       task = create_task(ctx.user, ctx.project)
@@ -514,7 +534,9 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
          ctx do
       step =
         create_step(ctx.user, ctx.workflow, %{
-          "prompt" => "Prior output: '{{ execution.previous_output }}' (empty if none)"
+          "config" => %{
+            "prompt" => "Prior output: '{{ execution.previous_output }}' (empty if none)"
+          }
         })
 
       task = create_task(ctx.user, ctx.project)
@@ -540,7 +562,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
     test "multiple prior executions renders the most recent one", ctx do
       step =
         create_step(ctx.user, ctx.workflow, %{
-          "prompt" => "Latest: {{ execution.previous_output }}"
+          "config" => %{"prompt" => "Latest: {{ execution.previous_output }}"}
         })
 
       task = create_task(ctx.user, ctx.project)
@@ -590,7 +612,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
     test "handoff passed to create_and_dispatch is available in context", ctx do
       step =
         create_step(ctx.user, ctx.workflow, %{
-          "prompt" => "Handoff context: {{ execution.handoff | json_encode }}"
+          "config" => %{"prompt" => "Handoff context: {{ execution.handoff | json_encode }}"}
         })
 
       task = create_task(ctx.user, ctx.project)
@@ -621,14 +643,16 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
         create_step(ctx.user, ctx.workflow, %{
           "name" => "eval_step",
           "step_order" => 1,
-          "output_schema" => %{
-            "type" => "object",
-            "properties" => %{
-              "verdict" => %{"type" => "string"},
-              "should_retry" => %{"type" => "boolean"}
-            },
-            "required" => ["verdict", "should_retry"],
-            "additionalProperties" => false
+          "config" => %{
+            "output_schema" => %{
+              "type" => "object",
+              "properties" => %{
+                "verdict" => %{"type" => "string"},
+                "should_retry" => %{"type" => "boolean"}
+              },
+              "required" => ["verdict", "should_retry"],
+              "additionalProperties" => false
+            }
           }
         })
 
@@ -636,7 +660,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
         create_step(ctx.user, ctx.workflow, %{
           "name" => "route_step",
           "step_order" => 2,
-          "prompt" => "Verdict: {{ execution.previous_output.verdict }}"
+          "config" => %{"prompt" => "Verdict: {{ execution.previous_output.verdict }}"}
         })
 
       task = create_task(ctx.user, ctx.project)
@@ -678,7 +702,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
         create_step(ctx.user, ctx.workflow, %{
           "name" => "step_2",
           "step_order" => 2,
-          "prompt" => "Previous: {{ execution.previous_output }}"
+          "config" => %{"prompt" => "Previous: {{ execution.previous_output }}"}
         })
 
       task = create_task(ctx.user, ctx.project)
@@ -718,11 +742,13 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
         create_step(ctx.user, ctx.workflow, %{
           "name" => "eval_step",
           "step_order" => 1,
-          "output_schema" => %{
-            "type" => "object",
-            "properties" => %{"result" => %{"type" => "string"}},
-            "required" => ["result"],
-            "additionalProperties" => false
+          "config" => %{
+            "output_schema" => %{
+              "type" => "object",
+              "properties" => %{"result" => %{"type" => "string"}},
+              "required" => ["result"],
+              "additionalProperties" => false
+            }
           }
         })
 
@@ -730,7 +756,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
         create_step(ctx.user, ctx.workflow, %{
           "name" => "next_step",
           "step_order" => 2,
-          "prompt" => "Got: {{ execution.previous_output }}"
+          "config" => %{"prompt" => "Got: {{ execution.previous_output }}"}
         })
 
       task = create_task(ctx.user, ctx.project)
@@ -769,14 +795,16 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
         create_step(ctx.user, ctx.workflow, %{
           "name" => "eval_step",
           "step_order" => 1,
-          "output_schema" => %{
-            "type" => "object",
-            "properties" => %{
-              "verdict" => %{"type" => "string"},
-              "confidence" => %{"type" => "number"}
-            },
-            "required" => ["verdict", "confidence"],
-            "additionalProperties" => false
+          "config" => %{
+            "output_schema" => %{
+              "type" => "object",
+              "properties" => %{
+                "verdict" => %{"type" => "string"},
+                "confidence" => %{"type" => "number"}
+              },
+              "required" => ["verdict", "confidence"],
+              "additionalProperties" => false
+            }
           }
         })
 
@@ -784,8 +812,10 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
         create_step(ctx.user, ctx.workflow, %{
           "name" => "route_step",
           "step_order" => 2,
-          "prompt" =>
-            "Verdict: {{ execution.previous_output.verdict }}, Confidence: {{ execution.previous_output.confidence }}"
+          "config" => %{
+            "prompt" =>
+              "Verdict: {{ execution.previous_output.verdict }}, Confidence: {{ execution.previous_output.confidence }}"
+          }
         })
 
       task = create_task(ctx.user, ctx.project)
@@ -849,11 +879,13 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
         create_step(ctx.user, ctx.workflow, %{
           "name" => "eval_step",
           "step_order" => 1,
-          "output_schema" => %{
-            "type" => "object",
-            "properties" => %{"result" => %{"type" => "string"}},
-            "required" => ["result"],
-            "additionalProperties" => false
+          "config" => %{
+            "output_schema" => %{
+              "type" => "object",
+              "properties" => %{"result" => %{"type" => "string"}},
+              "required" => ["result"],
+              "additionalProperties" => false
+            }
           }
         })
 
@@ -861,7 +893,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
         create_step(ctx.user, ctx.workflow, %{
           "name" => "route_step",
           "step_order" => 2,
-          "prompt" => "Result: {{ execution.previous_output.result }}"
+          "config" => %{"prompt" => "Result: {{ execution.previous_output.result }}"}
         })
 
       task = create_task(ctx.user, ctx.project)
@@ -903,7 +935,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
         create_step(ctx.user, ctx.workflow, %{
           "name" => "step_2",
           "step_order" => 2,
-          "prompt" => "{{ execution.previous_output }}"
+          "config" => %{"prompt" => "{{ execution.previous_output }}"}
         })
 
       task = create_task(ctx.user, ctx.project)
@@ -945,7 +977,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
          ctx do
       step =
         create_step(ctx.user, ctx.workflow, %{
-          "prompt" => "This is run number {{ execution.run_count }}"
+          "config" => %{"prompt" => "This is run number {{ execution.run_count }}"}
         })
 
       task = create_task(ctx.user, ctx.project) |> assign_workflow(ctx.workflow)
@@ -962,7 +994,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
     test "run_count is 0 when no prior executions exist for the step", ctx do
       step =
         create_step(ctx.user, ctx.workflow, %{
-          "prompt" => "Run count: {{ execution.run_count }}"
+          "config" => %{"prompt" => "Run count: {{ execution.run_count }}"}
         })
 
       task = create_task(ctx.user, ctx.project) |> assign_workflow(ctx.workflow)
@@ -976,7 +1008,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
     test "run_count excludes 'invalidated' status executions", ctx do
       step =
         create_step(ctx.user, ctx.workflow, %{
-          "prompt" => "Run count is {{ execution.run_count }}"
+          "config" => %{"prompt" => "Run count is {{ execution.run_count }}"}
         })
 
       task = create_task(ctx.user, ctx.project) |> assign_workflow(ctx.workflow)
@@ -992,8 +1024,10 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
     test "splits run count into completed_count and failed_count", ctx do
       step =
         create_step(ctx.user, ctx.workflow, %{
-          "prompt" =>
-            "total={{ execution.run_count }} ok={{ execution.completed_count }} ko={{ execution.failed_count }}"
+          "config" => %{
+            "prompt" =>
+              "total={{ execution.run_count }} ok={{ execution.completed_count }} ko={{ execution.failed_count }}"
+          }
         })
 
       task = create_task(ctx.user, ctx.project) |> assign_workflow(ctx.workflow)
@@ -1014,7 +1048,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
         create_step(ctx.user, ctx.workflow, %{
           "name" => "step_b",
           "step_order" => 2,
-          "prompt" => "Step B run count: {{ execution.run_count }}"
+          "config" => %{"prompt" => "Step B run count: {{ execution.run_count }}"}
         })
 
       task = create_task(ctx.user, ctx.project) |> assign_workflow(ctx.workflow)
@@ -1102,7 +1136,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
     test "persists rendered prompt on the execution row and broadcasts the same text", ctx do
       step =
         create_step(ctx.user, ctx.workflow, %{
-          "prompt" => "Task: {{ task.title }} | Level: {{ task.level }}"
+          "config" => %{"prompt" => "Task: {{ task.title }} | Level: {{ task.level }}"}
         })
 
       task = create_task(ctx.user, ctx.project) |> assign_workflow(ctx.workflow)

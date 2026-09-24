@@ -39,7 +39,7 @@ defmodule Sacrum.WorkflowBundles.Manifest do
     {"agents", :agents, []},
     {"skills", :skills, []},
     {"agent_config", :agent_config, nil},
-    {"step_type", :step_type, "execute"},
+    {"step_type", :step_type, "llm_inference"},
     {"step_order", :step_order, 0},
     {"output_schema", :output_schema, nil},
     {"persistence_options", :persistence_options, nil},

@@ -27,7 +27,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
   }
 
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.{StepExecution, TaskRun}
+  alias Sacrum.Repo.Schemas.{StepExecution, TaskRun, WorkflowStep}
   alias Sacrum.Repo.TaskWorkflows
   alias Sacrum.Routing.{RouteContext, RouteEvaluator}
 
@@ -77,7 +77,11 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
 
   defp validated_predecessor_output(%{source_execution: execution, source_step: source_step}) do
     with {:ok, output} <- decode_predecessor_output(execution.output),
-         :ok <- OutputValidator.validate_output(output, source_step.output_schema) do
+         :ok <-
+           OutputValidator.validate_output(
+             output,
+             WorkflowStep.config_value(source_step, :output_schema)
+           ) do
       {:ok, output}
     end
   end

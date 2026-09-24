@@ -336,13 +336,16 @@ defmodule SacrumWeb.DaemonChannelTest do
       Accounts.Workflows.insert(user.id, project.id, %{name: "Execution Workflow"})
 
     {:ok, step} =
-      Accounts.WorkflowSteps.insert(user.id, %{
-        "name" => "Execute",
-        "step_order" => 1,
-        "workflow_id" => workflow.id,
-        "project_id" => project.id,
-        "prompt" => "Run the assigned work"
-      })
+      Accounts.WorkflowSteps.insert(
+        user.id,
+        %{
+          "name" => "Execute",
+          "step_order" => 1,
+          "workflow_id" => workflow.id,
+          "project_id" => project.id,
+          "config" => %{"prompt" => "Run the assigned work"}
+        }
+      )
 
     {:ok, task} =
       Accounts.Tasks.insert(user.id, project.id, %{
@@ -363,7 +366,7 @@ defmodule SacrumWeb.DaemonChannelTest do
         step_id: step.id,
         step_name: step.name,
         status: "started",
-        prompt: step.prompt
+        prompt: step.config.prompt
       })
 
     {:ok, _reply, _channel} =
@@ -371,7 +374,7 @@ defmodule SacrumWeb.DaemonChannelTest do
 
     :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "daemon:#{daemon.id}")
 
-    data = %{task: task, step: step, execution: execution, rendered_prompt: step.prompt}
+    data = %{task: task, step: step, execution: execution, rendered_prompt: step.config.prompt}
     assert :ok = CommandBroadcaster.broadcast_run_step(data, daemon.id)
 
     assert_receive %Phoenix.Socket.Broadcast{
