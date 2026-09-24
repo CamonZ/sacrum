@@ -213,9 +213,6 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
 
   defp validate_route_config(changeset) do
     case {get_field(changeset, :step_type), get_field(changeset, :route_config)} do
-      {:route, nil} ->
-        add_error(changeset, :route_config, "is required for route steps")
-
       {:route, route_config} when is_map(route_config) ->
         case RouteConfig.decode(route_config) do
           {:ok, _program} ->

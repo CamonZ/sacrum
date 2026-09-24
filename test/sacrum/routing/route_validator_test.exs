@@ -34,6 +34,14 @@ defmodule Sacrum.Routing.RouteValidatorTest do
     assert :ok = validate(route)
   end
 
+  test "runtime validation still rejects an unconfigured route draft", context do
+    destination = create_step(context, "destination", 1)
+    route = create_route(context, "route", 2, valid_route_config(destination.id))
+    route = persist_invalid_route_config(route, nil)
+
+    assert {:error, %{code: :route_config_required, path: "$.route_config"}} = validate(route)
+  end
+
   test "rejects an existing but unconnected intra-workflow destination", context do
     source = create_step(context, "source", 1, output_schema: predecessor_schema(["approved"]))
     disconnected = create_step(context, "disconnected", 2)
@@ -192,7 +200,11 @@ defmodule Sacrum.Routing.RouteValidatorTest do
   end
 
   defp create_route(context, name, order, route_config) do
-    create_step(context, name, order, step_type: "route", route_config: route_config)
+    create_step(context, name, order,
+      step_type: "route",
+      prompt: nil,
+      route_config: route_config
+    )
   end
 
   defp valid_route_config(target_id),

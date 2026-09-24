@@ -169,7 +169,7 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
 
             "route" ->
               %{
-                prompt: "Choose a destination",
+                prompt: nil,
                 route_config:
                   route_config(%{"ref" => "task.level", "op" => "eq", "value" => "task"})
               }
@@ -208,7 +208,7 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
       assert {:ok, updated} =
                WorkflowSteps.update(step, %{
                  step_type: "route",
-                 prompt: "Choose a destination",
+                 prompt: nil,
                  route_config:
                    route_config(%{"ref" => "task.level", "op" => "eq", "value" => "task"})
                })
@@ -270,7 +270,7 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
                WorkflowSteps.insert(workflow, %{
                  name: "Route",
                  step_type: "route",
-                 prompt: "Choose a destination",
+                 prompt: nil,
                  route_config: %{
                    "version" => 2,
                    "match_policy" => "exactly_one",
@@ -314,7 +314,7 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
                  WorkflowSteps.insert(workflow, %{
                    name: "Route",
                    step_type: "route",
-                   prompt: "Choose a destination",
+                   prompt: nil,
                    route_config: route_config(condition, default)
                  })
 
@@ -340,14 +340,16 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
       assert route.prompt == nil
     end
 
-    test "rejects a promptless unconfigured route" do
+    test "creates a promptless route draft without configuration" do
       user = create_user()
       {_project, workflow} = create_workflow(user)
 
-      assert {:error, changeset} =
+      assert {:ok, route} =
                WorkflowSteps.insert(workflow, %{name: "Route", step_type: "route", prompt: nil})
 
-      assert %{route_config: ["is required for route steps"]} = errors_on(changeset)
+      assert route.step_type == :route
+      assert route.prompt == nil
+      assert route.route_config == nil
     end
   end
 

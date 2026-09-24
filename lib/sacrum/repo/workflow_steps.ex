@@ -65,7 +65,8 @@ defmodule Sacrum.Repo.WorkflowSteps do
       [Ecto.Changeset.get_field(changeset, :workflow_id)],
       changeset,
       fn -> Repo.insert(changeset) end,
-      Ecto.Changeset.get_field(changeset, :step_type) == :route
+      Ecto.Changeset.get_field(changeset, :step_type) == :route and
+        not is_nil(Ecto.Changeset.get_field(changeset, :route_config))
     )
   end
 
@@ -114,15 +115,18 @@ defmodule Sacrum.Repo.WorkflowSteps do
       step.step_type == :route and is_nil(step.route_config) and
         not is_nil(Ecto.Changeset.get_field(changeset, :route_config))
 
-    authoring_route? =
-      (step.step_type != :route and Ecto.Changeset.get_field(changeset, :step_type) == :route) or
-        adding_route_config?
+    adding_configured_route? =
+      Ecto.Changeset.get_field(changeset, :step_type) == :route and
+        not is_nil(Ecto.Changeset.get_field(changeset, :route_config)) and
+        step.step_type != :route
+
+    allow_incomplete? = adding_configured_route? or adding_route_config?
 
     RouteValidation.mutate(
       affected,
       changeset,
       fn -> Repo.update(changeset) end,
-      authoring_route?
+      allow_incomplete?
     )
   end
 

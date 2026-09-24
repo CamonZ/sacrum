@@ -168,7 +168,10 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
       arg(:prompt, :string)
       arg(:output_schema, :json)
       arg(:persistence_options, :json)
-      arg(:route_config, :json, description: "Required when stepType is route.")
+
+      arg(:route_config, :json,
+        description: "Optional deterministic routing configuration for route steps."
+      )
 
       resolve(fn args, %{context: %{current_user: user}} ->
         workflow_id = Map.get(args, :workflow_id)
@@ -196,7 +199,7 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
       arg(:persistence_options, :json)
 
       arg(:route_config, :json,
-        description: "Required for route steps; clear it when changing to a non-route type."
+        description: "Optional deterministic routing configuration for route steps."
       )
 
       arg(:clear_output_schema, :boolean)

@@ -203,6 +203,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
         create_step(ctx.user, ctx.workflow, %{
           "name" => "Configured route",
           "step_type" => "route",
+          "prompt" => nil,
           "route_config" => valid_route_config()
         })
 
@@ -219,8 +220,8 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
              ) == nil
     end
 
-    test "rejects route step creation without route_config", ctx do
-      assert {:error, changeset} =
+    test "allows a promptless route draft to be saved", ctx do
+      assert {:ok, route} =
                Accounts.WorkflowSteps.insert(ctx.user.id, %{
                  name: "Unconfigured route",
                  step_type: "route",
@@ -229,7 +230,9 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
                  project_id: ctx.project.id
                })
 
-      assert %{route_config: ["is required for route steps"]} = errors_on(changeset)
+      assert route.step_type == :route
+      assert route.prompt == nil
+      assert route.route_config == nil
     end
 
     test "renders {{ task.title }} in step prompt", ctx do
