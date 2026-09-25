@@ -61,6 +61,170 @@ defmodule Sacrum.Routing.HandoffTemplate do
   def validate(_template, path),
     do: {:error, error(:route_handoff_template_invalid, path, "must be an object")}
 
+  @doc """
+  Resolves a structured step config against the broader string-keyed execution
+  context. References use the same closed `{{ dotted.path }}` grammar as route
+  handoffs; append `?` to a reference to make a missing value optional.
+  """
+  @spec resolve_config(term(), map(), String.t()) :: {:ok, term()} | {:error, error()}
+  def resolve_config(config, context, path) when is_map(config) and is_map(context) do
+    with :ok <- validate_config_value(config, path) do
+      render_config_value(config, context, path)
+    end
+  end
+
+  def resolve_config(_config, _context, path),
+    do: {:error, error(:step_config_render_failed, path, "must be an object")}
+
+  defp validate_config_value(value, path) when is_map(value) do
+    if Enum.all?(Map.keys(value), &is_binary/1) do
+      value
+      |> Enum.sort_by(fn {key, _} -> key end)
+      |> Traverse.each_while(fn {key, nested}, _ ->
+        validate_config_value(nested, path_for_key(path, key))
+      end)
+    else
+      {:error, error(:step_config_template_invalid, path, "must use string keys")}
+    end
+  end
+
+  defp validate_config_value(value, path) when is_list(value) do
+    Traverse.each_while(value, fn nested, index ->
+      validate_config_value(nested, "#{path}[#{index}]")
+    end)
+  end
+
+  defp validate_config_value(value, path) when is_binary(value),
+    do: validate_config_string(value, path)
+
+  defp validate_config_value(value, _path)
+       when is_number(value) or is_boolean(value) or is_nil(value),
+       do: :ok
+
+  defp validate_config_value(_value, path),
+    do: {:error, error(:step_config_template_invalid, path, "must contain only JSON values")}
+
+  defp validate_config_string(value, path) do
+    matches = Regex.scan(@interpolation, value, capture: :all_but_first)
+    remainder = Regex.replace(@interpolation, value, "")
+
+    if String.contains?(remainder, "{{") or String.contains?(remainder, "}}") do
+      {:error, error(:step_config_template_invalid, path, "contains a malformed interpolation")}
+    else
+      Traverse.each_while(matches, fn [reference], _ ->
+        {_, reference} = optional_reference(String.trim(reference))
+        validate_config_reference(reference, path)
+      end)
+    end
+  end
+
+  defp render_config_value(value, context, path) when is_map(value) do
+    Enum.reduce_while(value, {:ok, %{}}, fn {key, nested}, {:ok, acc} ->
+      case render_config_value(nested, context, path_for_key(path, key)) do
+        {:ok, resolved} -> {:cont, {:ok, Map.put(acc, key, resolved)}}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp render_config_value(value, context, path) when is_list(value),
+    do:
+      Traverse.map_while(value, fn nested, index ->
+        render_config_value(nested, context, "#{path}[#{index}]")
+      end)
+
+  defp render_config_value(value, context, path) when is_binary(value),
+    do: render_config_string(value, context, path)
+
+  defp render_config_value(value, _context, _path), do: {:ok, value}
+
+  defp render_config_string(template, context, path) do
+    case Regex.run(@exact_interpolation, template) do
+      [_, reference] -> fetch_config_reference(context, String.trim(reference), path)
+      nil -> render_config_embedded(template, context, path)
+    end
+  end
+
+  defp render_config_embedded(template, context, path) do
+    Enum.reduce_while(Regex.scan(@interpolation, template), {:ok, template}, fn
+      [match, reference], {:ok, rendered} ->
+        replace_config_interpolation(rendered, match, reference, context, path)
+    end)
+  end
+
+  defp replace_config_interpolation(rendered, match, reference, context, path) do
+    with {:ok, value} <- fetch_config_reference(context, String.trim(reference), path),
+         {:ok, replacement} <- stringify_config_embedded_value(value, path) do
+      {:cont, {:ok, String.replace(rendered, match, replacement, global: false)}}
+    else
+      {:error, _} = error -> {:halt, error}
+    end
+  end
+
+  defp fetch_config_reference(context, reference, path) do
+    {optional?, reference} = optional_reference(reference)
+
+    with :ok <- validate_config_reference(reference, path) do
+      case fetch_path(context, String.split(reference, ".")) do
+        {:ok, value} ->
+          {:ok, value}
+
+        :error when optional? ->
+          {:ok, nil}
+
+        :error ->
+          {:error,
+           error(
+             :step_config_render_failed,
+             path,
+             "required interpolation reference #{inspect(reference)} is missing"
+           )}
+      end
+    end
+  end
+
+  defp stringify_config_embedded_value(value, _path) when is_binary(value), do: {:ok, value}
+
+  defp stringify_config_embedded_value(value, _path) when is_integer(value),
+    do: {:ok, Integer.to_string(value)}
+
+  defp stringify_config_embedded_value(value, _path) when is_float(value),
+    do: {:ok, Float.to_string(value)}
+
+  defp stringify_config_embedded_value(true, _path), do: {:ok, "true"}
+  defp stringify_config_embedded_value(false, _path), do: {:ok, "false"}
+  defp stringify_config_embedded_value(nil, _path), do: {:ok, ""}
+
+  defp stringify_config_embedded_value(_value, path) do
+    {:error,
+     error(
+       :step_config_render_failed,
+       path,
+       "object and array interpolations must occupy the whole string to preserve their JSON type"
+     )}
+  end
+
+  defp optional_reference(reference) do
+    if String.ends_with?(reference, "?") do
+      {true, String.trim_trailing(reference, "?")}
+    else
+      {false, reference}
+    end
+  end
+
+  defp validate_config_reference(reference, path) do
+    if reference != "" and Enum.all?(String.split(reference, "."), &Regex.match?(@segment, &1)) do
+      :ok
+    else
+      {:error,
+       error(
+         :step_config_template_invalid,
+         path,
+         "interpolation reference #{inspect(reference)} is invalid"
+       )}
+    end
+  end
+
   defp validate_map(template, path) do
     if Enum.all?(Map.keys(template), &is_binary/1) do
       template

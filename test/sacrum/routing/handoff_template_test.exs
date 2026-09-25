@@ -76,6 +76,62 @@ defmodule Sacrum.Routing.HandoffTemplateTest do
     assert message =~ "missing from the route-step context"
   end
 
+  test "resolves broad step config references while preserving JSON types" do
+    context = %{
+      "task" => %{"tags" => ["backend", "typesafe"]},
+      "inputs" => %{"limit" => 3},
+      "execution" => %{"previous_output" => %{"approved" => true}},
+      "steps" => %{"review" => %{"output" => %{"score" => 0.9}}}
+    }
+
+    config = %{
+      "state" => %{
+        "tags" => "{{ task.tags }}",
+        "limit" => "{{ inputs.limit }}",
+        "previous" => "{{ execution.previous_output }}",
+        "review" => "{{ steps.review.output }}",
+        "label" => "score={{ steps.review.output.score }}"
+      }
+    }
+
+    assert {:ok, resolved} = HandoffTemplate.resolve_config(config, context, "$.config")
+
+    assert resolved == %{
+             "state" => %{
+               "tags" => ["backend", "typesafe"],
+               "limit" => 3,
+               "previous" => %{"approved" => true},
+               "review" => %{"score" => 0.9},
+               "label" => "score=0.9"
+             }
+           }
+  end
+
+  test "reports config path and reference for missing required data and permits explicit optional refs" do
+    context = %{"task" => %{}}
+
+    assert {:error,
+            %{
+              code: :step_config_render_failed,
+              path: "$.state.owner",
+              message: message
+            }} =
+             HandoffTemplate.resolve_config(
+               %{"state" => %{"owner" => "{{ task.owner }}"}},
+               context,
+               "$"
+             )
+
+    assert message =~ "task.owner"
+
+    assert {:ok, %{"state" => %{"owner" => nil}}} =
+             HandoffTemplate.resolve_config(
+               %{"state" => %{"owner" => "{{ task.owner? }}"}},
+               context,
+               "$"
+             )
+  end
+
   defp route_context do
     {:ok, context} =
       RouteContext.build(

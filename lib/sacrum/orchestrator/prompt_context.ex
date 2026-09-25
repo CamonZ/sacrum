@@ -42,6 +42,8 @@ defmodule Sacrum.Orchestrator.PromptContext do
     %{
       "task" => build_task_context(task),
       "execution" => build_execution_context(execution_data),
+      "inputs" => string_keyed_map(execution_data[:inputs]),
+      "steps" => build_named_step_outputs(execution_data[:history]),
       "workflow" => build_workflow_context(workflow_step, task),
       "artifacts" => build_artifact_namespaces(task)
     }
@@ -229,6 +231,31 @@ defmodule Sacrum.Orchestrator.PromptContext do
   end
 
   def build_execution_context(_), do: %{}
+
+  defp string_keyed_map(map) when is_map(map), do: stringify_keys(map)
+  defp string_keyed_map(_), do: %{}
+
+  defp stringify_keys(map) do
+    Map.new(map, fn {key, value} ->
+      {to_string(key), if(is_map(value), do: stringify_keys(value), else: value)}
+    end)
+  end
+
+  defp build_named_step_outputs(history) when is_list(history) do
+    Enum.reduce(history, %{}, fn execution, outputs ->
+      step_name = execution[:step_name]
+
+      if is_binary(step_name) and execution[:status] == "completed" and
+           not Map.has_key?(outputs, step_name) do
+        output = Map.get(execution, :typed_output, execution[:output])
+        Map.put(outputs, step_name, %{"output" => output})
+      else
+        outputs
+      end
+    end)
+  end
+
+  defp build_named_step_outputs(_), do: %{}
 
   @doc """
   Builds the workflow context: name, current step name/goal, step count, and
