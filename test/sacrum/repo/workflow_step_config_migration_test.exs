@@ -247,14 +247,14 @@ defmodule Sacrum.Repo.WorkflowStepConfigMigrationTest do
     execution = %{
       id: Ecto.UUID.generate(),
       task_id: Ecto.UUID.generate(),
-      project_id: step.project_id
+      project_id: step.project_id,
+      config: step.config
     }
 
     data = %{
       execution: execution,
       step: step,
-      task: %Task{workspace: %TaskWorkspace{daemon_id: daemon_id, worktree_path: "/tmp/wt"}},
-      rendered_prompt: legacy.prompt
+      task: %Task{workspace: %TaskWorkspace{daemon_id: daemon_id, worktree_path: "/tmp/wt"}}
     }
 
     assert :ok = CommandBroadcaster.broadcast_run_step(data, daemon_id)
@@ -265,7 +265,7 @@ defmodule Sacrum.Repo.WorkflowStepConfigMigrationTest do
         id: execution.id,
         task_id: execution.task_id,
         project_id: step.project_id,
-        prompt: legacy.prompt,
+        prompt: legacy.prompt || "",
         agent_config: Map.get(legacy, :agent_config),
         worktree: "/tmp/wt"
       }

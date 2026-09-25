@@ -478,7 +478,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
                  step_type: :human_input,
                  status: "waiting",
                  output: nil,
-                 prompt: nil
+                 config: nil
                } = execution
              ] = executions_for_task(task.id)
 
@@ -782,7 +782,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
                      1500
 
       assert first_id == first_exec.id
-      assert first_exec.prompt == first_expected
+      assert first_exec.config.prompt == first_expected
 
       {:ok, %{artifact: first_artifact}} =
         Accounts.Artifacts.create_and_link(
@@ -801,7 +801,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
 
       [_failed, retry] = executions_for_task(task.id)
       retry_expected = "Retry task=#{artifact.id} previous=#{first_artifact.id} older="
-      assert retry.prompt == retry_expected
+      assert retry.config.prompt == retry_expected
 
       assert_receive %Phoenix.Socket.Broadcast{
                        event: "run_step",
@@ -831,7 +831,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
       second_retry_expected =
         "Retry task=#{artifact.id} previous=#{retry_artifact.id} older=#{first_artifact.id}"
 
-      assert second_retry.prompt == second_retry_expected
+      assert second_retry.config.prompt == second_retry_expected
 
       assert_receive %Phoenix.Socket.Broadcast{
                        event: "run_step",
@@ -843,8 +843,8 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
                      1500
 
       assert second_retry_id == second_retry.id
-      refute second_retry.prompt =~ "private first execution body"
-      refute second_retry.prompt =~ "private retry execution body"
+      refute second_retry.config.prompt =~ "private first execution body"
+      refute second_retry.config.prompt =~ "private retry execution body"
     end
 
     test "single failure inserts a fresh started execution and re-broadcasts run_step for the same step" do

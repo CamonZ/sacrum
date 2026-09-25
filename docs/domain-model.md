@@ -212,7 +212,7 @@ The `Project.artifacts(limit: 50, offset: 0)` field returns the caller's project
 **`execution_types.ex`** — 3 mutations (via `Accounts.StepExecutions` / `Accounts.SessionLogs`)
 | Mutation | Arguments | Returns |
 |----------|-----------|---------|
-| `updateStepExecution` | `id!`, `step_name`, `status`, `context`, `prompt`, `output`, `transition_result`, `model`, `model_provider`, `input_tokens`, `output_tokens`, `session_input_tokens`, `session_cache_read_input_tokens`, `session_output_tokens`, `session_total_tokens`, `context_window_input_tokens`, `context_window_cache_read_input_tokens`, `context_window_total_tokens`, `cost`, `duration_ms` | `:step_execution` |
+| `updateStepExecution` | `id!`, `step_name`, `status`, `context`, `output`, `transition_result`, `model`, `model_provider`, `input_tokens`, `output_tokens`, `session_input_tokens`, `session_cache_read_input_tokens`, `session_output_tokens`, `session_total_tokens`, `context_window_input_tokens`, `context_window_cache_read_input_tokens`, `context_window_total_tokens`, `cost`, `duration_ms` | `:step_execution` |
 | `createSessionLog` | `step_execution_id!`, `content!`, `format` (`anthropic` default, or `openai`), optional opaque `logical_key` for in-place updates | `:session_log` |
 | `cancelStepExecution` | `step_execution_id!` | `:step_execution` |
 
@@ -220,8 +220,8 @@ The `Project.artifacts(limit: 50, offset: 0)` field returns the caller's project
 
 ### Step types and step configuration
 
-`WorkflowStep.stepType` is one of `llm_inference`, `route`, `wait_children`,
-`human_input`, `stop`, or `finish`. The former `execute` and `evaluate` types
+`WorkflowStep.stepType` is one of `llm_inference`, `structured_inference`,
+`route`, `wait_children`, `human_input`, `stop`, or `finish`. The former `execute` and `evaluate` types
 behaved identically and were merged into `llm_inference`; neither name is
 accepted any more. A step's type is fixed when it is created; updates that
 change it are rejected, so a different kind of step is a new step.
@@ -232,12 +232,30 @@ polymorphic embedded schema whose variant is selected by `stepType`:
 | `stepType` | GraphQL type | Fields (besides `version: 1`) |
 |------------|--------------|-------------------------------|
 | `llm_inference` | `LlmInferenceStepConfig` | `prompt`, `output_schema`, `agents`, `skills`, `agent_config` |
+| `structured_inference` | `StructuredInferenceStepConfig` | `provider`, `model`, `state`, `fields` (all required) |
 | `route` | `RouteStepConfig` | `route_config` |
 | `wait_children` | `WaitChildrenStepConfig` | `output_schema` (for artifact persistence) |
 | `human_input`, `stop`, `finish` | — | `config` is `null` |
 
 `human_input` has no defined prompt or response contract yet: its waiting
-execution renders an empty prompt and its response is not schema-validated.
+execution has a null `config` and its response is not schema-validated.
+
+### Execution config
+
+Every `StepExecution` records the step config it ran with in
+`StepExecution.config`, in the same `step_type`-discriminated shape and
+`WorkflowStepConfig` GraphQL union as `WorkflowStep.config`, with templates
+rendered: `llm_inference` stores its rendered `prompt`, `structured_inference`
+its resolved `state`; other fields are copied as configured, and
+`human_input`, `stop`, and `finish` executions have a null `config`. It is
+written by the server when the execution is created and cannot be set or
+changed through `createStepExecution`/`updateStepExecution`; an execution
+created through `createStepExecution` with a `stepId` records that step's
+config unrendered. Validation, typed `previous_output`, and artifact
+persistence read the execution's own config, so editing a step does not change
+how past executions are interpreted. There is no separate `prompt` column;
+executions from before this change were backfilled with their rendered prompt
+and the rest of their step's config at migration time.
 
 `WorkflowStep.config` is the `WorkflowStepConfig` union of those types. The
 `config` mutation argument is a JSON object with snake_case keys. On create,
@@ -257,6 +275,44 @@ but workflow graph validation rejects an unconfigured route, so it cannot run
 until a valid `route_config` is saved. The daemon `run_step` payload (`prompt`,
 `agent_config`, `output_schema`, `worktree`, `verbose_daemon_logging`) is
 unchanged.
+
+### Structured inference steps
+
+A `structured_inference` step sends data and a declared output schema to a
+provider harness and stores validated structured output. It produces data only
+and follows its single outgoing edge; only route steps choose transitions.
+
+- `provider` and `model` are required strings. Sacrum does not restrict them;
+  the daemon decides whether a compatible harness exists.
+- `state` is a string, object, or array. It may reference execution context
+  with the closed `{{ dotted.path }}` grammar (`task.*`, `inputs.*`,
+  `steps.<name>.output`, `execution.previous_output`, ...); a whole-string
+  reference keeps its JSON type and a trailing `?` makes it optional.
+- `fields` is the JSON Schema the result must satisfy. Sacrum does not
+  interpret it per provider; harnesses map it to their own request (for
+  example System One questions). It is also the step's output schema for
+  typed `previous_output` and artifact persistence.
+
+At dispatch, `state` is resolved into the execution's `config` (see
+"Execution config"), and `model` and `model_provider` are set. A required
+reference that is missing fails the dispatch before an execution is created.
+The daemon receives `run_step` with `state`, `output_schema` (the `fields`
+schema), and `agent_config: {provider, model}` instead of a `prompt`.
+
+The harness completes the execution through `updateStepExecution` with
+`status: "completed"` and `output` set to the JSON encoding of
+`{"output": value, "meta": meta}`. `output` must satisfy `fields`; the
+optional `meta` is an object keyed by `fields` properties, each holding
+`probabilities` (a map of numbers in [0, 1]) and/or `confidence` (a number in
+[0, 1]). A conforming result stores only the JSON-encoded `output` value in
+`StepExecution.output` and records `meta` in
+`context["structured_inference"]["meta"]`, which harness updates cannot
+replace. A non-conforming result is stored as a `failed` execution whose
+`output` explains the rejection.
+
+Later steps see the value as `execution.previous_output` and
+`steps.<name>.output`, and the meta as `execution.previous_meta` and
+`steps.<name>.meta`.
 
 ### Deterministic route handoff templates
 

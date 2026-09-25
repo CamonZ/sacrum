@@ -2,13 +2,15 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   @moduledoc """
   Dispatches daemon-backed step executions.
 
-  Creates a StepExecution row in "started" status for the current step,
-  renders the prompt using PromptRenderer with Liquid/Solid templates,
-  and broadcasts a run_step event to the daemon.
+  Creates a StepExecution row in "started" status for the current step with
+  the step's rendered config (see `ExecutionConfig`), and broadcasts a
+  run_step event to the daemon.
 
   The dispatcher is the single source of StepExecution row creation for
-  llm_inference steps. Deterministic route executions are created locally
-  by the route handler. Transitions (advance_to_step, move_to_step) only update
+  llm_inference and structured_inference steps. A config that cannot be
+  rendered (such as a missing required reference in structured_inference
+  `state`) fails the dispatch before any execution row is created.
+  Deterministic route executions are created locally by the route handler. Transitions (advance_to_step, move_to_step) only update
   current_step_id; daemon-backed execution rows are created at dispatch time.
 
   Used by the TaskOrchestrator to dispatch workflow steps.
@@ -20,12 +22,13 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
 
   alias Sacrum.Accounts.StepExecutions
 
-  alias Sacrum.Orchestrator.{ExecutionHistory, PromptContext, PromptRenderer}
+  alias Sacrum.Orchestrator.{ExecutionConfig, ExecutionHistory, PromptContext}
 
   alias Sacrum.Orchestrator.TaskRuns.Failure
   alias Sacrum.Realtime.CommandBroadcaster
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{StepExecution, Task, TaskRun, WorkflowStep}
+  alias Sacrum.Repo.Schemas.WorkflowStep.Config
   alias Sacrum.Routing.RouteMode
   alias Sacrum.TaskRuns.Status, as: TaskRunStatus
   alias Sacrum.Tasks.Status
@@ -58,8 +61,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
           {:ok, execution}
 
         _ ->
-          {:ok, rendered} = render_dispatch_prompt(task, step, task_run, handoff)
-          commit_and_broadcast_dispatch(task, step, task_run, handoff, rendered)
+          dispatch_new_execution(task, step, task_run, handoff)
       end
     else
       {:error, reason} = err ->
@@ -115,14 +117,26 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
     end
   end
 
-  @spec render_dispatch_prompt(Task.t(), WorkflowStep.t(), TaskRun.t(), handoff()) ::
-          {:ok, String.t()} | {:error, term()}
-  defp render_dispatch_prompt(task, step, task_run, handoff) do
+  defp dispatch_new_execution(task, step, task_run, handoff) do
+    with {:ok, config} <- render_config(task, step, task_run, handoff) do
+      commit_and_broadcast_dispatch(task, step, task_run, handoff, config)
+    end
+  end
+
+  # Renders the step's config with the execution context; a template that
+  # cannot be rendered fails the dispatch before any execution row exists.
+  @spec render_config(Task.t(), WorkflowStep.t(), TaskRun.t(), handoff()) ::
+          {:ok, Config.t()} | {:error, term()}
+  defp render_config(task, step, task_run, handoff) do
     execution = execution_struct(task, step, task_run, handoff, %{})
     execution_data = ExecutionHistory.build_execution_data(task, execution, task_run)
     context = PromptContext.build_context(task, execution_data, step, task_run)
 
-    PromptRenderer.render(WorkflowStep.config_value(step, :prompt), context)
+    with {:error, reason} <- ExecutionConfig.render(step, context) do
+      Logger.error("[ExecutionDispatcher] create_and_dispatch failed: #{inspect(reason)}")
+      mark_dispatch_failure(task_run, {:config_render_failed, reason})
+      {:error, {:config_render_failed, reason}}
+    end
   end
 
   @spec commit_and_broadcast_dispatch(
@@ -130,13 +144,13 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
           WorkflowStep.t(),
           TaskRun.t(),
           handoff(),
-          String.t()
+          Config.t()
         ) ::
           {:ok, StepExecution.t()} | {:error, term()}
-  defp commit_and_broadcast_dispatch(task, step, task_run, handoff, rendered) do
-    case insert_and_stamp(task, step, task_run, handoff, rendered) do
+  defp commit_and_broadcast_dispatch(task, step, task_run, handoff, config) do
+    case insert_and_stamp(task, step, task_run, handoff, config) do
       {:ok, %{execution: execution, task: task, task_run: updated_task_run}} ->
-        case broadcast_dispatch(task, step, execution, rendered, updated_task_run) do
+        case broadcast_dispatch(task, step, execution, updated_task_run) do
           {:ok, _execution} = result ->
             result
 
@@ -157,17 +171,19 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
     end
   end
 
-  # Inserts the started StepExecution with its rendered prompt, advances the
+  # Inserts the started StepExecution with its rendered config, advances the
   # TaskRun cursor/status, and updates task timestamps/derived status in one
   # transaction. The task changeset is built after the execution insert so
   # derive/1 sees the new execution.
-  @spec insert_and_stamp(Task.t(), WorkflowStep.t(), TaskRun.t(), handoff(), String.t()) ::
+  @spec insert_and_stamp(Task.t(), WorkflowStep.t(), TaskRun.t(), handoff(), Config.t()) ::
           {:ok, map()} | {:error, atom(), term(), map()}
-  defp insert_and_stamp(task, step, task_run, handoff, rendered, status \\ "started") do
+  defp insert_and_stamp(task, step, task_run, handoff, config) do
     Multi.new()
     |> Multi.insert(
       :execution,
-      execution_changeset(task, step, task_run, handoff, %{prompt: rendered, status: status})
+      task
+      |> execution_changeset(step, task_run, handoff, model_attrs(config))
+      |> StepExecution.put_config(config)
     )
     |> Multi.update(:task_run, fn %{execution: execution} ->
       TaskRun.update_changeset(task_run, %{
@@ -178,6 +194,11 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
     |> Multi.update(:task, fn _changes -> task_dispatch_changeset(task) end)
     |> Repo.transaction()
   end
+
+  defp model_attrs(%Config.StructuredInference{provider: provider, model: model}),
+    do: %{model: model, model_provider: provider}
+
+  defp model_attrs(_config), do: %{}
 
   @spec execution_changeset(Task.t(), WorkflowStep.t(), TaskRun.t(), handoff(), map()) ::
           Ecto.Changeset.t()
@@ -203,7 +224,6 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
       step_type: step.step_type,
       status: attrs.status,
       handoff: attrs[:handoff],
-      prompt: attrs[:prompt],
       output: attrs[:output]
     }
   end
@@ -236,23 +256,17 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
     |> Status.put_status()
   end
 
-  @spec broadcast_dispatch(
-          Task.t(),
-          WorkflowStep.t(),
-          StepExecution.t(),
-          String.t(),
-          TaskRun.t()
-        ) ::
+  @spec broadcast_dispatch(Task.t(), WorkflowStep.t(), StepExecution.t(), TaskRun.t()) ::
           {:ok, StepExecution.t()} | {:error, term()}
-  defp broadcast_dispatch(task, step, execution, rendered, task_run) do
+  defp broadcast_dispatch(task, step, execution, task_run) do
     Logger.info(
       "[ExecutionDispatcher] Dispatching execution=#{execution.id} step=#{step.name} " <>
-        "task=#{task.id} task_run=#{task_run.id} prompt_length=#{String.length(rendered)}"
+        "task=#{task.id} task_run=#{task_run.id} step_type=#{step.step_type}"
     )
 
     with :ok <-
            CommandBroadcaster.broadcast_run_step(
-             %{execution: execution, step: step, task: task, rendered_prompt: rendered},
+             %{execution: execution, step: step, task: task},
              Task.workspace_daemon(task)
            ) do
       {:ok, execution}

@@ -212,7 +212,7 @@ defmodule Sacrum.Routing.RouteValidator do
         transition_id: edge.transition_id,
         source_step_id: edge.from_step_id,
         destination_step_id: route_step.id,
-        output_schema: source && WorkflowStep.config_value(source, :output_schema)
+        output_schema: source && WorkflowStep.output_schema(source)
       }
     end)
   end

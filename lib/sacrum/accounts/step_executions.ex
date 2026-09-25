@@ -13,40 +13,45 @@ defmodule Sacrum.Accounts.StepExecutions do
     default_order: [asc: :inserted_at]
 
   alias Sacrum.Accounts.WorkflowSteps
-  alias Sacrum.Orchestrator.ExecutionEvents
+  alias Sacrum.Orchestrator.{ExecutionEvents, StructuredInference}
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{StepExecution, TaskRun, WorkflowStep}
+  alias Sacrum.Repo.Schemas.WorkflowStep.Config
 
   defguardp human_input_resume_args(user_id, execution_id, encoded_output)
             when is_binary(user_id) and is_binary(execution_id) and is_binary(encoded_output)
 
   @doc """
   Insert a new step execution for a user.
-  Extracts task_id and project_id from attrs.
+  Extracts task_id and project_id from attrs. An execution that references a
+  step records that step's config as its own; it has no templates rendered.
   """
   @spec insert(String.t(), map()) :: {:ok, StepExecution.t()} | {:error, Ecto.Changeset.t()}
   def insert(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
-    with {:ok, attrs} <- put_derived_step_type(user_id, attrs) do
+    with {:ok, attrs, config} <- put_derived_step_type(user_id, attrs) do
       task_id = attr(attrs, :task_id)
       project_id = attr(attrs, :project_id)
 
       %StepExecution{user_id: user_id, task_id: task_id, project_id: project_id}
       |> StepExecution.create_changeset(attrs)
+      |> StepExecution.put_config(config)
       |> Repo.insert()
     end
   end
 
-  @spec put_derived_step_type(String.t(), map()) :: {:ok, map()} | {:error, Ecto.Changeset.t()}
+  @spec put_derived_step_type(String.t(), map()) ::
+          {:ok, map(), Config.t()} | {:error, Ecto.Changeset.t()}
   defp put_derived_step_type(user_id, attrs) do
     case attr(attrs, :step_id) do
       nil ->
-        {:ok, attrs}
+        {:ok, attrs, nil}
 
       step_id ->
         with {:ok, %WorkflowStep{} = step} <-
                WorkflowSteps.get_by(user_id, conditions: [id: step_id]),
-             :ok <- validate_step_scope(attrs, step) do
-          validate_step_type_match(attrs, step.step_type)
+             :ok <- validate_step_scope(attrs, step),
+             {:ok, attrs} <- validate_step_type_match(attrs, step.step_type) do
+          {:ok, attrs, step.config}
         end
     end
   end
@@ -112,7 +117,7 @@ defmodule Sacrum.Accounts.StepExecutions do
     result =
       with :ok <- prevent_human_input_resume_bypass(execution, attrs) do
         execution
-        |> StepExecution.update_changeset(attrs)
+        |> StepExecution.update_changeset(StructuredInference.prepare_update(execution, attrs))
         |> Repo.update()
       end
 

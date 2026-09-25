@@ -600,7 +600,7 @@ defmodule SacrumWeb.ProjectChannel do
       step_type: WorkflowStep.step_type_wire_value(field_value(execution, :step_type)),
       status: field_value(execution, :status),
       context: field_value(execution, :context),
-      prompt: field_value(execution, :prompt),
+      config: field_value(execution, :config),
       output: field_value(execution, :output),
       transition_result: field_value(execution, :transition_result),
       model: field_value(execution, :model),

@@ -8,7 +8,7 @@ defmodule Sacrum.Orchestrator.ExecutionHistory do
   import Ecto.Query
 
   alias Sacrum.Accounts.TaskRuns
-  alias Sacrum.Orchestrator.StructuredOutput
+  alias Sacrum.Orchestrator.{StructuredInference, StructuredOutput}
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{StepExecution, WorkflowStep}
 
@@ -49,24 +49,36 @@ defmodule Sacrum.Orchestrator.ExecutionHistory do
   def put_previous_output(data, task, task_run, current_execution_id) do
     query =
       from(e in StepExecution,
-        left_join: ws in WorkflowStep,
-        on: ws.id == e.step_id or (is_nil(e.step_id) and ws.name == e.step_name),
         where:
           e.user_id == ^task.user_id and e.project_id == ^task.project_id and
             e.task_id == ^task.id and e.task_run_id == ^task_run.id and
             e.status == "completed",
         order_by: [desc: e.inserted_at, desc: e.id],
         limit: 1,
-        select: {e.output, ws.config["output_schema"]}
+        select:
+          {e.output, fragment("coalesce(?->'output_schema', ?->'fields')", e.config, e.config),
+           e.context}
       )
 
     query = exclude_current_execution(query, current_execution_id)
 
     case Repo.one(query) do
-      nil -> data
-      {output, schema} -> Map.put(data, :previous, %{output: decode_prior_output(output, schema)})
+      nil ->
+        data
+
+      {output, schema, context} ->
+        previous =
+          put_meta(
+            %{output: decode_prior_output(output, schema)},
+            StructuredInference.meta(context)
+          )
+
+        Map.put(data, :previous, previous)
     end
   end
+
+  defp put_meta(entry, nil), do: entry
+  defp put_meta(entry, meta), do: Map.put(entry, :meta, meta)
 
   @doc """
   Decodes prior execution output as JSON when an output schema is present.
@@ -147,27 +159,25 @@ defmodule Sacrum.Orchestrator.ExecutionHistory do
     |> TaskRuns.list_step_executions_for_run(task.project_id, task.id, task_run.id)
     |> Enum.take_while(fn execution -> execution.id != dispatched_execution.id end)
     |> Enum.reverse()
-    |> Repo.preload(:step)
     |> Enum.map(&execution_to_history/1)
   end
 
   defp execution_to_history(%StepExecution{} = execution) do
-    output_schema =
-      case execution.step do
-        %WorkflowStep{} = step -> WorkflowStep.config_value(step, :output_schema)
-        _ -> nil
-      end
+    output_schema = WorkflowStep.output_schema(execution)
 
-    %{
-      id: execution.id,
-      step_id: execution.step_id,
-      step_name: execution.step_name,
-      status: execution.status,
-      output: execution.output,
-      typed_output: decode_prior_output(execution.output, output_schema),
-      duration_ms: execution.duration_ms,
-      inserted_at: execution.inserted_at
-    }
+    put_meta(
+      %{
+        id: execution.id,
+        step_id: execution.step_id,
+        step_name: execution.step_name,
+        status: execution.status,
+        output: execution.output,
+        typed_output: decode_prior_output(execution.output, output_schema),
+        duration_ms: execution.duration_ms,
+        inserted_at: execution.inserted_at
+      },
+      StructuredInference.meta(execution.context)
+    )
   end
 
   defp run_counts_query(task_id, step_id, nil) do

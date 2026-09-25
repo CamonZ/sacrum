@@ -22,14 +22,11 @@ defmodule Sacrum.Realtime.CommandBroadcasterTest do
         id: Ecto.UUID.generate(),
         task_id: Ecto.UUID.generate(),
         project_id: project_id,
-        user_id: user_id
+        user_id: user_id,
+        config: %WorkflowStep.Config.LlmInference{agent_config: %{"model" => "test"}}
       },
       task: %Task{workspace: %TaskWorkspace{daemon_id: daemon_id, worktree_path: "/tmp/worktree"}},
-      step: %{
-        config: %WorkflowStep.Config.LlmInference{agent_config: %{"model" => "test"}},
-        verbose_daemon_logging: false
-      },
-      rendered_prompt: ""
+      step: %{verbose_daemon_logging: false}
     }
 
     %{data: data, daemon_id: daemon_id, other_daemon_id: other_daemon_id, user_id: user_id}
@@ -87,7 +84,7 @@ defmodule Sacrum.Realtime.CommandBroadcasterTest do
   test "preserves optional output schema and verbose logging", ctx do
     schema = %{"type" => "object"}
     data = ctx.data
-    data = put_in(data.step.config.output_schema, schema)
+    data = put_in(data.execution.config.output_schema, schema)
     data = put_in(data.step.verbose_daemon_logging, true)
     assert :ok = CommandBroadcaster.broadcast_run_step(data, ctx.daemon_id)
     assert_receive %Phoenix.Socket.Broadcast{event: "run_step", payload: payload}

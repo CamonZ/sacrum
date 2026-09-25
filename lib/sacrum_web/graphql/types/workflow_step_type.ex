@@ -15,6 +15,7 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
   @empty_task_counts %{epic: 0, ticket: 0, task: 0}
   @config_types %{
     Config.LlmInference => :llm_inference_step_config,
+    Config.StructuredInference => :structured_inference_step_config,
     Config.Route => :route_step_config,
     Config.WaitChildren => :wait_children_step_config
   }
@@ -117,6 +118,7 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
   union :workflow_step_config do
     types([
       :llm_inference_step_config,
+      :structured_inference_step_config,
       :route_step_config,
       :wait_children_step_config
     ])
@@ -131,6 +133,14 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
     field :agents, list_of(:string)
     field :skills, list_of(:string)
     field :agent_config, :json
+  end
+
+  object :structured_inference_step_config do
+    field :version, non_null(:integer)
+    field :provider, :string
+    field :model, :string
+    field :state, :json
+    field :fields, :json
   end
 
   object :route_step_config do

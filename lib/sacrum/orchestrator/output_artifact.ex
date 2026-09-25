@@ -50,7 +50,7 @@ defmodule Sacrum.Orchestrator.OutputArtifact do
   end
 
   defp persist_artifact(data, step, execution, logical_name) do
-    output_schema = WorkflowStep.config_value(step, :output_schema)
+    output_schema = WorkflowStep.output_schema(step)
 
     with :ok <- require_output_schema(output_schema),
          {:ok, decoded_output} <- decode_output(execution.output),

@@ -362,7 +362,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   end
 
   defp transition_current_step(data, %{step_type: type} = current_step)
-       when type in [:llm_inference, :human_input] do
+       when type in [:llm_inference, :structured_inference, :human_input] do
     handle_single_transition_step(data, current_step)
   end
 

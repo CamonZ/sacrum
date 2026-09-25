@@ -12,13 +12,19 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep.Config do
   require Logger
 
   alias Sacrum.JsonSchema.Strict
-  alias __MODULE__.{LlmInference, Route, WaitChildren}
+  alias __MODULE__.{LlmInference, Route, StructuredInference, WaitChildren}
 
   @version 1
 
-  @types [llm_inference: LlmInference, route: Route, wait_children: WaitChildren]
+  @types [
+    llm_inference: LlmInference,
+    structured_inference: StructuredInference,
+    route: Route,
+    wait_children: WaitChildren
+  ]
 
-  @type t :: LlmInference.t() | Route.t() | WaitChildren.t() | nil
+  @type t ::
+          LlmInference.t() | StructuredInference.t() | Route.t() | WaitChildren.t() | nil
 
   @doc "The variant embedded schemas keyed by `step_type`."
   @spec types() :: keyword(module())
@@ -36,18 +42,18 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep.Config do
   end
 
   @doc """
-  Checks that `output_schema` is a resolvable JSON Schema and, for Codex-backed
-  agents, Codex strict-compatible.
+  Checks that the output schema in `field` is a resolvable JSON Schema and, for
+  Codex-backed agents, Codex strict-compatible.
   """
-  @spec validate_output_schema(Ecto.Changeset.t()) :: Ecto.Changeset.t()
-  def validate_output_schema(changeset) do
-    case get_field(changeset, :output_schema) do
+  @spec validate_output_schema(Ecto.Changeset.t(), atom()) :: Ecto.Changeset.t()
+  def validate_output_schema(changeset, field \\ :output_schema) do
+    case get_field(changeset, field) do
       nil -> changeset
-      schema -> validate_resolvable(changeset, schema)
+      schema -> validate_resolvable(changeset, field, schema)
     end
   end
 
-  defp validate_resolvable(changeset, schema) do
+  defp validate_resolvable(changeset, field, schema) do
     ExJsonSchema.Schema.resolve(schema)
     validate_provider_output_schema(changeset, schema)
   rescue
@@ -56,7 +62,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep.Config do
         "Failed to resolve output_schema: #{Exception.format(:error, exception, __STACKTRACE__)}"
       )
 
-      add_error(changeset, :output_schema, "must be a valid JSON Schema")
+      add_error(changeset, field, "must be a valid JSON Schema")
   end
 
   defp validate_provider_output_schema(changeset, schema) do

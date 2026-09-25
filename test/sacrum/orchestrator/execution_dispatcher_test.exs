@@ -309,8 +309,10 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       {:ok, dispatched} = create_and_dispatch(ctx, task, step)
 
       expected = "Project: #{project_artifact.id} Task: #{task_artifact.id}"
-      assert dispatched.prompt == expected
-      assert Sacrum.Repo.get!(Sacrum.Repo.Schemas.StepExecution, dispatched.id).prompt == expected
+      assert dispatched.config.prompt == expected
+
+      assert Sacrum.Repo.get!(Sacrum.Repo.Schemas.StepExecution, dispatched.id).config.prompt ==
+               expected
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "run_step",
@@ -342,8 +344,8 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
         ExecutionDispatcher.create_and_dispatch(task, step, task_run)
 
       expected = "Run artifact: #{artifact.id}"
-      assert dispatched.prompt == expected
-      refute inspect(dispatched.prompt) =~ "private task-run body"
+      assert dispatched.config.prompt == expected
+      refute inspect(dispatched.config.prompt) =~ "private task-run body"
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "run_step",
@@ -674,6 +676,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
           "project_id" => task.project_id,
           "workflow_id" => ctx.workflow.id,
           "step_name" => prior_step.name,
+          "step_id" => prior_step.id,
           "status" => "completed",
           "output" => "{\"verdict\": \"approved\", \"should_retry\": false}"
         })
@@ -716,6 +719,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
           "project_id" => task.project_id,
           "workflow_id" => ctx.workflow.id,
           "step_name" => prior_step.name,
+          "step_id" => prior_step.id,
           "status" => "completed",
           "output" => "Just a plain string output"
         })
@@ -770,6 +774,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
           "project_id" => task.project_id,
           "workflow_id" => ctx.workflow.id,
           "step_name" => prior_step.name,
+          "step_id" => prior_step.id,
           "status" => "completed",
           "output" => "{ broken json"
         })
@@ -831,6 +836,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
           "project_id" => task.project_id,
           "workflow_id" => ctx.workflow.id,
           "step_name" => prior_step.name,
+          "step_id" => prior_step.id,
           "status" => "completed",
           "output" => output
         })
@@ -907,6 +913,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
           "project_id" => task.project_id,
           "workflow_id" => ctx.workflow.id,
           "step_name" => prior_step.name,
+          "step_id" => prior_step.id,
           "status" => "completed",
           "output" => "{\"result\": \"success\"}"
         })
@@ -949,6 +956,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
           "project_id" => task.project_id,
           "workflow_id" => ctx.workflow.id,
           "step_name" => prior_step.name,
+          "step_id" => prior_step.id,
           "status" => "completed",
           "output" => "plain string output"
         })
@@ -1147,8 +1155,10 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
       {:ok, dispatched} = create_and_dispatch(ctx, task, step)
 
       expected = "Task: Test Task | Level: ticket"
-      assert dispatched.prompt == expected
-      assert Sacrum.Repo.get!(Sacrum.Repo.Schemas.StepExecution, dispatched.id).prompt == expected
+      assert dispatched.config.prompt == expected
+
+      assert Sacrum.Repo.get!(Sacrum.Repo.Schemas.StepExecution, dispatched.id).config.prompt ==
+               expected
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "run_step",
