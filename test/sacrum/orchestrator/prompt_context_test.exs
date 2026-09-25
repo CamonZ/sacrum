@@ -193,12 +193,25 @@ defmodule Sacrum.Orchestrator.PromptContextTest do
       workflow = create_workflow(user, project)
       task = create_task(user, project, workflow)
 
-      execution_data = %{}
+      execution_data = %{
+        inputs: %{review: %{"required" => true}},
+        history: [
+          %{
+            step_name: "review",
+            status: "completed",
+            output: "raw",
+            typed_output: %{"score" => 9}
+          },
+          %{step_name: "ignored", status: "failed", output: "no"}
+        ]
+      }
 
       context = PromptContext.build_context(task, execution_data, nil)
 
       assert context["task"]["id"] == to_string(task.id)
       assert context["workflow"] == %{}
+      assert context["inputs"] == %{"review" => %{"required" => true}}
+      assert context["steps"] == %{"review" => %{"output" => %{"score" => 9}}}
     end
   end
 

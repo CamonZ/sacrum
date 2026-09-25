@@ -147,16 +147,24 @@ defmodule Sacrum.Orchestrator.ExecutionHistory do
     |> TaskRuns.list_step_executions_for_run(task.project_id, task.id, task_run.id)
     |> Enum.take_while(fn execution -> execution.id != dispatched_execution.id end)
     |> Enum.reverse()
+    |> Repo.preload(:step)
     |> Enum.map(&execution_to_history/1)
   end
 
   defp execution_to_history(%StepExecution{} = execution) do
+    output_schema =
+      case execution.step do
+        %WorkflowStep{} = step -> WorkflowStep.config_value(step, :output_schema)
+        _ -> nil
+      end
+
     %{
       id: execution.id,
       step_id: execution.step_id,
       step_name: execution.step_name,
       status: execution.status,
       output: execution.output,
+      typed_output: decode_prior_output(execution.output, output_schema),
       duration_ms: execution.duration_ms,
       inserted_at: execution.inserted_at
     }
