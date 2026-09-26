@@ -291,7 +291,14 @@ transitions.
   reference keeps its JSON type and a trailing `?` makes it optional. It is
   the only templated field.
 - `questions` is static config in the System One request vocabulary shared by
-  TypeSafe and Laya: a non-empty object keyed by non-blank question ids. Each
+  TypeSafe and Laya: a non-empty object keyed by question ids normalized to
+  snake_case on save. Normalization trims surrounding whitespace, lowercases,
+  removes diacritics, replaces runs of non-ASCII letters and digits with `_`,
+  and removes leading or trailing underscores. Empty results and collisions
+  are rejected. Choice option keys use the same normalization; when an option
+  key changes and its description is `null`, the authored key becomes its
+  description so the provider retains the original wording. Noul criteria keys
+  (`"true"` and `"false"`) and score levels are unchanged. Each
   question has a `type` and non-blank `instructions` (string, object, or
   array):
 
@@ -351,11 +358,11 @@ and `boolean` values are routable; `string`/`boolean` values accept only `eq`,
 `neq`, and `in`, and numbers also accept `lt`, `lte`, `gt`, and `gte`. Compared
 values must match the value's type, be one of its enum members (a `choice`
 must be a declared option), and lie within its declared range (probabilities,
-`confidence`, and `noul` in `[0, 1]`; `score` in `[0, n-1]`). Option keys are
-addressable only when they are made of letters, digits, `_`, and `-`. A route
-with mixed predecessor kinds may use only references valid for every incoming
-edge, such as `task.level`. Answers are routable but not available to handoff
-templates.
+`confidence`, and `noul` in `[0, 1]`; `score` in `[0, n-1]`). Since question
+ids and choice option keys are normalized to snake_case when their step is
+saved, each declared key can be referenced in a route. A route with mixed
+predecessor kinds may use only references valid for every incoming edge, such
+as `task.level`. Answers are routable but not available to handoff templates.
 
 The route re-validates the stored answers against the derived schema before
 evaluating, and non-conforming answers fail the route without committing a

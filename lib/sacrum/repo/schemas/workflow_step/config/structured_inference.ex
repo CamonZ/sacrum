@@ -51,6 +51,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep.Config.StructuredInference do
     |> validate_required([:provider, :model, :state, :questions])
     |> validate_state()
     |> update_change(:questions, &json_keys/1)
+    |> normalize_questions()
     |> validate_questions()
   end
 
@@ -81,6 +82,92 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep.Config.StructuredInference do
     end
   end
 
+  defp normalize_questions(changeset) do
+    case get_field(changeset, :questions) do
+      questions when is_map(questions) ->
+        {questions, errors} = normalize_question_ids(questions)
+
+        changeset = put_change(changeset, :questions, questions)
+
+        Enum.reduce(errors, changeset, fn {path, message}, changeset ->
+          add_error(changeset, :questions, "#{path}: #{message}")
+        end)
+
+      _questions ->
+        changeset
+    end
+  end
+
+  defp normalize_question_ids(questions) do
+    questions
+    |> Enum.sort()
+    |> Enum.reduce({%{}, [], MapSet.new()}, fn {id, question}, {normalized, errors, seen} ->
+      key = snake_case(id)
+      path = "$.questions.#{id}"
+
+      cond do
+        key == "" ->
+          {Map.put(normalized, id, question),
+           [{path, "question id normalizes to an empty key"} | errors], seen}
+
+        MapSet.member?(seen, key) ->
+          {Map.put(normalized, key, question),
+           [{path, "question id collides after normalization as #{key}"} | errors], seen}
+
+        true ->
+          {question, errors} = normalize_choice_options(question, path, errors)
+          {Map.put(normalized, key, question), errors, MapSet.put(seen, key)}
+      end
+    end)
+    |> then(fn {questions, errors, _seen} -> {questions, errors} end)
+  end
+
+  defp normalize_choice_options(
+         %{"type" => "choice", "criteria" => criteria} = question,
+         path,
+         errors
+       )
+       when is_map(criteria) do
+    {criteria, _seen, errors} =
+      criteria
+      |> Enum.sort()
+      |> Enum.reduce({%{}, MapSet.new(), errors}, fn {option, description}, acc ->
+        normalize_choice_option(acc, option, description, path)
+      end)
+
+    {Map.put(question, "criteria", criteria), errors}
+  end
+
+  defp normalize_choice_options(question, _path, errors), do: {question, errors}
+
+  defp normalize_choice_option({normalized, seen, errors}, option, description, path) do
+    key = snake_case(option)
+    option_path = "#{path}.criteria.#{option}"
+
+    cond do
+      key == "" ->
+        {Map.put(normalized, "_", description), seen,
+         [{option_path, "option normalizes to an empty key"} | errors]}
+
+      MapSet.member?(seen, key) ->
+        {Map.put(normalized, key, description), seen,
+         [{option_path, "option collides after normalization as #{key}"} | errors]}
+
+      true ->
+        description = if key != option and is_nil(description), do: option, else: description
+        {Map.put(normalized, key, description), MapSet.put(seen, key), errors}
+    end
+  end
+
+  defp snake_case(value) do
+    value
+    |> String.downcase()
+    |> String.normalize(:nfd)
+    |> String.replace(~r/\p{Mn}/u, "")
+    |> String.replace(~r/[^a-z0-9]+/u, "_")
+    |> String.trim("_")
+  end
+
   defp question_errors(questions) when map_size(questions) == 0,
     do: [{"$.questions", "must not be empty"}]
 
@@ -90,9 +177,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep.Config.StructuredInference do
     |> Enum.flat_map(fn {id, question} ->
       path = "$.questions.#{id}"
 
-      if blank?(id),
-        do: [{path, "question id must not be blank"}],
-        else: question_errors(path, question)
+      if blank?(id), do: [], else: question_errors(path, question)
     end)
   end
 
