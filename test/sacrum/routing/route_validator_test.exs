@@ -140,8 +140,86 @@ defmodule Sacrum.Routing.RouteValidatorTest do
         route_config([result_rule("approved", intra_target(destination.id))])
       )
 
-    assert {:error, %{code: :route_config_uncovered, path: "$.rules"}} =
+    assert {:error, %{code: :route_config_uncovered, path: "$.rules", message: message}} =
              validate(route)
+
+    assert message =~ ~r/^does not cover route\.result="rejected" and task\.level="epic"$/
+  end
+
+  test "proves coverage over a predecessor's string enum without a default", context do
+    explain =
+      create_step(context, "explain", 1, config: %{"output_schema" => verdict_schema()})
+
+    implementer = create_step(context, "implementer", 2)
+    done = create_step(context, "done", 3)
+
+    config =
+      route_config([
+        verdict_rule("needs_changes", intra_target(implementer.id), %{
+          "how" => "{{ previous_output.explanation }}"
+        }),
+        verdict_rule("ready", intra_target(done.id))
+      ])
+
+    route = create_route(context, "route", 4, config)
+    create_step_transition(context.user, explain, route)
+    create_step_transition(context.user, route, implementer)
+    create_step_transition(context.user, route, done)
+
+    assert :ok = validate(route)
+
+    route =
+      persist_invalid_route_config(
+        route,
+        route_config([verdict_rule("needs_changes", intra_target(implementer.id))])
+      )
+
+    assert {:error, %{code: :route_config_uncovered, path: "$.rules", message: message}} =
+             validate(route)
+
+    assert message =~ ~r/^does not cover verdict="ready" and task\.level="epic"$/
+
+    open_rule = %{
+      "id" => "explained",
+      "when" => %{"ref" => "previous_output.explanation", "op" => "eq", "value" => "none"},
+      "transition" => intra_target(done.id)
+    }
+
+    route = persist_invalid_route_config(route, route_config([open_rule]))
+
+    assert {:error, %{code: :route_config_invalid, path: "$.default"}} = validate(route)
+
+    route =
+      persist_invalid_route_config(route, route_config([open_rule], intra_target(done.id)))
+
+    assert :ok = validate(route)
+  end
+
+  test "rejects saving an llm_inference predecessor without output_schema", context do
+    explain = create_step(context, "explain", 1)
+    done = create_step(context, "done", 2)
+
+    route =
+      create_route(
+        context,
+        "route",
+        3,
+        route_config([verdict_rule("ready", intra_target(done.id))], intra_target(done.id))
+      )
+
+    create_step_transition(context.user, route, done)
+
+    assert {:error, changeset} =
+             Accounts.StepTransitions.insert(context.user.id, %{
+               "from_step_id" => explain.id,
+               "to_step_id" => route.id,
+               "project_id" => explain.project_id
+             })
+
+    assert [message] = errors_on(changeset).route_config
+
+    assert message =~
+             ~r/^\$\.predecessors\[[^\]]+\]\.output_schema: is required for llm_inference steps that feed a route$/
   end
 
   test "rejects statically overlapping closed-domain rules", context do
@@ -342,6 +420,28 @@ defmodule Sacrum.Routing.RouteValidatorTest do
       "id" => "result-#{result}",
       "when" => %{"ref" => "previous_output.route.result", "op" => "eq", "value" => result},
       "transition" => target
+    }
+  end
+
+  defp verdict_rule(verdict, target, handoff \\ nil) do
+    rule = %{
+      "id" => verdict,
+      "when" => %{"ref" => "previous_output.verdict", "op" => "eq", "value" => verdict},
+      "transition" => target
+    }
+
+    if handoff, do: Map.put(rule, "handoff", handoff), else: rule
+  end
+
+  defp verdict_schema do
+    %{
+      "type" => "object",
+      "properties" => %{
+        "verdict" => %{"type" => "string", "enum" => ["needs_changes", "ready"]},
+        "explanation" => %{"type" => "string"}
+      },
+      "required" => ["verdict", "explanation"],
+      "additionalProperties" => false
     }
   end
 

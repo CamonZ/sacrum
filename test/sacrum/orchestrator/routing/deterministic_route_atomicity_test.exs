@@ -41,6 +41,36 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
       end
     end
 
+    test "routes an explanation on its verdict and hands the explanation back to the implementer" do
+      for {verdict, expected, expected_handoff} <- [
+            {"needs_changes", :implementer, %{"how" => "Add the missing tests", "notes" => nil}},
+            {"ready", :done, nil}
+          ] do
+        fixture = explain_route_fixture(verdict, "Add the missing tests")
+
+        assert {:next_state, :awaiting_execution, returned_data} =
+                 RouteStep.handle_deterministic_route_step(
+                   fixture.data,
+                   fixture.route,
+                   fixture.program
+                 )
+
+        assert Repo.get!(Task, fixture.task.id).current_step_id ==
+                 fixture.destinations[expected].id
+
+        assert returned_data.pending_handoff == expected_handoff
+
+        audit = deterministic_audit(fixture.task.id, fixture.route.id)
+        assert audit.handoff == expected_handoff
+        assert audit.context["route"]["used_default"] == false
+
+        assert audit.context["route"]["context"]["previous_output"] == %{
+                 "verdict" => verdict,
+                 "explanation" => "Add the missing tests"
+               }
+      end
+    end
+
     test "rejects stored answers that do not match the derived schema without committing a route" do
       for output <- [
             answers("yes", 1.5),
@@ -281,20 +311,46 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
       end)
     end
 
-    test "fails before committing a route when a selected template reads a missing handoff value" do
-      fixture =
-        configured_intra_fixture(%{
-          "review" => "{{ previous_output.route.handoff.missing }}"
+    test "rejects saving a template that reads an undeclared predecessor value" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project, "Undeclared handoff workflow")
+
+      source =
+        create_step(user, workflow, %{
+          "name" => "source",
+          "step_order" => 1,
+          "config" => %{"output_schema" => predecessor_schema(["review"])}
         })
 
-      assert {:next_state, :failed, _failed_data} =
-               RouteStep.handle_deterministic_route_step(
-                 fixture.data,
-                 fixture.route,
-                 fixture.program
-               )
+      destination = create_step(user, workflow, %{"name" => "review", "step_order" => 3})
 
-      assert_no_partial_route_commit(fixture)
+      route =
+        create_step(user, workflow, %{
+          "name" => "route",
+          "step_order" => 2,
+          "step_type" => "route",
+          "config" => %{
+            "route_config" =>
+              route_config(
+                %{"type" => "intra_workflow", "step_id" => destination.id},
+                %{"review" => "{{ previous_output.route.handoff.missing }}"}
+              )
+          }
+        })
+
+      create_step_transition(user, route, destination)
+
+      assert {:error, changeset} =
+               Accounts.StepTransitions.insert(user.id, %{
+                 "from_step_id" => source.id,
+                 "to_step_id" => route.id,
+                 "project_id" => source.project_id
+               })
+
+      assert [message] = errors_on(changeset).route_config
+      assert message =~ "$.rules[0].handoff.review"
+      assert message =~ ~s("missing" is not declared)
     end
   end
 
@@ -478,6 +534,109 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
       program: program,
       route: route,
       source_execution: source_execution,
+      task: task
+    }
+  end
+
+  defp explain_route_fixture(verdict, explanation) do
+    user = create_user()
+    project = create_project(user)
+    workflow = create_workflow(user, project, "Explain route workflow")
+
+    source =
+      create_step(user, workflow, %{
+        "name" => "explain",
+        "step_order" => 1,
+        "config" => %{
+          "output_schema" => %{
+            "type" => "object",
+            "properties" => %{
+              "verdict" => %{"type" => "string", "enum" => ["needs_changes", "ready"]},
+              "explanation" => %{"type" => "string"},
+              "notes" => %{"type" => "string"}
+            },
+            "required" => ["verdict", "explanation"],
+            "additionalProperties" => false
+          }
+        }
+      })
+
+    implementer = create_step(user, workflow, %{"name" => "implementer", "step_order" => 3})
+    done = create_step(user, workflow, %{"name" => "done", "step_order" => 4})
+    target = fn step -> %{"type" => "intra_workflow", "step_id" => step.id} end
+
+    # No default: the verdict enum is closed and both values are covered.
+    config = %{
+      "version" => 1,
+      "match_policy" => "exactly_one",
+      "rules" => [
+        %{
+          "id" => "needs-changes",
+          "when" => %{
+            "ref" => "previous_output.verdict",
+            "op" => "eq",
+            "value" => "needs_changes"
+          },
+          "transition" => target.(implementer),
+          "handoff" => %{
+            "how" => "{{ previous_output.explanation }}",
+            "notes" => "{{ previous_output.notes? }}"
+          }
+        },
+        %{
+          "id" => "ready",
+          "when" => %{"ref" => "previous_output.verdict", "op" => "eq", "value" => "ready"},
+          "transition" => target.(done)
+        }
+      ]
+    }
+
+    route =
+      create_step(user, workflow, %{
+        "name" => "route",
+        "step_order" => 2,
+        "step_type" => "route",
+        "config" => %{"route_config" => config}
+      })
+
+    create_step_transition(user, route, implementer)
+    create_step_transition(user, route, done)
+    create_step_transition(user, source, route)
+    {:ok, _workflow} = Accounts.Workflows.update(workflow, %{initial_step_id: source.id})
+
+    task = create_task(user, project, workflow)
+    {:ok, task} = Repo.update(Ecto.Changeset.change(task, current_step_id: route.id))
+    task_run = create_task_run(user, task)
+
+    {:ok, source_execution} =
+      Accounts.StepExecutions.insert(user.id, %{
+        task_id: task.id,
+        project_id: project.id,
+        workflow_id: workflow.id,
+        task_run_id: task_run.id,
+        step_id: source.id,
+        step_name: source.name,
+        step_type: :llm_inference,
+        status: "completed",
+        output: Jason.encode!(%{"verdict" => verdict, "explanation" => explanation})
+      })
+
+    task_run = update_cursor(task_run, source_execution.id)
+    {:ok, program} = RouteConfig.decode(config)
+
+    data = fsm_data(user, project, task, task_run, workflow, source, route, implementer)
+
+    data = %{
+      data
+      | steps: Map.put(data.steps, done.id, done),
+        transitions: %{source.id => [route.id], route.id => [implementer.id, done.id]}
+    }
+
+    %{
+      data: data,
+      destinations: %{implementer: implementer, done: done},
+      program: program,
+      route: route,
       task: task
     }
   end

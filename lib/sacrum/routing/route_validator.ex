@@ -181,7 +181,9 @@ defmodule Sacrum.Routing.RouteValidator do
          {:ok, type_environment} <-
            RoutePredecessors.derive_type_environment(predecessor_schemas(route_step, snapshot)),
          :ok <- RoutePredecessors.validate(program, type_environment),
-         :ok <- validate_finite_domain(program, result_domain(type_environment)),
+         domains = RoutePredecessors.closed_domains(program, type_environment),
+         :ok <- validate_default_required(program, domains),
+         :ok <- validate_finite_domain(program, domains),
          :ok <- validate_targets(route_step, program, snapshot) do
       :ok
     else
@@ -198,7 +200,7 @@ defmodule Sacrum.Routing.RouteValidator do
   end
 
   @doc """
-  Returns the incoming predecessor envelopes for a route step, keeping the
+  Returns the incoming predecessor schemas for a route step, keeping the
   edge identity so a contract error can identify the configuration to repair.
   """
   @spec predecessor_schemas(WorkflowStep.t(), snapshot()) :: [map()]
@@ -218,39 +220,65 @@ defmodule Sacrum.Routing.RouteValidator do
     end)
   end
 
-  # A structured predecessor has no route.result, and RoutePredecessors rejects
-  # route.result predicates when one is present, so the only finite dimension
-  # left is task.level (represented by a single `nil` result).
-  defp result_domain(%{predecessors: predecessors, result_values: values}) do
-    if Enum.any?(predecessors, &(&1.kind == :structured)), do: [nil], else: values
+  # Output rules the finite-domain analysis cannot enumerate could leave a
+  # value unmatched at runtime, so they need an explicit default.
+  defp validate_default_required(%{default: nil} = program, domains) do
+    if Enum.all?(program.rules, &closed_rule?(&1, domains)) do
+      :ok
+    else
+      {:error,
+       error(
+         :route_config_invalid,
+         "$.default",
+         "is required for rules on output values that are not required string enums"
+       )}
+    end
   end
 
+  defp validate_default_required(_program, _domains), do: :ok
+
   #
-  # Finite-domain analysis: one pass over result x level proves both overlap
-  # and coverage. Overlap is reported in preference to a coverage gap,
-  # matching the previous two-pass semantics.
+  # Finite-domain analysis: one pass over every closed output value
+  # combination x task level proves both overlap and coverage. Overlap is
+  # reported in preference to a coverage gap.
   #
 
-  defp validate_finite_domain(program, result_values) do
-    closed_rules = Enum.filter(program.rules, &closed_rule?/1)
-    combinations = for result <- result_values, level <- RouteConfig.levels(), do: {result, level}
+  defp validate_finite_domain(program, domains) do
+    closed_rules = Enum.filter(program.rules, &closed_rule?(&1, domains))
 
-    combinations
+    closed_rules
+    |> Enum.flat_map(&RouteConfig.predicates(&1.when))
+    |> Enum.map(& &1.ref)
+    |> Enum.filter(&is_binary/1)
+    |> Enum.uniq()
+    |> Enum.sort()
+    |> assignments(domains)
+    |> Enum.flat_map(fn assignment ->
+      for level <- RouteConfig.levels(), do: {assignment, level}
+    end)
     |> Enum.reduce_while({:ok, nil, nil}, &analyze_combination(&1, &2, program, closed_rules))
     |> report_analysis(program)
   end
 
-  defp analyze_combination({result, level}, {_, overlap, gap} = acc, program, closed_rules) do
-    case matches_for(program, closed_rules, result, level) do
+  # Prepending over the reversed references keeps each assignment in
+  # reference order.
+  defp assignments(references, domains) do
+    references
+    |> Enum.reverse()
+    |> Enum.reduce([[]], fn reference, acc ->
+      for assignment <- acc, value <- Map.fetch!(domains, reference) do
+        [{reference, value} | assignment]
+      end
+    end)
+  end
+
+  defp analyze_combination({assignment, level}, {_, overlap, gap} = acc, program, closed_rules) do
+    case matches_for(program, closed_rules, assignment, level) do
       {:ok, ids} when length(ids) > 1 and is_nil(overlap) ->
-        {:cont, {:ok, %{rule_id: Enum.at(ids, 1), result: result, level: level}, gap}}
+        {:cont, {:ok, %{rule_id: Enum.at(ids, 1), assignment: assignment, level: level}, gap}}
 
       {:ok, []} when is_nil(gap) and is_nil(program.default) ->
-        if length(closed_rules) == length(program.rules) do
-          {:cont, {:ok, overlap, %{result: result, level: level}}}
-        else
-          {:cont, acc}
-        end
+        {:cont, {:ok, overlap, %{assignment: assignment, level: level}}}
 
       {:ok, _ids} ->
         {:cont, acc}
@@ -262,49 +290,48 @@ defmodule Sacrum.Routing.RouteValidator do
 
   defp report_analysis({:ok, nil, nil}, _program), do: :ok
 
-  defp report_analysis({:ok, nil, %{result: result, level: level}}, _program) do
+  defp report_analysis({:ok, nil, %{assignment: assignment, level: level}}, _program) do
     {:error,
      error(
        :route_config_uncovered,
        "$.rules",
-       "does not cover #{describe_combination(result, level)}"
+       "does not cover #{describe_combination(assignment, level)}"
      )}
   end
 
   defp report_analysis(
-         {:ok, %{rule_id: rule_id, result: result, level: level}, _gap},
+         {:ok, %{rule_id: rule_id, assignment: assignment, level: level}, _gap},
          program
        ) do
     {:error,
      error(
        :route_config_ambiguous,
        "$.rules[#{rule_index(program, rule_id)}].when",
-       "overlaps for #{describe_combination(result, level)}"
+       "overlaps for #{describe_combination(assignment, level)}"
      )}
   end
 
   defp report_analysis({:error, _reason} = error, _program), do: error
 
-  defp describe_combination(nil, level), do: "task.level=#{inspect(level)}"
+  defp describe_combination(assignment, level) do
+    Enum.map_join(assignment, fn {"previous_output." <> path, value} ->
+      "#{path}=#{inspect(value)} and "
+    end) <> "task.level=#{inspect(level)}"
+  end
 
-  defp describe_combination(result, level),
-    do: "route.result=#{inspect(result)} and task.level=#{inspect(level)}"
-
-  defp matches_for(program, closed_rules, result, level) do
-    with {:ok, context} <- finite_domain_context(result, level) do
+  defp matches_for(program, closed_rules, assignment, level) do
+    with {:ok, context} <- finite_domain_context(assignment, level) do
       RouteEvaluator.matching_rule_ids(%{program | rules: closed_rules}, context)
     end
   end
 
-  defp finite_domain_context(nil, level),
-    do: RouteContext.build_structured(%{}, %{"level" => level, "tags" => []}, 1)
+  defp finite_domain_context(assignment, level) do
+    previous_output =
+      Enum.reduce(assignment, %{}, fn {"previous_output." <> path, value}, output ->
+        put_in(output, path |> String.split(".") |> Enum.map(&Access.key(&1, %{})), value)
+      end)
 
-  defp finite_domain_context(result, level) do
-    RouteContext.build(
-      %{"route" => %{"result" => result, "handoff" => %{}}},
-      %{"level" => level, "tags" => []},
-      1
-    )
+    RouteContext.build(previous_output, %{"level" => level, "tags" => []}, 1)
   end
 
   #
@@ -415,16 +442,11 @@ defmodule Sacrum.Routing.RouteValidator do
     Map.merge(reason, %{route_step_id: route_step.id, workflow_id: route_step.workflow_id})
   end
 
-  defp closed_rule?(%{when: expression}), do: closed_expression?(expression)
-
-  defp closed_expression?(%{kind: kind, expressions: expressions}) when kind in [:all, :any],
-    do: Enum.all?(expressions, &closed_expression?/1)
-
-  defp closed_expression?(%{kind: :not, expression: expression}),
-    do: closed_expression?(expression)
-
-  defp closed_expression?(%{kind: :predicate, ref: ref}),
-    do: ref in [:previous_output_route_result, :task_level]
+  defp closed_rule?(%{when: expression}, domains) do
+    expression
+    |> RouteConfig.predicates()
+    |> Enum.all?(fn %{ref: ref} -> ref == :task_level or Map.has_key?(domains, ref) end)
+  end
 
   defp error(code, path, message), do: %{code: code, path: path, message: message}
 end

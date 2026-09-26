@@ -296,10 +296,15 @@ defmodule Sacrum.Orchestrator.WorkflowGraphTest do
       assert Enum.map(predecessors, & &1.transition_id) |> Enum.sort() ==
                Enum.sort([approved_transition.id, rejected_transition.id])
 
-      {:ok, %{result_values: result_values}} =
+      {:ok, environment} =
         Sacrum.Routing.RoutePredecessors.derive_type_environment(predecessors)
 
-      assert result_values == MapSet.new(["approved", "rejected", "retry"])
+      {:ok, program} = Sacrum.Routing.RouteConfig.decode(route.config.route_config)
+
+      assert %{"previous_output.route.result" => values} =
+               Sacrum.Routing.RoutePredecessors.closed_domains(program, environment)
+
+      assert Enum.sort(values) == ["approved", "rejected", "retry"]
     end
 
     test "returns an error for an unknown workflow" do

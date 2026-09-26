@@ -344,38 +344,115 @@ Later steps read answers by path from `execution.previous_output` and
 `steps.<name>.output`, e.g. `previous_output.<question>.choice`, `.score`,
 `.noul`, `.confidence`, or `.probabilities.<option|level>`.
 
+### Route predecessors and output references
+
+A route owns its handoff. Predecessors do not need to know they feed a route or
+emit any route-specific envelope; they only declare an output schema whose
+properties the route compares and hands off:
+
+- Every incoming predecessor of a route must declare an object output schema.
+  `llm_inference` steps with an outgoing edge to a route must configure
+  `output_schema` (graph validation rejects the edge or route otherwise, with
+  `$.predecessors[<transition>].output_schema`). `structured_inference` steps
+  use the answers schema derived from their questions. Other step types have
+  no output schema and cannot feed a route.
+- Rule references `previous_output.<path>` and handoff references
+  `{{ previous_output.<path> }}` are resolved with one schema-path resolver
+  against **every** incoming predecessor schema when the route is saved.
+  Saving fails with the rule or handoff path when a segment is undeclared.
+- Only `string`, `number`, `integer`, and `boolean` values are routable;
+  `string`/`boolean` values accept only `eq`, `neq`, and `in`, and numbers
+  also accept `lt`, `lte`, `gt`, and `gte`. Compared values must match the
+  value's type, lie within its declared `minimum`/`maximum`, and, when the
+  value has an `enum`, be declared by at least one predecessor's enum.
+- A path is a closed domain when every predecessor declares it as a required
+  `string` with an `enum`. Rules that compare only closed paths and
+  `task.level` are proved exhaustive and non-overlapping, so they need no
+  `default`; coverage gaps and overlaps are reported as
+  `route_config_uncovered` on `$.rules` or `route_config_ambiguous` on the
+  second overlapping rule. Any other output comparison needs a `default`
+  (`$.default` is required), as do `task.tags` and
+  `execution.step_visit_count` rules.
+
+At runtime the route re-validates the stored predecessor output against the
+predecessor's schema before evaluating. A value that is absent or `null` does
+not match a predicate, including `neq` and predicates nested under `not`.
+
+For example, an implementer → `structured_inference` (are the requirements
+met?) → route → `llm_inference` (explain how they are not met) → route →
+implementer loop gives the explain step a routable property separate from the
+handed-off text:
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "verdict": {"type": "string", "enum": ["needs_changes", "ready"]},
+    "explanation": {"type": "string"}
+  },
+  "required": ["verdict", "explanation"],
+  "additionalProperties": false
+}
+```
+
+The following route after it needs no default because `verdict` is a closed
+enum and both values are covered:
+
+```json
+{
+  "version": 1,
+  "match_policy": "exactly_one",
+  "rules": [
+    {
+      "id": "needs-changes",
+      "when": {"ref": "previous_output.verdict", "op": "eq", "value": "needs_changes"},
+      "transition": {"type": "intra_workflow", "step_id": "<implementer-step-uuid>"},
+      "handoff": {"how": "{{ previous_output.explanation }}"}
+    },
+    {
+      "id": "ready",
+      "when": {"ref": "previous_output.verdict", "op": "eq", "value": "ready"},
+      "transition": {"type": "intra_workflow", "step_id": "<done-step-uuid>"}
+    }
+  ]
+}
+```
+
+Saving fails if a rule compares `previous_output.verdict` to `"approved"`, or
+a handoff references `{{ previous_output.reason }}` that the schema does not
+declare.
+
+#### Migrating route-envelope predecessors
+
+`previous_output.route.result` is an ordinary output path.
+Existing predecessors that declare `route.{result, handoff}` keep validating
+and routing: `route.result` is a required string enum, so the same rules are
+proved exhaustive as before, and `{{ previous_output.route.handoff.<key> }}`
+handoff references resolve against the declared handoff schema. New
+predecessors should declare a plain comparable property (such as `verdict`)
+and let the route's handoff template pick the fields to deliver.
+
 ### Routing on structured inference
 
 A route immediately after `structured_inference` compares values in the
 predecessor's answers with `previous_output.<question>.<path>`, e.g.
 `previous_output.approved.choice`, `.score`, `.noul`, `.confidence`, or
-`.probabilities.<option|level>` (score levels are `"0"`..`"n-1"`). Every path
-is resolved against the answers schema derived from each incoming
-predecessor's questions when the route is saved, so undeclared questions,
-options, levels, or fields (including provider extras such as Laya's `action`)
-are rejected with the rule's `ref` path. Only `string`, `number`, `integer`,
-and `boolean` values are routable; `string`/`boolean` values accept only `eq`,
-`neq`, and `in`, and numbers also accept `lt`, `lte`, `gt`, and `gte`. Compared
-values must match the value's type, be one of its enum members (a `choice`
-must be a declared option), and lie within its declared range (probabilities,
-`confidence`, and `noul` in `[0, 1]`; `score` in `[0, n-1]`). Since question
-ids and choice option keys are normalized to snake_case when their step is
-saved, each declared key can be referenced in a route. A route with mixed
-predecessor kinds may use only references valid for every incoming edge, such
-as `task.level`. Answers are routable but not available to handoff templates.
+`.probabilities.<option|level>` (score levels are `"0"`..`"n-1"`), and may
+hand off the same paths. Undeclared questions, options, levels, or fields
+(including provider extras such as Laya's `action`) are rejected with the
+rule's `ref` or handoff path. Probabilities, `confidence`, and `noul` lie in
+`[0, 1]`, and `score` in `[0, n-1]`. Since question ids and choice option keys
+are normalized to snake_case when their step is saved, each declared key can
+be referenced in a route. A `choice` answer's `choice` is a required string
+enum, so a route covering every option needs no default.
 
-The route re-validates the stored answers against the derived schema before
-evaluating, and non-conforming answers fail the route without committing a
-transition. A value that is absent or `null` does not match a predicate,
-including `neq` and predicates nested under `not`. Define a `default`
-transition for threshold and no-match cases. For example, a route can send
-high-confidence `yes` and `no` results to separate steps and send all other
-results to a `human_input` step through its default. The route must have
-declared outgoing transitions to each target. The route reads the completed
-execution in the active TaskRun cursor, so an unrelated execution cannot change
-its decision. The audit records only the answer values the rules reference.
-Existing `previous_output.route.result` rules continue to work for
-route-envelope predecessors.
+Non-conforming answers fail the route without committing a transition. Define
+a `default` transition for threshold and no-match cases. For example, a route
+can send high-confidence `yes` and `no` results to separate steps and send all
+other results to a `human_input` step through its default. The route must
+have declared outgoing transitions to each target. The route reads the
+completed execution in the active TaskRun cursor, so an unrelated execution
+cannot change its decision.
 
 The route config can express that policy directly (replace the step IDs with
 the workflow's outgoing transition targets):
@@ -416,24 +493,31 @@ for the destination. Transition control fields are never merged into the
 handoff.
 
 Template values use a closed `{{ dotted.path }}` interpolation syntax. The
-route-step context is limited to `previous_output.route.result`,
-`previous_output.route.handoff` (and its nested object keys), `task.level`,
-`task.tags`, and `execution.step_visit_count`. An interpolation that occupies
-the full string preserves its JSON type, including objects, arrays, numbers,
-booleans, and `null`; embedded interpolations are scalar string rendering.
-Unknown, missing, malformed, filtered, or code-like expressions fail the
-deterministic route before its transition is committed. Templates cannot access
-the broader prompt context or execute arbitrary code.
+route-step context is limited to `previous_output.<path>` (any path declared
+by every incoming predecessor's output schema), `task.level`, `task.tags`, and
+`execution.step_visit_count`. `previous_output` paths are proved when the
+route is saved: a reference to a property that is not `required` somewhere
+along its path must be marked optional with a trailing `?`
+(`{{ previous_output.notes? }}`), which renders a missing value as `null`
+(or an empty string when embedded). An interpolation that occupies the full
+string preserves its JSON type, including objects, arrays, numbers, booleans,
+and `null`; embedded interpolations are scalar string rendering, and saving
+rejects an embedded reference to a declared `object` or `array`. At runtime
+the handoff renders from the full validated predecessor output; unknown,
+missing, malformed, filtered, or code-like expressions fail the deterministic
+route before its transition is committed. Templates cannot access the broader
+prompt context or execute arbitrary code.
 
 For example:
 
 ```json
 {
   "id": "approved",
-  "when": {"ref": "previous_output.route.result", "op": "eq", "value": "approved"},
+  "when": {"ref": "previous_output.verdict", "op": "eq", "value": "needs_changes"},
   "transition": {"type": "intra_workflow", "step_id": "..."},
   "handoff": {
-    "review": "{{ previous_output.route.handoff.review }}",
+    "how": "{{ previous_output.explanation }}",
+    "notes": "{{ previous_output.notes? }}",
     "tags": "{{ task.tags }}",
     "route_visit": "{{ execution.step_visit_count }}"
   }
@@ -700,9 +784,10 @@ Never derive permanent task or run failure from the latest `StepExecution.status
 A completed local deterministic route keeps its canonical audit in
 `StepExecution.context.route`. The record contains `mode`,
 `source_execution_id`, `config_version`, `matched_rule_id`, `used_default`, and
-the evaluated `context` snapshot. For structured inference, that snapshot keeps
-the task and visit count plus only present fields referenced by route rules, so large
-unrelated output and provider metadata are not copied into the audit. The destination remains the JSON string in
+the evaluated `context` snapshot. That snapshot keeps the task and visit count
+plus only the present `previous_output` fields referenced by route rules and
+handoff templates, so large unrelated output and provider metadata are not
+copied into the audit. The destination remains the JSON string in
 `transition_result` (`dest_id` and `transition_type`), and the carried payload
 remains `handoff`.
 

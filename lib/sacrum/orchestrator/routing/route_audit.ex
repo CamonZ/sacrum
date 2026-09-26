@@ -32,17 +32,26 @@ defmodule Sacrum.Orchestrator.Routing.RouteAudit do
     }
   end
 
-  # Structured predecessor output is not copied wholesale: the audit keeps
-  # only the values the rules referenced.
+  # Predecessor output is not copied wholesale: the audit keeps the task,
+  # visit count, and only the output values the rules and handoff templates
+  # referenced.
   defp audit_context(program, context) do
-    program
-    |> RouteConfig.structured_references()
-    |> Enum.reduce(RouteContext.interpolation_context(context), fn reference, snapshot ->
-      case RouteContext.fetch(context, reference) do
-        {:ok, value} -> put_in(snapshot, access_path(reference), value)
-        :missing -> snapshot
+    acc =
+      context
+      |> RouteContext.interpolation_context()
+      |> Map.put("previous_output", %{})
+
+    (RouteConfig.output_references(program) ++ RouteConfig.handoff_output_references(program))
+    |> Enum.uniq()
+    |> Enum.reduce(
+      acc,
+      fn reference, snapshot ->
+        case RouteContext.fetch(context, reference) do
+          {:ok, value} -> put_in(snapshot, access_path(reference), value)
+          :missing -> snapshot
+        end
       end
-    end)
+    )
   end
 
   defp access_path(reference),

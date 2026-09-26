@@ -76,6 +76,38 @@ defmodule Sacrum.Routing.HandoffTemplateTest do
     assert message =~ "missing from the route-step context"
   end
 
+  test "renders optional references to missing values as null and lists every reference" do
+    template = %{
+      "missing" => "{{ previous_output.route.handoff.missing? }}",
+      "embedded" => "missing={{ previous_output.absent.value? }}",
+      "items" => ["{{ task.level }}"]
+    }
+
+    assert {:ok, %{"missing" => nil, "embedded" => "missing=", "items" => ["ticket"]}} =
+             HandoffTemplate.render(template, route_context(), "$.rules[0].handoff")
+
+    assert HandoffTemplate.references(template, "$.rules[0].handoff") == [
+             %{
+               path: "$.rules[0].handoff.embedded",
+               reference: "previous_output.absent.value",
+               optional?: true,
+               embedded?: true
+             },
+             %{
+               path: "$.rules[0].handoff.items[0]",
+               reference: "task.level",
+               optional?: false,
+               embedded?: false
+             },
+             %{
+               path: "$.rules[0].handoff.missing",
+               reference: "previous_output.route.handoff.missing",
+               optional?: true,
+               embedded?: false
+             }
+           ]
+  end
+
   test "resolves broad step config references while preserving JSON types" do
     context = %{
       "task" => %{"tags" => ["backend", "typesafe"]},

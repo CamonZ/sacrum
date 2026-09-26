@@ -1,32 +1,38 @@
 defmodule Sacrum.Routing.RoutePredecessors do
   @moduledoc """
-  Validates route predecessor schemas and references used by route rules.
+  Proves route references against every incoming predecessor's output schema.
 
-  Legacy route envelopes declare `route.{result, handoff}`. Structured
-  inference predecessors are routed on paths into their output schema (the
-  answers schema derived from their questions). Runtime evaluation uses the
-  already-built `RouteContext`.
+  A route owns its handoff: predecessors only declare an output schema, and
+  the route's rule references (`previous_output.<path>`) and handoff template
+  references (`{{ previous_output.<path> }}`) are resolved against each
+  incoming predecessor schema with one schema-path resolver. Runtime
+  evaluation uses the already-built `RouteContext`.
   """
 
-  alias Sacrum.JsonSchema.Strict
-  alias Sacrum.Routing.{RouteConfig, Traverse}
+  alias Sacrum.Routing.{HandoffTemplate, RouteConfig, Traverse}
 
-  @type type_environment :: %{result_values: MapSet.t(String.t()), predecessors: [map()]}
+  @type predecessor :: %{
+          optional(:transition_id) => term(),
+          optional(:source_step_id) => binary(),
+          optional(:destination_step_id) => binary(),
+          schema: map()
+        }
+  @type type_environment :: %{predecessors: [predecessor()]}
   @type error :: %{code: atom(), path: String.t(), message: String.t()}
 
   @routable_types ["string", "number", "integer", "boolean"]
+  @container_types ["object", "array"]
 
   @doc """
-  Validates predecessor-result predicates against a derived result-enum union.
+  Validates rule and handoff references against every predecessor schema.
 
   Callers holding raw schemas derive the environment first with
   `derive_type_environment/1`.
   """
   @spec validate(RouteConfig.t(), type_environment()) :: :ok | {:error, error()}
-  def validate(%{rules: rules}, %{result_values: result_values, predecessors: predecessors})
-      when is_list(rules) do
-    with :ok <- validate_structured_rules(rules, predecessors) do
-      validate_rules(rules, result_values)
+  def validate(%{rules: rules} = program, %{predecessors: predecessors}) when is_list(rules) do
+    with :ok <- validate_rules(rules, predecessors) do
+      validate_handoffs(program, predecessors)
     end
   end
 
@@ -34,52 +40,17 @@ defmodule Sacrum.Routing.RoutePredecessors do
     do: {:error, error(:route_config_invalid, "$", "must be a decoded route program")}
 
   @doc """
-  Validates one predecessor output schema and returns its route-result enum.
-  """
-  @spec validate_predecessor_schema(map()) :: {:ok, type_environment()} | {:error, error()}
-  def validate_predecessor_schema(schema) when is_map(schema) do
-    with {:ok, properties} <- fetch_object(schema, "properties", "$.properties"),
-         :ok <- require_route_key(schema, properties),
-         {:ok, route} <- fetch_object(properties, "route", "$.properties.route"),
-         :ok <-
-           typed_error(
-             Strict.require_exact_value(route, "type", "object", "must be object"),
-             "$.properties.route.type"
-           ),
-         :ok <-
-           typed_error(
-             Strict.require_exact_value(
-               route,
-               "additionalProperties",
-               false,
-               "must be false"
-             ),
-             "$.properties.route.additionalProperties"
-           ),
-         :ok <-
-           require_included_keys(
-             route["required"],
-             ["result", "handoff"],
-             "$.properties.route.required"
-           ),
-         {:ok, route_properties} <-
-           fetch_object(route, "properties", "$.properties.route.properties"),
-         {:ok, result_values} <- validate_result_schema(route_properties["result"]),
-         :ok <- validate_handoff_schema(route_properties["handoff"]) do
-      {:ok, %{result_values: MapSet.new(result_values)}}
-    end
-  end
+  Collects the incoming predecessor output schemas a route reads.
 
-  def validate_predecessor_schema(_schema),
-    do: {:error, error(:route_input_invalid, "$", "predecessor schema must be an object")}
-
-  @doc """
-  Merges the result enum declarations from all legal incoming predecessors.
+  Every predecessor must declare an object output schema; `llm_inference`
+  steps that feed a route must configure `output_schema`, and
+  `structured_inference` steps use the answers schema derived from their
+  questions.
   """
   @spec derive_type_environment([map()]) :: {:ok, type_environment()} | {:error, error()}
   def derive_type_environment(predecessors) when is_list(predecessors) and predecessors != [] do
-    with {:ok, environments} <- Traverse.map_while(predecessors, &validate_predecessor(&1, &2)) do
-      {:ok, merge_type_environments(environments)}
+    with {:ok, predecessors} <- Traverse.map_while(predecessors, &validate_predecessor(&1, &2)) do
+      {:ok, %{predecessors: predecessors}}
     end
   end
 
@@ -87,20 +58,52 @@ defmodule Sacrum.Routing.RoutePredecessors do
     do:
       {:error, error(:route_input_invalid, "$.predecessors", "must contain at least one schema")}
 
-  defp validate_predecessor(%{output_schema: schema} = predecessor, index) do
-    result =
-      case Map.get(predecessor, :step_type) do
-        :structured_inference -> validate_structured_schema(schema)
-        _step_type -> validate_predecessor_schema(schema)
-      end
+  @doc """
+  Returns the finite value domain of each rule reference that every
+  predecessor declares as a required string enum.
 
-    case result do
-      {:ok, environment} ->
-        {:ok, Map.put_new(environment, :kind, :route)}
+  Values are the union across predecessors. References missing from the map
+  are open: they cannot be enumerated, so their rules need a default.
+  """
+  @spec closed_domains(RouteConfig.t(), type_environment()) :: %{
+          optional(String.t()) => [String.t()]
+        }
+  def closed_domains(program, %{predecessors: predecessors}) do
+    program
+    |> RouteConfig.output_references()
+    |> Enum.reduce(%{}, fn reference, domains ->
+      case closed_domain(reference, predecessors) do
+        {:ok, values} -> Map.put(domains, reference, values)
+        :open -> domains
+      end
+    end)
+  end
+
+  defp closed_domain("previous_output." <> path, predecessors) do
+    segments = String.split(path, ".")
+
+    Enum.reduce_while(predecessors, {:ok, []}, fn %{schema: schema}, {:ok, values} ->
+      case resolve(schema, segments) do
+        {:ok, %{"type" => "string", "enum" => enum}, nil} when is_list(enum) and enum != [] ->
+          {:cont, {:ok, Enum.uniq(values ++ enum)}}
+
+        _open ->
+          {:halt, :open}
+      end
+    end)
+  end
+
+  defp validate_predecessor(predecessor, index) do
+    id = Map.get(predecessor, :transition_id) || index
+
+    case validate_schema(Map.get(predecessor, :output_schema), Map.get(predecessor, :step_type)) do
+      {:ok, schema} ->
+        {:ok,
+         predecessor
+         |> Map.take([:transition_id, :source_step_id, :destination_step_id])
+         |> Map.put(:schema, schema)}
 
       {:error, %{path: path} = reason} ->
-        id = Map.get(predecessor, :transition_id) || index
-
         {:error,
          reason
          |> Map.merge(
@@ -110,115 +113,114 @@ defmodule Sacrum.Routing.RoutePredecessors do
     end
   end
 
-  defp validate_predecessor(_predecessor, index) do
-    {:error,
-     error(:route_input_invalid, "$.predecessors[#{index}]", "must include output_schema")}
-  end
+  defp validate_schema(nil, :llm_inference),
+    do:
+      {:error,
+       error(
+         :route_input_invalid,
+         "$.output_schema",
+         "is required for llm_inference steps that feed a route"
+       )}
 
-  defp merge_type_environments(environments) do
-    result_values =
-      Enum.reduce(environments, MapSet.new(), fn %{result_values: values}, acc ->
-        MapSet.union(acc, values)
-      end)
+  defp validate_schema(nil, _step_type),
+    do: {:error, error(:route_input_invalid, "$.output_schema", "is required to feed a route")}
 
-    %{result_values: result_values, predecessors: environments}
-  end
-
-  # The answers schema is derived by Sacrum from the step's questions and
-  # requires every declared answer property; answers may carry additional
-  # provider fields, so it is not a strict schema.
-  defp validate_structured_schema(%{"type" => "object", "properties" => properties} = schema)
+  defp validate_schema(%{"type" => "object", "properties" => properties} = schema, _step_type)
        when is_map(properties),
-       do: {:ok, %{result_values: MapSet.new(), schema: schema, kind: :structured}}
+       do: {:ok, schema}
 
-  defp validate_structured_schema(_schema),
+  defp validate_schema(_schema, _step_type),
     do:
       {:error,
-       error(:route_input_invalid, "$", "structured predecessor requires an object output schema")}
+       error(:route_input_invalid, "$.output_schema", "must be an object schema with properties")}
 
-  defp validate_structured_rules(rules, predecessors) do
+  #
+  # Schema-path resolution shared by rule and handoff references.
+  #
+
+  # Returns the leaf schema and the first segment that is not required on the
+  # way to it (nil when every segment is required), or the first undeclared
+  # segment.
+  defp resolve(schema, segments),
+    do: Enum.reduce_while(segments, {:ok, schema, nil}, &resolve_segment/2)
+
+  defp resolve_segment(segment, {:ok, %{"properties" => %{} = properties} = current, optional})
+       when is_map_key(properties, segment) do
+    optional = optional || if(required?(current, segment), do: nil, else: segment)
+    {:cont, {:ok, Map.fetch!(properties, segment), optional}}
+  end
+
+  defp resolve_segment(segment, _acc), do: {:halt, {:undeclared, segment}}
+
+  defp required?(%{"required" => required}, segment) when is_list(required),
+    do: segment in required
+
+  defp required?(_schema, _segment), do: false
+
+  #
+  # Rule references
+  #
+
+  defp validate_rules(rules, predecessors) do
     Traverse.each_while(rules, fn %{when: expression}, index ->
-      validate_structured_expression(expression, predecessors, "$.rules[#{index}].when")
+      path = "$.rules[#{index}].when"
+
+      expression
+      |> predicate_paths(path)
+      |> Traverse.each_while(fn {predicate, predicate_path}, _index ->
+        validate_predicate(predicate, predecessors, predicate_path)
+      end)
     end)
   end
 
-  defp validate_structured_expression(%{kind: kind, expressions: expressions}, predecessors, path)
-       when kind in [:all, :any] do
-    Traverse.each_while(expressions, fn expression, index ->
-      validate_structured_expression(expression, predecessors, "#{path}.#{kind}[#{index}]")
+  defp predicate_paths(%{kind: kind, expressions: expressions}, path) when kind in [:all, :any] do
+    expressions
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {expression, index} ->
+      predicate_paths(expression, "#{path}.#{kind}[#{index}]")
     end)
   end
 
-  defp validate_structured_expression(%{kind: :not, expression: expression}, predecessors, path),
-    do: validate_structured_expression(expression, predecessors, "#{path}.not")
+  defp predicate_paths(%{kind: :not, expression: expression}, path),
+    do: predicate_paths(expression, "#{path}.not")
 
-  defp validate_structured_expression(
-         %{kind: :predicate, ref: ref} = predicate,
-         predecessors,
-         path
-       )
-       when is_binary(ref) do
-    Traverse.each_while(predecessors, fn predecessor, _index ->
-      validate_structured_predicate(predicate, predecessor, path)
-    end)
-  end
+  defp predicate_paths(%{kind: :predicate} = predicate, path), do: [{predicate, path}]
 
-  defp validate_structured_expression(
-         %{kind: :predicate, ref: :previous_output_route_result},
-         predecessors,
-         path
-       ) do
-    if Enum.any?(predecessors, &(&1.kind == :structured)) do
-      {:error,
-       error(
-         :route_config_invalid,
-         "#{path}.ref",
-         "route.result is unavailable from a structured predecessor"
-       )}
-    else
-      :ok
-    end
-  end
-
-  defp validate_structured_expression(%{kind: :predicate}, _predecessors, _path), do: :ok
-
-  defp validate_structured_predicate(_predicate, %{kind: kind}, path) when kind != :structured,
-    do:
-      {:error,
-       error(
-         :route_config_invalid,
-         "#{path}.ref",
-         "structured reference is unavailable from this predecessor"
-       )}
-
-  defp validate_structured_predicate(
+  defp validate_predicate(
          %{ref: "previous_output." <> ref_path, operator: operator, value: value},
-         %{schema: schema},
+         predecessors,
          path
        ) do
-    with {:ok, leaf} <- resolve_schema_path(schema, String.split(ref_path, "."), path) do
-      validate_leaf(leaf, operator, value, path)
+    segments = String.split(ref_path, ".")
+
+    with {:ok, leaves} <-
+           Traverse.map_while(predecessors, fn %{schema: schema}, _index ->
+             resolve_rule_leaf(schema, segments, path)
+           end),
+         :ok <-
+           Traverse.each_while(leaves, fn leaf, _index ->
+             validate_leaf(leaf, operator, value, path)
+           end) do
+      validate_declared_enum(leaves, operator, value, path)
     end
   end
 
-  defp resolve_schema_path(schema, segments, path) do
-    Enum.reduce_while(segments, {:ok, schema}, fn segment, {:ok, current} ->
-      case current do
-        %{"properties" => %{^segment => child}} ->
-          {:cont, {:ok, child}}
+  defp validate_predicate(%{kind: :predicate}, _predecessors, _path), do: :ok
 
-        _undeclared ->
-          {:halt,
-           {:error,
-            error(:route_config_invalid, "#{path}.ref", "#{inspect(segment)} is not declared")}}
-      end
-    end)
+  defp resolve_rule_leaf(schema, segments, path) do
+    case resolve(schema, segments) do
+      {:ok, leaf, _optional} ->
+        {:ok, leaf}
+
+      {:undeclared, segment} ->
+        {:error,
+         error(:route_config_invalid, "#{path}.ref", "#{inspect(segment)} is not declared")}
+    end
   end
 
   defp validate_leaf(%{"type" => type} = schema, operator, value, path)
        when type in @routable_types do
-    with :ok <- validate_typed_value(type, operator, value, path),
-         :ok <- validate_declared_enum(schema, operator, value, path) do
+    with :ok <- validate_typed_value(type, operator, value, path) do
       validate_bounds(schema, operator, value, path)
     end
   end
@@ -256,20 +258,26 @@ defmodule Sacrum.Routing.RoutePredecessors do
 
   defp within_bounds?(_value, _minimum, _maximum), do: true
 
-  defp validate_declared_enum(%{"enum" => enum}, operator, value, path) when is_list(enum) do
-    values = if operator == :in, do: value, else: [value]
+  # A compared value is valid when any predecessor can produce it, so enum
+  # membership is checked against the union of the predecessors' enums. A
+  # predecessor without an enum leaves the value open.
+  defp validate_declared_enum(leaves, operator, value, path) do
+    if Enum.all?(leaves, &is_list(&1["enum"])) do
+      enum = Enum.flat_map(leaves, & &1["enum"])
+      values = if operator == :in, do: value, else: [value]
 
-    case Enum.find(values, &(&1 not in enum)) do
-      nil ->
-        :ok
+      case Enum.find(values, &(&1 not in enum)) do
+        nil ->
+          :ok
 
-      undeclared ->
-        {:error,
-         error(:route_config_invalid, "#{path}.value", "#{inspect(undeclared)} is not declared")}
+        undeclared ->
+          {:error,
+           error(:route_config_invalid, "#{path}.value", "#{inspect(undeclared)} is not declared")}
+      end
+    else
+      :ok
     end
   end
-
-  defp validate_declared_enum(_schema, _operator, _value, _path), do: :ok
 
   defp validate_typed_value(type, operator, value, path) do
     values = if operator == :in, do: value, else: [value]
@@ -298,125 +306,75 @@ defmodule Sacrum.Routing.RoutePredecessors do
   defp valid_typed_item?("boolean", operator, value),
     do: is_boolean(value) and operator not in [:lt, :lte, :gt, :gte]
 
-  defp validate_rules(rules, result_values) do
-    Traverse.each_while(rules, fn %{when: expression}, index ->
-      validate_expression(expression, result_values, "$.rules[#{index}].when")
+  #
+  # Handoff references
+  #
+
+  defp validate_handoffs(%{rules: rules, default: default}, predecessors) do
+    rule_decisions =
+      rules
+      |> Enum.with_index()
+      |> Enum.map(fn {rule, index} -> {rule.handoff, "$.rules[#{index}].handoff"} end)
+
+    default_decisions = if default, do: [{default.handoff, "$.default.handoff"}], else: []
+
+    (rule_decisions ++ default_decisions)
+    |> Enum.flat_map(fn {template, path} -> HandoffTemplate.references(template, path) end)
+    |> Traverse.each_while(fn interpolation, _index ->
+      validate_handoff_reference(interpolation, predecessors)
     end)
   end
 
-  defp validate_expression(%{kind: kind, expressions: expressions}, result_values, path)
-       when kind in [:all, :any] do
-    Traverse.each_while(expressions, fn expression, index ->
-      validate_expression(expression, result_values, "#{path}.#{kind}[#{index}]")
-    end)
-  end
-
-  defp validate_expression(%{kind: :not, expression: expression}, result_values, path),
-    do: validate_expression(expression, result_values, "#{path}.not")
-
-  defp validate_expression(
-         %{
-           kind: :predicate,
-           ref: :previous_output_route_result,
-           operator: operator,
-           value: value
-         },
-         result_values,
-         path
+  defp validate_handoff_reference(
+         %{reference: "previous_output." <> ref_path} = ref,
+         predecessors
        ) do
-    values = if operator == :in, do: value, else: [value]
+    segments = String.split(ref_path, ".")
 
-    case Enum.find(values, &(not MapSet.member?(result_values, &1))) do
-      nil ->
-        :ok
+    Traverse.each_while(predecessors, fn %{schema: schema}, _index ->
+      case resolve(schema, segments) do
+        {:ok, leaf, optional} ->
+          validate_handoff_leaf(leaf, optional, ref)
 
-      undeclared ->
-        {:error,
-         error(:route_config_invalid, "#{path}.value", "#{inspect(undeclared)} is not declared")}
-    end
+        {:undeclared, segment} ->
+          handoff_error(ref, "#{inspect(segment)} is not declared")
+      end
+    end)
   end
 
-  defp validate_expression(%{kind: :predicate}, _result_values, _path), do: :ok
+  defp validate_handoff_reference(_ref, _predecessors), do: :ok
 
-  defp require_route_key(schema, properties) do
-    required = schema["required"]
+  defp validate_handoff_leaf(_leaf, segment, %{optional?: false} = ref) when is_binary(segment),
+    do:
+      handoff_error(
+        ref,
+        "#{inspect(segment)} is not required; mark the reference optional with ?"
+      )
 
-    cond do
-      not is_list(required) ->
-        {:error, error(:route_input_invalid, "$.required", "must include route")}
-
-      "route" not in required or not Map.has_key?(properties, "route") ->
-        {:error, error(:route_input_invalid, "$.properties.route", "is required")}
-
-      true ->
-        :ok
-    end
+  defp validate_handoff_leaf(leaf, _optional, %{embedded?: true} = ref) do
+    if container?(leaf["type"]),
+      do:
+        handoff_error(
+          ref,
+          "object and array interpolations must occupy the whole string to preserve their JSON type"
+        ),
+      else: :ok
   end
 
-  defp validate_result_schema(%{"type" => "string", "enum" => values}) when is_list(values) do
-    if values != [] and Enum.all?(values, &(is_binary(&1) and &1 != "")) and
-         length(values) == length(Enum.uniq(values)) do
-      {:ok, values}
-    else
-      {:error,
-       error(
-         :route_input_invalid,
-         "$.properties.route.properties.result.enum",
-         "must be a unique non-empty string enum"
-       )}
-    end
-  end
+  defp validate_handoff_leaf(_leaf, _optional, _ref), do: :ok
 
-  defp validate_result_schema(_result) do
+  defp container?(type) when is_binary(type), do: type in @container_types
+  defp container?(types) when is_list(types), do: Enum.any?(types, &(&1 in @container_types))
+  defp container?(_type), do: false
+
+  defp handoff_error(%{path: path, reference: reference}, message) do
     {:error,
      error(
-       :route_input_invalid,
-       "$.properties.route.properties.result",
-       "must be a string with a non-empty enum"
+       :route_handoff_template_invalid,
+       path,
+       "interpolation reference #{inspect(reference)}: #{message}"
      )}
   end
-
-  defp validate_handoff_schema(%{"type" => "object"} = handoff) do
-    case Strict.validate(handoff) do
-      :ok ->
-        :ok
-
-      {:error, message} ->
-        {:error, error(:route_input_invalid, "$.properties.route.properties.handoff", message)}
-    end
-  end
-
-  defp validate_handoff_schema(_handoff) do
-    {:error,
-     error(
-       :route_input_invalid,
-       "$.properties.route.properties.handoff",
-       "must be a strict object schema"
-     )}
-  end
-
-  defp fetch_object(map, key, path) do
-    case Strict.fetch_map(map, key, "must be an object") do
-      {:ok, value} -> {:ok, value}
-      {:error, message} -> {:error, error(:route_input_invalid, path, message)}
-    end
-  end
-
-  defp require_included_keys(keys, required, path) when is_list(keys) do
-    if Enum.all?(required, &(&1 in keys)) do
-      :ok
-    else
-      {:error, error(:route_input_invalid, path, "must include #{Enum.join(required, ", ")}")}
-    end
-  end
-
-  defp require_included_keys(_keys, _required, path),
-    do: {:error, error(:route_input_invalid, path, "must be an array")}
-
-  defp typed_error(:ok, _path), do: :ok
-
-  defp typed_error({:error, message}, path),
-    do: {:error, error(:route_input_invalid, path, message)}
 
   defp drop_root("$"), do: ""
   defp drop_root(path), do: String.replace_prefix(path, "$", "")
