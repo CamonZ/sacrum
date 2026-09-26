@@ -3,6 +3,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStepConfigTest do
 
   alias Sacrum.Repo.Schemas.WorkflowStep
   alias Sacrum.Repo.Schemas.WorkflowStep.Config
+  alias Sacrum.Routing.{RouteConfig, RoutePredecessors}
 
   @route_config %{
     "version" => 1,
@@ -211,10 +212,95 @@ defmodule Sacrum.Repo.Schemas.WorkflowStepConfigTest do
              }) == []
     end
 
+    test "normalizes question and choice keys and preserves authored option labels" do
+      questions = %{
+        "Needs changes" => %{
+          "type" => "choice",
+          "instructions" => "Pick",
+          "criteria" => %{"Needs changes" => nil, "already_snake_case" => "Given"}
+        },
+        "Sí.version-2" => %{"type" => "noul", "instructions" => "Check"}
+      }
+
+      changeset = structured(%{"questions" => questions})
+      assert changeset.valid?
+
+      assert %Config.StructuredInference{questions: normalized} = get_field(changeset, :config)
+
+      assert normalized["needs_changes"]["criteria"] == %{
+               "needs_changes" => "Needs changes",
+               "already_snake_case" => "Given"
+             }
+
+      assert normalized["si_version_2"]
+
+      schema = Config.StructuredInference.answers_schema(normalized)
+      assert schema["required"] == ["needs_changes", "si_version_2"]
+
+      assert schema["properties"]["needs_changes"]["properties"]["probabilities"]["required"] ==
+               ["already_snake_case", "needs_changes"]
+
+      {:ok, route} =
+        RouteConfig.decode(%{
+          "version" => 1,
+          "match_policy" => "exactly_one",
+          "rules" => [
+            %{
+              "id" => "normalized-answer",
+              "when" => %{
+                "ref" => "previous_output.needs_changes.probabilities.needs_changes",
+                "op" => "gte",
+                "value" => 0.7
+              },
+              "transition" => %{"type" => "intra_workflow", "step_id" => Ecto.UUID.generate()}
+            }
+          ],
+          "default" => %{
+            "transition" => %{"type" => "intra_workflow", "step_id" => Ecto.UUID.generate()}
+          }
+        })
+
+      assert {:ok, environment} =
+               RoutePredecessors.derive_type_environment([
+                 %{
+                   output_schema: schema,
+                   step_type: :structured_inference,
+                   transition_id: "inference"
+                 }
+               ])
+
+      assert :ok = RoutePredecessors.validate(route, environment)
+    end
+
+    test "rejects keys that normalize to empty strings or collide" do
+      assert ["$.questions.???: question id normalizes to an empty key"] =
+               question_errors(%{"???" => %{"type" => "noul", "instructions" => "x"}})
+
+      assert [message] =
+               question_errors(%{
+                 "q" => %{
+                   "type" => "choice",
+                   "instructions" => "x",
+                   "criteria" => %{"Needs changes" => nil, "needs-changes" => nil}
+                 }
+               })
+
+      assert message =~ "$.questions.q.criteria.needs-changes"
+      assert message =~ "collides after normalization as needs_changes"
+
+      assert [message] =
+               question_errors(%{
+                 "Needs changes" => %{"type" => "noul", "instructions" => "x"},
+                 "needs-changes" => %{"type" => "noul", "instructions" => "x"}
+               })
+
+      assert message =~ "collides after normalization as needs_changes"
+    end
+
     test "rejects invalid questions with the config path" do
       cases = [
         {%{}, "$.questions: must not be empty"},
-        {%{" " => @questions["ready"]}, "$.questions. : question id must not be blank"},
+        {%{" " => @questions["ready"]}, "$.questions. : question id normalizes to an empty key"},
         {%{"q" => "noul"}, "$.questions.q: must be an object"},
         {%{"q" => %{"type" => "entity", "instructions" => "x"}},
          "$.questions.q.type: must be one of noul, choice, score"},
@@ -238,7 +324,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStepConfigTest do
            }
          }, "$.questions.q.criteria: must be an object with 1 to 255 options"},
         {%{"q" => %{"type" => "choice", "instructions" => "x", "criteria" => %{"" => nil}}},
-         "$.questions.q.criteria.: option must not be blank"},
+         "$.questions.q.criteria.: option normalizes to an empty key"},
         {%{"q" => %{"type" => "choice", "instructions" => "x", "criteria" => %{"a" => ""}}},
          "$.questions.q.criteria.a: must be a non-blank string, object, or array"},
         {%{"q" => %{"type" => "score", "instructions" => "x", "criteria" => ["only"]}},
