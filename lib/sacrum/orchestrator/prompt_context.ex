@@ -221,7 +221,6 @@ defmodule Sacrum.Orchestrator.PromptContext do
 
     reject_nil_values(%{
       "previous_output" => coerce_previous_output(previous_output),
-      "previous_meta" => get_in(execution_data, [:previous, :meta]),
       "run_count" => execution_data[:run_count] || 0,
       "completed_count" => execution_data[:completed_count] || 0,
       "failed_count" => execution_data[:failed_count] || 0,
@@ -258,12 +257,7 @@ defmodule Sacrum.Orchestrator.PromptContext do
   defp build_named_step_outputs(_), do: %{}
 
   defp named_step_output(execution) do
-    output = Map.get(execution, :typed_output, execution[:output])
-
-    case execution[:meta] do
-      nil -> %{"output" => output}
-      meta -> %{"output" => output, "meta" => meta}
-    end
+    %{"output" => Map.get(execution, :typed_output, execution[:output])}
   end
 
   @doc """

@@ -8,7 +8,7 @@ defmodule Sacrum.Orchestrator.ExecutionHistory do
   import Ecto.Query
 
   alias Sacrum.Accounts.TaskRuns
-  alias Sacrum.Orchestrator.{StructuredInference, StructuredOutput}
+  alias Sacrum.Orchestrator.StructuredOutput
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{StepExecution, WorkflowStep}
 
@@ -54,10 +54,7 @@ defmodule Sacrum.Orchestrator.ExecutionHistory do
             e.task_id == ^task.id and e.task_run_id == ^task_run.id and
             e.status == "completed",
         order_by: [desc: e.inserted_at, desc: e.id],
-        limit: 1,
-        select:
-          {e.output, fragment("coalesce(?->'output_schema', ?->'fields')", e.config, e.config),
-           e.context}
+        limit: 1
       )
 
     query = exclude_current_execution(query, current_execution_id)
@@ -66,19 +63,11 @@ defmodule Sacrum.Orchestrator.ExecutionHistory do
       nil ->
         data
 
-      {output, schema, context} ->
-        previous =
-          put_meta(
-            %{output: decode_prior_output(output, schema)},
-            StructuredInference.meta(context)
-          )
-
-        Map.put(data, :previous, previous)
+      execution ->
+        output = decode_prior_output(execution.output, WorkflowStep.output_schema(execution))
+        Map.put(data, :previous, %{output: output})
     end
   end
-
-  defp put_meta(entry, nil), do: entry
-  defp put_meta(entry, meta), do: Map.put(entry, :meta, meta)
 
   @doc """
   Decodes prior execution output as JSON when an output schema is present.
@@ -165,19 +154,16 @@ defmodule Sacrum.Orchestrator.ExecutionHistory do
   defp execution_to_history(%StepExecution{} = execution) do
     output_schema = WorkflowStep.output_schema(execution)
 
-    put_meta(
-      %{
-        id: execution.id,
-        step_id: execution.step_id,
-        step_name: execution.step_name,
-        status: execution.status,
-        output: execution.output,
-        typed_output: decode_prior_output(execution.output, output_schema),
-        duration_ms: execution.duration_ms,
-        inserted_at: execution.inserted_at
-      },
-      StructuredInference.meta(execution.context)
-    )
+    %{
+      id: execution.id,
+      step_id: execution.step_id,
+      step_name: execution.step_name,
+      status: execution.status,
+      output: execution.output,
+      typed_output: decode_prior_output(execution.output, output_schema),
+      duration_ms: execution.duration_ms,
+      inserted_at: execution.inserted_at
+    }
   end
 
   defp run_counts_query(task_id, step_id, nil) do

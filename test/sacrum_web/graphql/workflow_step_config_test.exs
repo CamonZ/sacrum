@@ -137,13 +137,18 @@ defmodule SacrumWeb.Graphql.WorkflowStepConfigTest do
 
   test "step executions expose the config they ran with and no prompt",
        %{conn: conn, user: user, workflow: workflow} do
-    fields = %{"type" => "object", "properties" => %{"ok" => %{"type" => "boolean"}}}
+    questions = %{"ok" => %{"type" => "noul", "instructions" => "Is it ok?"}}
 
     {:ok, step} =
       Accounts.WorkflowSteps.insert(workflow, %{
         name: "Judge",
         step_type: "structured_inference",
-        config: %{"provider" => "typesafe", "model" => "jev", "state" => "x", "fields" => fields}
+        config: %{
+          "provider" => "typesafe",
+          "model" => "jev",
+          "state" => "x",
+          "questions" => questions
+        }
       })
 
     {:ok, task} =
@@ -167,7 +172,7 @@ defmodule SacrumWeb.Graphql.WorkflowStepConfigTest do
           updateStepExecution(id: "#{execution.id}", status: "in_progress") {
             config {
               __typename
-              ... on StructuredInferenceStepConfig { version provider model state fields }
+              ... on StructuredInferenceStepConfig { version provider model state questions }
             }
           }
         }
@@ -180,7 +185,7 @@ defmodule SacrumWeb.Graphql.WorkflowStepConfigTest do
              "provider" => "typesafe",
              "model" => "jev",
              "state" => "x",
-             "fields" => fields
+             "questions" => questions
            }
 
     result =

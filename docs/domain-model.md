@@ -232,7 +232,7 @@ polymorphic embedded schema whose variant is selected by `stepType`:
 | `stepType` | GraphQL type | Fields (besides `version: 1`) |
 |------------|--------------|-------------------------------|
 | `llm_inference` | `LlmInferenceStepConfig` | `prompt`, `output_schema`, `agents`, `skills`, `agent_config` |
-| `structured_inference` | `StructuredInferenceStepConfig` | `provider`, `model`, `state`, `fields` (all required) |
+| `structured_inference` | `StructuredInferenceStepConfig` | `provider`, `model`, `state`, `questions` (all required) |
 | `route` | `RouteStepConfig` | `route_config` |
 | `wait_children` | `WaitChildrenStepConfig` | `output_schema` (for artifact persistence) |
 | `human_input`, `stop`, `finish` | — | `config` is `null` |
@@ -278,41 +278,64 @@ unchanged.
 
 ### Structured inference steps
 
-A `structured_inference` step sends data and a declared output schema to a
-provider harness and stores validated structured output. It produces data only
-and follows its single outgoing edge; only route steps choose transitions.
+A `structured_inference` step sends data and System One questions to a
+provider harness and stores the provider's answers as its output. It produces
+data only and follows its single outgoing edge; only route steps choose
+transitions.
 
 - `provider` and `model` are required strings. Sacrum does not restrict them;
   the daemon decides whether a compatible harness exists.
 - `state` is a string, object, or array. It may reference execution context
   with the closed `{{ dotted.path }}` grammar (`task.*`, `inputs.*`,
   `steps.<name>.output`, `execution.previous_output`, ...); a whole-string
-  reference keeps its JSON type and a trailing `?` makes it optional.
-- `fields` is the JSON Schema the result must satisfy. Sacrum does not
-  interpret it per provider; harnesses map it to their own request (for
-  example System One questions). It is also the step's output schema for
-  typed `previous_output` and artifact persistence.
+  reference keeps its JSON type and a trailing `?` makes it optional. It is
+  the only templated field.
+- `questions` is static config in the System One request vocabulary shared by
+  TypeSafe and Laya: a non-empty object keyed by non-blank question ids. Each
+  question has a `type` and non-blank `instructions` (string, object, or
+  array):
+
+  | `type` | `criteria` |
+  |--------|------------|
+  | `noul` | optional; only `"true"` and `"false"` keys |
+  | `choice` | required; 1-255 non-blank options, each mapped to a description (string, object, array) or `null` |
+  | `score` | required; an array of 2-10 levels |
+
+  Invalid questions are rejected on save with a path such as
+  `$.questions.<id>.criteria`.
 
 At dispatch, `state` is resolved into the execution's `config` (see
 "Execution config"), and `model` and `model_provider` are set. A required
 reference that is missing fails the dispatch before an execution is created.
-The daemon receives `run_step` with `state`, `output_schema` (the `fields`
-schema), and `agent_config: {provider, model}` instead of a `prompt`.
+The daemon receives `run_step` with `state`, `questions`, and
+`agent_config: {provider, model}` instead of a `prompt` or `output_schema`. It
+builds the provider request from them and returns the provider's answers
+without reshaping them.
+
+The step's output schema (`WorkflowStep.output_schema/1`) is derived from
+`questions`: an object with exactly one answer per question id
+(`additionalProperties: false`). Every answer is an object with its `type` and
+may carry additional provider fields (such as Laya's `action`):
+
+| `type` | Required answer fields |
+|--------|------------------------|
+| `noul` | `noul`: P(true) in [0, 1] |
+| `choice` | `choice`: one of the criteria options; `probabilities`: exactly the options, each in [0, 1]; `confidence` in [0, 1] |
+| `score` | `score`: expected level in [0, n-1]; `legend` and `probabilities` keyed `"0"`..`"n-1"` (probabilities in [0, 1]); `confidence` in [0, 1] |
+
+The derived schema is used for completion validation, typed
+`previous_output`, artifact persistence, and route predecessor validation.
 
 The harness completes the execution through `updateStepExecution` with
-`status: "completed"` and `output` set to the JSON encoding of
-`{"output": value, "meta": meta}`. `output` must satisfy `fields`; the
-optional `meta` is an object keyed by `fields` properties, each holding
-`probabilities` (a map of numbers in [0, 1]) and/or `confidence` (a number in
-[0, 1]). A conforming result stores only the JSON-encoded `output` value in
-`StepExecution.output` and records `meta` in
-`context["structured_inference"]["meta"]`, which harness updates cannot
-replace. A non-conforming result is stored as a `failed` execution whose
-`output` explains the rejection.
+`status: "completed"` and `output` set to the JSON encoding of the provider's
+answers map. The answers are validated against the schema derived from the
+execution's own `config` and stored unchanged in `StepExecution.output`. A
+non-conforming result is stored as a `failed` execution whose `output`
+explains the rejection.
 
-Later steps see the value as `execution.previous_output` and
-`steps.<name>.output`, and the meta as `execution.previous_meta` and
-`steps.<name>.meta`.
+Later steps read answers by path from `execution.previous_output` and
+`steps.<name>.output`, e.g. `previous_output.<question>.choice`, `.score`,
+`.noul`, `.confidence`, or `.probabilities.<option|level>`.
 
 ### Deterministic route handoff templates
 

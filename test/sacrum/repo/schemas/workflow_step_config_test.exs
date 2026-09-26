@@ -117,9 +117,18 @@ defmodule Sacrum.Repo.Schemas.WorkflowStepConfigTest do
   end
 
   describe "structured_inference" do
-    @fields %{
-      "type" => "object",
-      "properties" => %{"approved" => %{"type" => "boolean"}}
+    @questions %{
+      "ready" => %{"type" => "noul", "instructions" => "Is the task ready?"},
+      "area" => %{
+        "type" => "choice",
+        "instructions" => "Which area does the task touch?",
+        "criteria" => %{"api" => "Server code", "ui" => nil}
+      },
+      "risk" => %{
+        "type" => "score",
+        "instructions" => %{"assess" => "risk"},
+        "criteria" => ["low", "medium", "high"]
+      }
     }
 
     defp structured(config) do
@@ -131,11 +140,18 @@ defmodule Sacrum.Repo.Schemas.WorkflowStepConfigTest do
               "provider" => "typesafe",
               "model" => "jev-latest",
               "state" => "{{ task.title }}",
-              "fields" => @fields
+              "questions" => @questions
             },
             config
           )
       })
+    end
+
+    defp question_errors(questions) do
+      case errors_on(structured(%{"questions" => questions})) do
+        %{config: %{questions: errors}} -> errors
+        _valid -> []
+      end
     end
 
     test "accepts a string, object, or array state with any provider" do
@@ -143,12 +159,16 @@ defmodule Sacrum.Repo.Schemas.WorkflowStepConfigTest do
         changeset = structured(%{"state" => state, "provider" => "gliner"})
         assert changeset.valid?
 
-        assert %Config.StructuredInference{version: 1, provider: "gliner", state: ^state} =
-                 get_field(changeset, :config)
+        assert %Config.StructuredInference{
+                 version: 1,
+                 provider: "gliner",
+                 state: ^state,
+                 questions: @questions
+               } = get_field(changeset, :config)
       end
     end
 
-    test "requires provider, model, state, and fields" do
+    test "requires provider, model, state, and questions" do
       assert %{config: errors} =
                errors_on(create(%{step_type: "structured_inference", config: %{}}))
 
@@ -156,25 +176,127 @@ defmodule Sacrum.Repo.Schemas.WorkflowStepConfigTest do
                provider: ["can't be blank"],
                model: ["can't be blank"],
                state: ["can't be blank"],
-               fields: ["can't be blank"]
+               questions: ["can't be blank"]
              }
     end
 
-    test "rejects non-JSON-content state, malformed references, and invalid schemas" do
+    test "rejects non-JSON-content state, malformed references, and undeclared keys" do
       assert %{config: %{state: ["must be a string, object, or array"]}} =
                errors_on(structured(%{"state" => 42}))
 
       assert %{config: %{state: ["$.state: contains a malformed interpolation"]}} =
                errors_on(structured(%{"state" => "{{ task.title"}))
 
-      assert %{config: %{fields: ["must be a valid JSON Schema"]}} =
-               errors_on(structured(%{"fields" => %{"type" => "not-a-type"}}))
-
-      assert %{config: [message]} = errors_on(structured(%{"prompt" => "Go"}))
-      assert message == "$.prompt: is not supported for structured_inference steps"
+      for key <- ["prompt", "fields"] do
+        assert %{config: [message]} = errors_on(structured(%{key => %{}}))
+        assert message == "$.#{key}: is not supported for structured_inference steps"
+      end
     end
 
-    test "uses fields as the output schema for artifact persistence" do
+    test "accepts each question type with optional and nullable criteria" do
+      assert question_errors(@questions) == []
+
+      assert question_errors(%{
+               "flag" => %{
+                 "type" => "noul",
+                 "instructions" => ["Check", "this"],
+                 "criteria" => %{"true" => "Yes", "false" => %{"means" => "no"}}
+               },
+               "one" => %{
+                 "type" => "choice",
+                 "instructions" => "Pick",
+                 "criteria" => %{"a" => nil}
+               },
+               "two" => %{"type" => "score", "instructions" => "Rate", "criteria" => ["lo", "hi"]}
+             }) == []
+    end
+
+    test "rejects invalid questions with the config path" do
+      cases = [
+        {%{}, "$.questions: must not be empty"},
+        {%{" " => @questions["ready"]}, "$.questions. : question id must not be blank"},
+        {%{"q" => "noul"}, "$.questions.q: must be an object"},
+        {%{"q" => %{"type" => "entity", "instructions" => "x"}},
+         "$.questions.q.type: must be one of noul, choice, score"},
+        {%{"q" => %{"type" => "noul"}},
+         "$.questions.q.instructions: must be a non-blank string, object, or array"},
+        {%{"q" => %{"type" => "noul", "instructions" => "  "}},
+         "$.questions.q.instructions: must be a non-blank string, object, or array"},
+        {%{"q" => %{"type" => "noul", "instructions" => "x", "criteria" => %{"maybe" => "?"}}},
+         "$.questions.q.criteria.maybe: noul criteria may only contain true and false"},
+        {%{"q" => %{"type" => "noul", "instructions" => "x", "criteria" => %{"true" => 1}}},
+         "$.questions.q.criteria.true: must be a non-blank string, object, or array"},
+        {%{"q" => %{"type" => "choice", "instructions" => "x"}},
+         "$.questions.q.criteria: must be an object with 1 to 255 options"},
+        {%{"q" => %{"type" => "choice", "instructions" => "x", "criteria" => %{}}},
+         "$.questions.q.criteria: must be an object with 1 to 255 options"},
+        {%{
+           "q" => %{
+             "type" => "choice",
+             "instructions" => "x",
+             "criteria" => Map.new(1..256, &{"o#{&1}", nil})
+           }
+         }, "$.questions.q.criteria: must be an object with 1 to 255 options"},
+        {%{"q" => %{"type" => "choice", "instructions" => "x", "criteria" => %{"" => nil}}},
+         "$.questions.q.criteria.: option must not be blank"},
+        {%{"q" => %{"type" => "choice", "instructions" => "x", "criteria" => %{"a" => ""}}},
+         "$.questions.q.criteria.a: must be a non-blank string, object, or array"},
+        {%{"q" => %{"type" => "score", "instructions" => "x", "criteria" => ["only"]}},
+         "$.questions.q.criteria: must be an array of 2 to 10 levels"},
+        {%{
+           "q" => %{
+             "type" => "score",
+             "instructions" => "x",
+             "criteria" => Enum.map(1..11, &"l#{&1}")
+           }
+         }, "$.questions.q.criteria: must be an array of 2 to 10 levels"},
+        {%{"q" => %{"type" => "score", "instructions" => "x", "criteria" => ["lo", nil]}},
+         "$.questions.q.criteria[1]: must be a non-blank string, object, or array"}
+      ]
+
+      for {questions, message} <- cases do
+        assert question_errors(questions) == [message], "for #{inspect(questions)}"
+      end
+    end
+
+    test "derives a strict answers schema from the questions" do
+      schema = WorkflowStep.output_schema(apply_changes(structured(%{})))
+      probability = %{"type" => "number", "minimum" => 0, "maximum" => 1}
+
+      assert schema["required"] == ["area", "ready", "risk"]
+      assert schema["additionalProperties"] == false
+
+      assert schema["properties"]["ready"] == %{
+               "type" => "object",
+               "properties" => %{
+                 "type" => %{"type" => "string", "enum" => ["noul"]},
+                 "noul" => probability
+               },
+               "required" => ["type", "noul"]
+             }
+
+      area = schema["properties"]["area"]
+      assert area["required"] == ["type", "choice", "confidence", "probabilities"]
+      assert area["properties"]["choice"] == %{"type" => "string", "enum" => ["api", "ui"]}
+      assert area["properties"]["confidence"] == probability
+
+      assert area["properties"]["probabilities"] == %{
+               "type" => "object",
+               "properties" => %{"api" => probability, "ui" => probability},
+               "required" => ["api", "ui"],
+               "additionalProperties" => false
+             }
+
+      risk = schema["properties"]["risk"]
+      assert risk["required"] == ["type", "confidence", "legend", "probabilities", "score"]
+      assert risk["properties"]["score"] == %{"type" => "number", "minimum" => 0, "maximum" => 2}
+      assert risk["properties"]["legend"]["required"] == ["0", "1", "2"]
+      assert risk["properties"]["legend"]["properties"]["0"] == %{"type" => "string"}
+      assert risk["properties"]["probabilities"]["required"] == ["0", "1", "2"]
+      refute Map.has_key?(risk, "additionalProperties")
+    end
+
+    test "uses the answers schema for artifact persistence" do
       changeset =
         create(%{
           step_type: "structured_inference",
@@ -183,12 +305,14 @@ defmodule Sacrum.Repo.Schemas.WorkflowStepConfigTest do
             "provider" => "typesafe",
             "model" => "jev-latest",
             "state" => "x",
-            "fields" => @fields
+            "questions" => @questions
           }
         })
 
       assert changeset.valid?
-      assert WorkflowStep.output_schema(apply_changes(changeset)) == @fields
+
+      assert WorkflowStep.output_schema(apply_changes(changeset)) ==
+               Config.StructuredInference.answers_schema(@questions)
     end
   end
 end
