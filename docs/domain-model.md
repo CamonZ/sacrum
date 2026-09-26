@@ -337,6 +337,68 @@ Later steps read answers by path from `execution.previous_output` and
 `steps.<name>.output`, e.g. `previous_output.<question>.choice`, `.score`,
 `.noul`, `.confidence`, or `.probabilities.<option|level>`.
 
+### Routing on structured inference
+
+A route immediately after `structured_inference` compares values in the
+predecessor's answers with `previous_output.<question>.<path>`, e.g.
+`previous_output.approved.choice`, `.score`, `.noul`, `.confidence`, or
+`.probabilities.<option|level>` (score levels are `"0"`..`"n-1"`). Every path
+is resolved against the answers schema derived from each incoming
+predecessor's questions when the route is saved, so undeclared questions,
+options, levels, or fields (including provider extras such as Laya's `action`)
+are rejected with the rule's `ref` path. Only `string`, `number`, `integer`,
+and `boolean` values are routable; `string`/`boolean` values accept only `eq`,
+`neq`, and `in`, and numbers also accept `lt`, `lte`, `gt`, and `gte`. Compared
+values must match the value's type, be one of its enum members (a `choice`
+must be a declared option), and lie within its declared range (probabilities,
+`confidence`, and `noul` in `[0, 1]`; `score` in `[0, n-1]`). Option keys are
+addressable only when they are made of letters, digits, `_`, and `-`. A route
+with mixed predecessor kinds may use only references valid for every incoming
+edge, such as `task.level`. Answers are routable but not available to handoff
+templates.
+
+The route re-validates the stored answers against the derived schema before
+evaluating, and non-conforming answers fail the route without committing a
+transition. A value that is absent or `null` does not match a predicate,
+including `neq` and predicates nested under `not`. Define a `default`
+transition for threshold and no-match cases. For example, a route can send
+high-confidence `yes` and `no` results to separate steps and send all other
+results to a `human_input` step through its default. The route must have
+declared outgoing transitions to each target. The route reads the completed
+execution in the active TaskRun cursor, so an unrelated execution cannot change
+its decision. The audit records only the answer values the rules reference.
+Existing `previous_output.route.result` rules continue to work for
+route-envelope predecessors.
+
+The route config can express that policy directly (replace the step IDs with
+the workflow's outgoing transition targets):
+
+```json
+{
+  "version": 1,
+  "match_policy": "exactly_one",
+  "rules": [
+    {
+      "id": "accept",
+      "when": {"all": [
+        {"ref": "previous_output.approved.choice", "op": "eq", "value": "yes"},
+        {"ref": "previous_output.approved.probabilities.yes", "op": "gte", "value": 0.8}
+      ]},
+      "transition": {"type": "intra_workflow", "step_id": "<accept-step-uuid>"}
+    },
+    {
+      "id": "reject",
+      "when": {"all": [
+        {"ref": "previous_output.approved.choice", "op": "eq", "value": "no"},
+        {"ref": "previous_output.approved.probabilities.no", "op": "gte", "value": 0.8}
+      ]},
+      "transition": {"type": "intra_workflow", "step_id": "<reject-step-uuid>"}
+    }
+  ],
+  "default": {"transition": {"type": "intra_workflow", "step_id": "<human-input-step-uuid>"}}
+}
+```
+
 ### Deterministic route handoff templates
 
 Each deterministic rule and the optional default decision may include a
@@ -631,7 +693,9 @@ Never derive permanent task or run failure from the latest `StepExecution.status
 A completed local deterministic route keeps its canonical audit in
 `StepExecution.context.route`. The record contains `mode`,
 `source_execution_id`, `config_version`, `matched_rule_id`, `used_default`, and
-the evaluated `context` snapshot. The destination remains the JSON string in
+the evaluated `context` snapshot. For structured inference, that snapshot keeps
+the task and visit count plus only present fields referenced by route rules, so large
+unrelated output and provider metadata are not copied into the audit. The destination remains the JSON string in
 `transition_result` (`dest_id` and `transition_type`), and the carried payload
 remains `handoff`.
 

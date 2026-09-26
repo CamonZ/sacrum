@@ -1,17 +1,20 @@
 defmodule Sacrum.Routing.RoutePredecessors do
   @moduledoc """
-  Validates route predecessor envelopes and their declared result enums.
+  Validates route predecessor schemas and references used by route rules.
 
-  The predecessor envelope is `route.{result, handoff}`. Handoff objects use
-  the shared strict JSON Schema subset; result values are a string enum. Runtime
-  evaluation uses the already-built `RouteContext` instead of this module.
+  Legacy route envelopes declare `route.{result, handoff}`. Structured
+  inference predecessors are routed on paths into their output schema (the
+  answers schema derived from their questions). Runtime evaluation uses the
+  already-built `RouteContext`.
   """
 
   alias Sacrum.JsonSchema.Strict
   alias Sacrum.Routing.{RouteConfig, Traverse}
 
-  @type type_environment :: %{result_values: MapSet.t(String.t())}
+  @type type_environment :: %{result_values: MapSet.t(String.t()), predecessors: [map()]}
   @type error :: %{code: atom(), path: String.t(), message: String.t()}
+
+  @routable_types ["string", "number", "integer", "boolean"]
 
   @doc """
   Validates predecessor-result predicates against a derived result-enum union.
@@ -20,8 +23,11 @@ defmodule Sacrum.Routing.RoutePredecessors do
   `derive_type_environment/1`.
   """
   @spec validate(RouteConfig.t(), type_environment()) :: :ok | {:error, error()}
-  def validate(%{rules: rules}, %{result_values: result_values}) when is_list(rules) do
-    validate_rules(rules, result_values)
+  def validate(%{rules: rules}, %{result_values: result_values, predecessors: predecessors})
+      when is_list(rules) do
+    with :ok <- validate_structured_rules(rules, predecessors) do
+      validate_rules(rules, result_values)
+    end
   end
 
   def validate(_program, _type_environment),
@@ -82,9 +88,15 @@ defmodule Sacrum.Routing.RoutePredecessors do
       {:error, error(:route_input_invalid, "$.predecessors", "must contain at least one schema")}
 
   defp validate_predecessor(%{output_schema: schema} = predecessor, index) do
-    case validate_predecessor_schema(schema) do
+    result =
+      case Map.get(predecessor, :step_type) do
+        :structured_inference -> validate_structured_schema(schema)
+        _step_type -> validate_predecessor_schema(schema)
+      end
+
+    case result do
       {:ok, environment} ->
-        {:ok, environment}
+        {:ok, Map.put_new(environment, :kind, :route)}
 
       {:error, %{path: path} = reason} ->
         id = Map.get(predecessor, :transition_id) || index
@@ -109,8 +121,182 @@ defmodule Sacrum.Routing.RoutePredecessors do
         MapSet.union(acc, values)
       end)
 
-    %{result_values: result_values}
+    %{result_values: result_values, predecessors: environments}
   end
+
+  # The answers schema is derived by Sacrum from the step's questions and
+  # requires every declared answer property; answers may carry additional
+  # provider fields, so it is not a strict schema.
+  defp validate_structured_schema(%{"type" => "object", "properties" => properties} = schema)
+       when is_map(properties),
+       do: {:ok, %{result_values: MapSet.new(), schema: schema, kind: :structured}}
+
+  defp validate_structured_schema(_schema),
+    do:
+      {:error,
+       error(:route_input_invalid, "$", "structured predecessor requires an object output schema")}
+
+  defp validate_structured_rules(rules, predecessors) do
+    Traverse.each_while(rules, fn %{when: expression}, index ->
+      validate_structured_expression(expression, predecessors, "$.rules[#{index}].when")
+    end)
+  end
+
+  defp validate_structured_expression(%{kind: kind, expressions: expressions}, predecessors, path)
+       when kind in [:all, :any] do
+    Traverse.each_while(expressions, fn expression, index ->
+      validate_structured_expression(expression, predecessors, "#{path}.#{kind}[#{index}]")
+    end)
+  end
+
+  defp validate_structured_expression(%{kind: :not, expression: expression}, predecessors, path),
+    do: validate_structured_expression(expression, predecessors, "#{path}.not")
+
+  defp validate_structured_expression(
+         %{kind: :predicate, ref: ref} = predicate,
+         predecessors,
+         path
+       )
+       when is_binary(ref) do
+    Traverse.each_while(predecessors, fn predecessor, _index ->
+      validate_structured_predicate(predicate, predecessor, path)
+    end)
+  end
+
+  defp validate_structured_expression(
+         %{kind: :predicate, ref: :previous_output_route_result},
+         predecessors,
+         path
+       ) do
+    if Enum.any?(predecessors, &(&1.kind == :structured)) do
+      {:error,
+       error(
+         :route_config_invalid,
+         "#{path}.ref",
+         "route.result is unavailable from a structured predecessor"
+       )}
+    else
+      :ok
+    end
+  end
+
+  defp validate_structured_expression(%{kind: :predicate}, _predecessors, _path), do: :ok
+
+  defp validate_structured_predicate(_predicate, %{kind: kind}, path) when kind != :structured,
+    do:
+      {:error,
+       error(
+         :route_config_invalid,
+         "#{path}.ref",
+         "structured reference is unavailable from this predecessor"
+       )}
+
+  defp validate_structured_predicate(
+         %{ref: "previous_output." <> ref_path, operator: operator, value: value},
+         %{schema: schema},
+         path
+       ) do
+    with {:ok, leaf} <- resolve_schema_path(schema, String.split(ref_path, "."), path) do
+      validate_leaf(leaf, operator, value, path)
+    end
+  end
+
+  defp resolve_schema_path(schema, segments, path) do
+    Enum.reduce_while(segments, {:ok, schema}, fn segment, {:ok, current} ->
+      case current do
+        %{"properties" => %{^segment => child}} ->
+          {:cont, {:ok, child}}
+
+        _undeclared ->
+          {:halt,
+           {:error,
+            error(:route_config_invalid, "#{path}.ref", "#{inspect(segment)} is not declared")}}
+      end
+    end)
+  end
+
+  defp validate_leaf(%{"type" => type} = schema, operator, value, path)
+       when type in @routable_types do
+    with :ok <- validate_typed_value(type, operator, value, path),
+         :ok <- validate_declared_enum(schema, operator, value, path) do
+      validate_bounds(schema, operator, value, path)
+    end
+  end
+
+  defp validate_leaf(schema, _operator, _value, path) do
+    {:error,
+     error(
+       :route_operand_type_mismatch,
+       "#{path}.ref",
+       "#{inspect(schema["type"])} values are not routable; use string, number, integer, or boolean"
+     )}
+  end
+
+  # A compared value outside the declared range can never be produced, so the
+  # rule could only be a typo.
+  defp validate_bounds(schema, operator, value, path) do
+    values = if operator == :in, do: value, else: [value]
+    minimum = Map.get(schema, "minimum")
+    maximum = Map.get(schema, "maximum")
+
+    if Enum.all?(values, &within_bounds?(&1, minimum, maximum)) do
+      :ok
+    else
+      {:error,
+       error(
+         :route_operand_type_mismatch,
+         "#{path}.value",
+         "must be within #{inspect(minimum)} and #{inspect(maximum)}"
+       )}
+    end
+  end
+
+  defp within_bounds?(value, minimum, maximum) when is_number(value),
+    do: (is_nil(minimum) or value >= minimum) and (is_nil(maximum) or value <= maximum)
+
+  defp within_bounds?(_value, _minimum, _maximum), do: true
+
+  defp validate_declared_enum(%{"enum" => enum}, operator, value, path) when is_list(enum) do
+    values = if operator == :in, do: value, else: [value]
+
+    case Enum.find(values, &(&1 not in enum)) do
+      nil ->
+        :ok
+
+      undeclared ->
+        {:error,
+         error(:route_config_invalid, "#{path}.value", "#{inspect(undeclared)} is not declared")}
+    end
+  end
+
+  defp validate_declared_enum(_schema, _operator, _value, _path), do: :ok
+
+  defp validate_typed_value(type, operator, value, path) do
+    values = if operator == :in, do: value, else: [value]
+
+    valid? =
+      is_list(values) and values != [] and
+        Enum.all?(values, &valid_typed_item?(type, operator, &1))
+
+    if valid?,
+      do: :ok,
+      else:
+        {:error,
+         error(
+           :route_operand_type_mismatch,
+           "#{path}.value",
+           "does not match the referenced field type"
+         )}
+  end
+
+  defp valid_typed_item?("string", operator, value),
+    do: is_binary(value) and operator not in [:lt, :lte, :gt, :gte]
+
+  defp valid_typed_item?("number", _operator, value), do: is_number(value)
+  defp valid_typed_item?("integer", _operator, value), do: is_integer(value)
+
+  defp valid_typed_item?("boolean", operator, value),
+    do: is_boolean(value) and operator not in [:lt, :lte, :gt, :gte]
 
   defp validate_rules(rules, result_values) do
     Traverse.each_while(rules, fn %{when: expression}, index ->

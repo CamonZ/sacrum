@@ -2,17 +2,16 @@ defmodule Sacrum.Routing.RouteContext do
   @moduledoc """
   Builds the closed runtime value used by deterministic routes.
 
-  Predicate evaluation reads the four V1 route references. Handoff templates
-  read the same value as a string-keyed interpolation context, plus nested
-  keys under `previous_output.route.handoff`. There is no database or
-  schema-validation dependency, and no access to the wider prompt context.
+  Predicate evaluation reads the closed route references and schema-validated
+  paths into a structured predecessor's output. Handoff templates retain their narrower
+  interpolation whitelist. There is no access to the wider prompt context.
   """
 
   @levels MapSet.new(["epic", "ticket", "task"])
   @segment ~r/^[A-Za-z_][A-Za-z0-9_-]*$/
 
   @type t :: %{
-          previous_output: %{route: %{result: String.t(), handoff: map()}},
+          previous_output: map(),
           task: %{level: String.t(), tags: [String.t()]},
           execution: %{step_visit_count: pos_integer()}
         }
@@ -28,15 +27,8 @@ defmodule Sacrum.Routing.RouteContext do
   @spec build(map(), map(), term()) :: {:ok, t()} | {:error, error()}
   def build(previous_output, task, step_visit_count)
       when is_map(previous_output) and is_map(task) do
-    with {:ok, result, handoff} <- decode_route_output(previous_output),
-         {:ok, normalized_task} <- decode_task(task),
-         :ok <- validate_visit_count(step_visit_count) do
-      {:ok,
-       %{
-         previous_output: %{route: %{result: result, handoff: handoff}},
-         task: normalized_task,
-         execution: %{step_visit_count: step_visit_count}
-       }}
+    with :ok <- validate_route_output(previous_output) do
+      build_structured(previous_output, task, step_visit_count)
     end
   end
 
@@ -44,11 +36,36 @@ defmodule Sacrum.Routing.RouteContext do
     do: {:error, error(:route_input_invalid, "$", "must include previous output and task maps")}
 
   @doc """
-  Returns a single whitelisted value from a RouteContext.
+  Builds a RouteContext for a structured predecessor, whose output is already
+  validated against its schema and carries no route envelope.
   """
-  @spec fetch(t(), atom()) :: {:ok, term()} | {:error, error()}
+  @spec build_structured(map(), map(), term()) :: {:ok, t()} | {:error, error()}
+  def build_structured(previous_output, task, step_visit_count)
+      when is_map(previous_output) and is_map(task) do
+    with {:ok, normalized_task} <- decode_task(task),
+         :ok <- validate_visit_count(step_visit_count) do
+      {:ok,
+       %{
+         previous_output: previous_output,
+         task: normalized_task,
+         execution: %{step_visit_count: step_visit_count}
+       }}
+    end
+  end
+
+  def build_structured(_previous_output, _task, _step_visit_count),
+    do: {:error, error(:route_input_invalid, "$", "must include previous output and task maps")}
+
+  @doc """
+  Returns a single whitelisted value from a RouteContext.
+
+  Structured references (`previous_output.<path>`) return `:missing` when the
+  value is absent or `null`; callers must treat that as an unmatched signal,
+  not as a value.
+  """
+  @spec fetch(t(), atom() | String.t()) :: {:ok, term()} | :missing | {:error, error()}
   def fetch(context, :previous_output_route_result),
-    do: {:ok, get_in(context, [:previous_output, :route, :result])}
+    do: {:ok, get_in(context, [:previous_output, "route", "result"])}
 
   def fetch(context, :task_level), do: {:ok, get_in(context, [:task, :level])}
   def fetch(context, :task_tags), do: {:ok, get_in(context, [:task, :tags])}
@@ -56,25 +73,41 @@ defmodule Sacrum.Routing.RouteContext do
   def fetch(context, :execution_step_visit_count),
     do: {:ok, get_in(context, [:execution, :step_visit_count])}
 
+  def fetch(context, "previous_output." <> path),
+    do: fetch_structured(context.previous_output, path)
+
   def fetch(_context, reference),
     do: {:error, error(:route_reference_unknown, "$", "#{inspect(reference)} is not routable")}
+
+  defp fetch_structured(data, path) do
+    path
+    |> String.split(".")
+    |> Enum.reduce_while(data, fn
+      key, %{} = map when is_map_key(map, key) -> {:cont, Map.fetch!(map, key)}
+      _key, _value -> {:halt, nil}
+    end)
+    |> case do
+      nil -> :missing
+      value -> {:ok, value}
+    end
+  end
 
   @doc """
   Returns the full closed, string-keyed context available to route handoff
   templates.
 
   The context deliberately contains only the deterministic route-step inputs:
-  predecessor route output, task level/tags, and the current route visit
-  count. It is not the wider prompt-rendering context.
+  the predecessor route envelope, task level/tags, and the current route visit
+  count. Structured predecessor paths are routable but not interpolable.
   """
   @spec interpolation_context(t()) :: map()
   def interpolation_context(%{
-        previous_output: %{route: %{result: result, handoff: handoff}},
+        previous_output: output,
         task: %{level: level, tags: tags},
         execution: %{step_visit_count: step_visit_count}
       }) do
     %{
-      "previous_output" => %{"route" => %{"result" => result, "handoff" => handoff}},
+      "previous_output" => Map.take(output, ["route"]),
       "task" => %{"level" => level, "tags" => tags},
       "execution" => %{"step_visit_count" => step_visit_count}
     }
@@ -103,19 +136,17 @@ defmodule Sacrum.Routing.RouteContext do
 
   defp valid_interpolation_segment?(segment), do: Regex.match?(@segment, segment)
 
-  defp decode_route_output(%{"route" => %{"result" => result, "handoff" => handoff}})
-       when is_binary(result) and result != "" and is_map(handoff) do
-    {:ok, result, handoff}
-  end
+  defp validate_route_output(%{"route" => %{"result" => result, "handoff" => handoff}})
+       when is_binary(result) and result != "" and is_map(handoff), do: :ok
 
-  defp decode_route_output(_output) do
-    {:error,
-     error(
-       :route_input_invalid,
-       "$.previous_output.route",
-       "must contain a non-empty result string and handoff object"
-     )}
-  end
+  defp validate_route_output(_output),
+    do:
+      {:error,
+       error(
+         :route_input_invalid,
+         "$.previous_output.route",
+         "must contain a non-empty result string and handoff object"
+       )}
 
   defp decode_task(%{"level" => level, "tags" => tags}) do
     with :ok <- validate_level(level),

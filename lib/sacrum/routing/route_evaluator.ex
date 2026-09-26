@@ -99,13 +99,13 @@ defmodule Sacrum.Routing.RouteEvaluator do
            Traverse.map_while(expressions, fn expression, index ->
              evaluate_expression(expression, context, "#{path}.#{kind}[#{index}]")
            end) do
-      {:ok, if(kind == :all, do: Enum.all?(results), else: Enum.any?(results))}
+      {:ok, combine_results(kind, results)}
     end
   end
 
   defp evaluate_expression(%{kind: :not, expression: expression}, context, path) do
     with {:ok, result} <- evaluate_expression(expression, context, "#{path}.not"),
-         do: {:ok, not result}
+         do: {:ok, negate(result)}
   end
 
   defp evaluate_expression(
@@ -113,15 +113,38 @@ defmodule Sacrum.Routing.RouteEvaluator do
          context,
          path
        ) do
-    with {:ok, actual} <- fetch_reference(context, reference, path) do
-      {:ok, predicate(operator, actual, expected)}
+    case fetch_reference(context, reference, path) do
+      {:ok, actual} -> {:ok, predicate(operator, actual, expected)}
+      :missing -> {:ok, :missing}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  # Missing structured signals use three-valued logic: `:missing` never
+  # matches, and negating it stays `:missing`.
+  defp negate(:missing), do: :missing
+  defp negate(result), do: not result
+
+  defp combine_results(:all, results) do
+    cond do
+      false in results -> false
+      :missing in results -> :missing
+      true -> true
+    end
+  end
+
+  defp combine_results(:any, results) do
+    cond do
+      true in results -> true
+      :missing in results -> :missing
+      true -> false
     end
   end
 
   defp fetch_reference(context, reference, path) do
     case RouteContext.fetch(context, reference) do
-      {:ok, value} -> {:ok, value}
       {:error, reason} -> {:error, %{reason | path: "#{path}.ref"}}
+      found_or_missing -> found_or_missing
     end
   end
 

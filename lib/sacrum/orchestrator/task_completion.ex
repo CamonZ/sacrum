@@ -182,11 +182,6 @@ defmodule Sacrum.Orchestrator.TaskCompletion do
 
   @spec to_fsm_transition(tuple(), FSMData.t()) ::
           {:next_state, atom(), FSMData.t()} | {:stop, atom(), FSMData.t()}
-  defp to_fsm_transition({:failed, :no_current_step}, data) do
-    Logger.error("[TaskOrchestrator:#{data.task.id}] No current step after transition")
-    {:next_state, :failed, data}
-  end
-
   defp to_fsm_transition({:failed, {:step_not_found, step_id}}, data) do
     Logger.error("[TaskOrchestrator:#{data.task.id}] Step #{step_id} not found in cache")
     {:next_state, :failed, data}

@@ -21,7 +21,8 @@ defmodule Sacrum.Routing.RouteConfig do
                 :previous_output_route_result
                 | :task_level
                 | :task_tags
-                | :execution_step_visit_count,
+                | :execution_step_visit_count
+                | String.t(),
               operator:
                 :eq
                 | :neq
@@ -55,27 +56,31 @@ defmodule Sacrum.Routing.RouteConfig do
           message: String.t()
         }
 
+  # Structured path segments are property keys, which include numeric score
+  # levels such as `probabilities.2`.
+  @structured_segment ~r/^[A-Za-z0-9_-]+$/
+
   @references %{
     "previous_output.route.result" => %{
-      atom: :previous_output_route_result,
+      ref: :previous_output_route_result,
       operators: [:eq, :neq, :in],
       value: :string,
       open?: false
     },
     "task.level" => %{
-      atom: :task_level,
+      ref: :task_level,
       operators: [:eq, :neq, :in],
       value: :level,
       open?: false
     },
     "task.tags" => %{
-      atom: :task_tags,
+      ref: :task_tags,
       operators: [:contains, :contains_any, :contains_all],
       value: :tags,
       open?: true
     },
     "execution.step_visit_count" => %{
-      atom: :execution_step_visit_count,
+      ref: :execution_step_visit_count,
       operators: [:eq, :neq, :lt, :lte, :gt, :gte, :in],
       value: :count,
       open?: true
@@ -202,7 +207,7 @@ defmodule Sacrum.Routing.RouteConfig do
       {:ok,
        %{
          kind: :predicate,
-         ref: spec.atom,
+         ref: spec.ref,
          operator: operator,
          value: Map.fetch!(predicate, "value")
        }}
@@ -212,11 +217,31 @@ defmodule Sacrum.Routing.RouteConfig do
   defp decode_reference(reference, path) when is_binary(reference) do
     case Map.fetch(@references, reference) do
       {:ok, spec} -> {:ok, spec}
-      :error -> {:error, error(path, "is not a supported route reference")}
+      :error -> decode_structured_reference(reference, path)
     end
   end
 
   defp decode_reference(_reference, path), do: {:error, error(path, "must be a string")}
+
+  # Structured references are open paths into the predecessor output: which
+  # paths exist, and their operand types and bounds, come from the predecessor
+  # schema and are checked by `RoutePredecessors`.
+  defp decode_structured_reference("previous_output." <> rest = reference, path) do
+    if rest |> String.split(".") |> Enum.all?(&Regex.match?(@structured_segment, &1)) do
+      {:ok,
+       %{
+         ref: reference,
+         operators: [:eq, :neq, :in, :lt, :lte, :gt, :gte],
+         value: :structured,
+         open?: true
+       }}
+    else
+      {:error, error(path, "is not a supported route reference")}
+    end
+  end
+
+  defp decode_structured_reference(_reference, path),
+    do: {:error, error(path, "is not a supported route reference")}
 
   defp decode_operator(operator, path) when is_binary(operator) do
     case Map.fetch(@operators, operator) do
@@ -235,11 +260,11 @@ defmodule Sacrum.Routing.RouteConfig do
     end
   end
 
-  defp validate_operator_error(%{atom: atom}, operator, path) do
+  defp validate_operator_error(%{ref: ref}, operator, path) do
     {:error,
      error(
        path,
-       "#{inspect(operator)} is not valid for #{inspect(atom)}",
+       "#{inspect(operator)} is not valid for #{inspect(ref)}",
        :route_operand_type_mismatch
      )}
   end
@@ -268,6 +293,8 @@ defmodule Sacrum.Routing.RouteConfig do
 
   defp validate_value(%{value: :count}, _operator, value, path),
     do: validate_positive_integer(value, "#{path}.value")
+
+  defp validate_value(%{value: :structured}, _operator, _value, _path), do: :ok
 
   defp string_values(:in, value, path) do
     with :ok <- validate_nonempty_string_list(value, "#{path}.value"), do: {:ok, value}
@@ -338,7 +365,11 @@ defmodule Sacrum.Routing.RouteConfig do
   defp validate_default(rules, nil) do
     if Enum.any?(rules, &uses_open_domain?/1) do
       {:error,
-       error("$.default", "is required for tag or visit-count rules", :route_config_invalid)}
+       error(
+         "$.default",
+         "is required for tag, visit-count, or structured inference rules",
+         :route_config_invalid
+       )}
     else
       :ok
     end
@@ -353,18 +384,33 @@ defmodule Sacrum.Routing.RouteConfig do
     end
   end
 
-  defp uses_open_domain?(%{when: condition}), do: uses_open_domain_expression?(condition)
-
-  defp uses_open_domain_expression?(%{kind: kind, expressions: expressions})
-       when kind in [:all, :any],
-       do: Enum.any?(expressions, &uses_open_domain_expression?/1)
-
-  defp uses_open_domain_expression?(%{kind: :not, expression: expression}),
-    do: uses_open_domain_expression?(expression)
-
-  defp uses_open_domain_expression?(%{kind: :predicate, ref: ref}) do
-    Enum.any?(@references, fn {_key, spec} -> spec.atom == ref and spec.open? end)
+  defp uses_open_domain?(%{when: condition}) do
+    condition
+    |> predicates()
+    |> Enum.any?(fn %{ref: ref} ->
+      is_binary(ref) or
+        Enum.any?(@references, fn {_key, spec} -> spec.ref == ref and spec.open? end)
+    end)
   end
+
+  @doc """
+  Returns the distinct structured references (`previous_output.<path>`) used
+  by a decoded program's rules, in rule order.
+  """
+  @spec structured_references(t()) :: [String.t()]
+  def structured_references(%{rules: rules}) do
+    rules
+    |> Enum.flat_map(&predicates(&1.when))
+    |> Enum.map(& &1.ref)
+    |> Enum.filter(&is_binary/1)
+    |> Enum.uniq()
+  end
+
+  defp predicates(%{kind: kind, expressions: expressions}) when kind in [:all, :any],
+    do: Enum.flat_map(expressions, &predicates/1)
+
+  defp predicates(%{kind: :not, expression: expression}), do: predicates(expression)
+  defp predicates(%{kind: :predicate} = predicate), do: [predicate]
 
   defp decode_target(target, path) when is_map(target) do
     case Map.get(target, "type") do
