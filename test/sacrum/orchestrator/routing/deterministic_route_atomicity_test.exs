@@ -11,6 +11,69 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
   alias Sacrum.Routing.RouteConfig
 
   describe "handle_deterministic_route_step/3" do
+    test "routes structured inference from the TaskRun cursor and escalates uncertain output" do
+      for {choice, probability, expected} <- [
+            {"yes", 0.9, :accept},
+            {"no", 0.9, :reject},
+            {"yes", 0.6, :human}
+          ] do
+        fixture = structured_route_fixture(choice, probability)
+
+        assert {:next_state, :awaiting_execution, _data} =
+                 RouteStep.handle_deterministic_route_step(
+                   fixture.data,
+                   fixture.route,
+                   fixture.program
+                 )
+
+        assert Repo.get!(Task, fixture.task.id).current_step_id ==
+                 fixture.destinations[expected].id
+
+        audit = deterministic_audit(fixture.task.id, fixture.route.id)
+        assert audit.context["route"]["source_execution_id"] == fixture.source_execution.id
+        assert audit.context["route"]["used_default"] == (expected == :human)
+
+        audited = audit.context["route"]["context"]["previous_output"]
+        assert audited["approved"]["choice"] == choice
+        assert audited["approved"]["probabilities"][choice] == probability
+        refute Map.has_key?(audited["approved"], "confidence")
+        refute Map.has_key?(audited, "done")
+      end
+    end
+
+    test "rejects stored answers that do not match the derived schema without committing a route" do
+      for output <- [
+            answers("yes", 1.5),
+            Map.delete(answers("yes", 0.9), "done"),
+            put_in(answers("yes", 0.9), ["approved", "choice"], "maybe")
+          ] do
+        fixture = structured_route_fixture("yes", 0.9)
+
+        fixture.source_execution
+        |> Ecto.Changeset.change(output: Jason.encode!(output))
+        |> Repo.update!()
+
+        assert {:next_state, :failed, _data} =
+                 RouteStep.handle_deterministic_route_step(
+                   fixture.data,
+                   fixture.route,
+                   fixture.program
+                 )
+
+        assert Repo.get!(Task, fixture.task.id).current_step_id == fixture.route.id
+
+        assert Repo.get!(TaskRun, fixture.source_execution.task_run_id).latest_step_execution_id ==
+                 fixture.source_execution.id
+
+        assert Repo.aggregate(
+                 from(e in StepExecution,
+                   where: e.task_id == ^fixture.task.id and e.step_id == ^fixture.route.id
+                 ),
+                 :count
+               ) == 0
+      end
+    end
+
     test "atomically persists a rendered handoff without transition metadata and dispatches it to the destination" do
       fixture = configured_intra_fixture()
 
@@ -291,6 +354,145 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
       task: task,
       task_run: task_run,
       workflow: workflow
+    }
+  end
+
+  defp structured_route_fixture(choice, probability) do
+    user = create_user()
+    project = create_project(user)
+    workflow = create_workflow(user, project, "Structured route workflow")
+
+    source =
+      create_step(user, workflow, %{
+        "name" => "judge",
+        "step_order" => 1,
+        "step_type" => "structured_inference",
+        "config" => %{
+          "provider" => "typesafe",
+          "model" => "jev",
+          "state" => "task",
+          "questions" => %{
+            "approved" => %{
+              "type" => "choice",
+              "instructions" => "Are the requirements met?",
+              "criteria" => %{"yes" => nil, "no" => nil}
+            },
+            "done" => %{"type" => "noul", "instructions" => "Is the work finished?"}
+          }
+        }
+      })
+
+    accept = create_step(user, workflow, %{"name" => "accept", "step_order" => 3})
+    reject = create_step(user, workflow, %{"name" => "reject", "step_order" => 4})
+
+    human =
+      create_step(user, workflow, %{
+        "name" => "human",
+        "step_order" => 5,
+        "step_type" => "human_input"
+      })
+
+    target = fn step -> %{"type" => "intra_workflow", "step_id" => step.id} end
+
+    config = %{
+      "version" => 1,
+      "match_policy" => "exactly_one",
+      "rules" => [
+        %{
+          "id" => "accept",
+          "when" => %{
+            "all" => [
+              %{"ref" => "previous_output.approved.choice", "op" => "eq", "value" => "yes"},
+              %{
+                "ref" => "previous_output.approved.probabilities.yes",
+                "op" => "gte",
+                "value" => 0.8
+              }
+            ]
+          },
+          "transition" => target.(accept)
+        },
+        %{
+          "id" => "reject",
+          "when" => %{
+            "all" => [
+              %{"ref" => "previous_output.approved.choice", "op" => "eq", "value" => "no"},
+              %{
+                "ref" => "previous_output.approved.probabilities.no",
+                "op" => "gte",
+                "value" => 0.8
+              }
+            ]
+          },
+          "transition" => target.(reject)
+        }
+      ],
+      "default" => %{"transition" => target.(human)}
+    }
+
+    route =
+      create_step(user, workflow, %{
+        "name" => "route",
+        "step_order" => 2,
+        "step_type" => "route",
+        "config" => %{"route_config" => config}
+      })
+
+    create_step_transition(user, source, route)
+    create_step_transition(user, route, accept)
+    create_step_transition(user, route, reject)
+    create_step_transition(user, route, human)
+    {:ok, _workflow} = Accounts.Workflows.update(workflow, %{initial_step_id: source.id})
+
+    task = create_task(user, project, workflow)
+    {:ok, task} = Repo.update(Ecto.Changeset.change(task, current_step_id: route.id))
+    task_run = create_task_run(user, task)
+
+    {:ok, source_execution} =
+      Accounts.StepExecutions.insert(user.id, %{
+        task_id: task.id,
+        project_id: project.id,
+        workflow_id: workflow.id,
+        task_run_id: task_run.id,
+        step_id: source.id,
+        step_name: source.name,
+        step_type: :structured_inference,
+        status: "completed",
+        output: Jason.encode!(answers(choice, probability))
+      })
+
+    task_run = update_cursor(task_run, source_execution.id)
+    {:ok, program} = RouteConfig.decode(config)
+
+    data = fsm_data(user, project, task, task_run, workflow, source, route, human)
+
+    data = %{
+      data
+      | steps: data.steps |> Map.put(accept.id, accept) |> Map.put(reject.id, reject),
+        transitions: %{source.id => [route.id], route.id => [accept.id, reject.id, human.id]}
+    }
+
+    %{
+      data: data,
+      destinations: %{accept: accept, reject: reject, human: human},
+      program: program,
+      route: route,
+      source_execution: source_execution,
+      task: task
+    }
+  end
+
+  defp answers(choice, probability) do
+    other = if choice == "yes", do: "no", else: "yes"
+
+    %{
+      "approved" => %{
+        "type" => "choice",
+        "choice" => choice,
+        "probabilities" => %{choice => probability, other => 1 - probability},
+        "confidence" => 0.7
+      },
+      "done" => %{"type" => "noul", "noul" => 0.4}
     }
   end
 

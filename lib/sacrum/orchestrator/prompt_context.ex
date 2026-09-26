@@ -6,8 +6,6 @@ defmodule Sacrum.Orchestrator.PromptContext do
   All keys at every nesting level are strings — Solid requires it.
   """
 
-  require Logger
-
   alias Sacrum.Accounts.Artifacts
   alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.Schemas.WorkflowStep

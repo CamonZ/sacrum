@@ -181,7 +181,7 @@ defmodule Sacrum.Routing.RouteValidator do
          {:ok, type_environment} <-
            RoutePredecessors.derive_type_environment(predecessor_schemas(route_step, snapshot)),
          :ok <- RoutePredecessors.validate(program, type_environment),
-         :ok <- validate_finite_domain(program, type_environment.result_values),
+         :ok <- validate_finite_domain(program, result_domain(type_environment)),
          :ok <- validate_targets(route_step, program, snapshot) do
       :ok
     else
@@ -212,9 +212,17 @@ defmodule Sacrum.Routing.RouteValidator do
         transition_id: edge.transition_id,
         source_step_id: edge.from_step_id,
         destination_step_id: route_step.id,
+        step_type: source && source.step_type,
         output_schema: source && WorkflowStep.output_schema(source)
       }
     end)
+  end
+
+  # A structured predecessor has no route.result, and RoutePredecessors rejects
+  # route.result predicates when one is present, so the only finite dimension
+  # left is task.level (represented by a single `nil` result).
+  defp result_domain(%{predecessors: predecessors, result_values: values}) do
+    if Enum.any?(predecessors, &(&1.kind == :structured)), do: [nil], else: values
   end
 
   #
@@ -259,7 +267,7 @@ defmodule Sacrum.Routing.RouteValidator do
      error(
        :route_config_uncovered,
        "$.rules",
-       "does not cover route.result=#{inspect(result)} and task.level=#{inspect(level)}"
+       "does not cover #{describe_combination(result, level)}"
      )}
   end
 
@@ -271,21 +279,32 @@ defmodule Sacrum.Routing.RouteValidator do
      error(
        :route_config_ambiguous,
        "$.rules[#{rule_index(program, rule_id)}].when",
-       "overlaps for route.result=#{inspect(result)} and task.level=#{inspect(level)}"
+       "overlaps for #{describe_combination(result, level)}"
      )}
   end
 
   defp report_analysis({:error, _reason} = error, _program), do: error
 
+  defp describe_combination(nil, level), do: "task.level=#{inspect(level)}"
+
+  defp describe_combination(result, level),
+    do: "route.result=#{inspect(result)} and task.level=#{inspect(level)}"
+
   defp matches_for(program, closed_rules, result, level) do
-    with {:ok, context} <-
-           RouteContext.build(
-             %{"route" => %{"result" => result, "handoff" => %{}}},
-             %{"level" => level, "tags" => []},
-             1
-           ) do
+    with {:ok, context} <- finite_domain_context(result, level) do
       RouteEvaluator.matching_rule_ids(%{program | rules: closed_rules}, context)
     end
+  end
+
+  defp finite_domain_context(nil, level),
+    do: RouteContext.build_structured(%{}, %{"level" => level, "tags" => []}, 1)
+
+  defp finite_domain_context(result, level) do
+    RouteContext.build(
+      %{"route" => %{"result" => result, "handoff" => %{}}},
+      %{"level" => level, "tags" => []},
+      1
+    )
   end
 
   #

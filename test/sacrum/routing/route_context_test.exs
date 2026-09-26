@@ -29,6 +29,27 @@ defmodule Sacrum.Routing.RouteContextTest do
     refute RouteContext.allowed_interpolation_path?("previous_output.route")
   end
 
+  test "structured references return :missing for absent, null, or non-object paths" do
+    output = %{
+      "approved" => %{"type" => "choice", "choice" => "no", "confidence" => 0.4, "legend" => nil},
+      "urgent" => %{"type" => "noul", "noul" => 0.2, "probabilities" => "unexpected"}
+    }
+
+    task = %{"level" => "ticket", "tags" => []}
+
+    assert {:ok, context} = RouteContext.build_structured(output, task, 1)
+    assert {:ok, "no"} = RouteContext.fetch(context, "previous_output.approved.choice")
+    assert {:ok, 0.4} = RouteContext.fetch(context, "previous_output.approved.confidence")
+    assert :missing = RouteContext.fetch(context, "previous_output.approved.legend")
+    assert :missing = RouteContext.fetch(context, "previous_output.absent.choice")
+    assert :missing = RouteContext.fetch(context, "previous_output.urgent.probabilities.yes")
+
+    assert {:error, %{code: :route_reference_unknown}} =
+             RouteContext.fetch(context, "task.title")
+
+    assert RouteContext.interpolation_context(context)["previous_output"] == %{}
+  end
+
   test "rejects malformed predecessor output and invalid task values" do
     assert {:error, %{code: :route_input_invalid, path: "$.previous_output.route"}} =
              RouteContext.build(%{"route" => %{}}, %{"level" => "task", "tags" => []}, 1)

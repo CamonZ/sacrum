@@ -173,6 +173,69 @@ defmodule Sacrum.Routing.RouteValidatorTest do
              validate(route)
   end
 
+  test "accepts structured inference thresholds and rejects undeclared refs at graph validation",
+       context do
+    source =
+      create_step(context, "judge", 1,
+        step_type: "structured_inference",
+        config: %{
+          "provider" => "typesafe",
+          "model" => "jev",
+          "state" => "task",
+          "questions" => %{
+            "approved" => %{
+              "type" => "choice",
+              "instructions" => "Are the requirements met?",
+              "criteria" => %{"yes" => nil, "no" => nil}
+            }
+          }
+        }
+      )
+
+    destination = create_step(context, "destination", 2)
+
+    config =
+      route_config(
+        [
+          %{
+            "id" => "accept",
+            "when" => %{
+              "ref" => "previous_output.approved.probabilities.yes",
+              "op" => "gte",
+              "value" => 0.8
+            },
+            "transition" => intra_target(destination.id)
+          }
+        ],
+        intra_target(destination.id)
+      )
+
+    route = create_route(context, "route", 3, config)
+    create_step_transition(context.user, source, route)
+    create_step_transition(context.user, route, destination)
+    assert :ok = validate(route)
+
+    invalid =
+      put_in(
+        config,
+        ["rules", Access.at(0), "when", "ref"],
+        "previous_output.approved.probabilities.maybe"
+      )
+
+    route = persist_invalid_route_config(route, invalid)
+
+    assert {:error, %{path: "$.rules[0].when.ref"}} = validate(route)
+
+    route =
+      persist_invalid_route_config(
+        route,
+        route_config([level_rule("ticket", intra_target(destination.id))])
+      )
+
+    assert {:error, %{code: :route_config_uncovered, message: message}} = validate(route)
+    assert message =~ ~r/^does not cover task\.level="(epic|task)"$/
+  end
+
   defp create_user do
     suffix = System.unique_integer([:positive])
 

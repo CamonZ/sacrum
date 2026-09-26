@@ -11,7 +11,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteAudit do
 
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.StepExecution
-  alias Sacrum.Routing.RouteContext
+  alias Sacrum.Routing.{RouteConfig, RouteContext}
 
   @mode "deterministic"
 
@@ -27,10 +27,26 @@ defmodule Sacrum.Orchestrator.Routing.RouteAudit do
         "config_version" => program.version,
         "matched_rule_id" => result.matched_rule_id,
         "used_default" => result.used_default,
-        "context" => RouteContext.interpolation_context(route_context)
+        "context" => audit_context(program, route_context)
       }
     }
   end
+
+  # Structured predecessor output is not copied wholesale: the audit keeps
+  # only the values the rules referenced.
+  defp audit_context(program, context) do
+    program
+    |> RouteConfig.structured_references()
+    |> Enum.reduce(RouteContext.interpolation_context(context), fn reference, snapshot ->
+      case RouteContext.fetch(context, reference) do
+        {:ok, value} -> put_in(snapshot, access_path(reference), value)
+        :missing -> snapshot
+      end
+    end)
+  end
+
+  defp access_path(reference),
+    do: reference |> String.split(".") |> Enum.map(&Access.key(&1, %{}))
 
   @doc """
   True when a StepExecution is a committed local deterministic route audit.

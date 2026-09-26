@@ -158,6 +158,81 @@ defmodule Sacrum.Routing.RouteEvaluatorTest do
              Enum.map(1..3, fn _attempt -> RouteEvaluator.evaluate(program, context) end)
   end
 
+  test "routes on a choice answer and its probability, using default when uncertain" do
+    program =
+      program([
+        rule("accept", %{
+          "all" => [
+            predicate("previous_output.approved.choice", "eq", "yes"),
+            predicate("previous_output.approved.probabilities.yes", "gte", 0.8)
+          ]
+        }),
+        rule("reject", predicate("previous_output.approved.choice", "eq", "no"))
+      ])
+
+    task = %{"level" => "task", "tags" => []}
+
+    {:ok, confident} = RouteContext.build_structured(approval("yes", 0.9), task, 1)
+    assert {:ok, %{matched_rule_id: "accept"}} = RouteEvaluator.evaluate(program, confident)
+
+    {:ok, uncertain} = RouteContext.build_structured(approval("yes", 0.6), task, 1)
+    assert {:ok, %{used_default: true}} = RouteEvaluator.evaluate(program, uncertain)
+
+    {:ok, rejected} = RouteContext.build_structured(approval("no", 0.1), task, 1)
+    assert {:ok, %{matched_rule_id: "reject"}} = RouteEvaluator.evaluate(program, rejected)
+  end
+
+  test "missing structured values remain unmatched through negation and nested expressions" do
+    task = %{"level" => "task", "tags" => []}
+    {:ok, context} = RouteContext.build_structured(%{"approved" => %{"choice" => "yes"}}, task, 1)
+    missing = predicate("previous_output.approved.confidence", "gte", 0.8)
+    known = predicate("previous_output.approved.choice", "eq", "yes")
+
+    for expression <- [
+          %{"not" => missing},
+          %{"all" => [known, %{"not" => missing}]},
+          %{
+            "any" => [
+              predicate("previous_output.approved.choice", "eq", "no"),
+              %{"not" => missing}
+            ]
+          }
+        ] do
+      assert {:ok, %{used_default: true}} =
+               RouteEvaluator.evaluate(program([rule("unexpected", expression)]), context)
+    end
+
+    assert {:ok, %{matched_rule_id: "known"}} =
+             RouteEvaluator.evaluate(
+               program([rule("known", %{"any" => [known, missing]})]),
+               context
+             )
+
+    {:ok, null_value} =
+      RouteContext.build_structured(
+        %{"approved" => %{"choice" => "yes", "confidence" => nil}},
+        task,
+        1
+      )
+
+    assert {:ok, %{used_default: true}} =
+             RouteEvaluator.evaluate(
+               program([rule("unexpected", %{"not" => missing})]),
+               null_value
+             )
+  end
+
+  defp approval(choice, yes) do
+    %{
+      "approved" => %{
+        "type" => "choice",
+        "choice" => choice,
+        "probabilities" => %{"yes" => yes, "no" => 1 - yes},
+        "confidence" => 0.8
+      }
+    }
+  end
+
   defp program(rules, default \\ default()) do
     {:ok, decoded} =
       RouteConfig.decode(%{

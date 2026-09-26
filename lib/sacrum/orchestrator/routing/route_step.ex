@@ -42,8 +42,9 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
   @spec handle_deterministic_route_step(FSMData.t(), struct(), map()) :: fsm_transition()
   def handle_deterministic_route_step(data, current_step, program) do
     with {:ok, provenance} <- RouteProvenance.resolve(data, current_step),
-         {:ok, previous_output} <- validated_predecessor_output(provenance),
-         {:ok, context} <- build_route_context(data.task, current_step.id, previous_output),
+         {:ok, predecessor_input} <- validated_predecessor_input(provenance),
+         {:ok, context} <-
+           build_route_context(data.task, current_step.id, predecessor_input, provenance),
          {:ok, result} <- RouteEvaluator.evaluate(program, context),
          {:ok, {dest_id, transition_type}} <- destination(result.transition),
          {:ok, route_plan} <- prepare_route_plan(data, dest_id, transition_type, result.handoff),
@@ -75,7 +76,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
     end
   end
 
-  defp validated_predecessor_output(%{source_execution: execution, source_step: source_step}) do
+  defp validated_predecessor_input(%{source_execution: execution, source_step: source_step}) do
     with {:ok, output} <- decode_predecessor_output(execution.output),
          :ok <-
            OutputValidator.validate_output(
@@ -91,12 +92,18 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
 
   defp decode_predecessor_output(_output), do: {:error, :route_predecessor_output_missing}
 
-  defp build_route_context(task, route_step_id, previous_output) do
-    RouteContext.build(
-      previous_output,
-      %{"level" => task.level, "tags" => task.tags || []},
-      RouteAudit.visit_count(task, route_step_id)
-    )
+  defp build_route_context(task, route_step_id, previous_output, provenance) do
+    task_input = %{"level" => task.level, "tags" => task.tags || []}
+    visit_count = RouteAudit.visit_count(task, route_step_id)
+
+    # Only route-envelope predecessors must carry `route.{result, handoff}`.
+    case provenance.source_step.step_type do
+      :structured_inference ->
+        RouteContext.build_structured(previous_output, task_input, visit_count)
+
+      _step_type ->
+        RouteContext.build(previous_output, task_input, visit_count)
+    end
   end
 
   defp destination(%{type: :intra_workflow, step_id: step_id}),
