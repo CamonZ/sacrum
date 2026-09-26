@@ -42,19 +42,28 @@ defmodule Sacrum.WorkflowBundles.RouteRefs do
     end
   end
 
-  defp remap_step(%{route_config: nil} = step, _workflow, _workflow_index, _step_index, _context),
-    do: {:ok, step}
-
-  defp remap_step(step, workflow, workflow_index, step_index, context) do
-    case remap_config(step.route_config, workflow.workflow_ref, step.step_ref, context) do
+  defp remap_step(
+         %{config: %{"route_config" => route_config} = config} = step,
+         workflow,
+         workflow_index,
+         step_index,
+         context
+       )
+       when not is_nil(route_config) do
+    case remap_config(route_config, workflow.workflow_ref, step.step_ref, context) do
       {:ok, route_config} ->
-        {:ok, %{step | route_config: route_config}}
+        {:ok, %{step | config: Map.put(config, "route_config", route_config)}}
 
       {:error, reason} ->
         {:error,
-         prefix_error(reason, "workflows[#{workflow_index}].steps[#{step_index}].route_config")}
+         prefix_error(
+           reason,
+           "workflows[#{workflow_index}].steps[#{step_index}].config.route_config"
+         )}
     end
   end
+
+  defp remap_step(step, _workflow, _workflow_index, _step_index, _context), do: {:ok, step}
 
   defp remap_config(config, workflow_ref, step_ref, context) when is_map(config) do
     with {:ok, config} <-
@@ -66,7 +75,7 @@ defmodule Sacrum.WorkflowBundles.RouteRefs do
   end
 
   defp remap_config(_config, _workflow_ref, _step_ref, _context),
-    do: {:error, error("$.route_config", "must be a JSON object")}
+    do: {:error, error("$", "must be a JSON object")}
 
   defp remap_section(config, key, path, workflow_ref, step_ref, context) do
     with {:ok, value} <-

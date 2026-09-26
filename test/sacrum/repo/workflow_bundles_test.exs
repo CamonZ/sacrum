@@ -76,6 +76,45 @@ defmodule Sacrum.Repo.WorkflowBundlesTest do
              WorkflowBundles.import(caller.id, project.id, successful_bundle())
   end
 
+  test "imports structured inference steps with their config" do
+    {user, project} = create_project()
+
+    assert {:ok, result} = WorkflowBundles.import(user.id, project.id, structured_bundle())
+
+    step = Repo.get!(WorkflowStep, get_in(result.step_mappings, ["triage", "classify"]))
+
+    assert step.step_type == :structured_inference
+    assert step.config.provider == "typesafe"
+    assert step.config.model == "system-one"
+    assert step.config.state == %{"title" => "{{ task.title }}", "labels" => ["a", "b"]}
+    assert step.config.questions == structured_questions()
+  end
+
+  test "imports nothing when a structured inference step is invalid" do
+    {user, project} = create_project()
+
+    bundle =
+      update_in(
+        structured_bundle(),
+        ["workflows", Access.at(0), "steps", Access.at(0)],
+        fn step ->
+          put_in(step, ["config", "questions", "area", "criteria"], %{})
+        end
+      )
+
+    assert {:error, %Ecto.Changeset{} = changeset} =
+             WorkflowBundles.import(user.id, project.id, bundle)
+
+    assert {"workflows[0].steps[0].config.questions.area.criteria: must be an object with 1 to 255 options",
+            _opts} = changeset.errors[:bundle]
+
+    assert Repo.all(
+             from workflow in Workflow,
+               where: workflow.project_id == ^project.id,
+               select: workflow.name
+           ) == ["Backlog"]
+  end
+
   defp create_project do
     suffix = Ecto.UUID.generate()
 
@@ -92,7 +131,6 @@ defmodule Sacrum.Repo.WorkflowBundlesTest do
 
   defp successful_bundle do
     %{
-      "schema_version" => 1,
       "workflows" => [
         %{
           "workflow_ref" => "build",
@@ -125,9 +163,51 @@ defmodule Sacrum.Repo.WorkflowBundlesTest do
     }
   end
 
+  defp structured_bundle do
+    %{
+      "workflows" => [
+        %{
+          "workflow_ref" => "triage",
+          "name" => "Triage",
+          "initial_step" => address("triage", "classify"),
+          "steps" => [
+            %{
+              "step_ref" => "classify",
+              "name" => "Classify",
+              "step_type" => "structured_inference",
+              "config" => %{
+                "provider" => "typesafe",
+                "model" => "system-one",
+                "state" => %{"title" => "{{ task.title }}", "labels" => ["a", "b"]},
+                "questions" => structured_questions()
+              }
+            },
+            %{"step_ref" => "done", "name" => "Done", "step_type" => "finish"}
+          ]
+        }
+      ],
+      "step_edges" => [step_edge("triage", "classify", "done")]
+    }
+  end
+
+  defp structured_questions do
+    %{
+      "risky" => %{"type" => "noul", "instructions" => "Is the change risky?"},
+      "area" => %{
+        "type" => "choice",
+        "instructions" => "Which area does it touch?",
+        "criteria" => %{"api" => "Server code", "ui" => nil}
+      },
+      "size" => %{
+        "type" => "score",
+        "instructions" => "How large is it?",
+        "criteria" => ["small", "medium", "large"]
+      }
+    }
+  end
+
   defp invalid_route_bundle do
     %{
-      "schema_version" => 1,
       "workflows" => [
         %{
           "workflow_ref" => "broken",
@@ -139,22 +219,24 @@ defmodule Sacrum.Repo.WorkflowBundlesTest do
               "step_ref" => "route",
               "name" => "Route",
               "step_type" => "route",
-              "route_config" => %{
-                "version" => 1,
-                "match_policy" => "exactly_one",
-                "rules" => [
-                  %{
-                    "id" => "done",
-                    "when" => %{
-                      "ref" => "previous_output.route.result",
-                      "op" => "eq",
-                      "value" => "done"
-                    },
+              "config" => %{
+                "route_config" => %{
+                  "version" => 1,
+                  "match_policy" => "exactly_one",
+                  "rules" => [
+                    %{
+                      "id" => "done",
+                      "when" => %{
+                        "ref" => "previous_output.route.result",
+                        "op" => "eq",
+                        "value" => "done"
+                      },
+                      "transition" => %{"type" => "intra_workflow", "step_ref" => "finish"}
+                    }
+                  ],
+                  "default" => %{
                     "transition" => %{"type" => "intra_workflow", "step_ref" => "finish"}
                   }
-                ],
-                "default" => %{
-                  "transition" => %{"type" => "intra_workflow", "step_ref" => "finish"}
                 }
               }
             },

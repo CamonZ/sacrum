@@ -18,8 +18,6 @@ defmodule Sacrum.Repo.WorkflowBundles do
   alias Sacrum.Routing.RouteValidator
   alias Sacrum.WorkflowBundles.Manifest
 
-  @step_config_fields ~w(prompt output_schema agents skills agent_config route_config)a
-
   @type result :: %{
           workflows: [Workflow.t()],
           workflow_steps: [WorkflowStep.t()],
@@ -37,7 +35,7 @@ defmodule Sacrum.Repo.WorkflowBundles do
           step_ids: %{{String.t(), String.t()} => String.t()}
         }
 
-  @doc "Imports a validated V1 bundle into one authenticated project."
+  @doc "Imports a validated bundle into one authenticated project."
   @spec import(String.t(), String.t(), term()) ::
           {:ok, result()} | {:error, Ecto.Changeset.t()} | {:error, :not_found}
   def import(user_id, project_id, bundle)
@@ -211,18 +209,9 @@ defmodule Sacrum.Repo.WorkflowBundles do
     end)
   end
 
-  # V1 manifests carry step settings as flat fields; non-blank ones become the
-  # step's config, so fields the step type does not declare are rejected.
-  defp put_step_config(attrs, step) do
-    config =
-      for key <- @step_config_fields,
-          value = Map.fetch!(step, key),
-          value not in [nil, [], %{}, ""],
-          into: %{},
-          do: {Atom.to_string(key), value}
-
-    if config == %{}, do: attrs, else: Map.put(attrs, :config, config)
-  end
+  # A step without a config gets its variant's defaults.
+  defp put_step_config(attrs, %{config: nil}), do: attrs
+  defp put_step_config(attrs, %{config: config}), do: Map.put(attrs, :config, config)
 
   defp add_initial_step_updates(multi, prepared) do
     Enum.reduce(prepared.bundle.workflows, multi, fn

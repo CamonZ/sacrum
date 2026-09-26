@@ -374,6 +374,36 @@ For example:
 This extends the configuration language only; it does not migrate, backfill,
 or reinterpret existing workflow definitions.
 
+### Workflow bundles
+
+`importWorkflowBundle(projectId!, bundle!)` imports a portable bundle of
+`workflows`, `step_edges`, and `workflow_edges` into a project in one
+transaction. It is additive and never changes the project's default workflow.
+The manifest is validated by `Sacrum.WorkflowBundles.Manifest`; any error is
+returned as a `bundle` error with a manifest path (e.g.
+`workflows[0].steps[1].config.questions.size.criteria`) and nothing is
+imported. Vertebrae's sacrum-client exports workflows in the same format.
+
+A step has `step_ref`, `name`, `goal`, `step_type` (default `llm_inference`),
+`step_order`, `persistence_options`, and `config`. `config` is the step type's
+config object, exactly as `WorkflowStep.config` returns it (see "Step types
+and step configuration"):
+
+- it must be absent or `null` for `human_input`, `stop`, and `finish` steps;
+- fields the variant does not declare are rejected with
+  `is not supported for <step_type> steps`;
+- it is validated against its variant changeset, so a missing
+  `structured_inference` `provider` is reported at
+  `workflows[i].steps[j].config.provider` and invalid questions keep their
+  path below `config.questions`. A variant step without a `config` is
+  validated as an empty one;
+- in a route step's `config.route_config`, transition `step_ref` and
+  `workflow_ref` targets must be outgoing edges and are remapped to the new
+  ids, after which the route config is validated.
+
+Config values are stored unchanged; a `structured_inference` `state` keeps its
+JSON type (string, object, or array).
+
 ## Tech Stack
 
 | Layer | Technology |
