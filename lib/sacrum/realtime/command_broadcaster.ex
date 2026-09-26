@@ -4,7 +4,7 @@ defmodule Sacrum.Realtime.CommandBroadcaster do
   continue to carry client state projections, never execution commands.
   """
 
-  alias Sacrum.Repo.Schemas.{Task, WorkflowStep}
+  alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.Schemas.WorkflowStep.Config
 
   @doc """
@@ -22,26 +22,31 @@ defmodule Sacrum.Realtime.CommandBroadcaster do
         worktree: Task.workspace_worktree(data.task)
       }
       |> Map.merge(request_payload(execution.config))
-      |> put_present(:output_schema, WorkflowStep.output_schema(execution))
       |> put_present(:verbose_daemon_logging, data.step.verbose_daemon_logging || nil)
 
     broadcast(daemon_id, "run_step", payload)
   end
 
-  # structured_inference sends resolved `state` with `fields` as the output
-  # schema; the provider harness maps both to its own request.
+  # structured_inference sends resolved `state` with its `questions`; the
+  # provider harness builds its request from both and returns the provider's
+  # answers unchanged.
   defp request_payload(%Config.StructuredInference{} = config) do
     %{
       state: config.state,
+      questions: config.questions,
       agent_config: %{"provider" => config.provider, "model" => config.model}
     }
   end
 
   defp request_payload(config) do
-    %{
-      prompt: (config && Map.get(config, :prompt)) || "",
-      agent_config: config && Map.get(config, :agent_config)
-    }
+    put_present(
+      %{
+        prompt: (config && Map.get(config, :prompt)) || "",
+        agent_config: config && Map.get(config, :agent_config)
+      },
+      :output_schema,
+      config && Map.get(config, :output_schema)
+    )
   end
 
   defp put_present(payload, _key, nil), do: payload

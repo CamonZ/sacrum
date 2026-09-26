@@ -415,8 +415,8 @@ no destination `execution.handoff`; transition target metadata remains only in
 every former `execute`/`evaluate` step; the two were behaviorally identical and
 neither name is accepted or reported any more. Clients must treat
 `llm_inference` as the daemon-driven work step.
-`structured_inference` is also daemon-driven; its completed `output` is JSON
-matching the `fields` schema in its execution `config`.
+`structured_inference` is also daemon-driven; its completed `output` is the
+provider's JSON answers map, keyed by the `questions` in its execution `config`.
 
 `StepExecution.prompt` has been removed. `StepExecution.config` is the
 `WorkflowStepConfig` union the execution ran with, templates rendered: read the

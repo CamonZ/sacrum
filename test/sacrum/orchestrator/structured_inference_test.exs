@@ -1,8 +1,9 @@
 defmodule Sacrum.Orchestrator.StructuredInferenceTest do
   @moduledoc """
   End-to-end contract for `structured_inference` steps with a stubbed provider
-  harness: resolve `state`, dispatch the request, validate the harness result
-  against `fields`, and expose the stored output to the next step.
+  harness: resolve `state`, dispatch the questions, validate the provider's
+  answers against the schema derived from the questions, and expose the stored
+  answers to the next step.
   """
 
   use Sacrum.DataCase, async: false
@@ -22,24 +23,43 @@ defmodule Sacrum.Orchestrator.StructuredInferenceTest do
   alias Sacrum.Repo.Schemas.{StepExecution, Task, TaskRun}
   alias Sacrum.Repo.Schemas.WorkflowStep.Config
 
-  @fields %{
-    "type" => "object",
-    "properties" => %{
-      "approved" => %{
-        "type" => "string",
-        "enum" => ["yes", "no"],
-        "description" => "Is the task ready?"
-      }
+  @questions %{
+    "approved" => %{
+      "type" => "choice",
+      "instructions" => "Is the task ready?",
+      "criteria" => %{"yes" => "Ready to ship", "no" => nil}
     },
-    "required" => ["approved"],
-    "additionalProperties" => false
+    "blocked" => %{"type" => "noul", "instructions" => "Is the task blocked?"},
+    "risk" => %{
+      "type" => "score",
+      "instructions" => "Rate the risk",
+      "criteria" => ["low", "high"]
+    }
   }
 
   @structured_config %{
     "provider" => "typesafe",
     "model" => "jev-latest",
     "state" => %{"title" => "{{ task.title }}", "tags" => "{{ task.tags }}"},
-    "fields" => @fields
+    "questions" => @questions
+  }
+
+  # TypeSafe answers as the provider returns them.
+  @answers %{
+    "approved" => %{
+      "type" => "choice",
+      "choice" => "yes",
+      "probabilities" => %{"yes" => 0.9, "no" => 0.1},
+      "confidence" => 0.8
+    },
+    "blocked" => %{"type" => "noul", "noul" => 0.2},
+    "risk" => %{
+      "type" => "score",
+      "score" => 0.25,
+      "legend" => %{"0" => "low", "1" => "high"},
+      "probabilities" => %{"0" => 0.75, "1" => 0.25},
+      "confidence" => 0.5
+    }
   }
 
   defp setup_workflow(structured_config \\ @structured_config) do
@@ -67,9 +87,10 @@ defmodule Sacrum.Orchestrator.StructuredInferenceTest do
         "step_order" => 2,
         "config" => %{
           "prompt" =>
-            "approved={{ execution.previous_output.approved }} " <>
-              "p={{ execution.previous_meta.approved.probabilities.yes }} " <>
-              "named={{ steps.judge.output.approved }}",
+            "approved={{ execution.previous_output.approved.choice }} " <>
+              "p={{ execution.previous_output.approved.probabilities.yes }} " <>
+              "blocked={{ execution.previous_output.blocked.noul }} " <>
+              "risk={{ steps.judge.output.risk.score }}",
           "agent_config" => %{"model" => "test-model"}
         }
       })
@@ -155,7 +176,7 @@ defmodule Sacrum.Orchestrator.StructuredInferenceTest do
   end
 
   describe "a structured_inference step with a stubbed provider" do
-    test "dispatches the resolved request and hands validated output to the next step" do
+    test "dispatches the questions and hands the stored answers to the next step" do
       %{user: user, task: task, judge: judge, consume: consume} = setup_workflow()
 
       start_orchestrator(task, user)
@@ -174,42 +195,58 @@ defmodule Sacrum.Orchestrator.StructuredInferenceTest do
                provider: "typesafe",
                model: "jev-latest",
                state: resolved_state,
-               fields: @fields
+               questions: @questions
              }
 
       assert execution.model == "jev-latest"
       assert execution.model_provider == "typesafe"
-      assert execution.context == %{}
 
       assert_receive %Phoenix.Socket.Broadcast{event: "run_step", payload: payload}, 1500
       assert payload.id == execution_id
       assert payload.state == resolved_state
-      assert payload.output_schema == @fields
+      assert payload.questions == @questions
       assert payload.agent_config == %{"provider" => "typesafe", "model" => "jev-latest"}
       refute Map.has_key?(payload, :prompt)
+      refute Map.has_key?(payload, :output_schema)
 
-      meta = %{"approved" => %{"probabilities" => %{"yes" => 0.9, "no" => 0.1}}}
-
-      assert {:ok, completed} =
-               complete_execution(
-                 execution,
-                 Jason.encode!(%{"output" => %{"approved" => "yes"}, "meta" => meta})
-               )
+      result = Jason.encode!(@answers)
+      assert {:ok, completed} = complete_execution(execution, result)
 
       assert completed.status == "completed"
-      assert Jason.decode!(completed.output) == %{"approved" => "yes"}
-
-      assert completed.context == %{"structured_inference" => %{"meta" => meta}}
+      assert completed.output == result
+      assert completed.context == execution.context
       assert completed.config == execution.config
 
       wait_until(fn -> execution_for(task, consume) end, "next step dispatch")
       consume_execution = execution_for(task, consume)
 
-      assert %Config.LlmInference{prompt: "approved=yes p=0.9 named=yes"} =
+      assert %Config.LlmInference{prompt: "approved=yes p=0.9 blocked=0.2 risk=0.25"} =
                consume_execution.config
     end
 
-    test "fails the execution when the provider result does not satisfy fields" do
+    test "stores answers with additive provider fields verbatim" do
+      %{user: user, task: task, judge: judge} = setup_workflow()
+
+      start_orchestrator(task, user)
+      wait_until(fn -> execution_for(task, judge) end, "structured dispatch")
+      execution = execution_for(task, judge)
+
+      # Laya adds action.act_probability to every answer and confidence to noul.
+      laya_answers =
+        @answers
+        |> Map.new(fn {id, answer} ->
+          {id, Map.put(answer, "action", %{"act_probability" => 0.7})}
+        end)
+        |> put_in(["blocked", "confidence"], 0.6)
+
+      result = Jason.encode!(laya_answers)
+
+      assert {:ok, completed} = complete_execution(execution, result)
+      assert completed.status == "completed"
+      assert completed.output == result
+    end
+
+    test "fails the execution when the answers do not satisfy the questions" do
       %{user: user, task: task, judge: judge, consume: consume} = setup_workflow()
 
       start_orchestrator(task, user)
@@ -217,13 +254,10 @@ defmodule Sacrum.Orchestrator.StructuredInferenceTest do
       execution = execution_for(task, judge)
 
       assert {:ok, failed} =
-               complete_execution(
-                 execution,
-                 Jason.encode!(%{"output" => %{"approved" => "maybe"}})
-               )
+               complete_execution(execution, Jason.encode!(Map.delete(@answers, "risk")))
 
       assert failed.status == "failed"
-      assert failed.output =~ "structured output rejected: output"
+      assert failed.output =~ "structured output rejected: answers"
       assert failed.context == execution.context
 
       # The orchestrator either retries the step or fails the run; the next
@@ -243,52 +277,59 @@ defmodule Sacrum.Orchestrator.StructuredInferenceTest do
              )
     end
 
-    test "rejects meta for properties outside fields and results without an output key" do
+    test "rejects answers that do not match the questions" do
       %{user: user, task: task, judge: judge} = setup_workflow()
 
       start_orchestrator(task, user)
       wait_until(fn -> execution_for(task, judge) end, "structured dispatch")
       execution = execution_for(task, judge)
 
-      result =
-        Jason.encode!(%{
-          "output" => %{"approved" => "yes"},
-          "meta" => %{"unknown" => %{"confidence" => 0.5}}
-        })
+      invalid = [
+        Map.delete(@answers, "approved"),
+        Map.put(@answers, "extra", %{"type" => "noul", "noul" => 0.5}),
+        put_in(@answers, ["approved", "choice"], "maybe"),
+        put_in(@answers, ["approved", "probabilities"], %{"yes" => 1.0}),
+        put_in(@answers, ["approved", "probabilities"], %{"yes" => 0.5, "no" => 0.3, "x" => 0.2}),
+        put_in(@answers, ["approved", "confidence"], 1.5),
+        put_in(@answers, ["blocked", "noul"], -0.1),
+        put_in(@answers, ["blocked", "type"], "choice"),
+        put_in(@answers, ["risk", "score"], 2),
+        put_in(@answers, ["risk", "legend"], %{"0" => "low"}),
+        put_in(@answers, ["risk", "probabilities", "1"], 1.2)
+      ]
 
-      assert {:ok, %{status: "failed", output: output}} = complete_execution(execution, result)
-      assert output =~ "structured output rejected: meta"
+      for answers <- invalid do
+        assert %{"status" => "failed", "output" => "structured output rejected: answers " <> _} =
+                 StructuredInference.complete(execution, Jason.encode!(answers)),
+               "for #{inspect(answers)}"
+      end
 
-      assert %{"status" => "failed", "output" => output} =
-               StructuredInference.complete(execution.config, %{}, ~s({"approved":"yes"}))
+      assert %{"output" => "structured output rejected: answers must be valid JSON"} =
+               StructuredInference.complete(execution, "not json")
 
-      assert output =~ "result must be an object with an output key"
-
-      assert %{"output" => "structured output rejected: execution config is missing"} =
-               StructuredInference.complete(nil, %{}, result)
+      assert %{"output" => "structured output rejected: execution config is missing questions"} =
+               StructuredInference.complete(%{execution | config: nil}, Jason.encode!(@answers))
     end
 
-    test "harness updates cannot change the execution config or stored meta" do
+    test "harness updates cannot change the execution config" do
       %{user: user, task: task, judge: judge} = setup_workflow()
 
       start_orchestrator(task, user)
       wait_until(fn -> execution_for(task, judge) end, "structured dispatch")
       execution = execution_for(task, judge)
-
-      forged = %{"structured_inference" => %{"meta" => %{}}, "harness" => %{"pid" => 1}}
 
       assert {:ok, updated} =
                Accounts.StepExecutions.update(execution, %{
                  status: "in_progress",
-                 context: forged,
-                 config: %{"fields" => %{}}
+                 context: %{"harness" => %{"pid" => 1}},
+                 config: %{"questions" => %{}}
                })
 
       assert updated.context == %{"harness" => %{"pid" => 1}}
       assert updated.config == execution.config
 
       assert {:ok, %{status: "failed"}} =
-               complete_execution(updated, Jason.encode!(%{"output" => %{"approved" => 1}}))
+               complete_execution(updated, Jason.encode!(%{"approved" => 1}))
     end
 
     test "a duplicate completion re-validates instead of storing the raw result" do
@@ -297,17 +338,18 @@ defmodule Sacrum.Orchestrator.StructuredInferenceTest do
       start_orchestrator(task, user)
       wait_until(fn -> execution_for(task, judge) end, "structured dispatch")
       execution = execution_for(task, judge)
-      result = Jason.encode!(%{"output" => %{"approved" => "no"}})
+      result = Jason.encode!(@answers)
 
       assert {:ok, completed} = complete_execution(execution, result)
       assert {:ok, duplicate} = complete_execution(completed, result)
 
       assert duplicate.status == "completed"
-      assert duplicate.output == completed.output
-      assert Jason.decode!(duplicate.output) == %{"approved" => "no"}
+      assert duplicate.output == result
 
       assert {:ok, same} = Accounts.StepExecutions.update(duplicate, %{status: "completed"})
-      assert same.output == completed.output
+      assert same.output == result
+
+      assert {:ok, %{status: "failed"}} = complete_execution(same, Jason.encode!(%{}))
     end
 
     test "fails the dispatch when a required state reference is missing" do

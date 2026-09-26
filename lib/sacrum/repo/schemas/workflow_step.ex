@@ -84,14 +84,17 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
   def config_value(%{config: config}, key), do: config && Map.get(config, key)
 
   @doc """
-  The JSON Schema a step's output must satisfy: `fields` for
-  `structured_inference` steps, otherwise the variant's `output_schema`.
+  The JSON Schema a step's output must satisfy: the answers schema derived
+  from `questions` for `structured_inference` steps, otherwise the variant's
+  `output_schema`.
   """
   @spec output_schema(with_config()) :: map() | nil
-  def output_schema(%{config: %Config.StructuredInference{fields: fields}}), do: fields
+  def output_schema(%{config: %Config.StructuredInference{questions: questions}}),
+    do: Config.StructuredInference.answers_schema(questions)
+
   def output_schema(step), do: config_value(step, :output_schema)
 
-  defp output_schema_key(:structured_inference), do: :fields
+  defp output_schema_key(:structured_inference), do: :questions
   defp output_schema_key(_step_type), do: :output_schema
 
   # A step's type is fixed at creation; a different kind of step is a new step.

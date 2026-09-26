@@ -140,7 +140,7 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
     field :provider, :string
     field :model, :string
     field :state, :json
-    field :fields, :json
+    field :questions, :json
   end
 
   object :route_step_config do
