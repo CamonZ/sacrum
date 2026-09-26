@@ -9,7 +9,15 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
   @type t :: %__MODULE__{}
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
-  @step_types [:llm_inference, :route, :wait_children, :human_input, :stop, :finish]
+  @step_types [
+    :llm_inference,
+    :structured_inference,
+    :route,
+    :wait_children,
+    :human_input,
+    :stop,
+    :finish
+  ]
 
   schema "workflow_steps" do
     field :name, :string
@@ -18,11 +26,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     field :step_type, Ecto.Enum, values: @step_types, default: :llm_inference
 
     polymorphic_embeds_one(:config,
-      types: [
-        llm_inference: Config.LlmInference,
-        route: Config.Route,
-        wait_children: Config.WaitChildren
-      ],
+      types: Config.types(),
       use_parent_field_for_type: :step_type,
       on_replace: :update
     )
@@ -72,9 +76,23 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     |> validate_persistence_options()
   end
 
+  # A step struct, or any map carrying a step config.
+  @type with_config :: %{required(:config) => Config.t(), optional(atom()) => term()}
+
   @doc "Reads `key` from the step's config, or nil when the variant has no such field."
-  @spec config_value(%{config: Config.t()}, atom()) :: term()
+  @spec config_value(with_config(), atom()) :: term()
   def config_value(%{config: config}, key), do: config && Map.get(config, key)
+
+  @doc """
+  The JSON Schema a step's output must satisfy: `fields` for
+  `structured_inference` steps, otherwise the variant's `output_schema`.
+  """
+  @spec output_schema(with_config()) :: map() | nil
+  def output_schema(%{config: %Config.StructuredInference{fields: fields}}), do: fields
+  def output_schema(step), do: config_value(step, :output_schema)
+
+  defp output_schema_key(:structured_inference), do: :fields
+  defp output_schema_key(_step_type), do: :output_schema
 
   # A step's type is fixed at creation; a different kind of step is a new step.
   defp validate_step_type_unchanged(changeset, attrs) do
@@ -173,7 +191,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
 
   defp validate_persistence_output_schema(changeset, persistence_options) do
     if not is_nil(PersistenceOptions.artifact_logical_name(persistence_options)) and
-         is_nil(config_field(changeset, :output_schema)) do
+         is_nil(config_field(changeset, output_schema_key(get_field(changeset, :step_type)))) do
       add_error(
         changeset,
         :persistence_options,

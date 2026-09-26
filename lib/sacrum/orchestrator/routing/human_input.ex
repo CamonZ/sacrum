@@ -13,12 +13,9 @@ defmodule Sacrum.Orchestrator.Routing.HumanInput do
   alias Sacrum.Accounts
 
   alias Sacrum.Orchestrator.{
-    ExecutionHistory,
     ExecutionPool,
     FSMData,
     OutputValidator,
-    PromptContext,
-    PromptRenderer,
     Scheduler
   }
 
@@ -37,10 +34,7 @@ defmodule Sacrum.Orchestrator.Routing.HumanInput do
 
     with {:ok, task_run} <-
            Lookup.fetch_for_task(data.user_id, data.project_id, task.id, data.task_run_id),
-         {:ok, rendered_prompt} <-
-           render_human_prompt(task, step, task_run, data.pending_handoff),
-         {:ok, %{execution: execution}} <-
-           enter_waiting_state(data, task, step, task_run, rendered_prompt) do
+         {:ok, %{execution: execution}} <- enter_waiting_state(data, task, step, task_run) do
       Logger.info(
         "[TaskOrchestrator:#{task_id}] Entered human_input step=#{step.id} execution=#{execution.id}"
       )
@@ -138,21 +132,16 @@ defmodule Sacrum.Orchestrator.Routing.HumanInput do
           FSMData.t(),
           Task.t(),
           WorkflowStep.t(),
-          TaskRun.t(),
-          String.t()
+          TaskRun.t()
         ) ::
           {:ok, map()} | {:error, term()}
-  defp enter_waiting_state(data, task, step, task_run, rendered_prompt) do
-    Repo.transaction(fn ->
-      commit_waiting_state(data, task, step, task_run, rendered_prompt)
-    end)
+  defp enter_waiting_state(data, task, step, task_run) do
+    Repo.transaction(fn -> commit_waiting_state(data, task, step, task_run) end)
   end
 
-  @spec commit_waiting_state(FSMData.t(), Task.t(), WorkflowStep.t(), TaskRun.t(), String.t()) ::
-          map()
-  defp commit_waiting_state(data, task, step, task_run, rendered_prompt) do
-    with {:ok, execution} <-
-           Repo.insert(waiting_execution_changeset(data, task, step, task_run, rendered_prompt)),
+  @spec commit_waiting_state(FSMData.t(), Task.t(), WorkflowStep.t(), TaskRun.t()) :: map()
+  defp commit_waiting_state(data, task, step, task_run) do
+    with {:ok, execution} <- Repo.insert(waiting_execution_changeset(data, task, step, task_run)),
          {:ok, updated_task_run} <-
            task_run
            |> StateTransitions.waiting_changeset(execution.id)
@@ -168,10 +157,9 @@ defmodule Sacrum.Orchestrator.Routing.HumanInput do
           FSMData.t(),
           Task.t(),
           WorkflowStep.t(),
-          TaskRun.t(),
-          String.t()
+          TaskRun.t()
         ) :: Ecto.Changeset.t()
-  defp waiting_execution_changeset(data, task, step, task_run, rendered_prompt) do
+  defp waiting_execution_changeset(data, task, step, task_run) do
     attrs =
       maybe_put_handoff(
         %{
@@ -181,8 +169,7 @@ defmodule Sacrum.Orchestrator.Routing.HumanInput do
           step_id: step.id,
           step_name: step.name,
           step_type: step.step_type,
-          status: "waiting",
-          prompt: rendered_prompt
+          status: "waiting"
         },
         data.pending_handoff
       )
@@ -191,29 +178,6 @@ defmodule Sacrum.Orchestrator.Routing.HumanInput do
       %StepExecution{user_id: data.user_id, project_id: data.project_id},
       attrs
     )
-  end
-
-  @spec render_human_prompt(Task.t(), WorkflowStep.t(), TaskRun.t(), map() | nil) ::
-          {:ok, String.t()}
-  defp render_human_prompt(task, step, task_run, handoff) do
-    execution =
-      %StepExecution{
-        user_id: task.user_id,
-        project_id: task.project_id,
-        task_id: task.id,
-        task_run_id: task_run.id,
-        workflow_id: task.workflow_id,
-        step_id: step.id,
-        step_name: step.name,
-        step_type: step.step_type,
-        status: "waiting",
-        handoff: handoff
-      }
-
-    execution_data = ExecutionHistory.build_execution_data(task, execution, task_run)
-    context = PromptContext.build_context(task, execution_data, step, task_run)
-
-    PromptRenderer.render(nil, context)
   end
 
   defp maybe_put_handoff(attrs, handoff) when is_map(handoff),

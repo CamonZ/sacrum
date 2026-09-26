@@ -17,7 +17,7 @@ Sacrum now separates four different questions:
 | What is this task? | `Task` | The durable work item: title, hierarchy, workflow assignment, current step, sections, refs. |
 | Where is the task in the workflow? | `Task.workflow`, `Task.currentStep` | The current workflow position. |
 | Is automation currently running or waiting? | `TaskRun.status` | The durable run lifecycle. |
-| What happened during an individual attempt? | `StepExecution.status` | Attempt history, prompt/output/logs/LLM metadata. |
+| What happened during an individual attempt? | `StepExecution.status` | Attempt history, rendered config/output/logs/LLM metadata. |
 
 `TaskRun` is not a replacement for `Task`. It is a run session for automation over a task. A task can have many historical TaskRuns, but should be represented with at most one active run in normal client state.
 
@@ -415,6 +415,16 @@ no destination `execution.handoff`; transition target metadata remains only in
 every former `execute`/`evaluate` step; the two were behaviorally identical and
 neither name is accepted or reported any more. Clients must treat
 `llm_inference` as the daemon-driven work step.
+`structured_inference` is also daemon-driven; its completed `output` is JSON
+matching the `fields` schema in its execution `config`.
+
+`StepExecution.prompt` has been removed. `StepExecution.config` is the
+`WorkflowStepConfig` union the execution ran with, templates rendered: read the
+rendered prompt from `config { ... on LlmInferenceStepConfig { prompt } }` and
+the resolved structured-inference input from `StructuredInferenceStepConfig.state`.
+It is null for `human_input`, `stop`, and `finish` executions. Channel
+`step_execution_*` payloads carry `config` in place of `prompt` (CDC
+after-images include the `__type__` tag, as for workflow steps).
 
 Type-specific settings are exposed as the typed `config` union (see
 `docs/domain-model.md`, "Step types and step configuration"):

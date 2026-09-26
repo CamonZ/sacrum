@@ -80,7 +80,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
          :ok <-
            OutputValidator.validate_output(
              output,
-             WorkflowStep.config_value(source_step, :output_schema)
+             WorkflowStep.output_schema(source_step)
            ) do
       {:ok, output}
     end
@@ -229,21 +229,20 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
        ) do
     step = provenance.route_step
 
-    StepExecution.create_changeset(
-      %StepExecution{user_id: data.user_id, project_id: data.project_id},
-      %{
-        task_id: data.task.id,
-        task_run_id: provenance.task_run.id,
-        workflow_id: data.task.workflow_id,
-        step_id: step.id,
-        step_name: step.name,
-        step_type: :route,
-        status: "completed",
-        context: RouteAudit.context(provenance, program, context, result),
-        transition_result: RouteDecision.transition_result(dest_id, transition_type),
-        handoff: result.handoff
-      }
-    )
+    %StepExecution{user_id: data.user_id, project_id: data.project_id}
+    |> StepExecution.create_changeset(%{
+      task_id: data.task.id,
+      task_run_id: provenance.task_run.id,
+      workflow_id: data.task.workflow_id,
+      step_id: step.id,
+      step_name: step.name,
+      step_type: :route,
+      status: "completed",
+      context: RouteAudit.context(provenance, program, context, result),
+      transition_result: RouteDecision.transition_result(dest_id, transition_type),
+      handoff: result.handoff
+    })
+    |> StepExecution.put_config(step.config)
   end
 
   defp update_route_cursor(task_run, route_execution_id) do

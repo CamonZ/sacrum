@@ -115,4 +115,80 @@ defmodule Sacrum.Repo.Schemas.WorkflowStepConfigTest do
       assert WorkflowStep.update_changeset(step, %{step_type: "llm_inference"}).valid?
     end
   end
+
+  describe "structured_inference" do
+    @fields %{
+      "type" => "object",
+      "properties" => %{"approved" => %{"type" => "boolean"}}
+    }
+
+    defp structured(config) do
+      create(%{
+        step_type: "structured_inference",
+        config:
+          Map.merge(
+            %{
+              "provider" => "typesafe",
+              "model" => "jev-latest",
+              "state" => "{{ task.title }}",
+              "fields" => @fields
+            },
+            config
+          )
+      })
+    end
+
+    test "accepts a string, object, or array state with any provider" do
+      for state <- ["{{ task.title }}", %{"a" => "{{ inputs.a? }}"}, ["x", "{{ task.tags }}"]] do
+        changeset = structured(%{"state" => state, "provider" => "gliner"})
+        assert changeset.valid?
+
+        assert %Config.StructuredInference{version: 1, provider: "gliner", state: ^state} =
+                 get_field(changeset, :config)
+      end
+    end
+
+    test "requires provider, model, state, and fields" do
+      assert %{config: errors} =
+               errors_on(create(%{step_type: "structured_inference", config: %{}}))
+
+      assert errors == %{
+               provider: ["can't be blank"],
+               model: ["can't be blank"],
+               state: ["can't be blank"],
+               fields: ["can't be blank"]
+             }
+    end
+
+    test "rejects non-JSON-content state, malformed references, and invalid schemas" do
+      assert %{config: %{state: ["must be a string, object, or array"]}} =
+               errors_on(structured(%{"state" => 42}))
+
+      assert %{config: %{state: ["$.state: contains a malformed interpolation"]}} =
+               errors_on(structured(%{"state" => "{{ task.title"}))
+
+      assert %{config: %{fields: ["must be a valid JSON Schema"]}} =
+               errors_on(structured(%{"fields" => %{"type" => "not-a-type"}}))
+
+      assert %{config: [message]} = errors_on(structured(%{"prompt" => "Go"}))
+      assert message == "$.prompt: is not supported for structured_inference steps"
+    end
+
+    test "uses fields as the output schema for artifact persistence" do
+      changeset =
+        create(%{
+          step_type: "structured_inference",
+          persistence_options: %{"artifact" => %{"logical_name" => "judgment"}},
+          config: %{
+            "provider" => "typesafe",
+            "model" => "jev-latest",
+            "state" => "x",
+            "fields" => @fields
+          }
+        })
+
+      assert changeset.valid?
+      assert WorkflowStep.output_schema(apply_changes(changeset)) == @fields
+    end
+  end
 end

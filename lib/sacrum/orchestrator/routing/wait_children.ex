@@ -187,10 +187,9 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
 
   @spec waiting_step_execution_changeset(FSMData.t(), map()) :: Ecto.Changeset.t()
   defp waiting_step_execution_changeset(data, attrs) do
-    StepExecution.create_changeset(
-      %StepExecution{user_id: data.user_id, project_id: data.project_id},
-      attrs
-    )
+    %StepExecution{user_id: data.user_id, project_id: data.project_id}
+    |> StepExecution.create_changeset(attrs)
+    |> StepExecution.put_config(wait_children_step(data).config)
   end
 
   @spec get_or_create_child_runs([Task.t()], TaskRun.t(), binary()) ::

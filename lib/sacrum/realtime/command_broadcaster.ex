@@ -5,32 +5,47 @@ defmodule Sacrum.Realtime.CommandBroadcaster do
   """
 
   alias Sacrum.Repo.Schemas.{Task, WorkflowStep}
+  alias Sacrum.Repo.Schemas.WorkflowStep.Config
 
+  @doc """
+  Sends run_step for a started execution. The request comes from the
+  execution's rendered config; only `verbose_daemon_logging` is read from the
+  step.
+  """
   @spec broadcast_run_step(map(), String.t() | nil) :: :ok | {:error, atom()}
-  def broadcast_run_step(data, daemon_id) do
-    payload = %{
-      id: data.execution.id,
-      task_id: data.execution.task_id,
-      project_id: data.execution.project_id,
-      prompt: data.rendered_prompt,
-      agent_config: WorkflowStep.config_value(data.step, :agent_config),
-      worktree: Task.workspace_worktree(data.task)
-    }
-
+  def broadcast_run_step(%{execution: execution} = data, daemon_id) do
     payload =
-      case WorkflowStep.config_value(data.step, :output_schema) do
-        nil -> payload
-        schema -> Map.put(payload, :output_schema, schema)
-      end
-
-    payload =
-      case data.step.verbose_daemon_logging do
-        true -> Map.put(payload, :verbose_daemon_logging, true)
-        _ -> payload
-      end
+      %{
+        id: execution.id,
+        task_id: execution.task_id,
+        project_id: execution.project_id,
+        worktree: Task.workspace_worktree(data.task)
+      }
+      |> Map.merge(request_payload(execution.config))
+      |> put_present(:output_schema, WorkflowStep.output_schema(execution))
+      |> put_present(:verbose_daemon_logging, data.step.verbose_daemon_logging || nil)
 
     broadcast(daemon_id, "run_step", payload)
   end
+
+  # structured_inference sends resolved `state` with `fields` as the output
+  # schema; the provider harness maps both to its own request.
+  defp request_payload(%Config.StructuredInference{} = config) do
+    %{
+      state: config.state,
+      agent_config: %{"provider" => config.provider, "model" => config.model}
+    }
+  end
+
+  defp request_payload(config) do
+    %{
+      prompt: (config && Map.get(config, :prompt)) || "",
+      agent_config: config && Map.get(config, :agent_config)
+    }
+  end
+
+  defp put_present(payload, _key, nil), do: payload
+  defp put_present(payload, key, value), do: Map.put(payload, key, value)
 
   @spec broadcast_cancel_step(map(), String.t() | nil) :: :ok | {:error, atom()}
   def broadcast_cancel_step(execution, daemon_id) do

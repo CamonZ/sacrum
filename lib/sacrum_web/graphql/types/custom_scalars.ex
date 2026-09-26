@@ -68,9 +68,11 @@ defmodule SacrumWeb.Graphql.Types.CustomScalars do
         :error
     end)
 
+    # Output may be any JSON value; step configs carry string, object, or
+    # array values such as structured_inference `state`.
     serialize(fn
-      value when is_map(value) -> value
-      nil -> nil
+      value when is_map(value) or is_list(value) or is_binary(value) -> value
+      value when is_number(value) or is_boolean(value) or is_nil(value) -> value
       _ -> :error
     end)
   end

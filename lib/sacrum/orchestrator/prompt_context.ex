@@ -221,6 +221,7 @@ defmodule Sacrum.Orchestrator.PromptContext do
 
     reject_nil_values(%{
       "previous_output" => coerce_previous_output(previous_output),
+      "previous_meta" => get_in(execution_data, [:previous, :meta]),
       "run_count" => execution_data[:run_count] || 0,
       "completed_count" => execution_data[:completed_count] || 0,
       "failed_count" => execution_data[:failed_count] || 0,
@@ -247,8 +248,7 @@ defmodule Sacrum.Orchestrator.PromptContext do
 
       if is_binary(step_name) and execution[:status] == "completed" and
            not Map.has_key?(outputs, step_name) do
-        output = Map.get(execution, :typed_output, execution[:output])
-        Map.put(outputs, step_name, %{"output" => output})
+        Map.put(outputs, step_name, named_step_output(execution))
       else
         outputs
       end
@@ -256,6 +256,15 @@ defmodule Sacrum.Orchestrator.PromptContext do
   end
 
   defp build_named_step_outputs(_), do: %{}
+
+  defp named_step_output(execution) do
+    output = Map.get(execution, :typed_output, execution[:output])
+
+    case execution[:meta] do
+      nil -> %{"output" => output}
+      meta -> %{"output" => output, "meta" => meta}
+    end
+  end
 
   @doc """
   Builds the workflow context: name, current step name/goal, step count, and
@@ -280,7 +289,7 @@ defmodule Sacrum.Orchestrator.PromptContext do
           "step_count" => count_workflow_steps(workflow)
         }
 
-        case WorkflowStep.config_value(workflow_step, :output_schema) do
+        case WorkflowStep.output_schema(workflow_step) do
           nil -> context
           schema -> Map.put(context, "output_schema", schema)
         end

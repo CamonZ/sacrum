@@ -76,6 +76,17 @@ defmodule Sacrum.Routing.HandoffTemplate do
   def resolve_config(_config, _context, path),
     do: {:error, error(:step_config_render_failed, path, "must be an object")}
 
+  @doc """
+  Validates a structured step config template without resolving it, so
+  malformed references are rejected when the step is saved.
+  """
+  @spec validate_config_template(term(), String.t()) :: :ok | {:error, error()}
+  def validate_config_template(config, path) when is_map(config),
+    do: validate_config_value(config, path)
+
+  def validate_config_template(_config, path),
+    do: {:error, error(:step_config_template_invalid, path, "must be an object")}
+
   defp validate_config_value(value, path) when is_map(value) do
     if Enum.all?(Map.keys(value), &is_binary/1) do
       value

@@ -108,7 +108,13 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
 
     field :status, :string
     field :context, :json
-    field :prompt, :string
+
+    field :config, :workflow_step_config do
+      description(
+        "The step config as this execution used it, with templates rendered; null for human_input, stop, and finish executions."
+      )
+    end
+
     field :output, :string
     field :transition_result, :string
     field :model, :string
@@ -305,7 +311,6 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
       arg(:step_name, :string)
       arg(:status, :string)
       arg(:context, :json)
-      arg(:prompt, :string)
       arg(:output, :string)
       arg(:transition_result, :string)
       arg(:model, :string)
