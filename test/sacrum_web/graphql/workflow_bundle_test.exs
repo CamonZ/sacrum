@@ -10,7 +10,6 @@ defmodule SacrumWeb.Graphql.WorkflowBundleTest do
     {:ok, project} = Accounts.Projects.insert(user.id, %{name: "GraphQL Bundle Project"})
 
     bundle = %{
-      "schema_version" => 1,
       "workflows" => [%{"workflow_ref" => "imported", "name" => "Imported GraphQL"}]
     }
 
@@ -45,5 +44,77 @@ defmodule SacrumWeb.Graphql.WorkflowBundleTest do
 
     assert result["data"]["importWorkflowBundle"]["stepMappings"] == %{"imported" => %{}}
     assert is_binary(imported_id)
+  end
+
+  test "returns imported structured inference step config", %{conn: conn} do
+    user = create_user(%{email: "bundle-si@example.com", username: "bundle_si"})
+    {:ok, project} = Accounts.Projects.insert(user.id, %{name: "Structured Bundle Project"})
+
+    state = %{"title" => "{{ task.title }}", "labels" => ["a", "b"]}
+
+    questions = %{
+      "risky" => %{"type" => "noul", "instructions" => "Is the change risky?"},
+      "size" => %{
+        "type" => "score",
+        "instructions" => "How large is it?",
+        "criteria" => ["small", "large"]
+      }
+    }
+
+    bundle = %{
+      "workflows" => [
+        %{
+          "workflow_ref" => "triage",
+          "name" => "Triage",
+          "steps" => [
+            %{
+              "step_ref" => "classify",
+              "name" => "Classify",
+              "step_type" => "structured_inference",
+              "config" => %{
+                "provider" => "typesafe",
+                "model" => "system-one",
+                "state" => state,
+                "questions" => questions
+              }
+            }
+          ]
+        }
+      ]
+    }
+
+    result =
+      conn
+      |> authenticate(user)
+      |> post("/graphql", %{
+        "query" => """
+          mutation {
+            importWorkflowBundle(
+              projectId: "#{project.id}"
+              bundle: #{Jason.encode!(Jason.encode!(bundle))}
+            ) {
+              workflowSteps {
+                stepType
+                config {
+                  ... on StructuredInferenceStepConfig { provider model state questions }
+                }
+              }
+            }
+          }
+        """
+      })
+      |> json_response(200)
+
+    assert result["errors"] == nil
+
+    assert [%{"stepType" => "structured_inference", "config" => config}] =
+             result["data"]["importWorkflowBundle"]["workflowSteps"]
+
+    assert config == %{
+             "provider" => "typesafe",
+             "model" => "system-one",
+             "state" => state,
+             "questions" => questions
+           }
   end
 end

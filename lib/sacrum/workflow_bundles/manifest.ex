@@ -1,16 +1,21 @@
 defmodule Sacrum.WorkflowBundles.Manifest do
   @moduledoc """
-  Boundary validation for the portable V1 workflow bundle manifest.
+  Boundary validation for the portable workflow bundle manifest.
 
   The manifest is deliberately kept as JSON-shaped data at the transport
   boundary. This module validates its structural fields, normalizes them to
   atom-keyed internal values. RouteRefs resolves only the documented route
   target references; opaque JSON fields are never traversed or rewritten.
+
+  Each step carries its type's `config` object. Configs are checked against
+  their variant changeset so errors carry the manifest path; route configs are
+  checked once their step refs are remapped.
   """
 
+  alias Sacrum.Repo.Schemas.WorkflowStep
+  alias Sacrum.Repo.Schemas.WorkflowStep.Config
   alias Sacrum.WorkflowBundles.RouteRefs
 
-  @schema_version 1
   @max_bytes 1_048_576
   @max_depth 32
   @max_workflows 100
@@ -22,8 +27,7 @@ defmodule Sacrum.WorkflowBundles.Manifest do
     initial_step steps
   )
   @step_keys ~w(
-    step_ref name goal prompt agents skills agent_config step_type step_order output_schema
-    persistence_options route_config
+    step_ref name goal step_type step_order persistence_options config
   )
   @workflow_fields [
     {"description", :description, nil},
@@ -35,15 +39,10 @@ defmodule Sacrum.WorkflowBundles.Manifest do
   ]
   @step_fields [
     {"goal", :goal, nil},
-    {"prompt", :prompt, nil},
-    {"agents", :agents, []},
-    {"skills", :skills, []},
-    {"agent_config", :agent_config, nil},
     {"step_type", :step_type, "llm_inference"},
     {"step_order", :step_order, 0},
-    {"output_schema", :output_schema, nil},
     {"persistence_options", :persistence_options, nil},
-    {"route_config", :route_config, nil}
+    {"config", :config, nil}
   ]
 
   @type address :: %{workflow_ref: String.t(), step_ref: String.t()}
@@ -60,26 +59,18 @@ defmodule Sacrum.WorkflowBundles.Manifest do
           steps: [map()]
         }
   @type t :: %{
-          schema_version: 1,
           workflows: [workflow()],
           step_edges: [map()],
           workflow_edges: [map()]
         }
   @type error :: %{path: String.t(), message: String.t()}
 
-  @doc "Validates and normalizes a decoded V1 JSON manifest."
+  @doc "Validates and normalizes a decoded JSON manifest."
   @spec validate(term()) :: {:ok, t()} | {:error, error()}
   def validate(bundle) when is_map(bundle) do
     with {:ok, json} <- encode_json(bundle),
          :ok <- validate_size(json, bundle),
-         :ok <-
-           validate_keys(
-             bundle,
-             ["schema_version"],
-             ["workflows", "step_edges", "workflow_edges"],
-             "$"
-           ),
-         :ok <- validate_schema_version(Map.fetch(bundle, "schema_version")),
+         :ok <- validate_keys(bundle, [], ["workflows", "step_edges", "workflow_edges"], "$"),
          {:ok, workflows} <- validate_workflows(Map.get(bundle, "workflows", [])),
          {:ok, step_edges} <- validate_step_edges(Map.get(bundle, "step_edges", []), workflows),
          {:ok, workflow_edges} <-
@@ -87,7 +78,6 @@ defmodule Sacrum.WorkflowBundles.Manifest do
          :ok <- validate_graph_constraints(workflows, step_edges) do
       {:ok,
        %{
-         schema_version: @schema_version,
          workflows: workflows,
          step_edges: step_edges,
          workflow_edges: workflow_edges
@@ -154,13 +144,6 @@ defmodule Sacrum.WorkflowBundles.Manifest do
     end)
   end
 
-  defp validate_schema_version({:ok, @schema_version}), do: :ok
-
-  defp validate_schema_version({:ok, version}),
-    do: {:error, error("schema_version", "must be #{@schema_version}, got #{inspect(version)}")}
-
-  defp validate_schema_version(:error), do: {:error, error("schema_version", "is required")}
-
   defp validate_workflows(workflows) when is_list(workflows) do
     case map_unique(workflows, "workflows", :workflow_ref, "workflow", &normalize_workflow/2) do
       {:ok, workflows, _refs} -> {:ok, workflows}
@@ -221,13 +204,82 @@ defmodule Sacrum.WorkflowBundles.Manifest do
 
     with :ok <- validate_keys(step, ~w(step_ref name), @step_keys, path),
          {:ok, step_ref} <- required_text(step, "step_ref", path),
-         {:ok, name} <- required_text(step, "name", path) do
-      {:ok, atom_fields(step, @step_fields, %{step_ref: step_ref, name: name})}
+         {:ok, name} <- required_text(step, "name", path),
+         normalized = atom_fields(step, @step_fields, %{step_ref: step_ref, name: name}),
+         :ok <- validate_step_config(normalized, path) do
+      {:ok, normalized}
     end
   end
 
   defp normalize_step(_step, workflow_path, index),
     do: {:error, error("#{workflow_path}.steps[#{index}]", "must be an object")}
+
+  # Unknown step types are left to the step changeset to reject. A variant step
+  # without a config is checked as an empty one, so missing required fields
+  # are reported here.
+  defp validate_step_config(%{step_type: step_type, config: config}, path) do
+    path = "#{path}.config"
+
+    case {config_module(step_type), config} do
+      {:unknown, _config} ->
+        :ok
+
+      {nil, nil} ->
+        :ok
+
+      {nil, _config} ->
+        {:error, error(path, "must be null for #{step_type} steps")}
+
+      {module, config} when is_map(config) or is_nil(config) ->
+        validate_config_fields(module, step_type, config || %{}, path)
+
+      {_module, _config} ->
+        {:error, error(path, "must be an object")}
+    end
+  end
+
+  defp config_module(step_type) do
+    case Enum.find(WorkflowStep.step_types(), &(Atom.to_string(&1) == step_type)) do
+      nil -> :unknown
+      type -> Config.module(type)
+    end
+  end
+
+  defp validate_config_fields(module, step_type, config, path) do
+    allowed = Enum.map(module.__schema__(:fields), &Atom.to_string/1)
+
+    case config
+         |> Map.keys()
+         |> Enum.map(&to_string/1)
+         |> Enum.sort()
+         |> Enum.reject(&(&1 in allowed)) do
+      [] -> validate_config(module, config, path)
+      [key | _] -> {:error, error("#{path}.#{key}", "is not supported for #{step_type} steps")}
+    end
+  end
+
+  # Route configs are checked after their step refs are remapped. The first
+  # error, in schema field order, is reported at its manifest path.
+  defp validate_config(Config.Route, _config, _path), do: :ok
+
+  defp validate_config(module, config, path) do
+    errors = Enum.reverse(module.changeset(struct(module), config).errors)
+
+    case Enum.find(module.__schema__(:fields), &Keyword.has_key?(errors, &1)) do
+      nil -> :ok
+      field -> {:error, config_error(field, Keyword.fetch!(errors, field), path)}
+    end
+  end
+
+  defp config_error(field, {_message, [validation: :required]}, path),
+    do: error("#{path}.#{field}", "is required")
+
+  defp config_error(field, {message, _opts}, path) do
+    case String.split(message, ": ", parts: 2) do
+      ["$." <> subpath, detail] -> error("#{path}.#{subpath}", detail)
+      _message -> error("#{path}.#{field}", message)
+    end
+  end
 
   defp atom_fields(map, fields, defaults) do
     Enum.reduce(fields, defaults, fn {json_key, atom_key, default}, acc ->
