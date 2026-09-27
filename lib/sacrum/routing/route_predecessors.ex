@@ -9,7 +9,7 @@ defmodule Sacrum.Routing.RoutePredecessors do
   evaluation uses the already-built `RouteContext`.
   """
 
-  alias Sacrum.Routing.{HandoffTemplate, RouteConfig, Traverse}
+  alias Sacrum.Routing.{HandoffTemplate, RouteConfig, RouteValue, Traverse}
 
   @type predecessor :: %{
           optional(:transition_id) => term(),
@@ -92,6 +92,16 @@ defmodule Sacrum.Routing.RoutePredecessors do
       end
     end)
   end
+
+  @spec leaf_schema(map(), String.t()) :: {:ok, map()} | :undeclared
+  def leaf_schema(schema, "previous_output." <> path) do
+    case resolve(schema, String.split(path, ".")) do
+      {:ok, leaf, _optional} -> {:ok, leaf}
+      {:undeclared, _segment} -> :undeclared
+    end
+  end
+
+  def leaf_schema(_schema, _reference), do: :undeclared
 
   defp validate_predecessor(predecessor, index) do
     id = Map.get(predecessor, :transition_id) || index
@@ -254,7 +264,9 @@ defmodule Sacrum.Routing.RoutePredecessors do
   end
 
   defp within_bounds?(value, minimum, maximum) when is_number(value),
-    do: (is_nil(minimum) or value >= minimum) and (is_nil(maximum) or value <= maximum)
+    do:
+      (is_nil(minimum) or RouteValue.compare(value, minimum) != :lt) and
+        (is_nil(maximum) or RouteValue.compare(value, maximum) != :gt)
 
   defp within_bounds?(_value, _minimum, _maximum), do: true
 
@@ -266,7 +278,7 @@ defmodule Sacrum.Routing.RoutePredecessors do
       enum = Enum.flat_map(leaves, & &1["enum"])
       values = if operator == :in, do: value, else: [value]
 
-      case Enum.find(values, &(&1 not in enum)) do
+      case Enum.find(values, &(not RouteValue.member?(&1, enum))) do
         nil ->
           :ok
 

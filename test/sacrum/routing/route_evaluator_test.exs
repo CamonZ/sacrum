@@ -222,6 +222,31 @@ defmodule Sacrum.Routing.RouteEvaluatorTest do
              )
   end
 
+  test "compares numbers exactly regardless of integer or float representation" do
+    task = %{"level" => "task", "tags" => []}
+
+    {:ok, context} =
+      RouteContext.build(%{"score" => 1.0, "count" => 9_007_199_254_740_993}, task, 1)
+
+    for expression <- [
+          predicate("previous_output.score", "eq", 1),
+          predicate("previous_output.score", "in", [1]),
+          predicate("previous_output.score", "gte", 1),
+          predicate("previous_output.count", "gt", 9_007_199_254_740_992.0)
+        ] do
+      assert {:ok, %{matched_rule_id: "exact"}} =
+               RouteEvaluator.evaluate(program([rule("exact", expression)]), context)
+    end
+
+    for expression <- [
+          predicate("previous_output.score", "neq", 1),
+          predicate("previous_output.count", "eq", 9_007_199_254_740_992.0)
+        ] do
+      assert {:ok, %{used_default: true}} =
+               RouteEvaluator.evaluate(program([rule("exact", expression)]), context)
+    end
+  end
+
   defp approval(choice, yes) do
     %{
       "approved" => %{

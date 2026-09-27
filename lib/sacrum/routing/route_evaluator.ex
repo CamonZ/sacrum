@@ -6,7 +6,7 @@ defmodule Sacrum.Routing.RouteEvaluator do
   no repository, clock, prompt, daemon, or random dependencies.
   """
 
-  alias Sacrum.Routing.{HandoffTemplate, RouteConfig, RouteContext, Traverse}
+  alias Sacrum.Routing.{HandoffTemplate, RouteConfig, RouteContext, RouteValue, Traverse}
 
   @type result :: %{
           matched_rule_id: String.t() | nil,
@@ -148,16 +148,10 @@ defmodule Sacrum.Routing.RouteEvaluator do
     end
   end
 
-  defp predicate(:eq, actual, expected), do: actual == expected
-  defp predicate(:neq, actual, expected), do: actual != expected
-  defp predicate(:in, actual, expected), do: actual in expected
   defp predicate(:contains, tags, expected), do: expected in tags
   defp predicate(:contains_any, tags, expected), do: Enum.any?(expected, &(&1 in tags))
   defp predicate(:contains_all, tags, expected), do: Enum.all?(expected, &(&1 in tags))
-  defp predicate(:lt, actual, expected), do: actual < expected
-  defp predicate(:lte, actual, expected), do: actual <= expected
-  defp predicate(:gt, actual, expected), do: actual > expected
-  defp predicate(:gte, actual, expected), do: actual >= expected
+  defp predicate(operator, actual, expected), do: RouteValue.holds?(operator, actual, expected)
 
   defp error(code, path, message), do: %{code: code, path: path, message: message}
 end
