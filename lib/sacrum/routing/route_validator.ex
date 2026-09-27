@@ -14,7 +14,14 @@ defmodule Sacrum.Routing.RouteValidator do
   """
 
   alias Sacrum.Repo.Schemas.WorkflowStep
-  alias Sacrum.Routing.{RouteConfig, RouteContext, RouteEvaluator, RoutePredecessors}
+
+  alias Sacrum.Routing.{
+    RouteConfig,
+    RouteContext,
+    RouteEvaluator,
+    RouteOverlap,
+    RoutePredecessors
+  }
 
   @type step_edge :: %{
           transition_id: binary(),
@@ -184,6 +191,7 @@ defmodule Sacrum.Routing.RouteValidator do
          domains = RoutePredecessors.closed_domains(program, type_environment),
          :ok <- validate_default_required(program, domains),
          :ok <- validate_finite_domain(program, domains),
+         :ok <- RouteOverlap.validate(program, type_environment),
          :ok <- validate_targets(route_step, program, snapshot) do
       :ok
     else

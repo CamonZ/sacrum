@@ -365,6 +365,9 @@ properties the route compares and hands off:
   also accept `lt`, `lte`, `gt`, and `gte`. Compared values must match the
   value's type, lie within its declared `minimum`/`maximum`, and, when the
   value has an `enum`, be declared by at least one predecessor's enum.
+  Numbers compare exactly as decimals at save time and at runtime: `1` and
+  `1.0` are equal for `eq`, `neq`, `in`, and ordering operators, and large
+  integers keep full precision.
 - A path is a closed domain when every predecessor declares it as a required
   `string` with an `enum`. Rules that compare only closed paths and
   `task.level` are proved exhaustive and non-overlapping, so they need no
@@ -373,6 +376,23 @@ properties the route compares and hands off:
   second overlapping rule. Any other output comparison needs a `default`
   (`$.default` is required), as do `task.tags` and
   `execution.step_visit_count` rules.
+- Every pair of rules is also overlap-checked at save time, including rules
+  that compare numeric or boolean values (for example structured inference
+  `confidence`, `probabilities.<label>`, `noul`, or `score` thresholds),
+  alone or combined with `task.level` and enum paths. Each `when` is
+  normalized over `all`/`any`/`not`; each predicate constrains its reference
+  to a finite set (`task.level`, enum and boolean values), a string set, or
+  number/integer intervals clamped to the declared `minimum`/`maximum`. Two
+  rules overlap when every reference both constrain can hold a common value,
+  checked against each predecessor schema separately. The second rule is
+  rejected with `route_config_ambiguous` on `$.rules[<i>].when` and a
+  witness, e.g. `overlaps rule "likely" for task.level="epic",
+  approved.probabilities.yes in [0.8, 1], approved.confidence in [0.5, 1]`.
+  Closed-domain overlap and coverage errors take precedence. Conjunctions
+  that read `task.tags` or `execution.step_visit_count` are not
+  overlap-checked at save time; an input matching several such rules still
+  fails at runtime with `route_ambiguous_match`. Coverage of numeric rules is
+  not proved, so they still need a `default`.
 
 At runtime the route re-validates the stored predecessor output against the
 predecessor's schema before evaluating. A value that is absent or `null` does

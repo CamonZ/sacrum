@@ -314,6 +314,63 @@ defmodule Sacrum.Routing.RouteValidatorTest do
     assert message =~ ~r/^does not cover task\.level="(epic|task)"$/
   end
 
+  test "rejects overlapping structured inference threshold rules at save time", context do
+    source =
+      create_step(context, "judge", 1,
+        step_type: "structured_inference",
+        config: %{
+          "provider" => "typesafe",
+          "model" => "jev",
+          "state" => "task",
+          "questions" => %{
+            "approved" => %{
+              "type" => "choice",
+              "instructions" => "Are the requirements met?",
+              "criteria" => %{"yes" => nil, "no" => nil}
+            }
+          }
+        }
+      )
+
+    destination = create_step(context, "destination", 2)
+
+    threshold_rule = fn id, ref, value ->
+      %{
+        "id" => id,
+        "when" => %{
+          "all" => [
+            %{"ref" => "task.level", "op" => "eq", "value" => "epic"},
+            %{"ref" => ref, "op" => "gte", "value" => value}
+          ]
+        },
+        "transition" => intra_target(destination.id)
+      }
+    end
+
+    route = create_route(context, "route", 3, valid_route_config(destination.id))
+    create_step_transition(context.user, source, route)
+    create_step_transition(context.user, route, destination)
+
+    route =
+      persist_invalid_route_config(
+        route,
+        route_config(
+          [
+            threshold_rule.("likely", "previous_output.approved.probabilities.yes", 0.8),
+            threshold_rule.("confident", "previous_output.approved.confidence", 0.5)
+          ],
+          intra_target(destination.id)
+        )
+      )
+
+    assert {:error, %{code: :route_config_ambiguous, path: "$.rules[1].when", message: message}} =
+             validate(route)
+
+    assert message ==
+             ~s(overlaps rule "likely" for task.level="epic", ) <>
+               "approved.probabilities.yes in [0.8, 1], approved.confidence in [0.5, 1]"
+  end
+
   defp create_user do
     suffix = System.unique_integer([:positive])
 
