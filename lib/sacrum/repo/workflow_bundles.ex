@@ -187,6 +187,7 @@ defmodule Sacrum.Repo.WorkflowBundles do
               name: step.name,
               goal: step.goal,
               step_order: step.step_order,
+              harness: step.harness,
               step_type: step.step_type,
               persistence_options: step.persistence_options
             },

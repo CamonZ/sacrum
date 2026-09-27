@@ -117,15 +117,23 @@ defmodule Sacrum.Repo.WorkflowStepConfigMigrationTest do
 
       assert {name, step.step_type, step.config} == {name, step_type, config}
 
-      # The migrated row already satisfies the closed variant.
-      assert %Ecto.Changeset{valid?: true, changes: changes} =
-               WorkflowStep.update_changeset(step, %{})
+      # Provider-backed rows are populated by migration; the changeset fills
+      # provider-less legacy rows when they are next written.
+      changeset = WorkflowStep.update_changeset(step, %{})
+      assert %Ecto.Changeset{valid?: true, changes: changes} = changeset
 
-      assert changes == %{}, "#{name} changed on re-cast: #{inspect(changes)}"
+      expected_harness = if name == :execute, do: "claude", else: "codex"
+      expected_changes = if is_nil(step.harness), do: %{harness: expected_harness}, else: %{}
+
+      assert changes == expected_changes,
+             "#{name} changed on re-cast: #{inspect(changes)}"
+
+      assert get_field(changeset, :harness) == expected_harness
 
       # Casting the same legacy shape through today's write path agrees.
       created = WorkflowStep.create_changeset(%WorkflowStep{}, created_attrs(legacy, step_type))
       assert created.valid?, "#{name}: #{inspect(created.errors)}"
+      assert get_field(created, :harness) == expected_harness
       assert get_field(created, :config) == config
     end
 

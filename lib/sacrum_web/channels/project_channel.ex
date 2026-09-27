@@ -552,6 +552,7 @@ defmodule SacrumWeb.ProjectChannel do
       name: step.name,
       goal: step.goal,
       step_order: step.step_order,
+      harness: step.harness,
       step_type: WorkflowStep.step_type_wire_value(step.step_type),
       config: step.config,
       persistence_options: step.persistence_options,

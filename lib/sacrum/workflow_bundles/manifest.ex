@@ -27,7 +27,7 @@ defmodule Sacrum.WorkflowBundles.Manifest do
     initial_step steps
   )
   @step_keys ~w(
-    step_ref name goal step_type step_order persistence_options config
+    step_ref name goal step_type step_order harness persistence_options config
   )
   @workflow_fields [
     {"description", :description, nil},
@@ -41,6 +41,7 @@ defmodule Sacrum.WorkflowBundles.Manifest do
     {"goal", :goal, nil},
     {"step_type", :step_type, "llm_inference"},
     {"step_order", :step_order, 0},
+    {"harness", :harness, nil},
     {"persistence_options", :persistence_options, nil},
     {"config", :config, nil}
   ]
@@ -206,6 +207,7 @@ defmodule Sacrum.WorkflowBundles.Manifest do
          {:ok, step_ref} <- required_text(step, "step_ref", path),
          {:ok, name} <- required_text(step, "name", path),
          normalized = atom_fields(step, @step_fields, %{step_ref: step_ref, name: name}),
+         :ok <- validate_harness(normalized.harness, path),
          :ok <- validate_step_config(normalized, path) do
       {:ok, normalized}
     end
@@ -213,6 +215,17 @@ defmodule Sacrum.WorkflowBundles.Manifest do
 
   defp normalize_step(_step, workflow_path, index),
     do: {:error, error("#{workflow_path}.steps[#{index}]", "must be an object")}
+
+  defp validate_harness(nil, _path), do: :ok
+
+  defp validate_harness(harness, path) do
+    if harness in WorkflowStep.harnesses() do
+      :ok
+    else
+      {:error,
+       error("#{path}.harness", "must be one of #{Enum.join(WorkflowStep.harnesses(), ", ")}")}
+    end
+  end
 
   # Unknown step types are left to the step changeset to reject. A variant step
   # without a config is checked as an empty one, so missing required fields

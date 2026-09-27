@@ -172,10 +172,17 @@ The `Project.artifacts(limit: 50, offset: 0)` field returns the caller's project
 **`workflow_step_type.ex`** — 4 mutations (all via `Accounts.WorkflowSteps`)
 | Mutation | Arguments | Returns |
 |----------|-----------|---------|
-| `createWorkflowStep` | `workflow_id!`, `name!`, `goal`, `step_order`, `step_type`, `config`, `persistence_options` | `:workflow_step` |
-| `updateWorkflowStep` | `id!`, `name`, `goal`, `step_order`, `step_type`, `config`, `persistence_options` | `:workflow_step` |
+| `createWorkflowStep` | `workflow_id!`, `name!`, `goal`, `step_order`, `harness`, `step_type`, `config`, `persistence_options` | `:workflow_step` |
+| `updateWorkflowStep` | `id!`, `name`, `goal`, `step_order`, `harness`, `step_type`, `config`, `persistence_options` | `:workflow_step` |
 | `deleteWorkflowStep` | `id!` | `:workflow_step` |
 | `syncStepTransitions` | `id!`, `transitions!` (list of `StepTransitionInput`) | `:workflow_step` |
+
+Workflow steps expose a required `harness` selector with the values `codex`,
+`claude`, and `typesafe`. When omitted, Sacrum derives it from a recognized
+provider in `config` (`openai`/`codex` to `codex`, `anthropic`/`claude` to
+`claude`, and `typesafe` to `typesafe`); steps without a provider default to
+`codex`. The value is stored independently from the provider/model
+configuration inside `config`.
 
 **`task_type.ex`** — 11 mutations (CRUD via `Accounts.Tasks`, workflow ops via `Repo.TaskWorkflows`, deps via `Repo.TaskDependencies`)
 | Mutation | Arguments | Returns |
@@ -622,7 +629,7 @@ do not receive those imperative work commands. See
 | `task_parent_changed` | `{schema_version, task_id, project_id, from_parent_id, to_parent_id, level}` | Explicit task hierarchy move for tree UIs |
 | `task_dependency_created` / `task_dependency_deleted` | Dependency edge fields: `id`, `task_id`, `depends_on_id`, `project_id`, timestamps | Blocker/dependency relation changes |
 | `workflow_created` / `workflow_updated` / `workflow_deleted` | Workflow fields | Workflow lifecycle |
-| `step_created` / `step_updated` / `step_deleted` | Step fields including `step_type`, and the lossless `config` document | WorkflowStep lifecycle |
+| `step_created` / `step_updated` / `step_deleted` | Step fields including `harness`, `step_type`, and the lossless `config` document | WorkflowStep lifecycle |
 | `step_transition_created` / `step_transition_deleted` | Transition fields | Step-to-step edges |
 | `step_execution_created` | Execution fields | New execution started |
 | `step_execution_status_changed` | Execution fields including `context.route`, `transition_result`, and `handoff` | Status update (entered, completed, etc.) |

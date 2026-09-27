@@ -990,6 +990,7 @@ defmodule SacrumWeb.ProjectChannelTest do
       name: "Test Step",
       goal: "Test goal",
       step_order: 1,
+      harness: "codex",
       step_type: :llm_inference,
       config: %{
         "version" => 1,

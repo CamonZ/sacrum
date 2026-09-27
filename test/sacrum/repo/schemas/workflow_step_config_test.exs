@@ -25,6 +25,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStepConfigTest do
       changeset = create(%{step_type: "llm_inference", config: %{"prompt" => "Go"}})
 
       assert changeset.valid?
+      assert get_field(changeset, :harness) == "codex"
 
       assert get_field(changeset, :config) == %Config.LlmInference{
                version: 1,
@@ -40,6 +41,23 @@ defmodule Sacrum.Repo.Schemas.WorkflowStepConfigTest do
 
       assert get_field(create(%{step_type: "route", config: %{}}), :config) ==
                %Config.Route{version: 1, route_config: nil}
+    end
+
+    test "derives harness from a recognized llm inference provider" do
+      for {provider, harness} <- [
+            {"openai", "codex"},
+            {"anthropic", "claude"},
+            {"typesafe", "typesafe"}
+          ] do
+        changeset =
+          create(%{
+            step_type: "llm_inference",
+            config: %{"agent_config" => %{"provider" => provider}}
+          })
+
+        assert changeset.valid?
+        assert get_field(changeset, :harness) == harness
+      end
     end
 
     test "rejects fields the variant does not declare" do
@@ -132,9 +150,10 @@ defmodule Sacrum.Repo.Schemas.WorkflowStepConfigTest do
       }
     }
 
-    defp structured(config) do
+    defp structured(config, attrs \\ %{}) do
       create(%{
-        step_type: "structured_inference",
+        step_type: Map.get(attrs, :step_type, "structured_inference"),
+        harness: Map.get(attrs, :harness),
         config:
           Map.merge(
             %{
@@ -157,8 +176,11 @@ defmodule Sacrum.Repo.Schemas.WorkflowStepConfigTest do
 
     test "accepts a string, object, or array state with any provider" do
       for state <- ["{{ task.title }}", %{"a" => "{{ inputs.a? }}"}, ["x", "{{ task.tags }}"]] do
-        changeset = structured(%{"state" => state, "provider" => "gliner"})
+        changeset =
+          structured(%{"state" => state, "provider" => "gliner"}, %{harness: "codex"})
+
         assert changeset.valid?
+        assert get_field(changeset, :harness) == "codex"
 
         assert %Config.StructuredInference{
                  version: 1,
@@ -166,6 +188,19 @@ defmodule Sacrum.Repo.Schemas.WorkflowStepConfigTest do
                  state: ^state,
                  questions: @questions
                } = get_field(changeset, :config)
+      end
+    end
+
+    test "derives harness from the structured inference provider" do
+      for {provider, harness} <- [
+            {"openai", "codex"},
+            {"anthropic", "claude"},
+            {"typesafe", "typesafe"}
+          ] do
+        changeset = structured(%{"provider" => provider})
+
+        assert changeset.valid?
+        assert get_field(changeset, :harness) == harness
       end
     end
 
