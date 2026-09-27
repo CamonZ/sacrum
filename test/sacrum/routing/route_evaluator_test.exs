@@ -172,19 +172,19 @@ defmodule Sacrum.Routing.RouteEvaluatorTest do
 
     task = %{"level" => "task", "tags" => []}
 
-    {:ok, confident} = RouteContext.build_structured(approval("yes", 0.9), task, 1)
+    {:ok, confident} = RouteContext.build(approval("yes", 0.9), task, 1)
     assert {:ok, %{matched_rule_id: "accept"}} = RouteEvaluator.evaluate(program, confident)
 
-    {:ok, uncertain} = RouteContext.build_structured(approval("yes", 0.6), task, 1)
+    {:ok, uncertain} = RouteContext.build(approval("yes", 0.6), task, 1)
     assert {:ok, %{used_default: true}} = RouteEvaluator.evaluate(program, uncertain)
 
-    {:ok, rejected} = RouteContext.build_structured(approval("no", 0.1), task, 1)
+    {:ok, rejected} = RouteContext.build(approval("no", 0.1), task, 1)
     assert {:ok, %{matched_rule_id: "reject"}} = RouteEvaluator.evaluate(program, rejected)
   end
 
   test "missing structured values remain unmatched through negation and nested expressions" do
     task = %{"level" => "task", "tags" => []}
-    {:ok, context} = RouteContext.build_structured(%{"approved" => %{"choice" => "yes"}}, task, 1)
+    {:ok, context} = RouteContext.build(%{"approved" => %{"choice" => "yes"}}, task, 1)
     missing = predicate("previous_output.approved.confidence", "gte", 0.8)
     known = predicate("previous_output.approved.choice", "eq", "yes")
 
@@ -209,7 +209,7 @@ defmodule Sacrum.Routing.RouteEvaluatorTest do
              )
 
     {:ok, null_value} =
-      RouteContext.build_structured(
+      RouteContext.build(
         %{"approved" => %{"choice" => "yes", "confidence" => nil}},
         task,
         1

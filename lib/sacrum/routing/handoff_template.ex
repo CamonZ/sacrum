@@ -3,9 +3,10 @@ defmodule Sacrum.Routing.HandoffTemplate do
   Validates and renders structured deterministic-route handoff templates.
 
   Templates are JSON objects whose string values may contain closed
-  `{{ dotted.path }}` interpolations. An interpolation that occupies the whole
-  string preserves the referenced JSON value's type; embedded interpolations
-  are limited to scalar values and produce a string. No expressions, filters,
+  `{{ dotted.path }}` interpolations; append `?` to a reference to render a
+  missing value as `null`. An interpolation that occupies the whole string
+  preserves the referenced JSON value's type; embedded interpolations are
+  limited to scalar values and produce a string. No expressions, filters,
   function calls, or arbitrary code are evaluated.
   """
 
@@ -17,6 +18,12 @@ defmodule Sacrum.Routing.HandoffTemplate do
 
   @type template :: map()
   @type error :: %{code: atom(), path: String.t(), message: String.t()}
+  @type interpolation :: %{
+          path: String.t(),
+          reference: String.t(),
+          optional?: boolean(),
+          embedded?: boolean()
+        }
 
   @doc """
   Validates an optional handoff template and normalizes an empty object to
@@ -53,6 +60,39 @@ defmodule Sacrum.Routing.HandoffTemplate do
 
   def render(_template, _context, path),
     do: {:error, error(:route_handoff_render_failed, path, "must render to an object")}
+
+  @doc """
+  Lists every interpolation in a validated template with the template path
+  that contains it, so references can be proved against predecessor output
+  schemas when the route is saved.
+  """
+  @spec references(template() | nil, String.t()) :: [interpolation()]
+  def references(nil, _path), do: []
+
+  def references(template, path) when is_map(template) do
+    template
+    |> Enum.sort_by(fn {key, _value} -> key end)
+    |> Enum.flat_map(fn {key, value} -> value_references(value, path_for_key(path, key)) end)
+  end
+
+  defp value_references(value, path) when is_map(value), do: references(value, path)
+
+  defp value_references(value, path) when is_list(value) do
+    value
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {item, index} -> value_references(item, "#{path}[#{index}]") end)
+  end
+
+  defp value_references(value, path) when is_binary(value) do
+    embedded? = not Regex.match?(@exact_interpolation, value)
+
+    for [reference] <- Regex.scan(@interpolation, value, capture: :all_but_first) do
+      {optional?, reference} = optional_reference(String.trim(reference))
+      %{path: path, reference: reference, optional?: optional?, embedded?: embedded?}
+    end
+  end
+
+  defp value_references(_value, _path), do: []
 
   @doc false
   @spec validate(term(), String.t()) :: :ok | {:error, error()}
@@ -281,7 +321,8 @@ defmodule Sacrum.Routing.HandoffTemplate do
        )}
     else
       Traverse.each_while(matches, fn [reference], _index ->
-        validate_reference(String.trim(reference), path)
+        {_optional?, reference} = optional_reference(String.trim(reference))
+        validate_reference(reference, path)
       end)
     end
   end
@@ -328,10 +369,15 @@ defmodule Sacrum.Routing.HandoffTemplate do
   end
 
   defp fetch_reference(context, reference, path) do
+    {optional?, reference} = optional_reference(reference)
+
     with :ok <- validate_reference(reference, path),
          {:ok, value} <- fetch_path(context, String.split(reference, ".")) do
       {:ok, value}
     else
+      :error when optional? ->
+        {:ok, nil}
+
       :error ->
         {:error,
          error(

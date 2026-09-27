@@ -6,62 +6,154 @@ defmodule Sacrum.Routing.RoutePredecessorsTest do
 
   @step_id "00000000-0000-0000-0000-000000000001"
 
-  test "derives the result enum union from valid predecessor envelopes" do
-    approved_schema = predecessor_schema(["approved"])
-    rejected_schema = predecessor_schema(["rejected", "retry"])
-
-    assert {:ok, %{result_values: result_values}} =
+  test "requires every predecessor to declare an object output schema" do
+    assert {:error,
+            %{
+              code: :route_input_invalid,
+              path: "$.predecessors[explain].output_schema",
+              message: "is required for llm_inference steps that feed a route"
+            }} =
              RoutePredecessors.derive_type_environment([
-               envelope(approved_schema, "approved"),
-               envelope(rejected_schema, "rejected")
+               %{output_schema: nil, step_type: :llm_inference, transition_id: "explain"}
              ])
 
-    assert result_values == MapSet.new(["approved", "rejected", "retry"])
+    assert {:error, %{code: :route_input_invalid, path: "$.predecessors[0].output_schema"}} =
+             RoutePredecessors.derive_type_environment([%{step_type: :human_input}])
+
+    assert {:error, %{code: :route_input_invalid, path: "$.predecessors[pred].output_schema"}} =
+             RoutePredecessors.derive_type_environment([envelope(%{"type" => "string"})])
   end
 
-  test "rejects predecessor schemas without a result enum or strict handoff" do
-    missing_enum =
-      put_in(predecessor_schema(["approved"]), ["properties", "route", "properties", "result"], %{
-        "type" => "string"
-      })
+  test "route.result is an ordinary path whose enum is the union across predecessors" do
+    {:ok, environment} =
+      RoutePredecessors.derive_type_environment([
+        envelope(predecessor_schema(["approved"]), "approved"),
+        envelope(predecessor_schema(["rejected", "retry"]), "rejected")
+      ])
 
-    assert {:error, %{code: :route_input_invalid, path: "$.properties.route.properties.result"}} =
-             RoutePredecessors.validate_predecessor_schema(missing_enum)
-
-    loose_handoff =
-      put_in(
-        predecessor_schema(["approved"]),
-        ["properties", "route", "properties", "handoff"],
-        %{"type" => "object", "properties" => %{}, "required" => []}
-      )
-
-    assert {:error, %{code: :route_input_invalid, path: "$.properties.route.properties.handoff"}} =
-             RoutePredecessors.validate_predecessor_schema(loose_handoff)
-  end
-
-  test "rejects predecessor result values outside their declared enum" do
-    {:ok, program} =
-      RouteConfig.decode(%{
-        "version" => 1,
-        "match_policy" => "exactly_one",
-        "rules" => [
-          %{
-            "id" => "maybe",
-            "when" => %{
-              "ref" => "previous_output.route.result",
-              "op" => "eq",
-              "value" => "maybe"
-            },
-            "transition" => %{"type" => "intra_workflow", "step_id" => @step_id}
-          }
-        ]
-      })
-
-    {:ok, type_environment} =
-      RoutePredecessors.derive_type_environment([envelope(predecessor_schema(["approved"]))])
+    assert :ok = validate_ref(environment, "previous_output.route.result", "eq", "approved")
+    assert :ok = validate_ref(environment, "previous_output.route.result", "in", ["retry"])
 
     assert {:error, %{code: :route_config_invalid, path: "$.rules[0].when.value"}} =
-             RoutePredecessors.validate(program, type_environment)
+             validate_ref(environment, "previous_output.route.result", "eq", "maybe")
+
+    assert {:error, %{code: :route_operand_type_mismatch, path: "$.rules[0].when.value"}} =
+             validate_ref(environment, "previous_output.route.result", "eq", 1)
+
+    {:ok, program} =
+      RouteConfig.decode(config([rule("previous_output.route.result", "approved")]))
+
+    assert %{"previous_output.route.result" => values} =
+             RoutePredecessors.closed_domains(program, environment)
+
+    assert Enum.sort(values) == ["approved", "rejected", "retry"]
+  end
+
+  test "routes on a declared verdict and hands off a declared explanation" do
+    {:ok, environment} = RoutePredecessors.derive_type_environment([explain()])
+
+    assert :ok =
+             validate_config(
+               config([
+                 rule("previous_output.verdict", "needs_changes", %{
+                   "how" => "{{ previous_output.explanation }}",
+                   "level" => "{{ task.level }}"
+                 }),
+                 rule("previous_output.verdict", "ready")
+               ]),
+               environment
+             )
+
+    {:ok, program} = RouteConfig.decode(config([rule("previous_output.verdict", "ready")]))
+
+    assert RoutePredecessors.closed_domains(program, environment) == %{
+             "previous_output.verdict" => ["needs_changes", "ready"]
+           }
+  end
+
+  test "rejects undeclared rule references and values outside the declared enum" do
+    {:ok, environment} = RoutePredecessors.derive_type_environment([explain()])
+
+    assert {:error,
+            %{
+              code: :route_config_invalid,
+              path: "$.rules[0].when.value",
+              message: ~s("approved" is not declared)
+            }} = validate_ref(environment, "previous_output.verdict", "eq", "approved")
+
+    assert {:error,
+            %{
+              code: :route_config_invalid,
+              path: "$.rules[0].when.ref",
+              message: ~s("status" is not declared)
+            }} = validate_ref(environment, "previous_output.status", "eq", "ready")
+
+    assert {:error, %{code: :route_operand_type_mismatch, path: "$.rules[0].when.value"}} =
+             validate_ref(environment, "previous_output.verdict", "gt", "ready")
+  end
+
+  test "rejects undeclared, non-optional, and embedded container handoff references" do
+    {:ok, environment} = RoutePredecessors.derive_type_environment([explain()])
+
+    assert {:error,
+            %{
+              code: :route_handoff_template_invalid,
+              path: "$.rules[0].handoff.why",
+              message: message
+            }} = validate_handoff(environment, %{"why" => "{{ previous_output.reason }}"})
+
+    assert message =~ ~s("reason" is not declared)
+
+    assert {:error, %{code: :route_handoff_template_invalid, path: "$.default.handoff.notes"}} =
+             validate_config(
+               config([rule("previous_output.verdict", "ready")], %{
+                 "notes" => "{{ previous_output.notes }}"
+               }),
+               environment
+             )
+
+    assert {:error,
+            %{
+              code: :route_handoff_template_invalid,
+              path: "$.rules[0].handoff.list[0]",
+              message: message
+            }} =
+             validate_handoff(environment, %{"list" => ["{{ previous_output.notes.author }}"]})
+
+    assert message =~ ~s("notes" is not required; mark the reference optional with ?)
+
+    assert :ok =
+             validate_handoff(environment, %{
+               "notes" => "{{ previous_output.notes? }}",
+               "author" => "by {{ previous_output.notes.author? }}"
+             })
+
+    assert {:error,
+            %{
+              code: :route_handoff_template_invalid,
+              path: "$.rules[0].handoff.summary",
+              message: message
+            }} =
+             validate_handoff(environment, %{"summary" => "See {{ previous_output.notes? }}"})
+
+    assert message =~ "must occupy the whole string"
+  end
+
+  test "handoff references must be declared by every predecessor" do
+    {:ok, environment} =
+      RoutePredecessors.derive_type_environment([
+        explain(),
+        envelope(predecessor_schema(["ready"]))
+      ])
+
+    validate = fn handoff ->
+      validate_config(config([rule("task.level", "ticket", handoff)]), environment)
+    end
+
+    assert {:error, %{code: :route_handoff_template_invalid, path: "$.rules[0].handoff.how"}} =
+             validate.(%{"how" => "{{ previous_output.explanation }}"})
+
+    assert :ok = validate.(%{"level" => "{{ task.level }}"})
   end
 
   test "validates answer paths, labels, and operands against every predecessor" do
@@ -164,6 +256,65 @@ defmodule Sacrum.Routing.RoutePredecessorsTest do
       step_type: :structured_inference,
       transition_id: "judge"
     }
+  end
+
+  defp explain do
+    %{
+      output_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "verdict" => %{"type" => "string", "enum" => ["needs_changes", "ready"]},
+          "explanation" => %{"type" => "string"},
+          "notes" => %{
+            "type" => "object",
+            "properties" => %{"author" => %{"type" => "string"}},
+            "required" => ["author"]
+          }
+        },
+        "required" => ["verdict", "explanation"],
+        "additionalProperties" => false
+      },
+      step_type: :llm_inference,
+      transition_id: "explain"
+    }
+  end
+
+  defp validate_handoff(environment, handoff) do
+    validate_config(
+      config([
+        rule("previous_output.verdict", "needs_changes", handoff),
+        rule("previous_output.verdict", "ready")
+      ]),
+      environment
+    )
+  end
+
+  defp validate_config(config, environment) do
+    {:ok, program} = RouteConfig.decode(config)
+    RoutePredecessors.validate(program, environment)
+  end
+
+  defp config(rules, default_handoff \\ nil) do
+    default =
+      %{"transition" => %{"type" => "intra_workflow", "step_id" => @step_id}}
+      |> then(&if default_handoff, do: Map.put(&1, "handoff", default_handoff), else: &1)
+
+    %{
+      "version" => 1,
+      "match_policy" => "exactly_one",
+      "rules" => rules,
+      "default" => default
+    }
+  end
+
+  defp rule(ref, value, handoff \\ nil) do
+    rule = %{
+      "id" => value,
+      "when" => %{"ref" => ref, "op" => "eq", "value" => value},
+      "transition" => %{"type" => "intra_workflow", "step_id" => @step_id}
+    }
+
+    if handoff, do: Map.put(rule, "handoff", handoff), else: rule
   end
 
   defp validate_ref(environment, ref, op, value) do

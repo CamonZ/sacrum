@@ -18,8 +18,7 @@ defmodule Sacrum.Routing.RouteConfig do
           | %{
               kind: :predicate,
               ref:
-                :previous_output_route_result
-                | :task_level
+                :task_level
                 | :task_tags
                 | :execution_step_visit_count
                 | String.t(),
@@ -56,17 +55,11 @@ defmodule Sacrum.Routing.RouteConfig do
           message: String.t()
         }
 
-  # Structured path segments are property keys, which include numeric score
+  # Output path segments are property keys, which include numeric score
   # levels such as `probabilities.2`.
-  @structured_segment ~r/^[A-Za-z0-9_-]+$/
+  @output_segment ~r/^[A-Za-z0-9_-]+$/
 
   @references %{
-    "previous_output.route.result" => %{
-      ref: :previous_output_route_result,
-      operators: [:eq, :neq, :in],
-      value: :string,
-      open?: false
-    },
     "task.level" => %{
       ref: :task_level,
       operators: [:eq, :neq, :in],
@@ -217,30 +210,31 @@ defmodule Sacrum.Routing.RouteConfig do
   defp decode_reference(reference, path) when is_binary(reference) do
     case Map.fetch(@references, reference) do
       {:ok, spec} -> {:ok, spec}
-      :error -> decode_structured_reference(reference, path)
+      :error -> decode_output_reference(reference, path)
     end
   end
 
   defp decode_reference(_reference, path), do: {:error, error(path, "must be a string")}
 
-  # Structured references are open paths into the predecessor output: which
-  # paths exist, and their operand types and bounds, come from the predecessor
-  # schema and are checked by `RoutePredecessors`.
-  defp decode_structured_reference("previous_output." <> rest = reference, path) do
-    if rest |> String.split(".") |> Enum.all?(&Regex.match?(@structured_segment, &1)) do
+  # Output references are paths into the predecessor output: which paths
+  # exist, their operand types and bounds, and whether they form a finite
+  # domain come from the predecessor schemas and are checked by
+  # `RoutePredecessors` when the route graph is validated.
+  defp decode_output_reference("previous_output." <> rest = reference, path) do
+    if rest |> String.split(".") |> Enum.all?(&Regex.match?(@output_segment, &1)) do
       {:ok,
        %{
          ref: reference,
          operators: [:eq, :neq, :in, :lt, :lte, :gt, :gte],
-         value: :structured,
-         open?: true
+         value: :output,
+         open?: false
        }}
     else
       {:error, error(path, "is not a supported route reference")}
     end
   end
 
-  defp decode_structured_reference(_reference, path),
+  defp decode_output_reference(_reference, path),
     do: {:error, error(path, "is not a supported route reference")}
 
   defp decode_operator(operator, path) when is_binary(operator) do
@@ -269,12 +263,6 @@ defmodule Sacrum.Routing.RouteConfig do
      )}
   end
 
-  defp validate_value(%{value: :string}, :in, value, path),
-    do: validate_nonempty_string_list(value, "#{path}.value")
-
-  defp validate_value(%{value: :string}, _operator, value, path),
-    do: validate_nonempty_string(value, "#{path}.value")
-
   defp validate_value(%{value: :level}, operator, value, path) do
     case string_values(operator, value, path) do
       {:ok, values} -> validate_level_values(values, path)
@@ -294,7 +282,7 @@ defmodule Sacrum.Routing.RouteConfig do
   defp validate_value(%{value: :count}, _operator, value, path),
     do: validate_positive_integer(value, "#{path}.value")
 
-  defp validate_value(%{value: :structured}, _operator, _value, _path), do: :ok
+  defp validate_value(%{value: :output}, _operator, _value, _path), do: :ok
 
   defp string_values(:in, value, path) do
     with :ok <- validate_nonempty_string_list(value, "#{path}.value"), do: {:ok, value}
@@ -367,7 +355,7 @@ defmodule Sacrum.Routing.RouteConfig do
       {:error,
        error(
          "$.default",
-         "is required for tag, visit-count, or structured inference rules",
+         "is required for tag or visit-count rules",
          :route_config_invalid
        )}
     else
@@ -388,17 +376,16 @@ defmodule Sacrum.Routing.RouteConfig do
     condition
     |> predicates()
     |> Enum.any?(fn %{ref: ref} ->
-      is_binary(ref) or
-        Enum.any?(@references, fn {_key, spec} -> spec.ref == ref and spec.open? end)
+      Enum.any?(@references, fn {_key, spec} -> spec.ref == ref and spec.open? end)
     end)
   end
 
   @doc """
-  Returns the distinct structured references (`previous_output.<path>`) used
-  by a decoded program's rules, in rule order.
+  Returns the distinct output references (`previous_output.<path>`) used by a
+  decoded program's rules, in rule order.
   """
-  @spec structured_references(t()) :: [String.t()]
-  def structured_references(%{rules: rules}) do
+  @spec output_references(t()) :: [String.t()]
+  def output_references(%{rules: rules}) do
     rules
     |> Enum.flat_map(&predicates(&1.when))
     |> Enum.map(& &1.ref)
@@ -406,11 +393,29 @@ defmodule Sacrum.Routing.RouteConfig do
     |> Enum.uniq()
   end
 
-  defp predicates(%{kind: kind, expressions: expressions}) when kind in [:all, :any],
+  @doc """
+  Returns the distinct output references (`previous_output.<path>`, without
+  `?`) interpolated by a decoded program's handoff templates, in decision
+  order.
+  """
+  @spec handoff_output_references(t()) :: [String.t()]
+  def handoff_output_references(%{rules: rules, default: default}) do
+    (rules ++ List.wrap(default))
+    |> Enum.flat_map(&HandoffTemplate.references(&1.handoff, "$"))
+    |> Enum.map(& &1.reference)
+    |> Enum.filter(&String.starts_with?(&1, "previous_output."))
+    |> Enum.uniq()
+  end
+
+  @doc """
+  Returns every predicate in a decoded expression, depth first.
+  """
+  @spec predicates(expression()) :: [expression()]
+  def predicates(%{kind: kind, expressions: expressions}) when kind in [:all, :any],
     do: Enum.flat_map(expressions, &predicates/1)
 
-  defp predicates(%{kind: :not, expression: expression}), do: predicates(expression)
-  defp predicates(%{kind: :predicate} = predicate), do: [predicate]
+  def predicates(%{kind: :not, expression: expression}), do: predicates(expression)
+  def predicates(%{kind: :predicate} = predicate), do: [predicate]
 
   defp decode_target(target, path) when is_map(target) do
     case Map.get(target, "type") do

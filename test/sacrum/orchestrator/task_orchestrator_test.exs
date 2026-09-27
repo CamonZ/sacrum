@@ -925,7 +925,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
                    "context" => %{
                      "execution" => %{"step_visit_count" => 1},
                      "previous_output" => %{
-                       "route" => %{"result" => "approved", "handoff" => %{}}
+                       "route" => %{"result" => "approved"}
                      }
                    }
                  }
