@@ -279,9 +279,10 @@ variant as `__type__`, which the embed needs to load it.
 route graph write path. Route decisions run locally from it and never dispatch
 to a daemon. A route step may be saved without one while it is being authored,
 but workflow graph validation rejects an unconfigured route, so it cannot run
-until a valid `route_config` is saved. The daemon `run_step` payload (`prompt`,
-`agent_config`, `output_schema`, `worktree`, `verbose_daemon_logging`) is
-unchanged.
+until a valid `route_config` is saved. The daemon `run_step` payload includes
+the step's canonical `harness` value alongside the existing `prompt`,
+`agent_config`, `output_schema`, `worktree`, and optional
+`verbose_daemon_logging` fields.
 
 ### Structured inference steps
 
@@ -321,10 +322,10 @@ transitions.
 At dispatch, `state` is resolved into the execution's `config` (see
 "Execution config"), and `model` and `model_provider` are set. A required
 reference that is missing fails the dispatch before an execution is created.
-The daemon receives `run_step` with `state`, `questions`, and
-`agent_config: {provider, model}` instead of a `prompt` or `output_schema`. It
-builds the provider request from them and returns the provider's answers
-without reshaping them.
+The daemon receives `run_step` with the step's canonical `harness`, plus
+`state`, `questions`, and `agent_config: {provider, model}` instead of a
+`prompt` or `output_schema`. It builds the provider request from them and
+returns the provider's answers without reshaping them.
 
 The step's output schema (`WorkflowStep.output_schema/1`) is derived from
 `questions`: an object with exactly one answer per question id

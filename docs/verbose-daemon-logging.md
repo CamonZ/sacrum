@@ -62,6 +62,7 @@ When a step with `verbose_daemon_logging = true` is dispatched via `ExecutionDis
   "task_id": "...",
   "prompt": "...",
   "agent_config": {...},
+  "harness": "codex",
   "worktree": "...",
   "output_schema": {...},
   "verbose_daemon_logging": true

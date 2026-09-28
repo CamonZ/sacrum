@@ -26,7 +26,7 @@ defmodule Sacrum.Realtime.CommandBroadcasterTest do
         config: %WorkflowStep.Config.LlmInference{agent_config: %{"model" => "test"}}
       },
       task: %Task{workspace: %TaskWorkspace{daemon_id: daemon_id, worktree_path: "/tmp/worktree"}},
-      step: %{verbose_daemon_logging: false}
+      step: %{harness: "codex", verbose_daemon_logging: false}
     }
 
     %{data: data, daemon_id: daemon_id, other_daemon_id: other_daemon_id, user_id: user_id}
@@ -57,7 +57,8 @@ defmodule Sacrum.Realtime.CommandBroadcasterTest do
                project_id: ctx.data.execution.project_id,
                prompt: "",
                agent_config: %{"model" => "test"},
-               worktree: "/tmp/worktree"
+               worktree: "/tmp/worktree",
+               harness: "codex"
              }
 
       assert :ok = CommandBroadcaster.broadcast_cancel_step(ctx.data.execution, ctx.daemon_id)
@@ -89,6 +90,7 @@ defmodule Sacrum.Realtime.CommandBroadcasterTest do
     assert :ok = CommandBroadcaster.broadcast_run_step(data, ctx.daemon_id)
     assert_receive %Phoenix.Socket.Broadcast{event: "run_step", payload: payload}
     assert payload.output_schema == schema
+    assert payload.harness == "codex"
     assert payload.verbose_daemon_logging
   end
 
