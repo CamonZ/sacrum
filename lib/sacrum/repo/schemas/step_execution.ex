@@ -28,6 +28,7 @@ defmodule Sacrum.Repo.Schemas.StepExecution do
     field :transition_result, :string
     field :model, :string
     field :model_provider, :string
+    field :harness, :string
     field :input_tokens, :integer
     field :output_tokens, :integer
     field :session_input_tokens, :integer
@@ -54,9 +55,9 @@ defmodule Sacrum.Repo.Schemas.StepExecution do
   end
 
   @token_fields ~w(input_tokens output_tokens session_input_tokens session_cache_read_input_tokens session_output_tokens session_total_tokens context_window_input_tokens context_window_cache_read_input_tokens context_window_total_tokens)a
-  @create_fields ~w(task_id task_run_id step_name step_type status context output transition_result model model_provider cost duration_ms workflow_id step_id handoff)a ++
+  @create_fields ~w(task_id task_run_id step_name step_type status context output transition_result model model_provider harness cost duration_ms workflow_id step_id handoff)a ++
                    @token_fields
-  @update_fields ~w(task_run_id step_name status context output transition_result model model_provider cost duration_ms handoff)a ++
+  @update_fields ~w(task_run_id step_name status context output transition_result model model_provider harness cost duration_ms handoff)a ++
                    @token_fields
 
   @spec create_changeset(t(), map()) :: Ecto.Changeset.t()

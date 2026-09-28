@@ -28,7 +28,9 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
     field :step_order, :integer
 
     field :harness, :string do
-      description("Optional runtime harness selector: codex, claude, or typesafe.")
+      description(
+        "Runtime harness selector: codex, claude, or typesafe. Defaults to codex when omitted."
+      )
     end
 
     field :step_type, :string do

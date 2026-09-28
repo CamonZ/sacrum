@@ -3,6 +3,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
   import Ecto.Changeset
   import PolymorphicEmbed
 
+  alias Sacrum.JsonSchema.Strict
   alias Sacrum.Orchestrator.PersistenceOptions
   alias Sacrum.Repo.Schemas.WorkflowStep.Config
 
@@ -19,19 +20,12 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     :finish
   ]
   @harnesses ~w(codex claude typesafe)
-  @provider_harnesses %{
-    "openai" => "codex",
-    "codex" => "codex",
-    "anthropic" => "claude",
-    "claude" => "claude",
-    "typesafe" => "typesafe"
-  }
 
   schema "workflow_steps" do
     field :name, :string
     field :goal, :string
     field :step_order, :integer
-    field :harness, :string
+    field :harness, :string, default: "codex"
     field :step_type, Ecto.Enum, values: @step_types, default: :llm_inference
 
     polymorphic_embeds_one(:config,
@@ -71,7 +65,8 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     step
     |> cast(attrs, @create_fields)
     |> cast_config(attrs)
-    |> maybe_set_harness_from_provider()
+    |> default_harness()
+    |> validate_provider_output_schema()
     |> validate_required([:name])
     |> validate_required([:harness])
     |> validate_length(:name, min: 1, max: 255)
@@ -87,7 +82,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     |> cast(attrs, @update_fields)
     |> validate_step_type_unchanged(attrs)
     |> cast_config(attrs)
-    |> maybe_set_harness_from_provider()
+    |> validate_provider_output_schema()
     |> validate_required([:harness])
     |> validate_length(:name, min: 1, max: 255)
     |> validate_inclusion(:harness, @harnesses)
@@ -179,42 +174,115 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     end
   end
 
-  defp maybe_set_harness_from_provider(changeset) do
-    if is_nil(get_field(changeset, :harness)) do
-      provider = changeset |> get_field(:config) |> config_provider()
+  defp validate_provider_output_schema(changeset) do
+    config = get_field(changeset, :config)
 
-      harness =
-        case provider do
-          nil -> "codex"
-          provider -> Map.get(@provider_harnesses, provider)
-        end
+    with schema when is_map(schema) <- config_output_schema(config),
+         {:error, compatibility, reason} <-
+           validate_provider_harness_schema(
+             config_provider(config),
+             get_field(changeset, :harness),
+             schema
+           ) do
+      invalid_config =
+        config
+        |> config_changeset()
+        |> add_error(:output_schema, "must be #{compatibility}: #{reason}")
 
-      if is_nil(harness), do: changeset, else: put_change(changeset, :harness, harness)
-    else
       changeset
+      |> put_change(:config, invalid_config)
+      |> Map.put(:valid?, false)
+    else
+      _valid -> changeset
     end
   end
 
-  defp config_provider(%Ecto.Changeset{data: %Config.StructuredInference{}} = config),
-    do: get_field(config, :provider)
-
-  defp config_provider(%Ecto.Changeset{data: %Config.LlmInference{}} = config) do
-    config
-    |> get_field(:agent_config)
-    |> agent_config_provider()
+  defp validate_provider_harness_schema(provider, "codex", schema)
+       when provider in ["openai", "codex"] do
+    case Strict.validate(schema) do
+      :ok -> :ok
+      {:error, reason} -> {:error, "Codex strict-compatible", reason}
+    end
   end
 
-  defp config_provider(%Config.StructuredInference{provider: provider}), do: provider
+  defp validate_provider_harness_schema(provider, "claude", schema)
+       when provider in ["anthropic", "claude"] do
+    if contains_uuid_format?(schema),
+      do: {:error, "Claude StructuredOutput-compatible", "format uuid is not supported"},
+      else: :ok
+  end
 
-  defp config_provider(%Config.LlmInference{agent_config: agent_config}),
-    do: agent_config_provider(agent_config)
+  defp validate_provider_harness_schema(_provider, _harness, _schema), do: :ok
 
-  defp config_provider(_config), do: nil
+  defp contains_uuid_format?(schema) when is_map(schema) do
+    Enum.any?(schema, fn
+      {key, value} when key in ["format", :format] ->
+        uuid_format?(value) or contains_uuid_format?(value)
 
-  defp agent_config_provider(agent_config) when is_map(agent_config),
-    do: Map.get(agent_config, "provider") || Map.get(agent_config, :provider)
+      {_key, value} ->
+        contains_uuid_format?(value)
+    end)
+  end
+
+  defp contains_uuid_format?(schema) when is_list(schema),
+    do: Enum.any?(schema, &contains_uuid_format?/1)
+
+  defp contains_uuid_format?(_schema), do: false
+
+  defp uuid_format?(format) when is_binary(format), do: String.downcase(format) == "uuid"
+  defp uuid_format?(_format), do: false
+
+  defp default_harness(changeset) do
+    if is_nil(get_field(changeset, :harness)),
+      do: put_change(changeset, :harness, "codex"),
+      else: changeset
+  end
+
+  defp config_output_schema(config) do
+    case config do
+      %Ecto.Changeset{data: %Config.LlmInference{}, valid?: true} = config ->
+        get_field(config, :output_schema)
+
+      %Config.LlmInference{output_schema: schema} ->
+        schema
+
+      _config ->
+        nil
+    end
+  end
+
+  defp config_provider(config) do
+    case config do
+      %Ecto.Changeset{data: %Config.LlmInference{}, valid?: true} = config ->
+        config
+        |> get_field(:agent_config)
+        |> agent_config_provider()
+
+      %Config.LlmInference{agent_config: agent_config} ->
+        agent_config_provider(agent_config)
+
+      _config ->
+        nil
+    end
+  end
+
+  defp agent_config_provider(agent_config) when is_map(agent_config) do
+    provider = Map.get(agent_config, "provider") || Map.get(agent_config, :provider)
+    normalize_provider(provider)
+  end
 
   defp agent_config_provider(_agent_config), do: nil
+
+  defp normalize_provider(provider) when is_atom(provider) and not is_nil(provider),
+    do: provider |> Atom.to_string() |> normalize_provider()
+
+  defp normalize_provider(provider) when is_binary(provider),
+    do: provider |> String.trim() |> String.downcase()
+
+  defp normalize_provider(_provider), do: nil
+
+  defp config_changeset(%Ecto.Changeset{} = config), do: config
+  defp config_changeset(%Config.LlmInference{} = config), do: Ecto.Changeset.change(config)
 
   defp fetch_attr(attrs, key) do
     with :error <- Map.fetch(attrs, key), do: Map.fetch(attrs, Atom.to_string(key))

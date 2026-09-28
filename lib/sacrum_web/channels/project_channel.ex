@@ -606,6 +606,7 @@ defmodule SacrumWeb.ProjectChannel do
       transition_result: field_value(execution, :transition_result),
       model: field_value(execution, :model),
       model_provider: field_value(execution, :model_provider),
+      harness: field_value(execution, :harness),
       input_tokens: field_value(execution, :input_tokens),
       output_tokens: field_value(execution, :output_tokens),
       session_input_tokens: field_value(execution, :session_input_tokens),

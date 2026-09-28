@@ -18,7 +18,7 @@ Sacrum is an API-only workflow engine and task management system built with Phoe
 - Repeatable workflow runs via `WorkflowStep.step_type == "stop"`, which ends
   the current TaskRun at a run boundary without completing the task
 
-**Execution tracking** — Durable `TaskRun` records track automation lifecycle for a task run. `StepExecution` records track individual step attempts inside a run, including the step name, attempt status, and optional LLM metadata (model, provider, token counts, cost, duration). Session logs attach free-text content to executions.
+**Execution tracking** — Durable `TaskRun` records track automation lifecycle for a task run. `StepExecution` records track individual step attempts inside a run, including the step name, attempt status, the nullable harness used when applicable, and optional LLM metadata (model, provider, token counts, cost, duration). Session logs attach free-text content to executions.
 
 **Artifact files** — Projects contain named text files whose contents are stored in `Artifact.body`. `ArtifactLink` records attach those files to projects, tasks, task sections, workflows, task runs, and step executions.
 
@@ -178,11 +178,15 @@ The `Project.artifacts(limit: 50, offset: 0)` field returns the caller's project
 | `syncStepTransitions` | `id!`, `transitions!` (list of `StepTransitionInput`) | `:workflow_step` |
 
 Workflow steps expose a required `harness` selector with the values `codex`,
-`claude`, and `typesafe`. When omitted, Sacrum derives it from a recognized
-provider in `config` (`openai`/`codex` to `codex`, `anthropic`/`claude` to
-`claude`, and `typesafe` to `typesafe`); steps without a provider default to
-`codex`. The value is stored independently from the provider/model
-configuration inside `config`.
+`claude`, and `typesafe`. When omitted on create, it defaults to `codex`.
+Provider values in `config` do not determine the harness. Provider identifiers
+are preserved as supplied and are not restricted to a built-in list. For
+`llm_inference` steps, provider-specific JSON Schema limits apply to the
+provider/harness pair: `openai` or `codex` with the `codex` harness requires
+Codex strict schemas, while `anthropic` or `claude` with the `claude` harness
+rejects `format: uuid` because it prevents Claude StructuredOutput from
+registering its tool. All providers also receive general JSON Schema
+validation.
 
 **`task_type.ex`** — 11 mutations (CRUD via `Accounts.Tasks`, workflow ops via `Repo.TaskWorkflows`, deps via `Repo.TaskDependencies`)
 | Mutation | Arguments | Returns |
@@ -219,7 +223,7 @@ configuration inside `config`.
 **`execution_types.ex`** — 3 mutations (via `Accounts.StepExecutions` / `Accounts.SessionLogs`)
 | Mutation | Arguments | Returns |
 |----------|-----------|---------|
-| `updateStepExecution` | `id!`, `step_name`, `status`, `context`, `output`, `transition_result`, `model`, `model_provider`, `input_tokens`, `output_tokens`, `session_input_tokens`, `session_cache_read_input_tokens`, `session_output_tokens`, `session_total_tokens`, `context_window_input_tokens`, `context_window_cache_read_input_tokens`, `context_window_total_tokens`, `cost`, `duration_ms` | `:step_execution` |
+| `updateStepExecution` | `id!`, `step_name`, `status`, `context`, `output`, `transition_result`, `model`, `model_provider`, `harness`, `input_tokens`, `output_tokens`, `session_input_tokens`, `session_cache_read_input_tokens`, `session_output_tokens`, `session_total_tokens`, `context_window_input_tokens`, `context_window_cache_read_input_tokens`, `context_window_total_tokens`, `cost`, `duration_ms` | `:step_execution` |
 | `createSessionLog` | `step_execution_id!`, `content!`, `format` (`anthropic` default, or `openai`), optional opaque `logical_key` for in-place updates | `:session_log` |
 | `cancelStepExecution` | `step_execution_id!` | `:step_execution` |
 
@@ -633,7 +637,7 @@ do not receive those imperative work commands. See
 | `step_created` / `step_updated` / `step_deleted` | Step fields including `harness`, `step_type`, and the lossless `config` document | WorkflowStep lifecycle |
 | `step_transition_created` / `step_transition_deleted` | Transition fields | Step-to-step edges |
 | `step_execution_created` | Execution fields | New execution started |
-| `step_execution_status_changed` | Execution fields including `context.route`, `transition_result`, and `handoff` | Status update (entered, completed, etc.) |
+| `step_execution_status_changed` | Execution fields including `harness`, `model_provider`, `context.route`, `transition_result`, and `handoff` | Status update (entered, completed, etc.) |
 | `task_run_created` / `task_run_updated` | TaskRun fields | TaskRun lifecycle changes |
 | `task_run_step_changed` | `{schema_version, task_run_id, task_id, from_step_id, to_step_id, status, level}` | Emitted at root or child run start, whenever a task's `current_step_id` changes while a TaskRun exists, and at run-end paths (`to_step_id` is `nil`). Lets pipeline views decrement the source step bucket and increment the destination bucket without refetching. |
 | `task_step_changed` | `{schema_version, task_id, from_step_id, to_step_id, workflow_id, level}` | Emitted when `current_step_id` changes outside orchestrator execution (`assign_workflow`, `advance_to_step`, `move_to_step`). Mirrors `task_run_step_changed` for the manual-move case where no TaskRun exists; only fires when `from != to`. |

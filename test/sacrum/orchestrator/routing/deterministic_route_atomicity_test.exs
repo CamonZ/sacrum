@@ -547,6 +547,7 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
       create_step(user, workflow, %{
         "name" => "explain",
         "step_order" => 1,
+        "harness" => "claude",
         "config" => %{
           "output_schema" => %{
             "type" => "object",
@@ -931,7 +932,7 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
         "workflow_id" => workflow.id,
         "project_id" => workflow.project_id
       }
-      |> Map.merge(Map.take(attrs, ["config"]))
+      |> Map.merge(Map.take(attrs, ["config", "harness"]))
       |> put_default_config(step_type)
 
     {:ok, step} = Accounts.WorkflowSteps.insert(user.id, step_attrs)
