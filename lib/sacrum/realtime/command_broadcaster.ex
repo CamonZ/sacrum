@@ -9,8 +9,8 @@ defmodule Sacrum.Realtime.CommandBroadcaster do
 
   @doc """
   Sends run_step for a started execution. The request comes from the
-  execution's rendered config; only `verbose_daemon_logging` is read from the
-  step.
+  execution's rendered config; `harness` and `verbose_daemon_logging` are read
+  from the step.
   """
   @spec broadcast_run_step(map(), String.t() | nil) :: :ok | {:error, atom()}
   def broadcast_run_step(%{execution: execution} = data, daemon_id) do
@@ -22,6 +22,7 @@ defmodule Sacrum.Realtime.CommandBroadcaster do
         worktree: Task.workspace_worktree(data.task)
       }
       |> Map.merge(request_payload(execution.config))
+      |> put_present(:harness, Map.get(data.step, :harness))
       |> put_present(:verbose_daemon_logging, data.step.verbose_daemon_logging || nil)
 
     broadcast(daemon_id, "run_step", payload)

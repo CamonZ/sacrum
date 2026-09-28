@@ -246,8 +246,8 @@ defmodule Sacrum.Repo.WorkflowStepConfigMigrationTest do
     %{name: "created #{step_type}", step_type: step_type, config: config}
   end
 
-  # The daemon-facing run payload built from the migrated step matches the one
-  # the legacy columns produced.
+  # The daemon-facing run payload built from the migrated step preserves the
+  # legacy config and carries the canonical harness separately.
   defp assert_daemon_payload(step, legacy) do
     daemon_id = Ecto.UUID.generate()
     Phoenix.PubSub.subscribe(Sacrum.PubSub, "daemon:#{daemon_id}")
@@ -277,6 +277,7 @@ defmodule Sacrum.Repo.WorkflowStepConfigMigrationTest do
         agent_config: Map.get(legacy, :agent_config),
         worktree: "/tmp/wt"
       }
+      |> then(&if(step.harness, do: Map.put(&1, :harness, step.harness), else: &1))
       |> then(
         &if(legacy[:output_schema],
           do: Map.put(&1, :output_schema, legacy.output_schema),
