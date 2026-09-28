@@ -18,11 +18,20 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     :stop,
     :finish
   ]
+  @harnesses ~w(codex claude typesafe)
+  @provider_harnesses %{
+    "openai" => "codex",
+    "codex" => "codex",
+    "anthropic" => "claude",
+    "claude" => "claude",
+    "typesafe" => "typesafe"
+  }
 
   schema "workflow_steps" do
     field :name, :string
     field :goal, :string
     field :step_order, :integer
+    field :harness, :string
     field :step_type, Ecto.Enum, values: @step_types, default: :llm_inference
 
     polymorphic_embeds_one(:config,
@@ -43,11 +52,14 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     timestamps(type: :utc_datetime_usec)
   end
 
-  @update_fields ~w(name goal step_order persistence_options)a
+  @update_fields ~w(name goal step_order harness persistence_options)a
   @create_fields [:step_type | @update_fields]
 
   @spec step_types() :: [atom()]
   def step_types, do: @step_types
+
+  @spec harnesses() :: [String.t()]
+  def harnesses, do: @harnesses
 
   @spec step_type_wire_value(atom() | String.t() | nil) :: String.t() | nil
   def step_type_wire_value(nil), do: nil
@@ -59,8 +71,11 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     step
     |> cast(attrs, @create_fields)
     |> cast_config(attrs)
+    |> maybe_set_harness_from_provider()
     |> validate_required([:name])
+    |> validate_required([:harness])
     |> validate_length(:name, min: 1, max: 255)
+    |> validate_inclusion(:harness, @harnesses)
     |> validate_persistence_options()
     |> foreign_key_constraint(:workflow_id)
     |> foreign_key_constraint(:project_id)
@@ -72,7 +87,10 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     |> cast(attrs, @update_fields)
     |> validate_step_type_unchanged(attrs)
     |> cast_config(attrs)
+    |> maybe_set_harness_from_provider()
+    |> validate_required([:harness])
     |> validate_length(:name, min: 1, max: 255)
+    |> validate_inclusion(:harness, @harnesses)
     |> validate_persistence_options()
   end
 
@@ -160,6 +178,43 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
         add_error(changeset, :config, "$.#{key}: is not supported for #{step_type} steps")
     end
   end
+
+  defp maybe_set_harness_from_provider(changeset) do
+    if is_nil(get_field(changeset, :harness)) do
+      provider = changeset |> get_field(:config) |> config_provider()
+
+      harness =
+        case provider do
+          nil -> "codex"
+          provider -> Map.get(@provider_harnesses, provider)
+        end
+
+      if is_nil(harness), do: changeset, else: put_change(changeset, :harness, harness)
+    else
+      changeset
+    end
+  end
+
+  defp config_provider(%Ecto.Changeset{data: %Config.StructuredInference{}} = config),
+    do: get_field(config, :provider)
+
+  defp config_provider(%Ecto.Changeset{data: %Config.LlmInference{}} = config) do
+    config
+    |> get_field(:agent_config)
+    |> agent_config_provider()
+  end
+
+  defp config_provider(%Config.StructuredInference{provider: provider}), do: provider
+
+  defp config_provider(%Config.LlmInference{agent_config: agent_config}),
+    do: agent_config_provider(agent_config)
+
+  defp config_provider(_config), do: nil
+
+  defp agent_config_provider(agent_config) when is_map(agent_config),
+    do: Map.get(agent_config, "provider") || Map.get(agent_config, :provider)
+
+  defp agent_config_provider(_agent_config), do: nil
 
   defp fetch_attr(attrs, key) do
     with :error <- Map.fetch(attrs, key), do: Map.fetch(attrs, Atom.to_string(key))

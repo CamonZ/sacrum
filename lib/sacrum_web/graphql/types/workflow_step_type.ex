@@ -27,6 +27,10 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
     field :goal, :string
     field :step_order, :integer
 
+    field :harness, :string do
+      description("Optional runtime harness selector: codex, claude, or typesafe.")
+    end
+
     field :step_type, :string do
       resolve(fn step, _args, _resolution ->
         {:ok, WorkflowStep.step_type_wire_value(step.step_type)}
@@ -202,6 +206,7 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
       arg(:name, non_null(:string))
       arg(:goal, :string)
       arg(:step_order, :integer)
+      arg(:harness, :string)
       arg(:step_type, :string)
       arg(:config, :json)
       arg(:persistence_options, :json)
@@ -223,6 +228,7 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
       arg(:name, :string)
       arg(:goal, :string)
       arg(:step_order, :integer)
+      arg(:harness, :string)
       arg(:step_type, :string)
       arg(:config, :json)
       arg(:persistence_options, :json)
