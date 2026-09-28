@@ -57,6 +57,7 @@ defmodule SacrumWeb.Graphql.WorkflowStepConfigTest do
     {:ok, step} =
       Accounts.WorkflowSteps.insert(workflow, %{
         name: "Implement",
+        harness: "claude",
         config: %{"prompt" => "Go", "output_schema" => %{"type" => "object"}}
       })
 

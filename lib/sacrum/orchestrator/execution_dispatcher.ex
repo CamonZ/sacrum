@@ -239,6 +239,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
           step_id: step.id,
           step_name: step.name,
           step_type: step.step_type,
+          harness: step.harness,
           status: "started"
         },
         overrides

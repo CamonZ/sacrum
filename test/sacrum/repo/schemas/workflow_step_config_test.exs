@@ -43,12 +43,8 @@ defmodule Sacrum.Repo.Schemas.WorkflowStepConfigTest do
                %Config.Route{version: 1, route_config: nil}
     end
 
-    test "derives harness from a recognized llm inference provider" do
-      for {provider, harness} <- [
-            {"openai", "codex"},
-            {"anthropic", "claude"},
-            {"typesafe", "typesafe"}
-          ] do
+    test "defaults the harness independently of the llm inference provider" do
+      for provider <- ["openai", "anthropic", "typesafe", "openrouter"] do
         changeset =
           create(%{
             step_type: "llm_inference",
@@ -56,7 +52,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStepConfigTest do
           })
 
         assert changeset.valid?
-        assert get_field(changeset, :harness) == harness
+        assert get_field(changeset, :harness) == "codex"
       end
     end
 
@@ -151,9 +147,8 @@ defmodule Sacrum.Repo.Schemas.WorkflowStepConfigTest do
     }
 
     defp structured(config, attrs \\ %{}) do
-      create(%{
+      step_attrs = %{
         step_type: Map.get(attrs, :step_type, "structured_inference"),
-        harness: Map.get(attrs, :harness),
         config:
           Map.merge(
             %{
@@ -164,7 +159,14 @@ defmodule Sacrum.Repo.Schemas.WorkflowStepConfigTest do
             },
             config
           )
-      })
+      }
+
+      step_attrs =
+        if Map.has_key?(attrs, :harness),
+          do: Map.put(step_attrs, :harness, Map.fetch!(attrs, :harness)),
+          else: step_attrs
+
+      create(step_attrs)
     end
 
     defp question_errors(questions) do
@@ -191,16 +193,12 @@ defmodule Sacrum.Repo.Schemas.WorkflowStepConfigTest do
       end
     end
 
-    test "derives harness from the structured inference provider" do
-      for {provider, harness} <- [
-            {"openai", "codex"},
-            {"anthropic", "claude"},
-            {"typesafe", "typesafe"}
-          ] do
+    test "defaults the harness independently of the structured inference provider" do
+      for provider <- ["openai", "anthropic", "typesafe", "openrouter"] do
         changeset = structured(%{"provider" => provider})
 
         assert changeset.valid?
-        assert get_field(changeset, :harness) == harness
+        assert get_field(changeset, :harness) == "codex"
       end
     end
 

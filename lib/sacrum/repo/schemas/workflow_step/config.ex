@@ -11,7 +11,6 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep.Config do
 
   require Logger
 
-  alias Sacrum.JsonSchema.Strict
   alias __MODULE__.{LlmInference, Route, StructuredInference, WaitChildren}
 
   @version 1
@@ -42,8 +41,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep.Config do
   end
 
   @doc """
-  Checks that the output schema in `field` is a resolvable JSON Schema and, for
-  Codex-backed agents, Codex strict-compatible.
+  Checks that the output schema in `field` is a resolvable JSON Schema.
   """
   @spec validate_output_schema(Ecto.Changeset.t(), atom()) :: Ecto.Changeset.t()
   def validate_output_schema(changeset, field \\ :output_schema) do
@@ -55,7 +53,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep.Config do
 
   defp validate_resolvable(changeset, field, schema) do
     ExJsonSchema.Schema.resolve(schema)
-    validate_provider_output_schema(changeset, schema)
+    changeset
   rescue
     exception ->
       Logger.error(
@@ -64,31 +62,4 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep.Config do
 
       add_error(changeset, field, "must be a valid JSON Schema")
   end
-
-  defp validate_provider_output_schema(changeset, schema) do
-    with true <- Map.has_key?(changeset.types, :agent_config),
-         true <- codex_strict_provider?(get_field(changeset, :agent_config)),
-         {:error, reason} <- Strict.validate(schema) do
-      add_error(changeset, :output_schema, "must be Codex strict-compatible: #{reason}")
-    else
-      _valid -> changeset
-    end
-  end
-
-  defp codex_strict_provider?(agent_config) when is_map(agent_config) do
-    agent_config
-    |> Map.get("provider", Map.get(agent_config, :provider))
-    |> normalize_provider()
-    |> Kernel.in(["openai", "codex"])
-  end
-
-  defp codex_strict_provider?(_agent_config), do: false
-
-  defp normalize_provider(provider) when is_atom(provider) and not is_nil(provider),
-    do: provider |> Atom.to_string() |> normalize_provider()
-
-  defp normalize_provider(provider) when is_binary(provider),
-    do: provider |> String.trim() |> String.downcase()
-
-  defp normalize_provider(_provider), do: nil
 end

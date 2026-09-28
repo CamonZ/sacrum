@@ -119,6 +119,7 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
     field :transition_result, :string
     field :model, :string
     field :model_provider, :string
+    field :harness, :string
     field :input_tokens, :integer
     field :output_tokens, :integer
     field :session_input_tokens, :integer
@@ -315,6 +316,7 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
       arg(:transition_result, :string)
       arg(:model, :string)
       arg(:model_provider, :string)
+      arg(:harness, :string)
       arg(:input_tokens, :integer)
       arg(:output_tokens, :integer)
       arg(:session_input_tokens, :integer)

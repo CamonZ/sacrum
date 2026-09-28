@@ -472,7 +472,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       assert updated.config.output_schema == updated_schema
     end
 
-    test "rejects schemas with const values" do
+    test "rejects schemas with const values for the OpenAI provider on the Codex harness" do
       workflow = create_workflow()
 
       schema = %{
@@ -487,7 +487,8 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       attrs =
         Map.merge(@valid_attrs, %{
           step_type: "llm_inference",
-          config: %{"output_schema" => schema, "agent_config" => %{"provider" => "codex"}}
+          harness: "codex",
+          config: %{"output_schema" => schema, "agent_config" => %{"provider" => "openai"}}
         })
 
       assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
@@ -496,7 +497,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       assert String.contains?(message, "const is not supported")
     end
 
-    test "rejects schema nodes without explicit type strings" do
+    test "rejects schemas without explicit type strings for the OpenAI provider on the Codex harness" do
       workflow = create_workflow()
 
       schema = %{
@@ -517,6 +518,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       attrs =
         Map.merge(@valid_attrs, %{
           step_type: "llm_inference",
+          harness: "codex",
           config: %{"output_schema" => schema, "agent_config" => %{"provider" => "openai"}}
         })
 
@@ -526,7 +528,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       assert String.contains?(message, "schema.route_hint.type must be a string")
     end
 
-    test "rejects object schemas without strict required and additionalProperties" do
+    test "rejects loose object schemas for the OpenAI provider on the Codex harness" do
       workflow = create_workflow()
 
       schema = %{
@@ -541,6 +543,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       attrs =
         Map.merge(@valid_attrs, %{
           step_type: "llm_inference",
+          harness: "codex",
           config: %{"output_schema" => schema, "agent_config" => %{"provider" => "openai"}}
         })
 
@@ -550,7 +553,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       assert String.contains?(message, "additionalProperties must be false")
     end
 
-    test "allows valid JSON Schema that is not Codex strict for Anthropic provider" do
+    test "allows non-Codex-strict JSON Schema for the Anthropic provider on the Claude harness" do
       workflow = create_workflow()
 
       schema = %{
@@ -565,6 +568,7 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       attrs =
         Map.merge(@valid_attrs, %{
           step_type: "llm_inference",
+          harness: "claude",
           config: %{"output_schema" => schema, "agent_config" => %{"provider" => "anthropic"}}
         })
 
@@ -574,7 +578,51 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
       assert returned_schema == schema
     end
 
-    test "rejects an existing loose schema when provider changes to OpenAI" do
+    test "rejects UUID format schemas for the Anthropic provider on the Claude harness" do
+      workflow = create_workflow()
+
+      schema = %{
+        "type" => "object",
+        "properties" => %{"id" => %{"type" => "string", "format" => "uuid"}},
+        "required" => ["id"],
+        "additionalProperties" => false
+      }
+
+      attrs =
+        Map.merge(@valid_attrs, %{
+          step_type: "llm_inference",
+          harness: "claude",
+          config: %{"output_schema" => schema, "agent_config" => %{"provider" => "anthropic"}}
+        })
+
+      assert {:error, changeset} = WorkflowSteps.insert(workflow, attrs)
+      assert %{config: %{output_schema: [message]}} = errors_on(changeset)
+      assert String.contains?(message, "Claude StructuredOutput-compatible")
+      assert String.contains?(message, "format uuid is not supported")
+    end
+
+    test "does not apply OpenAI strict schema rules to another provider on the Codex harness" do
+      workflow = create_workflow()
+
+      schema = %{
+        "type" => "object",
+        "properties" => %{"result" => %{"type" => "string"}}
+      }
+
+      attrs =
+        Map.merge(@valid_attrs, %{
+          step_type: "llm_inference",
+          harness: "codex",
+          config: %{"output_schema" => schema, "agent_config" => %{"provider" => "openrouter"}}
+        })
+
+      assert {:ok, %WorkflowStep{config: %{output_schema: returned_schema}}} =
+               WorkflowSteps.insert(workflow, attrs)
+
+      assert returned_schema == schema
+    end
+
+    test "rejects a loose schema when provider and harness change to OpenAI and Codex" do
       workflow = create_workflow()
 
       schema = %{
@@ -587,12 +635,14 @@ defmodule Sacrum.Repo.WorkflowStepsTest do
           workflow,
           Map.merge(@valid_attrs, %{
             step_type: "llm_inference",
+            harness: "claude",
             config: %{"output_schema" => schema, "agent_config" => %{"provider" => "anthropic"}}
           })
         )
 
       assert {:error, changeset} =
                WorkflowSteps.update(step, %{
+                 harness: "codex",
                  config: %{"agent_config" => %{"provider" => "openai"}}
                })
 

@@ -257,9 +257,12 @@ are evaluated locally from `route_config` and do not emit model output.
 ```
 
 All providers must use valid JSON Schema. Steps configured with
-`agent_config.provider` set to `openai` or `codex` additionally require
-Codex-strict schemas: explicit string `type` values, no `const`, no nullable
-type arrays, exact object `required` keys, `additionalProperties: false`, and
-schema-object array `items`.
+`agent_config.provider` set to `openai` or `codex` and `harness` set to `codex`
+additionally require Codex-strict schemas: explicit string `type` values, no
+`const`, no nullable type arrays, exact object `required` keys,
+`additionalProperties: false`, and schema-object array `items`.
+When `agent_config.provider` is `anthropic` or `claude` and `harness` is
+`claude`, schemas must not use `format: uuid`, which prevents Claude
+StructuredOutput from registering its tool.
 
 Without this, the model will return prose — and downstream steps will get `execution.previous_output` as unparseable text.
