@@ -39,7 +39,13 @@ defmodule SacrumWeb.Graphql.TaskRunApiTest do
   defp create_workflow_task(user, project) do
     task = create_task(user, project, "Runnable task")
     {:ok, workflow} = Accounts.Workflows.insert(user.id, project.id, %{name: "Workflow"})
-    {:ok, _step} = Accounts.WorkflowSteps.insert(workflow, %{name: "execute", goal: "Run"})
+
+    {:ok, _step} =
+      Accounts.WorkflowSteps.insert(
+        workflow,
+        workflow_step_attrs(%{name: "execute", goal: "Run"})
+      )
+
     {:ok, task} = Sacrum.Repo.TaskWorkflows.assign_workflow(task, workflow)
 
     {task, workflow}

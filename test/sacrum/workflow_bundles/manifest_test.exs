@@ -209,14 +209,25 @@ defmodule Sacrum.WorkflowBundles.ManifestTest do
           "name" => "Build",
           "initial_step" => %{"workflow_ref" => "build", "step_ref" => "start"},
           "steps" => [
-            %{"step_ref" => "start", "name" => "Start", "step_type" => "llm_inference"},
+            %{
+              "step_ref" => "start",
+              "name" => "Start",
+              "step_type" => "llm_inference",
+              "harness" => "codex"
+            },
             %{
               "step_ref" => "route",
               "name" => "Route",
               "step_type" => "route",
+              "harness" => "codex",
               "config" => %{"route_config" => route_config()}
             },
-            %{"step_ref" => "finish", "name" => "Finish", "step_type" => "finish"}
+            %{
+              "step_ref" => "finish",
+              "name" => "Finish",
+              "step_type" => "finish",
+              "harness" => "codex"
+            }
           ]
         }
       ],
@@ -241,6 +252,7 @@ defmodule Sacrum.WorkflowBundles.ManifestTest do
       "step_ref" => "classify",
       "name" => "Classify",
       "step_type" => "structured_inference",
+      "harness" => "typesafe",
       "config" => structured_config()
     }
   end

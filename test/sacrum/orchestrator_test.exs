@@ -48,7 +48,7 @@ defmodule Sacrum.OrchestratorTest do
     }
 
     merged_attrs = Map.merge(default_attrs, stringify_attrs(attrs))
-    {:ok, step} = Accounts.WorkflowSteps.insert(user.id, merged_attrs)
+    {:ok, step} = Accounts.WorkflowSteps.insert(user.id, workflow_step_attrs(merged_attrs))
     step
   end
 

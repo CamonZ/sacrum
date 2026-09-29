@@ -25,7 +25,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     field :name, :string
     field :goal, :string
     field :step_order, :integer
-    field :harness, :string, default: "codex"
+    field :harness, :string
     field :step_type, Ecto.Enum, values: @step_types, default: :llm_inference
 
     polymorphic_embeds_one(:config,
@@ -65,7 +65,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     step
     |> cast(attrs, @create_fields)
     |> cast_config(attrs)
-    |> default_harness()
+    |> validate_provider_harness()
     |> validate_provider_output_schema()
     |> validate_required([:name])
     |> validate_required([:harness])
@@ -82,6 +82,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     |> cast(attrs, @update_fields)
     |> validate_step_type_unchanged(attrs)
     |> cast_config(attrs)
+    |> validate_provider_harness()
     |> validate_provider_output_schema()
     |> validate_required([:harness])
     |> validate_length(:name, min: 1, max: 255)
@@ -179,11 +180,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
 
     with schema when is_map(schema) <- config_output_schema(config),
          {:error, compatibility, reason} <-
-           validate_provider_harness_schema(
-             config_provider(config),
-             get_field(changeset, :harness),
-             schema
-           ) do
+           validate_harness_schema(get_field(changeset, :harness), schema) do
       invalid_config =
         config
         |> config_changeset()
@@ -197,22 +194,40 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     end
   end
 
-  defp validate_provider_harness_schema(provider, "codex", schema)
-       when provider in ["openai", "codex"] do
+  defp validate_harness_schema("codex", schema) do
     case Strict.validate(schema) do
       :ok -> :ok
       {:error, reason} -> {:error, "Codex strict-compatible", reason}
     end
   end
 
-  defp validate_provider_harness_schema(provider, "claude", schema)
-       when provider in ["anthropic", "claude"] do
+  defp validate_harness_schema("claude", schema) do
     if contains_uuid_format?(schema),
       do: {:error, "Claude StructuredOutput-compatible", "format uuid is not supported"},
       else: :ok
   end
 
-  defp validate_provider_harness_schema(_provider, _harness, _schema), do: :ok
+  defp validate_harness_schema(_harness, _schema), do: :ok
+
+  defp validate_provider_harness(changeset) do
+    provider = config_provider(get_field(changeset, :config))
+    harness = get_field(changeset, :harness)
+
+    case builtin_provider_harness(provider) do
+      expected when is_binary(expected) and not is_nil(harness) and harness != expected ->
+        add_error(changeset, :harness, "must be #{expected} when provider is #{provider}")
+
+      _custom_or_matching ->
+        changeset
+    end
+  end
+
+  defp builtin_provider_harness(provider) when provider in ["anthropic", "claude"],
+    do: "claude"
+
+  defp builtin_provider_harness(provider) when provider in ["openai", "codex"], do: "codex"
+  defp builtin_provider_harness("typesafe"), do: "typesafe"
+  defp builtin_provider_harness(_custom_provider), do: nil
 
   defp contains_uuid_format?(schema) when is_map(schema) do
     Enum.any?(schema, fn
@@ -232,12 +247,6 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
   defp uuid_format?(format) when is_binary(format), do: String.downcase(format) == "uuid"
   defp uuid_format?(_format), do: false
 
-  defp default_harness(changeset) do
-    if is_nil(get_field(changeset, :harness)),
-      do: put_change(changeset, :harness, "codex"),
-      else: changeset
-  end
-
   defp config_output_schema(config) do
     case config do
       %Ecto.Changeset{data: %Config.LlmInference{}, valid?: true} = config ->
@@ -253,13 +262,19 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
 
   defp config_provider(config) do
     case config do
-      %Ecto.Changeset{data: %Config.LlmInference{}, valid?: true} = config ->
+      %Ecto.Changeset{data: %Config.LlmInference{}} = config ->
         config
         |> get_field(:agent_config)
         |> agent_config_provider()
 
       %Config.LlmInference{agent_config: agent_config} ->
         agent_config_provider(agent_config)
+
+      %Ecto.Changeset{data: %Config.StructuredInference{}} = config ->
+        config |> get_field(:provider) |> normalize_provider()
+
+      %Config.StructuredInference{provider: provider} ->
+        normalize_provider(provider)
 
       _config ->
         nil

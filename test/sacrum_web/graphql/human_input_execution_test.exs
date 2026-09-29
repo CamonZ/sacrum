@@ -25,12 +25,15 @@ defmodule SacrumWeb.GraphQL.HumanInputExecutionTest do
     {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
 
     {:ok, step} =
-      Accounts.WorkflowSteps.insert(user.id, %{
-        "workflow_id" => workflow.id,
-        "project_id" => project.id,
-        "name" => "Human Input",
-        "step_type" => "human_input"
-      })
+      Accounts.WorkflowSteps.insert(
+        user.id,
+        workflow_step_attrs(%{
+          "workflow_id" => workflow.id,
+          "project_id" => project.id,
+          "name" => "Human Input",
+          "step_type" => "human_input"
+        })
+      )
 
     {:ok, execution} =
       Accounts.StepExecutions.insert(user.id, %{

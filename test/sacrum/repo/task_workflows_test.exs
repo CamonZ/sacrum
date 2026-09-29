@@ -38,7 +38,7 @@ defmodule Sacrum.Repo.TaskWorkflowsTest do
   end
 
   defp create_step(workflow, attrs) do
-    {:ok, step} = WorkflowSteps.insert(workflow, attrs)
+    {:ok, step} = WorkflowSteps.insert(workflow, workflow_step_attrs(attrs))
     step
   end
 

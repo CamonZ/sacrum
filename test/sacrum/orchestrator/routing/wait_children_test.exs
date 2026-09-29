@@ -233,13 +233,16 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildrenTest do
 
   defp create_wait_children_step(user, workflow) do
     {:ok, step} =
-      Accounts.WorkflowSteps.insert(user.id, %{
-        "name" => "Wait Children",
-        "step_order" => 1,
-        "step_type" => "wait_children",
-        "workflow_id" => workflow.id,
-        "project_id" => workflow.project_id
-      })
+      Accounts.WorkflowSteps.insert(
+        user.id,
+        workflow_step_attrs(%{
+          "name" => "Wait Children",
+          "step_order" => 1,
+          "step_type" => "wait_children",
+          "workflow_id" => workflow.id,
+          "project_id" => workflow.project_id
+        })
+      )
 
     step
   end
@@ -248,7 +251,7 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildrenTest do
     {:ok, step} =
       Accounts.WorkflowSteps.insert(
         user.id,
-        %{
+        workflow_step_attrs(%{
           "name" => "Execute",
           "step_order" => 1,
           "step_type" => "llm_inference",
@@ -259,7 +262,7 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildrenTest do
             "skills" => ["test"],
             "agent_config" => %{"model" => "test-model"}
           }
-        }
+        })
       )
 
     step

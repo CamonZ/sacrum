@@ -171,6 +171,7 @@ defmodule Sacrum.Orchestrator.TaskRuns.RootTest do
   defp create_step(user, workflow, name, order, attrs \\ []) do
     defaults = %{
       name: name,
+      harness: "codex",
       step_order: order,
       workflow_id: workflow.id,
       project_id: workflow.project_id
@@ -187,7 +188,7 @@ defmodule Sacrum.Orchestrator.TaskRuns.RootTest do
         attrs
       end
 
-    {:ok, step} = WorkflowSteps.insert(user.id, attrs)
+    {:ok, step} = WorkflowSteps.insert(user.id, workflow_step_attrs(attrs))
     step
   end
 

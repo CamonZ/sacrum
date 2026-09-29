@@ -33,7 +33,9 @@ defmodule Sacrum.Repo.StepExecutionConfigMigrationTest do
       {:ok, step} =
         Accounts.WorkflowSteps.insert(
           user.id,
-          Map.merge(%{workflow_id: workflow.id, project_id: project.id}, attrs)
+          workflow_step_attrs(
+            Map.merge(%{workflow_id: workflow.id, project_id: project.id}, attrs)
+          )
         )
 
       step

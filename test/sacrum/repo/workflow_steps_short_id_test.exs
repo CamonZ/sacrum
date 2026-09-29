@@ -31,7 +31,7 @@ defmodule Sacrum.Repo.WorkflowStepsShortIdTest do
       workflow_id,
       project_id,
       user_id,
-      Map.merge(%{name: "Test Step", step_order: 1}, attrs)
+      workflow_step_attrs(Map.merge(%{name: "Test Step", step_order: 1}, attrs))
     )
   end
 

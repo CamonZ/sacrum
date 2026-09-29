@@ -18,7 +18,11 @@ defmodule Sacrum.Repo.Schemas.WorkflowStepConfigTest do
   }
 
   defp create(attrs),
-    do: WorkflowStep.create_changeset(%WorkflowStep{}, Map.put(attrs, :name, "Step"))
+    do:
+      WorkflowStep.create_changeset(
+        %WorkflowStep{},
+        attrs |> Map.put(:name, "Step") |> Map.put_new(:harness, "codex")
+      )
 
   describe "create" do
     test "casts the variant selected by step_type and fills its defaults" do
@@ -43,17 +47,36 @@ defmodule Sacrum.Repo.Schemas.WorkflowStepConfigTest do
                %Config.Route{version: 1, route_config: nil}
     end
 
-    test "defaults the harness independently of the llm inference provider" do
-      for provider <- ["openai", "anthropic", "typesafe", "openrouter"] do
+    test "requires an explicit harness" do
+      changeset = WorkflowStep.create_changeset(%WorkflowStep{}, %{name: "Step"})
+
+      assert %{harness: ["can't be blank"]} = errors_on(changeset)
+    end
+
+    test "validates built-in llm provider and harness pairs" do
+      for {provider, harness} <- [
+            {"openai", "codex"},
+            {"anthropic", "claude"},
+            {"typesafe", "typesafe"}
+          ] do
         changeset =
           create(%{
+            harness: harness,
             step_type: "llm_inference",
             config: %{"agent_config" => %{"provider" => provider}}
           })
 
         assert changeset.valid?
-        assert get_field(changeset, :harness) == "codex"
       end
+
+      mismatch =
+        create(%{
+          harness: "codex",
+          step_type: "llm_inference",
+          config: %{"agent_config" => %{"provider" => "anthropic"}}
+        })
+
+      assert %{harness: ["must be claude when provider is anthropic"]} = errors_on(mismatch)
     end
 
     test "rejects fields the variant does not declare" do
@@ -103,6 +126,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStepConfigTest do
     setup do
       step = %WorkflowStep{
         name: "Step",
+        harness: "codex",
         step_type: :llm_inference,
         config: %Config.LlmInference{prompt: "Old", agents: ["a"]}
       }
@@ -164,7 +188,12 @@ defmodule Sacrum.Repo.Schemas.WorkflowStepConfigTest do
       step_attrs =
         if Map.has_key?(attrs, :harness),
           do: Map.put(step_attrs, :harness, Map.fetch!(attrs, :harness)),
-          else: step_attrs
+          else:
+            Map.put(
+              step_attrs,
+              :harness,
+              if(step_attrs.config["provider"] == "typesafe", do: "typesafe", else: "codex")
+            )
 
       create(step_attrs)
     end
@@ -193,13 +222,12 @@ defmodule Sacrum.Repo.Schemas.WorkflowStepConfigTest do
       end
     end
 
-    test "defaults the harness independently of the structured inference provider" do
-      for provider <- ["openai", "anthropic", "typesafe", "openrouter"] do
-        changeset = structured(%{"provider" => provider})
+    test "validates built-in structured inference provider and harness pairs" do
+      assert structured(%{"provider" => "typesafe"}, %{harness: "typesafe"}).valid?
+      assert structured(%{"provider" => "openrouter"}, %{harness: "codex"}).valid?
 
-        assert changeset.valid?
-        assert get_field(changeset, :harness) == "codex"
-      end
+      mismatch = structured(%{"provider" => "typesafe"}, %{harness: "codex"})
+      assert %{harness: ["must be typesafe when provider is typesafe"]} = errors_on(mismatch)
     end
 
     test "requires provider, model, state, and questions" do
@@ -418,6 +446,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStepConfigTest do
     test "uses the answers schema for artifact persistence" do
       changeset =
         create(%{
+          harness: "typesafe",
           step_type: "structured_inference",
           persistence_options: %{"artifact" => %{"logical_name" => "judgment"}},
           config: %{

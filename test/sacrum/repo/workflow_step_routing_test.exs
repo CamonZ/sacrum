@@ -12,6 +12,7 @@ defmodule Sacrum.Repo.WorkflowStepRoutingTest do
   }
 
   @valid_attrs %{
+    harness: "codex",
     name: "Route",
     goal: "Select the next step",
     step_order: 1
@@ -24,7 +25,7 @@ defmodule Sacrum.Repo.WorkflowStepRoutingTest do
     assert {:ok, route} =
              WorkflowSteps.insert(
                workflow,
-               Map.merge(@valid_attrs, %{step_type: "route", config: %{}})
+               workflow_step_attrs(Map.merge(@valid_attrs, %{step_type: "route", config: %{}}))
              )
 
     assert route.config.route_config == nil
@@ -60,7 +61,12 @@ defmodule Sacrum.Repo.WorkflowStepRoutingTest do
     assert {:ok, route} =
              WorkflowSteps.insert(
                workflow,
-               Map.merge(@valid_attrs, %{step_type: "route", config: %{"route_config" => config}})
+               workflow_step_attrs(
+                 Map.merge(@valid_attrs, %{
+                   step_type: "route",
+                   config: %{"route_config" => config}
+                 })
+               )
              )
 
     assert route.config.route_config == config
@@ -73,10 +79,14 @@ defmodule Sacrum.Repo.WorkflowStepRoutingTest do
     assert {:error, changeset} =
              WorkflowSteps.insert(
                workflow,
-               Map.merge(@valid_attrs, %{
-                 step_type: "route",
-                 config: %{"route_config" => Map.put(route_config(destination.id), "version", 2)}
-               })
+               workflow_step_attrs(
+                 Map.merge(@valid_attrs, %{
+                   step_type: "route",
+                   config: %{
+                     "route_config" => Map.put(route_config(destination.id), "version", 2)
+                   }
+                 })
+               )
              )
 
     assert %{config: %{route_config: ["$.version: only version 1 is supported"]}} =
@@ -98,7 +108,7 @@ defmodule Sacrum.Repo.WorkflowStepRoutingTest do
             "config" => %{"route_config" => route_config(destination.id)}
           })
         ] do
-      assert {:ok, step} = WorkflowSteps.insert(workflow, attrs)
+      assert {:ok, step} = WorkflowSteps.insert(workflow, workflow_step_attrs(attrs))
       assert step.config == %WorkflowStep.Config.Route{route_config: route_config(destination.id)}
     end
   end
@@ -107,7 +117,10 @@ defmodule Sacrum.Repo.WorkflowStepRoutingTest do
     workflow = create_workflow()
 
     assert {:ok, step} =
-             WorkflowSteps.insert(workflow, Map.merge(@valid_attrs, %{goal: "   "}))
+             WorkflowSteps.insert(
+               workflow,
+               workflow_step_attrs(Map.merge(@valid_attrs, %{goal: "   "}))
+             )
 
     assert step.goal == nil
   end
@@ -127,6 +140,7 @@ defmodule Sacrum.Repo.WorkflowStepRoutingTest do
         user_id: workflow.user_id,
         name: "Legacy route",
         step_order: 3,
+        harness: "codex",
         step_type: :route
       })
 
@@ -186,7 +200,7 @@ defmodule Sacrum.Repo.WorkflowStepRoutingTest do
     {:ok, step} =
       WorkflowSteps.insert(
         workflow,
-        Map.merge(%{name: name, step_order: step_order}, Map.new(attrs))
+        workflow_step_attrs(Map.merge(%{name: name, step_order: step_order}, Map.new(attrs)))
       )
 
     step

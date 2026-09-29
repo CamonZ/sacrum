@@ -465,8 +465,12 @@ defmodule Sacrum.Repo.TasksTest do
       project = create_project(user)
 
       {:ok, wf} = Workflows.insert(project, %{name: "Test Workflow"})
-      {:ok, step1} = WorkflowSteps.insert(wf, %{name: "step1", step_order: 1})
-      {:ok, step2} = WorkflowSteps.insert(wf, %{name: "step2", step_order: 2})
+
+      {:ok, step1} =
+        WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "step1", step_order: 1}))
+
+      {:ok, step2} =
+        WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "step2", step_order: 2}))
 
       {:ok, wf} = Workflows.update(wf, %{initial_step_id: step1.id})
 
@@ -496,7 +500,9 @@ defmodule Sacrum.Repo.TasksTest do
       project = create_project(user)
 
       {:ok, wf} = Workflows.insert(project, %{name: "Test Workflow"})
-      {:ok, step} = WorkflowSteps.insert(wf, %{name: "test_step", step_order: 1})
+
+      {:ok, step} =
+        WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "test_step", step_order: 1}))
 
       {:ok, task1} = Tasks.insert(project, %{title: "Task 1"})
       {:ok, task2} = Tasks.insert(project, %{title: "Task 2"})

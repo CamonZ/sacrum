@@ -154,12 +154,15 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
     Repo.delete!(destination_transition)
 
     assert {:error, changeset} =
-             Accounts.WorkflowSteps.insert(user.id, %{
-               name: "Draft route",
-               step_type: "route",
-               workflow_id: workflow.id,
-               project_id: project.id
-             })
+             Accounts.WorkflowSteps.insert(
+               user.id,
+               workflow_step_attrs(%{
+                 name: "Draft route",
+                 step_type: "route",
+                 workflow_id: workflow.id,
+                 project_id: project.id
+               })
+             )
 
     assert %{route_config: [message]} = errors_on(changeset)
     assert message =~ "$.rules[0].transition.step_id"
@@ -265,13 +268,16 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
     create_step_transition(source_b, route_b)
 
     assert {:ok, _step} =
-             Accounts.WorkflowSteps.insert(user.id, %{
-               name: "harmless",
-               step_order: 2,
-               workflow_id: workflow_a.id,
-               project_id: project.id,
-               config: %{"prompt" => "Prompt"}
-             })
+             Accounts.WorkflowSteps.insert(
+               user.id,
+               workflow_step_attrs(%{
+                 name: "harmless",
+                 step_order: 2,
+                 workflow_id: workflow_a.id,
+                 project_id: project.id,
+                 config: %{"prompt" => "Prompt"}
+               })
+             )
 
     assert {:error, changeset} = Accounts.Workflows.delete(workflow_c)
     assert %{route_config: [message]} = errors_on(changeset)
@@ -307,13 +313,16 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
     create_step_transition(source_i, route_i)
 
     assert {:ok, _step} =
-             Accounts.WorkflowSteps.insert(user.id, %{
-               name: "harmless",
-               step_order: 2,
-               workflow_id: workflow_a.id,
-               project_id: project.id,
-               config: %{"prompt" => "Prompt"}
-             })
+             Accounts.WorkflowSteps.insert(
+               user.id,
+               workflow_step_attrs(%{
+                 name: "harmless",
+                 step_order: 2,
+                 workflow_id: workflow_a.id,
+                 project_id: project.id,
+                 config: %{"prompt" => "Prompt"}
+               })
+             )
   end
 
   defp configured_intra_route do
@@ -413,6 +422,7 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
   defp create_step(workflow, name, order, attrs \\ []) do
     defaults = %{
       name: name,
+      harness: "codex",
       step_order: order,
       workflow_id: workflow.id,
       project_id: workflow.project_id
@@ -421,7 +431,7 @@ defmodule Sacrum.Repo.RouteValidationMutationTest do
     {:ok, step} =
       Accounts.WorkflowSteps.insert(
         workflow.user_id,
-        Map.merge(defaults, Map.new(attrs))
+        workflow_step_attrs(Map.merge(defaults, Map.new(attrs)))
       )
 
     step

@@ -71,6 +71,7 @@ defmodule SacrumWeb.Graphql.WorkflowBundleTest do
               "step_ref" => "classify",
               "name" => "Classify",
               "step_type" => "structured_inference",
+              "harness" => "typesafe",
               "config" => %{
                 "provider" => "typesafe",
                 "model" => "system-one",

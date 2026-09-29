@@ -23,25 +23,34 @@ defmodule Sacrum.Repo.AttentionTest do
 
       # Create various workflow steps
       {:ok, execute_step} =
-        WorkflowSteps.insert(workflow, %{
-          name: "Execute Step",
-          step_type: "llm_inference",
-          step_order: 1
-        })
+        WorkflowSteps.insert(
+          workflow,
+          workflow_step_attrs(%{
+            name: "Execute Step",
+            step_type: "llm_inference",
+            step_order: 1
+          })
+        )
 
       {:ok, wait_children_step} =
-        WorkflowSteps.insert(workflow, %{
-          name: "Gate Step",
-          step_type: "wait_children",
-          step_order: 2
-        })
+        WorkflowSteps.insert(
+          workflow,
+          workflow_step_attrs(%{
+            name: "Gate Step",
+            step_type: "wait_children",
+            step_order: 2
+          })
+        )
 
       {:ok, final_step} =
-        WorkflowSteps.insert(workflow, %{
-          name: "Final Step",
-          step_type: "llm_inference",
-          step_order: 3
-        })
+        WorkflowSteps.insert(
+          workflow,
+          workflow_step_attrs(%{
+            name: "Final Step",
+            step_type: "llm_inference",
+            step_order: 3
+          })
+        )
 
       {
         :ok,
@@ -198,18 +207,24 @@ defmodule Sacrum.Repo.AttentionTest do
         })
 
       {:ok, execute_step} =
-        WorkflowSteps.insert(workflow, %{
-          name: "Execute Step",
-          step_type: "llm_inference",
-          step_order: 1
-        })
+        WorkflowSteps.insert(
+          workflow,
+          workflow_step_attrs(%{
+            name: "Execute Step",
+            step_type: "llm_inference",
+            step_order: 1
+          })
+        )
 
       {:ok, wait_children_step} =
-        WorkflowSteps.insert(workflow, %{
-          name: "Gate Step",
-          step_type: "wait_children",
-          step_order: 2
-        })
+        WorkflowSteps.insert(
+          workflow,
+          workflow_step_attrs(%{
+            name: "Gate Step",
+            step_type: "wait_children",
+            step_order: 2
+          })
+        )
 
       {
         :ok,
@@ -322,11 +337,14 @@ defmodule Sacrum.Repo.AttentionTest do
         })
 
       {:ok, other_step} =
-        WorkflowSteps.insert(other_workflow, %{
-          name: "Other Step",
-          step_type: "llm_inference",
-          step_order: 1
-        })
+        WorkflowSteps.insert(
+          other_workflow,
+          workflow_step_attrs(%{
+            name: "Other Step",
+            step_type: "llm_inference",
+            step_order: 1
+          })
+        )
 
       # Create task in first project
       {:ok, task1} = Tasks.insert(project, %{title: "Project 1 Task", user_id: user.id})

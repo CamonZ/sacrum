@@ -130,7 +130,9 @@ defmodule Sacrum.Orchestrator.StructuredInferenceTest do
     {:ok, step} =
       Accounts.WorkflowSteps.insert(
         user.id,
-        Map.merge(%{"workflow_id" => workflow.id, "project_id" => workflow.project_id}, attrs)
+        workflow_step_attrs(
+          Map.merge(%{"workflow_id" => workflow.id, "project_id" => workflow.project_id}, attrs)
+        )
       )
 
     step

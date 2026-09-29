@@ -67,4 +67,31 @@ defmodule Sacrum.DataCase do
       "additionalProperties" => false
     })
   end
+
+  def workflow_step_attrs(attrs) do
+    harness_key =
+      cond do
+        Map.has_key?(attrs, :harness) -> :harness
+        Map.has_key?(attrs, "harness") -> "harness"
+        Enum.any?(Map.keys(attrs), &is_atom/1) -> :harness
+        true -> "harness"
+      end
+
+    config = Map.get(attrs, :config) || Map.get(attrs, "config") || %{}
+    agent_config = Map.get(config, :agent_config) || Map.get(config, "agent_config") || %{}
+
+    provider =
+      Map.get(config, :provider) || Map.get(config, "provider") ||
+        Map.get(agent_config, :provider) ||
+        Map.get(agent_config, "provider")
+
+    harness =
+      case provider do
+        provider when provider in ["anthropic", "claude"] -> "claude"
+        provider when provider in ["typesafe"] -> "typesafe"
+        _provider -> "codex"
+      end
+
+    Map.put_new(attrs, harness_key, harness)
+  end
 end

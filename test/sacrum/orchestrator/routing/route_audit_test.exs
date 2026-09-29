@@ -179,7 +179,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteAuditTest do
       |> Map.merge(Map.take(attrs, ["config"]))
       |> put_default_config(step_type)
 
-    {:ok, step} = Accounts.WorkflowSteps.insert(user.id, step_attrs)
+    {:ok, step} = Accounts.WorkflowSteps.insert(user.id, workflow_step_attrs(step_attrs))
     step
   end
 

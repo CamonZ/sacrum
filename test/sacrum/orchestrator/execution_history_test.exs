@@ -47,7 +47,9 @@ defmodule Sacrum.Orchestrator.ExecutionHistoryTest do
       }
     }
 
-    {:ok, step} = Accounts.WorkflowSteps.insert(user.id, Map.merge(default_attrs, attrs))
+    {:ok, step} =
+      Accounts.WorkflowSteps.insert(user.id, workflow_step_attrs(Map.merge(default_attrs, attrs)))
+
     step
   end
 

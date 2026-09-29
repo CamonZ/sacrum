@@ -413,7 +413,7 @@ defmodule Sacrum.Routing.RouteValidatorTest do
         attrs
       end
 
-    {:ok, step} = Accounts.WorkflowSteps.insert(user.id, attrs)
+    {:ok, step} = Accounts.WorkflowSteps.insert(user.id, workflow_step_attrs(attrs))
     step
   end
 
