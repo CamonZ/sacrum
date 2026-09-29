@@ -144,7 +144,7 @@ The `Project.artifacts(limit: 50, offset: 0)` field returns the caller's project
 **`project_type.ex`** — 3 mutations (all via `Accounts.Projects`)
 | Mutation | Arguments | Returns |
 |----------|-----------|---------|
-| `createProject` | `name!`, `description`, `slug` | `:project` |
+| `createProject` | `name!`, `description`, `slug`, `codex_installed!`, `claude_installed!` | `:project` |
 | `updateProject` | `id!`, `name`, `description`, `slug` | `:project` |
 | `deleteProject` | `id!` | `:project` |
 
@@ -160,6 +160,13 @@ The `Project.artifacts(limit: 50, offset: 0)` field returns the caller's project
 `updateArtifact` changes `filename`, `body`, or both. Supplying `subject_type` and `subject_id` together replaces the artifact's sole link while preserving its metadata and logical name unless replacement values are supplied. Supplying only `logicalName` or `metadata` updates the sole link. The target must belong to the artifact's existing user and project; ownership and project scope never move. Invalid targets, metadata, or duplicate names roll back file edits and leave the original link intact. Artifacts with multiple links can still update file fields, but attachment replacement or link-field updates are rejected as ambiguous.
 
 `deleteArtifact` deletes an artifact owned by the authenticated user and returns the deleted file. Its `ArtifactLink` rows are removed by the database cascade. Update and delete requests for another user's artifact return not found.
+
+`createProject` requires the GUI's `codexInstalled` and `claudeInstalled`
+capability booleans. The generated Backlog step uses Codex when it is
+available (including when both are available), or Claude when Claude alone
+is available. If neither is available, creation returns a validation error and
+rolls back the project and its default workflow. Sacrum uses the supplied
+capabilities and does not probe the client's machine.
 
 **`workflow_type.ex`** — 4 mutations (all via `Accounts.Workflows`)
 | Mutation | Arguments | Returns |

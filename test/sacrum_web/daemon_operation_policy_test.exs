@@ -139,7 +139,10 @@ defmodule SacrumWeb.DaemonTokenGraphqlTest do
     created =
       build_conn()
       |> daemon_auth(ctx.daemon, ctx.reconnect)
-      |> post("/graphql", %{query: "mutation { createProject(name: \"Daemon CLI\") { id name } }"})
+      |> post("/graphql", %{
+        query:
+          "mutation { createProject(name: \"Daemon CLI\", codexInstalled: true, claudeInstalled: false) { id name } }"
+      })
       |> json_response(200)
 
     assert created["data"]["createProject"]["name"] == "Daemon CLI"
@@ -217,7 +220,10 @@ defmodule SacrumWeb.DaemonTokenGraphqlTest do
     created =
       build_conn()
       |> authenticate(ctx.owner)
-      |> post("/graphql", %{query: "mutation { createProject(name: \"Allowed\") { id name } }"})
+      |> post("/graphql", %{
+        query:
+          "mutation { createProject(name: \"Allowed\", codexInstalled: true, claudeInstalled: false) { id name } }"
+      })
       |> json_response(200)
 
     assert created["data"]["createProject"]["name"] == "Allowed"

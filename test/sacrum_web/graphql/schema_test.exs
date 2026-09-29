@@ -396,8 +396,15 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         |> authenticate(user)
         |> graphql("""
           mutation {
-            createProject(name: "New", description: "Desc", slug: "new-proj") {
+            createProject(
+              name: "New",
+              description: "Desc",
+              slug: "new-proj",
+              codexInstalled: true,
+              claudeInstalled: false
+            ) {
               id name slug description
+              workflows { name workflowSteps { name harness } }
             }
           }
         """)
@@ -408,6 +415,96 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert data["slug"] == "new-proj"
       assert data["description"] == "Desc"
       assert data["id"] != nil
+
+      assert [
+               %{
+                 "name" => "Backlog",
+                 "workflowSteps" => [%{"name" => "Backlog", "harness" => "codex"}]
+               }
+             ] = data["workflows"]
+    end
+
+    test "selects Claude for the default Backlog step when it is the only installed harness", %{
+      conn: conn
+    } do
+      user = create_user()
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createProject(name: "Claude Project", codexInstalled: false, claudeInstalled: true) {
+              workflows { workflowSteps { harness } }
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert [%{"workflowSteps" => [%{"harness" => "claude"}]}] =
+               result["data"]["createProject"]["workflows"]
+    end
+
+    test "prefers Codex when both supported harnesses are installed", %{conn: conn} do
+      user = create_user()
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createProject(name: "Both Harnesses", codexInstalled: true, claudeInstalled: true) {
+              workflows { workflowSteps { harness } }
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert [%{"workflowSteps" => [%{"harness" => "codex"}]}] =
+               result["data"]["createProject"]["workflows"]
+    end
+
+    test "rejects project creation and rolls back when neither supported harness is installed", %{
+      conn: conn
+    } do
+      user = create_user()
+      workflow_count = Sacrum.Repo.aggregate(Sacrum.Repo.Schemas.Workflow, :count)
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createProject(name: "No Harness", codexInstalled: false, claudeInstalled: false) {
+              id
+            }
+          }
+        """)
+        |> json_response(200)
+
+      assert result["data"]["createProject"] == nil
+      assert [%{"message" => message}] = result["errors"]
+      assert message =~ "at least one supported harness"
+      assert Accounts.Projects.list_by(user.id) == []
+      assert Sacrum.Repo.aggregate(Sacrum.Repo.Schemas.Workflow, :count) == workflow_count
+    end
+
+    test "requires both installed harness capability fields", %{conn: conn} do
+      user = create_user()
+
+      result =
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createProject(name: "Missing Capability", codexInstalled: true) { id }
+          }
+        """)
+        |> json_response(200)
+
+      assert [%{"message" => message}] = result["errors"]
+      assert message =~ "claudeInstalled"
+      assert Accounts.Projects.list_by(user.id) == []
     end
 
     test "updates a project", %{conn: conn} do
@@ -5380,7 +5477,13 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         conn
         |> authenticate(user)
         |> graphql("""
-          mutation { createProject(description: "No name") { id } }
+          mutation {
+            createProject(
+              description: "No name",
+              codexInstalled: true,
+              claudeInstalled: false
+            ) { id }
+          }
         """)
         |> json_response(200)
 
@@ -7650,7 +7753,13 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         conn
         |> authenticate(user)
         |> graphql("""
-          mutation { createProject(description: "No name") { id } }
+          mutation {
+            createProject(
+              description: "No name",
+              codexInstalled: true,
+              claudeInstalled: false
+            ) { id }
+          }
         """)
         |> json_response(200)
 
