@@ -70,7 +70,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
       |> Map.merge(Map.new(attrs, fn {k, v} -> {to_string(k), v} end))
       |> put_default_config()
 
-    {:ok, step} = Accounts.WorkflowSteps.insert(user.id, merged)
+    {:ok, step} = Accounts.WorkflowSteps.insert(user.id, workflow_step_attrs(merged))
     step
   end
 

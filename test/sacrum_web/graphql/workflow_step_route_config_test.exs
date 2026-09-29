@@ -36,6 +36,7 @@ defmodule SacrumWeb.Graphql.WorkflowStepRouteConfigTest do
         |> graphql("""
           mutation {
             createWorkflowStep(
+              harness: "codex"
               workflowId: "#{graph.workflow.id}"
               name: "Route draft"
               stepType: "route"
@@ -97,6 +98,7 @@ defmodule SacrumWeb.Graphql.WorkflowStepRouteConfigTest do
         |> graphql("""
           mutation {
             createWorkflowStep(
+              harness: "codex"
               workflowId: "#{graph.workflow.id}"
               name: "Configured on create"
               stepType: "route"
@@ -346,25 +348,34 @@ defmodule SacrumWeb.Graphql.WorkflowStepRouteConfigTest do
       Accounts.Workflows.insert(user.id, project.id, %{name: "Unconfigured route"})
 
     {:ok, source} =
-      Accounts.WorkflowSteps.insert(workflow, %{
-        name: "Source",
-        step_order: 1,
-        config: %{"output_schema" => predecessor_schema()}
-      })
+      Accounts.WorkflowSteps.insert(
+        workflow,
+        workflow_step_attrs(%{
+          name: "Source",
+          step_order: 1,
+          config: %{"output_schema" => predecessor_schema()}
+        })
+      )
 
     {:ok, destination} =
-      Accounts.WorkflowSteps.insert(workflow, %{
-        name: "Destination",
-        step_order: 3
-      })
+      Accounts.WorkflowSteps.insert(
+        workflow,
+        workflow_step_attrs(%{
+          name: "Destination",
+          step_order: 3
+        })
+      )
 
     {:ok, route} =
-      Accounts.WorkflowSteps.insert(workflow, %{
-        name: "Route",
-        step_order: 2,
-        step_type: "route",
-        config: %{"route_config" => routing_config(destination.id)}
-      })
+      Accounts.WorkflowSteps.insert(
+        workflow,
+        workflow_step_attrs(%{
+          name: "Route",
+          step_order: 2,
+          step_type: "route",
+          config: %{"route_config" => routing_config(destination.id)}
+        })
+      )
 
     {:ok, _} =
       Accounts.StepTransitions.insert(user.id, %{

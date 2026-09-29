@@ -338,13 +338,13 @@ defmodule SacrumWeb.DaemonChannelTest do
     {:ok, step} =
       Accounts.WorkflowSteps.insert(
         user.id,
-        %{
+        workflow_step_attrs(%{
           "name" => "Execute",
           "step_order" => 1,
           "workflow_id" => workflow.id,
           "project_id" => project.id,
           "config" => %{"prompt" => "Run the assigned work"}
-        }
+        })
       )
 
     {:ok, task} =

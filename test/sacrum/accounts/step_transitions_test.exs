@@ -22,8 +22,8 @@ defmodule Sacrum.Accounts.StepTransitionsTest do
   defp create_workflow_with_steps(user) do
     {:ok, project} = Projects.insert(user.id, %{name: "Test Project"})
     {:ok, workflow} = Workflows.insert(user.id, project.id, %{name: "Test Workflow"})
-    {:ok, step1} = WorkflowSteps.insert(workflow, %{name: "Backlog"})
-    {:ok, step2} = WorkflowSteps.insert(workflow, %{name: "In Progress"})
+    {:ok, step1} = WorkflowSteps.insert(workflow, workflow_step_attrs(%{name: "Backlog"}))
+    {:ok, step2} = WorkflowSteps.insert(workflow, workflow_step_attrs(%{name: "In Progress"}))
     {project, step1, step2}
   end
 

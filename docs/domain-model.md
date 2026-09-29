@@ -172,21 +172,22 @@ The `Project.artifacts(limit: 50, offset: 0)` field returns the caller's project
 **`workflow_step_type.ex`** — 4 mutations (all via `Accounts.WorkflowSteps`)
 | Mutation | Arguments | Returns |
 |----------|-----------|---------|
-| `createWorkflowStep` | `workflow_id!`, `name!`, `goal`, `step_order`, `harness`, `step_type`, `config`, `persistence_options` | `:workflow_step` |
+| `createWorkflowStep` | `workflow_id!`, `name!`, `goal`, `step_order`, `harness!`, `step_type`, `config`, `persistence_options` | `:workflow_step` |
 | `updateWorkflowStep` | `id!`, `name`, `goal`, `step_order`, `harness`, `step_type`, `config`, `persistence_options` | `:workflow_step` |
 | `deleteWorkflowStep` | `id!` | `:workflow_step` |
 | `syncStepTransitions` | `id!`, `transitions!` (list of `StepTransitionInput`) | `:workflow_step` |
 
-Workflow steps expose a required `harness` selector with the values `codex`,
-`claude`, and `typesafe`. When omitted on create, it defaults to `codex`.
-Provider values in `config` do not determine the harness. Provider identifiers
-are preserved as supplied and are not restricted to a built-in list. For
-`llm_inference` steps, provider-specific JSON Schema limits apply to the
-provider/harness pair: `openai` or `codex` with the `codex` harness requires
-Codex strict schemas, while `anthropic` or `claude` with the `claude` harness
-rejects `format: uuid` because it prevents Claude StructuredOutput from
-registering its tool. All providers also receive general JSON Schema
-validation.
+Workflow steps require an explicit `harness` selector with the values `codex`,
+`claude`, and `typesafe`; Sacrum does not infer or default it from config.
+Built-in providers must use their matching harness: `openai`/`codex` with
+`codex`, `anthropic`/`claude` with `claude`, and `typesafe` with `typesafe`.
+These checks apply to `llm_inference` `agent_config.provider` and
+`structured_inference` `provider`. Other provider identifiers are daemon
+configuration and are accepted with any supported harness. Output-schema
+compatibility checks follow the harness for all providers: Codex requires
+Codex strict schemas, and Claude rejects `format: uuid` because it prevents
+Claude StructuredOutput from registering its tool. All schemas also receive
+general JSON Schema validation.
 
 **`task_type.ex`** — 11 mutations (CRUD via `Accounts.Tasks`, workflow ops via `Repo.TaskWorkflows`, deps via `Repo.TaskDependencies`)
 | Mutation | Arguments | Returns |

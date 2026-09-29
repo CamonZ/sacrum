@@ -24,12 +24,15 @@ defmodule Sacrum.Accounts.WorkflowStepsShortIdTest do
 
   defp insert_step(user, project, workflow, name) do
     {:ok, step} =
-      WorkflowSteps.insert(user.id, %{
-        workflow_id: workflow.id,
-        project_id: project.id,
-        name: name,
-        step_order: 1
-      })
+      WorkflowSteps.insert(
+        user.id,
+        workflow_step_attrs(%{
+          workflow_id: workflow.id,
+          project_id: project.id,
+          name: name,
+          step_order: 1
+        })
+      )
 
     step
   end

@@ -81,10 +81,13 @@ defmodule Sacrum.Accounts.StepExecutionsTest do
       {project, task, workflow} = create_task_with_workflow(user)
 
       {:ok, step} =
-        WorkflowSteps.insert(workflow, %{
-          name: "Human Input",
-          step_type: "human_input"
-        })
+        WorkflowSteps.insert(
+          workflow,
+          workflow_step_attrs(%{
+            name: "Human Input",
+            step_type: "human_input"
+          })
+        )
 
       attrs = %{
         "task_id" => task.id,
@@ -105,11 +108,14 @@ defmodule Sacrum.Accounts.StepExecutionsTest do
       {:ok, other_workflow} = Workflows.insert(user.id, project.id, %{name: "Other Workflow"})
 
       {:ok, other_step} =
-        WorkflowSteps.insert(other_workflow, %{
-          name: "Other Step",
-          step_type: "llm_inference",
-          config: %{"prompt" => "Choose a destination"}
-        })
+        WorkflowSteps.insert(
+          other_workflow,
+          workflow_step_attrs(%{
+            name: "Other Step",
+            step_type: "llm_inference",
+            config: %{"prompt" => "Choose a destination"}
+          })
+        )
 
       assert {:error, changeset} =
                StepExecutions.insert(user.id, %{
@@ -304,12 +310,15 @@ defmodule Sacrum.Accounts.StepExecutionsTest do
       {project, task, workflow} = create_task_with_workflow(user)
 
       {:ok, step} =
-        WorkflowSteps.insert(user.id, %{
-          "workflow_id" => workflow.id,
-          "project_id" => project.id,
-          "name" => "Human Input",
-          "step_type" => "human_input"
-        })
+        WorkflowSteps.insert(
+          user.id,
+          workflow_step_attrs(%{
+            "workflow_id" => workflow.id,
+            "project_id" => project.id,
+            "name" => "Human Input",
+            "step_type" => "human_input"
+          })
+        )
 
       {:ok, execution} =
         StepExecutions.insert(user.id, %{
@@ -345,12 +354,15 @@ defmodule Sacrum.Accounts.StepExecutionsTest do
       {project, task, workflow} = create_task_with_workflow(user)
 
       {:ok, step} =
-        WorkflowSteps.insert(user.id, %{
-          "workflow_id" => workflow.id,
-          "project_id" => project.id,
-          "name" => "Human Input",
-          "step_type" => "human_input"
-        })
+        WorkflowSteps.insert(
+          user.id,
+          workflow_step_attrs(%{
+            "workflow_id" => workflow.id,
+            "project_id" => project.id,
+            "name" => "Human Input",
+            "step_type" => "human_input"
+          })
+        )
 
       {:ok, task_run} =
         TaskRuns.insert(user.id, project.id, task.id, %{status: :waiting})

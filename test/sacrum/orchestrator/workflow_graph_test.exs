@@ -56,7 +56,7 @@ defmodule Sacrum.Orchestrator.WorkflowGraphTest do
     {:ok, step} =
       Accounts.WorkflowSteps.insert(
         user.id,
-        default_attrs |> Map.merge(attrs) |> put_default_config()
+        workflow_step_attrs(default_attrs |> Map.merge(attrs) |> put_default_config())
       )
 
     step

@@ -1242,8 +1242,12 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       project: project
     } do
       {:ok, workflow} = Accounts.Workflows.insert(user.id, project.id, %{name: "Custom WF"})
-      {:ok, step1} = Accounts.WorkflowSteps.insert(workflow, %{name: "S1", step_order: 1})
-      {:ok, _step2} = Accounts.WorkflowSteps.insert(workflow, %{name: "S2", step_order: 2})
+
+      {:ok, step1} =
+        Accounts.WorkflowSteps.insert(workflow, workflow_step_attrs(%{name: "S1", step_order: 1}))
+
+      {:ok, _step2} =
+        Accounts.WorkflowSteps.insert(workflow, workflow_step_attrs(%{name: "S2", step_order: 2}))
 
       result =
         conn
@@ -1302,7 +1306,12 @@ defmodule SacrumWeb.Graphql.SchemaTest do
     } do
       {:ok, other_project} = Accounts.Projects.insert(user.id, %{name: "Other Project"})
       {:ok, other_workflow} = Accounts.Workflows.insert(user.id, other_project.id, %{name: "X"})
-      {:ok, _} = Accounts.WorkflowSteps.insert(other_workflow, %{name: "S1", step_order: 1})
+
+      {:ok, _} =
+        Accounts.WorkflowSteps.insert(
+          other_workflow,
+          workflow_step_attrs(%{name: "S1", step_order: 1})
+        )
 
       tasks_before = Accounts.Tasks.list_tasks(user.id, conditions: [project_id: project.id])
 
@@ -1342,7 +1351,11 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       {:ok, other_workflow} =
         Accounts.Workflows.insert(other_user.id, other_project.id, %{name: "X"})
 
-      {:ok, _} = Accounts.WorkflowSteps.insert(other_workflow, %{name: "S1", step_order: 1})
+      {:ok, _} =
+        Accounts.WorkflowSteps.insert(
+          other_workflow,
+          workflow_step_attrs(%{name: "S1", step_order: 1})
+        )
 
       result =
         conn
@@ -1967,7 +1980,12 @@ defmodule SacrumWeb.Graphql.SchemaTest do
     test "assigns and unassigns a workflow", %{conn: conn, user: user, project: project} do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
       {:ok, workflow} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-      {:ok, _step} = Accounts.WorkflowSteps.insert(workflow, %{name: "Step 1", step_order: 1})
+
+      {:ok, _step} =
+        Accounts.WorkflowSteps.insert(
+          workflow,
+          workflow_step_attrs(%{name: "Step 1", step_order: 1})
+        )
 
       # Assign
       result =
@@ -1999,8 +2017,18 @@ defmodule SacrumWeb.Graphql.SchemaTest do
     test "moves task to a step", %{conn: conn, user: user, project: project} do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
       {:ok, workflow} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-      {:ok, step1} = Accounts.WorkflowSteps.insert(workflow, %{name: "Step 1", step_order: 1})
-      {:ok, step2} = Accounts.WorkflowSteps.insert(workflow, %{name: "Step 2", step_order: 2})
+
+      {:ok, step1} =
+        Accounts.WorkflowSteps.insert(
+          workflow,
+          workflow_step_attrs(%{name: "Step 1", step_order: 1})
+        )
+
+      {:ok, step2} =
+        Accounts.WorkflowSteps.insert(
+          workflow,
+          workflow_step_attrs(%{name: "Step 2", step_order: 2})
+        )
 
       # Create a transition between step1 and step2
       {:ok, _} =
@@ -2321,7 +2349,9 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       project: project
     } do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "Test WF"})
-      {:ok, _step1} = Accounts.WorkflowSteps.insert(wf, %{name: "Step 1", step_order: 1})
+
+      {:ok, _step1} =
+        Accounts.WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "Step 1", step_order: 1}))
 
       # Create tasks with different levels
       {:ok, epic1} = Accounts.Tasks.insert(user.id, project.id, %{title: "Epic 1", level: "epic"})
@@ -2381,13 +2411,18 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         Accounts.Projects.insert(other_user.id, %{name: "Other User Project"})
 
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "Test WF"})
-      {:ok, step1} = Accounts.WorkflowSteps.insert(wf, %{name: "Step 1", step_order: 1})
+
+      {:ok, step1} =
+        Accounts.WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "Step 1", step_order: 1}))
 
       {:ok, other_wf} =
         Accounts.Workflows.insert(other_user.id, other_project.id, %{name: "Test WF"})
 
       {:ok, other_step1} =
-        Accounts.WorkflowSteps.insert(other_wf, %{name: "Step 1", step_order: 1})
+        Accounts.WorkflowSteps.insert(
+          other_wf,
+          workflow_step_attrs(%{name: "Step 1", step_order: 1})
+        )
 
       {:ok, ticket} =
         Accounts.Tasks.insert(user.id, project.id, %{
@@ -2448,7 +2483,9 @@ defmodule SacrumWeb.Graphql.SchemaTest do
            project: project
          } do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "Test WF"})
-      {:ok, step1} = Accounts.WorkflowSteps.insert(wf, %{name: "Step 1", step_order: 1})
+
+      {:ok, step1} =
+        Accounts.WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "Step 1", step_order: 1}))
 
       for status <- [:queued, :executing, :waiting, :stopping] do
         {:ok, task} =
@@ -2505,7 +2542,9 @@ defmodule SacrumWeb.Graphql.SchemaTest do
            project: project
          } do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "Test WF"})
-      {:ok, step1} = Accounts.WorkflowSteps.insert(wf, %{name: "Step 1", step_order: 1})
+
+      {:ok, step1} =
+        Accounts.WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "Step 1", step_order: 1}))
 
       {:ok, active_task} =
         Accounts.Tasks.insert(user.id, project.id, %{
@@ -2581,7 +2620,10 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       project: project
     } do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "Test WF"})
-      {:ok, step1} = Accounts.WorkflowSteps.insert(wf, %{name: "Step 1", step_order: 1})
+
+      {:ok, step1} =
+        Accounts.WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "Step 1", step_order: 1}))
+
       {:ok, task1} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task 1"})
 
       Sacrum.Repo.TaskWorkflows.assign_workflow(task1, wf)
@@ -2633,9 +2675,15 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       project: project
     } do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "Test WF"})
-      {:ok, step1} = Accounts.WorkflowSteps.insert(wf, %{name: "Step 1", step_order: 1})
-      {:ok, step2} = Accounts.WorkflowSteps.insert(wf, %{name: "Step 2", step_order: 2})
-      {:ok, step3} = Accounts.WorkflowSteps.insert(wf, %{name: "Step 3", step_order: 3})
+
+      {:ok, step1} =
+        Accounts.WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "Step 1", step_order: 1}))
+
+      {:ok, step2} =
+        Accounts.WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "Step 2", step_order: 2}))
+
+      {:ok, step3} =
+        Accounts.WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "Step 3", step_order: 3}))
 
       # Create transitions from step1 to step2 and step3
       Accounts.StepTransitions.insert(user.id, %{
@@ -2780,9 +2828,23 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       {:ok, wf1} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF 1"})
       {:ok, wf2} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF 2"})
 
-      {:ok, step1_1} = Accounts.WorkflowSteps.insert(wf1, %{name: "Step 1.1", step_order: 1})
-      {:ok, _step1_2} = Accounts.WorkflowSteps.insert(wf1, %{name: "Step 1.2", step_order: 2})
-      {:ok, step2_1} = Accounts.WorkflowSteps.insert(wf2, %{name: "Step 2.1", step_order: 1})
+      {:ok, step1_1} =
+        Accounts.WorkflowSteps.insert(
+          wf1,
+          workflow_step_attrs(%{name: "Step 1.1", step_order: 1})
+        )
+
+      {:ok, _step1_2} =
+        Accounts.WorkflowSteps.insert(
+          wf1,
+          workflow_step_attrs(%{name: "Step 1.2", step_order: 2})
+        )
+
+      {:ok, step2_1} =
+        Accounts.WorkflowSteps.insert(
+          wf2,
+          workflow_step_attrs(%{name: "Step 2.1", step_order: 1})
+        )
 
       {:ok, task1} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task 1", level: "task"})
       {:ok, task2} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task 2", level: "task"})
@@ -2852,7 +2914,12 @@ defmodule SacrumWeb.Graphql.SchemaTest do
          } do
       {:ok, wf1} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF 1"})
       {:ok, wf2} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF 2"})
-      {:ok, step2_1} = Accounts.WorkflowSteps.insert(wf2, %{name: "Step 2.1", step_order: 1})
+
+      {:ok, step2_1} =
+        Accounts.WorkflowSteps.insert(
+          wf2,
+          workflow_step_attrs(%{name: "Step 2.1", step_order: 1})
+        )
 
       # Create inter-workflow transition with target step
       Accounts.WorkflowTransitions.insert(user.id, %{
@@ -3215,7 +3282,9 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
     test "lists steps for a workflow", %{conn: conn, user: user, project: project} do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-      {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "Step 1", step_order: 1})
+
+      {:ok, step} =
+        Accounts.WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "Step 1", step_order: 1}))
 
       result =
         conn
@@ -3233,7 +3302,12 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
     test "gets a single workflow step", %{conn: conn, user: user, project: project} do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-      {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "Step 1", goal: "Do things"})
+
+      {:ok, step} =
+        Accounts.WorkflowSteps.insert(
+          wf,
+          workflow_step_attrs(%{name: "Step 1", goal: "Do things"})
+        )
 
       result =
         conn
@@ -3258,6 +3332,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         |> graphql("""
           mutation {
             createWorkflowStep(
+              harness: "codex"
               workflowId: "#{wf.id}"
               name: "Step 1"
               goal: "Test goal"
@@ -3295,6 +3370,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         |> graphql(~s"""
           mutation {
             createWorkflowStep(
+              harness: "codex"
               workflowId: "#{wf.id}"
               name: "Persisted step"
               config: #{json_arg(%{"output_schema" => output_schema})}
@@ -3348,6 +3424,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         |> graphql(~s"""
           mutation {
             createWorkflowStep(
+              harness: "codex"
               workflowId: "#{wf.id}"
               name: "Invalid persisted step"
               persistenceOptions: "#{persistence_options}"
@@ -3363,7 +3440,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
     test "updates a workflow step", %{conn: conn, user: user, project: project} do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-      {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "Original"})
+      {:ok, step} = Accounts.WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "Original"}))
 
       result =
         conn
@@ -3382,7 +3459,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
     test "deletes a workflow step", %{conn: conn, user: user, project: project} do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-      {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "To Delete"})
+      {:ok, step} = Accounts.WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "To Delete"}))
 
       result =
         conn
@@ -3439,7 +3516,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       project: project
     } do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-      {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "Step"})
+      {:ok, step} = Accounts.WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "Step"}))
 
       result =
         conn
@@ -3468,18 +3545,24 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "Routing WF"})
 
       {:ok, source} =
-        Accounts.WorkflowSteps.insert(wf, %{
-          name: "Source",
-          step_order: 1,
-          config: %{"output_schema" => routing_predecessor_schema()}
-        })
+        Accounts.WorkflowSteps.insert(
+          wf,
+          workflow_step_attrs(%{
+            name: "Source",
+            step_order: 1,
+            config: %{"output_schema" => routing_predecessor_schema()}
+          })
+        )
 
       {:ok, destination} =
-        Accounts.WorkflowSteps.insert(wf, %{
-          name: "Destination",
-          step_order: 3,
-          step_type: "finish"
-        })
+        Accounts.WorkflowSteps.insert(
+          wf,
+          workflow_step_attrs(%{
+            name: "Destination",
+            step_order: 3,
+            step_type: "finish"
+          })
+        )
 
       route_config = routing_config(destination.id)
 
@@ -3489,6 +3572,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         |> graphql("""
           mutation {
             createWorkflowStep(
+              harness: "codex"
               workflowId: "#{wf.id}"
               name: "Route"
               stepType: "route"
@@ -3580,11 +3664,14 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       valid_config = routing_config(Ecto.UUID.generate())
 
       {:ok, route} =
-        Accounts.WorkflowSteps.insert(wf, %{
-          name: "Route",
-          step_type: "route",
-          config: %{"route_config" => valid_config}
-        })
+        Accounts.WorkflowSteps.insert(
+          wf,
+          workflow_step_attrs(%{
+            name: "Route",
+            step_type: "route",
+            config: %{"route_config" => valid_config}
+          })
+        )
 
       invalid_config = %{
         "version" => 1,
@@ -3634,6 +3721,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         |> graphql("""
           mutation {
             createWorkflowStep(
+              harness: "codex"
               workflowId: "#{wf.id}"
               name: "Invalid Schema Step"
               config: #{json_arg(%{"output_schema" => invalid_schema})}
@@ -3655,7 +3743,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       project: project
     } do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-      {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "Step"})
+      {:ok, step} = Accounts.WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "Step"}))
       invalid_schema = %{"type" => "invalid_type_value"}
 
       result =
@@ -3691,6 +3779,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         |> graphql("""
           mutation {
             createWorkflowStep(
+              harness: "codex"
               workflowId: "#{wf.id}"
               name: ""
             ) { id }
@@ -3713,17 +3802,20 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
 
       {:ok, step} =
-        Accounts.WorkflowSteps.insert(wf, %{
-          name: "Step",
-          config: %{
-            "output_schema" => %{
-              "type" => "object",
-              "properties" => %{"result" => %{"type" => "string"}},
-              "required" => ["result"],
-              "additionalProperties" => false
+        Accounts.WorkflowSteps.insert(
+          wf,
+          workflow_step_attrs(%{
+            name: "Step",
+            config: %{
+              "output_schema" => %{
+                "type" => "object",
+                "properties" => %{"result" => %{"type" => "string"}},
+                "required" => ["result"],
+                "additionalProperties" => false
+              }
             }
-          }
-        })
+          })
+        )
 
       assert step.config.output_schema != nil
 
@@ -3757,6 +3849,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         |> graphql("""
           mutation {
             createWorkflowStep(
+              harness: "codex"
               workflowId: "#{wf.id}"
               name: "Step with verbose"
               goal: "Test verbose logging"
@@ -3781,7 +3874,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       project: project
     } do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-      {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "Original"})
+      {:ok, step} = Accounts.WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "Original"}))
 
       assert step.verbose_daemon_logging == false
 
@@ -3820,6 +3913,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         |> graphql("""
           mutation {
             createWorkflowStep(
+              harness: "codex"
               workflowId: "#{wf.id}"
               name: "Step without verbose"
               goal: "Test verbose logging"
@@ -4098,7 +4192,13 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
       task = assign_workspace(task, user.id)
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-      {:ok, _step} = Accounts.WorkflowSteps.insert(wf, %{name: "step_1", goal: "Do something"})
+
+      {:ok, _step} =
+        Accounts.WorkflowSteps.insert(
+          wf,
+          workflow_step_attrs(%{name: "step_1", goal: "Do something"})
+        )
+
       {:ok, updated_task} = Sacrum.Repo.TaskWorkflows.assign_workflow(task, wf)
 
       result =
@@ -4127,7 +4227,13 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
       task = assign_workspace(task, user.id)
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-      {:ok, _step} = Accounts.WorkflowSteps.insert(wf, %{name: "step_1", goal: "Do something"})
+
+      {:ok, _step} =
+        Accounts.WorkflowSteps.insert(
+          wf,
+          workflow_step_attrs(%{name: "step_1", goal: "Do something"})
+        )
+
       {:ok, updated_task} = Sacrum.Repo.TaskWorkflows.assign_workflow(task, wf)
 
       # Start orchestration once
@@ -4887,7 +4993,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
     test "resolves workflow with its steps", %{conn: conn, user: user, project: project} do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-      {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "Step 1"})
+      {:ok, step} = Accounts.WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "Step 1"}))
 
       result =
         conn
@@ -5387,8 +5493,18 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       project: project
     } do
       {:ok, workflow} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-      {:ok, step1} = Accounts.WorkflowSteps.insert(workflow, %{name: "Step 1", step_order: 1})
-      {:ok, step2} = Accounts.WorkflowSteps.insert(workflow, %{name: "Step 2", step_order: 2})
+
+      {:ok, step1} =
+        Accounts.WorkflowSteps.insert(
+          workflow,
+          workflow_step_attrs(%{name: "Step 1", step_order: 1})
+        )
+
+      {:ok, step2} =
+        Accounts.WorkflowSteps.insert(
+          workflow,
+          workflow_step_attrs(%{name: "Step 2", step_order: 2})
+        )
 
       result =
         conn
@@ -5490,8 +5606,12 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       # sync_transitions returns {:ok, [transitions]} but the GraphQL field declares :workflow_step
       # This causes a BadMapError. Skipping until the resolver is fixed.
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-      {:ok, s1} = Accounts.WorkflowSteps.insert(wf, %{name: "S1", step_order: 1})
-      {:ok, s2} = Accounts.WorkflowSteps.insert(wf, %{name: "S2", step_order: 2})
+
+      {:ok, s1} =
+        Accounts.WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "S1", step_order: 1}))
+
+      {:ok, s2} =
+        Accounts.WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "S2", step_order: 2}))
 
       result =
         conn
@@ -5511,8 +5631,12 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
     test "rejects duplicate to_step_id values", %{conn: conn, user: user, project: project} do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-      {:ok, s1} = Accounts.WorkflowSteps.insert(wf, %{name: "S1", step_order: 1})
-      {:ok, s2} = Accounts.WorkflowSteps.insert(wf, %{name: "S2", step_order: 2})
+
+      {:ok, s1} =
+        Accounts.WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "S1", step_order: 1}))
+
+      {:ok, s2} =
+        Accounts.WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "S2", step_order: 2}))
 
       result =
         conn
@@ -5536,8 +5660,12 @@ defmodule SacrumWeb.Graphql.SchemaTest do
     test "rejects steps from different workflows", %{conn: conn, user: user, project: project} do
       {:ok, wf1} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF 1"})
       {:ok, wf2} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF 2"})
-      {:ok, s1} = Accounts.WorkflowSteps.insert(wf1, %{name: "S1", step_order: 1})
-      {:ok, s_other} = Accounts.WorkflowSteps.insert(wf2, %{name: "S Other", step_order: 1})
+
+      {:ok, s1} =
+        Accounts.WorkflowSteps.insert(wf1, workflow_step_attrs(%{name: "S1", step_order: 1}))
+
+      {:ok, s_other} =
+        Accounts.WorkflowSteps.insert(wf2, workflow_step_attrs(%{name: "S Other", step_order: 1}))
 
       result =
         conn
@@ -5815,8 +5943,12 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
     test "deletes an existing step transition", %{conn: conn, user: user, project: project} do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-      {:ok, s1} = Accounts.WorkflowSteps.insert(wf, %{name: "S1", step_order: 1})
-      {:ok, s2} = Accounts.WorkflowSteps.insert(wf, %{name: "S2", step_order: 2})
+
+      {:ok, s1} =
+        Accounts.WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "S1", step_order: 1}))
+
+      {:ok, s2} =
+        Accounts.WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "S2", step_order: 2}))
 
       {:ok, transition} =
         Accounts.StepTransitions.insert(user.id, %{
@@ -6073,7 +6205,10 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
     test "filters by workflow_id", %{conn: conn, user: user, project: project} do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-      {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "S1", step_order: 1})
+
+      {:ok, step} =
+        Accounts.WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "S1", step_order: 1}))
+
       {:ok, _} = Accounts.Workflows.update(wf, %{initial_step_id: step.id})
 
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "With WF"})
@@ -6136,8 +6271,13 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
     test "filters by step_id", %{conn: conn, user: user, project: project} do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-      {:ok, step1} = Accounts.WorkflowSteps.insert(wf, %{name: "step1", step_order: 1})
-      {:ok, step2} = Accounts.WorkflowSteps.insert(wf, %{name: "step2", step_order: 2})
+
+      {:ok, step1} =
+        Accounts.WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "step1", step_order: 1}))
+
+      {:ok, step2} =
+        Accounts.WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "step2", step_order: 2}))
+
       {:ok, _} = Accounts.Workflows.update(wf, %{initial_step_id: step1.id})
 
       {:ok, _} =
@@ -6175,7 +6315,10 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       project: project
     } do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-      {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "mystep", step_order: 1})
+
+      {:ok, step} =
+        Accounts.WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "mystep", step_order: 1}))
+
       {:ok, _} = Accounts.Workflows.update(wf, %{initial_step_id: step.id})
 
       {:ok, task1} = Accounts.Tasks.insert(user.id, project.id, %{title: "With WF"})
@@ -6212,11 +6355,14 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       {:ok, workflow} = Accounts.Workflows.insert(user.id, project.id, %{name: "Human Review"})
 
       {:ok, step} =
-        Accounts.WorkflowSteps.insert(workflow, %{
-          name: "wait",
-          step_order: 1,
-          step_type: "human_input"
-        })
+        Accounts.WorkflowSteps.insert(
+          workflow,
+          workflow_step_attrs(%{
+            name: "wait",
+            step_order: 1,
+            step_type: "human_input"
+          })
+        )
 
       {:ok, task} =
         Accounts.Tasks.insert(user.id, project.id, %{
@@ -6275,7 +6421,9 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       project: project
     } do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-      {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "S1", step_order: 1})
+
+      {:ok, step} =
+        Accounts.WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "S1", step_order: 1}))
 
       {:ok, _} =
         Accounts.Workflows.update(wf, %{
@@ -6429,10 +6577,13 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
 
       {:ok, step} =
-        Accounts.WorkflowSteps.insert(wf, %{
-          name: "Snapshot step",
-          step_type: "llm_inference"
-        })
+        Accounts.WorkflowSteps.insert(
+          wf,
+          workflow_step_attrs(%{
+            name: "Snapshot step",
+            step_type: "llm_inference"
+          })
+        )
 
       {:ok, exec} =
         Accounts.StepExecutions.insert(user.id, %{
@@ -6563,7 +6714,10 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
     test "resolves task -> workflow", %{conn: conn, user: user, project: project} do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-      {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "S1", step_order: 1})
+
+      {:ok, step} =
+        Accounts.WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "S1", step_order: 1}))
+
       {:ok, _} = Accounts.Workflows.update(wf, %{initial_step_id: step.id})
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
       Sacrum.Repo.TaskWorkflows.assign_workflow(task, wf)
@@ -6580,7 +6734,10 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
     test "resolves task -> currentStep", %{conn: conn, user: user, project: project} do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-      {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "Step 1", step_order: 1})
+
+      {:ok, step} =
+        Accounts.WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "Step 1", step_order: 1}))
+
       {:ok, _} = Accounts.Workflows.update(wf, %{initial_step_id: step.id})
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
       Sacrum.Repo.TaskWorkflows.assign_workflow(task, wf)
@@ -6829,7 +6986,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
     test "resolves workflowStep -> workflow", %{conn: conn, user: user, project: project} do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-      {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "S1"})
+      {:ok, step} = Accounts.WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "S1"}))
 
       result =
         conn
@@ -6843,7 +7000,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
     test "resolves workflowStep -> project", %{conn: conn, user: user, project: project} do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-      {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "S1"})
+      {:ok, step} = Accounts.WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "S1"}))
 
       result =
         conn
@@ -6856,8 +7013,12 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
     test "resolves workflowStep -> transitions", %{conn: conn, user: user, project: project} do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-      {:ok, s1} = Accounts.WorkflowSteps.insert(wf, %{name: "S1", step_order: 1})
-      {:ok, s2} = Accounts.WorkflowSteps.insert(wf, %{name: "S2", step_order: 2})
+
+      {:ok, s1} =
+        Accounts.WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "S1", step_order: 1}))
+
+      {:ok, s2} =
+        Accounts.WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "S2", step_order: 2}))
 
       {:ok, transition} =
         Accounts.StepTransitions.insert(user.id, %{
@@ -7044,7 +7205,9 @@ defmodule SacrumWeb.Graphql.SchemaTest do
     } do
       {:ok, wf1} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF 1"})
       {:ok, wf2} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF 2"})
-      {:ok, step} = Accounts.WorkflowSteps.insert(wf2, %{name: "Target Step"})
+
+      {:ok, step} =
+        Accounts.WorkflowSteps.insert(wf2, workflow_step_attrs(%{name: "Target Step"}))
 
       {:ok, _transition} =
         Accounts.WorkflowTransitions.insert(user.id, %{
@@ -7085,8 +7248,12 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       project: project
     } do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-      {:ok, s1} = Accounts.WorkflowSteps.insert(wf, %{name: "S1", step_order: 1})
-      {:ok, s2} = Accounts.WorkflowSteps.insert(wf, %{name: "S2", step_order: 2})
+
+      {:ok, s1} =
+        Accounts.WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "S1", step_order: 1}))
+
+      {:ok, s2} =
+        Accounts.WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "S2", step_order: 2}))
 
       {:ok, _transition} =
         Accounts.StepTransitions.insert(user.id, %{
@@ -7268,7 +7435,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       other_user: other_user
     } do
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-      {:ok, step} = Accounts.WorkflowSteps.insert(wf, %{name: "Secret Step"})
+      {:ok, step} = Accounts.WorkflowSteps.insert(wf, workflow_step_attrs(%{name: "Secret Step"}))
 
       result =
         conn
@@ -7514,7 +7681,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         conn
         |> authenticate(user)
         |> graphql("""
-          mutation { createWorkflowStep(workflowId: "#{wf.id}", stepOrder: 1) { id } }
+          mutation { createWorkflowStep(workflowId: "#{wf.id}", stepOrder: 1, harness: "codex") { id } }
         """)
         |> json_response(200)
 
@@ -7594,11 +7761,16 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       project: project
     } do
       {:ok, wf1} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF 1"})
-      {:ok, step1} = Accounts.WorkflowSteps.insert(wf1, %{name: "S1", step_order: 1})
+
+      {:ok, step1} =
+        Accounts.WorkflowSteps.insert(wf1, workflow_step_attrs(%{name: "S1", step_order: 1}))
+
       {:ok, _} = Accounts.Workflows.update(wf1, %{initial_step_id: step1.id})
 
       {:ok, wf2} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF 2"})
-      {:ok, other_step} = Accounts.WorkflowSteps.insert(wf2, %{name: "Other", step_order: 1})
+
+      {:ok, other_step} =
+        Accounts.WorkflowSteps.insert(wf2, workflow_step_attrs(%{name: "Other", step_order: 1}))
 
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
       Sacrum.Repo.TaskWorkflows.assign_workflow(task, wf1)
@@ -7635,8 +7807,18 @@ defmodule SacrumWeb.Graphql.SchemaTest do
     } do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
       {:ok, workflow} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
-      {:ok, _step1} = Accounts.WorkflowSteps.insert(workflow, %{name: "Step 1", step_order: 1})
-      {:ok, step2} = Accounts.WorkflowSteps.insert(workflow, %{name: "Step 2", step_order: 2})
+
+      {:ok, _step1} =
+        Accounts.WorkflowSteps.insert(
+          workflow,
+          workflow_step_attrs(%{name: "Step 1", step_order: 1})
+        )
+
+      {:ok, step2} =
+        Accounts.WorkflowSteps.insert(
+          workflow,
+          workflow_step_attrs(%{name: "Step 2", step_order: 2})
+        )
 
       # Assign workflow (puts task on step1)
       conn
@@ -7678,9 +7860,17 @@ defmodule SacrumWeb.Graphql.SchemaTest do
     } do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
       {:ok, wf1} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF1"})
-      {:ok, _step1} = Accounts.WorkflowSteps.insert(wf1, %{name: "Step 1", step_order: 1})
+
+      {:ok, _step1} =
+        Accounts.WorkflowSteps.insert(wf1, workflow_step_attrs(%{name: "Step 1", step_order: 1}))
+
       {:ok, wf2} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF2"})
-      {:ok, other_step} = Accounts.WorkflowSteps.insert(wf2, %{name: "Other Step", step_order: 1})
+
+      {:ok, other_step} =
+        Accounts.WorkflowSteps.insert(
+          wf2,
+          workflow_step_attrs(%{name: "Other Step", step_order: 1})
+        )
 
       # Assign wf1
       conn
@@ -7964,32 +8154,38 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       {:ok, workflow} = Accounts.Workflows.insert(user.id, project.id, %{name: "Test Workflow"})
 
       {:ok, step1} =
-        Accounts.WorkflowSteps.insert(user.id, %{
-          "name" => "step_1",
-          "workflow_id" => workflow.id,
-          "project_id" => project.id,
-          "step_order" => 1,
-          "config" => %{
-            "agents" => ["test"],
-            "skills" => ["test_skill"],
-            "agent_config" => %{"model" => "test-model"},
-            "prompt" => "Test prompt"
-          }
-        })
+        Accounts.WorkflowSteps.insert(
+          user.id,
+          workflow_step_attrs(%{
+            "name" => "step_1",
+            "workflow_id" => workflow.id,
+            "project_id" => project.id,
+            "step_order" => 1,
+            "config" => %{
+              "agents" => ["test"],
+              "skills" => ["test_skill"],
+              "agent_config" => %{"model" => "test-model"},
+              "prompt" => "Test prompt"
+            }
+          })
+        )
 
       {:ok, step2} =
-        Accounts.WorkflowSteps.insert(user.id, %{
-          "name" => "step_2",
-          "workflow_id" => workflow.id,
-          "project_id" => project.id,
-          "step_order" => 2,
-          "config" => %{
-            "agents" => ["test"],
-            "skills" => ["test_skill"],
-            "agent_config" => %{"model" => "test-model"},
-            "prompt" => "Test prompt"
-          }
-        })
+        Accounts.WorkflowSteps.insert(
+          user.id,
+          workflow_step_attrs(%{
+            "name" => "step_2",
+            "workflow_id" => workflow.id,
+            "project_id" => project.id,
+            "step_order" => 2,
+            "config" => %{
+              "agents" => ["test"],
+              "skills" => ["test_skill"],
+              "agent_config" => %{"model" => "test-model"},
+              "prompt" => "Test prompt"
+            }
+          })
+        )
 
       # Create transition from step1 to step2
       {:ok, _transition} =

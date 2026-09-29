@@ -29,6 +29,7 @@ defmodule SacrumWeb.Graphql.WorkflowStepConfigTest do
       |> graphql("""
         mutation {
           createWorkflowStep(
+            harness: "codex"
             workflowId: "#{workflow.id}"
             name: "Implement"
             stepType: "llm_inference"
@@ -55,11 +56,14 @@ defmodule SacrumWeb.Graphql.WorkflowStepConfigTest do
   test "updateWorkflowStep patches the config and rejects a step type change",
        %{conn: conn, user: user, workflow: workflow} do
     {:ok, step} =
-      Accounts.WorkflowSteps.insert(workflow, %{
-        name: "Implement",
-        harness: "claude",
-        config: %{"prompt" => "Go", "output_schema" => %{"type" => "object"}}
-      })
+      Accounts.WorkflowSteps.insert(
+        workflow,
+        workflow_step_attrs(%{
+          name: "Implement",
+          harness: "claude",
+          config: %{"prompt" => "Go", "output_schema" => %{"type" => "object"}}
+        })
+      )
 
     patched =
       conn
@@ -105,6 +109,7 @@ defmodule SacrumWeb.Graphql.WorkflowStepConfigTest do
       |> graphql("""
         mutation {
           createWorkflowStep(
+            harness: "codex"
             workflowId: "#{workflow.id}"
             name: "Bad"
             stepType: "llm_inference"
@@ -122,7 +127,7 @@ defmodule SacrumWeb.Graphql.WorkflowStepConfigTest do
       |> authenticate(user)
       |> graphql("""
         mutation {
-          createWorkflowStep(workflowId: "#{workflow.id}", name: "Gate", stepType: "human_input") {
+          createWorkflowStep(workflowId: "#{workflow.id}", name: "Gate", stepType: "human_input", harness: "codex") {
             stepType config { __typename }
           }
         }
@@ -141,16 +146,19 @@ defmodule SacrumWeb.Graphql.WorkflowStepConfigTest do
     questions = %{"ok" => %{"type" => "noul", "instructions" => "Is it ok?"}}
 
     {:ok, step} =
-      Accounts.WorkflowSteps.insert(workflow, %{
-        name: "Judge",
-        step_type: "structured_inference",
-        config: %{
-          "provider" => "typesafe",
-          "model" => "jev",
-          "state" => "x",
-          "questions" => questions
-        }
-      })
+      Accounts.WorkflowSteps.insert(
+        workflow,
+        workflow_step_attrs(%{
+          name: "Judge",
+          step_type: "structured_inference",
+          config: %{
+            "provider" => "typesafe",
+            "model" => "jev",
+            "state" => "x",
+            "questions" => questions
+          }
+        })
+      )
 
     {:ok, task} =
       Accounts.Tasks.insert(user.id, workflow.project_id, %{title: "T", level: "task"})

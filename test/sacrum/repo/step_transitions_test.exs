@@ -18,8 +18,13 @@ defmodule Sacrum.Repo.StepTransitionsTest do
     {:ok, user} = Users.insert(@valid_user_attrs)
     {:ok, project} = Projects.insert(user, %{name: "My Project"})
     {:ok, workflow} = Workflows.insert(project, %{name: "Default"})
-    {:ok, step1} = WorkflowSteps.insert(workflow, %{name: "Draft", step_order: 1})
-    {:ok, step2} = WorkflowSteps.insert(workflow, %{name: "Review", step_order: 2})
+
+    {:ok, step1} =
+      WorkflowSteps.insert(workflow, workflow_step_attrs(%{name: "Draft", step_order: 1}))
+
+    {:ok, step2} =
+      WorkflowSteps.insert(workflow, workflow_step_attrs(%{name: "Review", step_order: 2}))
+
     {project, workflow, step1, step2}
   end
 
@@ -45,8 +50,8 @@ defmodule Sacrum.Repo.StepTransitionsTest do
       {:ok, project} = Projects.insert(user, %{name: "My Project"})
       {:ok, workflow1} = Workflows.insert(project, %{name: "Workflow 1"})
       {:ok, workflow2} = Workflows.insert(project, %{name: "Workflow 2"})
-      {:ok, step1} = WorkflowSteps.insert(workflow1, %{name: "Step A"})
-      {:ok, step2} = WorkflowSteps.insert(workflow2, %{name: "Step B"})
+      {:ok, step1} = WorkflowSteps.insert(workflow1, workflow_step_attrs(%{name: "Step A"}))
+      {:ok, step2} = WorkflowSteps.insert(workflow2, workflow_step_attrs(%{name: "Step B"}))
 
       assert {:error, :different_workflows} =
                StepTransitions.insert(step1.user_id, %{
@@ -83,9 +88,13 @@ defmodule Sacrum.Repo.StepTransitionsTest do
       {:ok, workflow} = Workflows.insert(project, %{name: "Default"})
 
       {:ok, finish_step} =
-        WorkflowSteps.insert(workflow, %{name: "Done", step_order: 1, step_type: "finish"})
+        WorkflowSteps.insert(
+          workflow,
+          workflow_step_attrs(%{name: "Done", step_order: 1, step_type: "finish"})
+        )
 
-      {:ok, target_step} = WorkflowSteps.insert(workflow, %{name: "Target", step_order: 2})
+      {:ok, target_step} =
+        WorkflowSteps.insert(workflow, workflow_step_attrs(%{name: "Target", step_order: 2}))
 
       assert {:error, :finish_step_cannot_have_outgoing_transition} =
                StepTransitions.insert(user.id, %{
@@ -101,10 +110,16 @@ defmodule Sacrum.Repo.StepTransitionsTest do
       {:ok, workflow} = Workflows.insert(project, %{name: "Default"})
 
       {:ok, stop_step} =
-        WorkflowSteps.insert(workflow, %{name: "Boundary", step_order: 1, step_type: "stop"})
+        WorkflowSteps.insert(
+          workflow,
+          workflow_step_attrs(%{name: "Boundary", step_order: 1, step_type: "stop"})
+        )
 
-      {:ok, first_target} = WorkflowSteps.insert(workflow, %{name: "First", step_order: 2})
-      {:ok, second_target} = WorkflowSteps.insert(workflow, %{name: "Second", step_order: 3})
+      {:ok, first_target} =
+        WorkflowSteps.insert(workflow, workflow_step_attrs(%{name: "First", step_order: 2}))
+
+      {:ok, second_target} =
+        WorkflowSteps.insert(workflow, workflow_step_attrs(%{name: "Second", step_order: 3}))
 
       attrs = %{
         project_id: project.id,

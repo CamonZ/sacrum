@@ -78,10 +78,13 @@ defmodule Sacrum.Accounts.TasksTest do
         })
 
       {:ok, step} =
-        Sacrum.Accounts.WorkflowSteps.insert(custom_workflow, %{
-          name: "Custom Step",
-          step_order: 1
-        })
+        Sacrum.Accounts.WorkflowSteps.insert(
+          custom_workflow,
+          workflow_step_attrs(%{
+            name: "Custom Step",
+            step_order: 1
+          })
+        )
 
       {:ok, custom_workflow} =
         Sacrum.Repo.Workflows.update(custom_workflow, %{initial_step_id: step.id})

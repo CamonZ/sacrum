@@ -2,6 +2,7 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
   use ExUnit.Case, async: false
 
   import Sacrum.CdcAssertions
+  import Sacrum.DataCase, only: [workflow_step_attrs: 1]
   import Sacrum.TestWorkspace
 
   alias Ecto.Adapters.SQL.Sandbox
@@ -524,11 +525,14 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
       :ok = subscribe_project(project.id)
 
       {:ok, step} =
-        WorkflowSteps.insert(workflow, %{
-          name: "CDC created step",
-          step_order: 3,
-          step_type: "llm_inference"
-        })
+        WorkflowSteps.insert(
+          workflow,
+          workflow_step_attrs(%{
+            name: "CDC created step",
+            step_order: 3,
+            step_type: "llm_inference"
+          })
+        )
 
       _created_payload =
         assert_project_broadcast(
@@ -568,12 +572,15 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
         })
 
       {:ok, route} =
-        WorkflowSteps.insert(workflow, %{
-          name: "CDC route",
-          step_order: 3,
-          step_type: "route",
-          config: %{"route_config" => cdc_route_config(second_step.id, "before")}
-        })
+        WorkflowSteps.insert(
+          workflow,
+          workflow_step_attrs(%{
+            name: "CDC route",
+            step_order: 3,
+            step_type: "route",
+            config: %{"route_config" => cdc_route_config(second_step.id, "before")}
+          })
+        )
 
       {:ok, _} =
         StepTransitions.insert(user.id, %{
@@ -615,11 +622,14 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
       {workflow, _first_step, _second_step} = create_workflow_with_steps(user, project)
 
       {:ok, step} =
-        WorkflowSteps.insert(workflow, %{
-          name: "CDC step delete",
-          step_order: 3,
-          step_type: "llm_inference"
-        })
+        WorkflowSteps.insert(
+          workflow,
+          workflow_step_attrs(%{
+            name: "CDC step delete",
+            step_order: 3,
+            step_type: "llm_inference"
+          })
+        )
 
       :ok = subscribe_project(project.id)
 
@@ -1316,12 +1326,15 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
       })
 
     {:ok, route} =
-      WorkflowSteps.insert(workflow, %{
-        name: "CDC local route",
-        step_order: 3,
-        step_type: "route",
-        config: %{"route_config" => cdc_route_config(destination.id)}
-      })
+      WorkflowSteps.insert(
+        workflow,
+        workflow_step_attrs(%{
+          name: "CDC local route",
+          step_order: 3,
+          step_type: "route",
+          config: %{"route_config" => cdc_route_config(destination.id)}
+        })
+      )
 
     {:ok, _} =
       StepTransitions.insert(user.id, %{
@@ -1422,18 +1435,24 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
       })
 
     {:ok, first_step} =
-      WorkflowSteps.insert(workflow, %{
-        name: "CDC support first #{suffix}",
-        step_order: 1,
-        step_type: "llm_inference"
-      })
+      WorkflowSteps.insert(
+        workflow,
+        workflow_step_attrs(%{
+          name: "CDC support first #{suffix}",
+          step_order: 1,
+          step_type: "llm_inference"
+        })
+      )
 
     {:ok, second_step} =
-      WorkflowSteps.insert(workflow, %{
-        name: "CDC support second #{suffix}",
-        step_order: 2,
-        step_type: "llm_inference"
-      })
+      WorkflowSteps.insert(
+        workflow,
+        workflow_step_attrs(%{
+          name: "CDC support second #{suffix}",
+          step_order: 2,
+          step_type: "llm_inference"
+        })
+      )
 
     {:ok, workflow} = Workflows.update(workflow, %{initial_step_id: first_step.id})
 

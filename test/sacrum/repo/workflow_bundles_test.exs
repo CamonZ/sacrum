@@ -138,8 +138,18 @@ defmodule Sacrum.Repo.WorkflowBundlesTest do
           "is_default" => true,
           "initial_step" => address("build", "start"),
           "steps" => [
-            %{"step_ref" => "start", "name" => "Build start", "step_type" => "llm_inference"},
-            %{"step_ref" => "finish", "name" => "Build finish", "step_type" => "finish"}
+            %{
+              "step_ref" => "start",
+              "name" => "Build start",
+              "step_type" => "llm_inference",
+              "harness" => "codex"
+            },
+            %{
+              "step_ref" => "finish",
+              "name" => "Build finish",
+              "step_type" => "finish",
+              "harness" => "codex"
+            }
           ]
         },
         %{
@@ -147,8 +157,18 @@ defmodule Sacrum.Repo.WorkflowBundlesTest do
           "name" => "Review",
           "initial_step" => address("review", "start"),
           "steps" => [
-            %{"step_ref" => "start", "name" => "Review start", "step_type" => "llm_inference"},
-            %{"step_ref" => "done", "name" => "Review done", "step_type" => "finish"}
+            %{
+              "step_ref" => "start",
+              "name" => "Review start",
+              "step_type" => "llm_inference",
+              "harness" => "codex"
+            },
+            %{
+              "step_ref" => "done",
+              "name" => "Review done",
+              "step_type" => "finish",
+              "harness" => "codex"
+            }
           ]
         }
       ],
@@ -175,6 +195,7 @@ defmodule Sacrum.Repo.WorkflowBundlesTest do
               "step_ref" => "classify",
               "name" => "Classify",
               "step_type" => "structured_inference",
+              "harness" => "typesafe",
               "config" => %{
                 "provider" => "typesafe",
                 "model" => "system-one",
@@ -182,7 +203,12 @@ defmodule Sacrum.Repo.WorkflowBundlesTest do
                 "questions" => structured_questions()
               }
             },
-            %{"step_ref" => "done", "name" => "Done", "step_type" => "finish"}
+            %{
+              "step_ref" => "done",
+              "name" => "Done",
+              "step_type" => "finish",
+              "harness" => "codex"
+            }
           ]
         }
       ],
@@ -219,6 +245,7 @@ defmodule Sacrum.Repo.WorkflowBundlesTest do
               "step_ref" => "route",
               "name" => "Route",
               "step_type" => "route",
+              "harness" => "codex",
               "config" => %{
                 "route_config" => %{
                   "version" => 1,
@@ -240,7 +267,12 @@ defmodule Sacrum.Repo.WorkflowBundlesTest do
                 }
               }
             },
-            %{"step_ref" => "finish", "name" => "Finish", "step_type" => "finish"}
+            %{
+              "step_ref" => "finish",
+              "name" => "Finish",
+              "step_type" => "finish",
+              "harness" => "codex"
+            }
           ]
         }
       ],

@@ -18,6 +18,7 @@ defmodule Sacrum.Repo.WorkflowsTest do
   @valid_project_attrs %{name: "My Project"}
 
   @valid_attrs %{
+    harness: "codex",
     name: "Default Workflow",
     description: "The default workflow"
   }
@@ -304,12 +305,17 @@ defmodule Sacrum.Repo.WorkflowsTest do
         Sacrum.Repo.Projects.insert(other_user.id, %{name: "Other Pipeline Project"})
 
       {:ok, workflow} = Workflows.insert(project, %{name: "Pipeline"})
-      {:ok, step} = WorkflowSteps.insert(workflow, %{name: "Review", step_order: 1})
+
+      {:ok, step} =
+        WorkflowSteps.insert(workflow, workflow_step_attrs(%{name: "Review", step_order: 1}))
 
       {:ok, other_workflow} = Workflows.insert(other_project, %{name: "Pipeline"})
 
       {:ok, other_step} =
-        WorkflowSteps.insert(other_workflow, %{name: "Review", step_order: 1})
+        WorkflowSteps.insert(
+          other_workflow,
+          workflow_step_attrs(%{name: "Review", step_order: 1})
+        )
 
       {:ok, ticket} =
         Tasks.insert(project.id, project.user_id, %{

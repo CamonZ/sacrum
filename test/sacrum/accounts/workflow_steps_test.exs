@@ -32,11 +32,14 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
       {project, workflow} = create_workflow(user)
 
       assert {:ok, %WorkflowStep{} = step} =
-               WorkflowSteps.insert(user.id, %{
-                 "workflow_id" => workflow.id,
-                 "project_id" => project.id,
-                 "name" => "Draft"
-               })
+               WorkflowSteps.insert(
+                 user.id,
+                 workflow_step_attrs(%{
+                   "workflow_id" => workflow.id,
+                   "project_id" => project.id,
+                   "name" => "Draft"
+                 })
+               )
 
       assert step.user_id == user.id
       assert step.project_id == project.id
@@ -49,7 +52,7 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
       {project, workflow} = create_workflow(user)
 
       assert {:ok, %WorkflowStep{} = step} =
-               WorkflowSteps.insert(workflow, %{name: "Draft"})
+               WorkflowSteps.insert(workflow, workflow_step_attrs(%{name: "Draft"}))
 
       assert step.user_id == user.id
       assert step.project_id == project.id
@@ -67,8 +70,8 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
 
       {_project2, workflow2} = create_workflow(user2)
 
-      {:ok, step} = WorkflowSteps.insert(workflow1, %{name: "User1 Step"})
-      {:ok, _} = WorkflowSteps.insert(workflow2, %{name: "User2 Step"})
+      {:ok, step} = WorkflowSteps.insert(workflow1, workflow_step_attrs(%{name: "User1 Step"}))
+      {:ok, _} = WorkflowSteps.insert(workflow2, workflow_step_attrs(%{name: "User2 Step"}))
 
       # User1 can access their step
       assert {:ok, found} = WorkflowSteps.get_by(user1.id, conditions: [id: step.id])
@@ -84,7 +87,7 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
     test "translates assigned-task conflicts into a client-safe error" do
       user = create_user()
       {project, workflow} = create_workflow(user)
-      {:ok, step} = WorkflowSteps.insert(workflow, %{name: "Assigned step"})
+      {:ok, step} = WorkflowSteps.insert(workflow, workflow_step_attrs(%{name: "Assigned step"}))
       {:ok, workflow} = Workflows.update(workflow, %{initial_step_id: step.id})
 
       {:ok, task_one} =
@@ -122,8 +125,8 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
 
       {_project2, workflow2} = create_workflow(user2)
 
-      {:ok, _} = WorkflowSteps.insert(workflow1, %{name: "User1 Step"})
-      {:ok, _} = WorkflowSteps.insert(workflow2, %{name: "User2 Step"})
+      {:ok, _} = WorkflowSteps.insert(workflow1, workflow_step_attrs(%{name: "User1 Step"}))
+      {:ok, _} = WorkflowSteps.insert(workflow2, workflow_step_attrs(%{name: "User2 Step"}))
 
       steps = WorkflowSteps.list_by(user1.id)
       # Project creation auto-creates a Backlog step; create_workflow adds a second.
@@ -136,8 +139,8 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
       {project, workflow1} = create_workflow(user)
       {:ok, workflow2} = Workflows.insert(user.id, project.id, %{name: "Workflow 2"})
 
-      {:ok, _} = WorkflowSteps.insert(workflow1, %{name: "Step 1"})
-      {:ok, _} = WorkflowSteps.insert(workflow2, %{name: "Step 2"})
+      {:ok, _} = WorkflowSteps.insert(workflow1, workflow_step_attrs(%{name: "Step 1"}))
+      {:ok, _} = WorkflowSteps.insert(workflow2, workflow_step_attrs(%{name: "Step 2"}))
 
       steps = WorkflowSteps.list_by(user.id, conditions: [workflow_id: workflow1.id])
       assert length(steps) == 1
@@ -151,7 +154,7 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
       {_project, workflow} = create_workflow(user)
 
       assert {:ok, %WorkflowStep{} = step} =
-               WorkflowSteps.insert(workflow, %{name: "Draft"})
+               WorkflowSteps.insert(workflow, workflow_step_attrs(%{name: "Draft"}))
 
       assert step.step_type == :llm_inference
     end
@@ -179,7 +182,7 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
         assert {:ok, %WorkflowStep{} = step} =
                  WorkflowSteps.insert(
                    workflow,
-                   Map.merge(%{name: "Step #{type}", step_type: type}, attrs)
+                   workflow_step_attrs(Map.merge(%{name: "Step #{type}", step_type: type}, attrs))
                  )
 
         assert step.step_type == String.to_existing_atom(type)
@@ -191,7 +194,10 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
       {_project, workflow} = create_workflow(user)
 
       assert {:error, changeset} =
-               WorkflowSteps.insert(workflow, %{name: "Bad", step_type: "invalid"})
+               WorkflowSteps.insert(
+                 workflow,
+                 workflow_step_attrs(%{name: "Bad", step_type: "invalid"})
+               )
 
       assert %{step_type: ["is invalid"]} = errors_on(changeset)
     end
@@ -200,7 +206,7 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
       user = create_user()
       {_project, workflow} = create_workflow(user)
 
-      {:ok, step} = WorkflowSteps.insert(workflow, %{name: "Draft"})
+      {:ok, step} = WorkflowSteps.insert(workflow, workflow_step_attrs(%{name: "Draft"}))
 
       assert {:error, changeset} = WorkflowSteps.update(step, %{step_type: "route"})
       assert %{step_type: ["cannot be changed; create a new step instead"]} = errors_on(changeset)
@@ -213,10 +219,13 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
       {_project, workflow} = create_workflow(user)
 
       assert {:ok, %WorkflowStep{} = step} =
-               WorkflowSteps.insert(workflow, %{
-                 name: "Review",
-                 config: %{"prompt" => "Please review the following content"}
-               })
+               WorkflowSteps.insert(
+                 workflow,
+                 workflow_step_attrs(%{
+                   name: "Review",
+                   config: %{"prompt" => "Please review the following content"}
+                 })
+               )
 
       assert step.config.prompt == "Please review the following content"
     end
@@ -225,7 +234,7 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
       user = create_user()
       {_project, workflow} = create_workflow(user)
 
-      {:ok, step} = WorkflowSteps.insert(workflow, %{name: "Review"})
+      {:ok, step} = WorkflowSteps.insert(workflow, workflow_step_attrs(%{name: "Review"}))
 
       assert {:ok, updated_step} =
                WorkflowSteps.update(step, %{
@@ -240,7 +249,7 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
       {_project, workflow} = create_workflow(user)
 
       # Create without prompt
-      assert {:ok, step} = WorkflowSteps.insert(workflow, %{name: "Review"})
+      assert {:ok, step} = WorkflowSteps.insert(workflow, workflow_step_attrs(%{name: "Review"}))
       assert is_nil(step.config.prompt)
 
       # Update to add it
@@ -257,30 +266,33 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
       {_project, workflow} = create_workflow(user)
 
       assert {:error, changeset} =
-               WorkflowSteps.insert(workflow, %{
-                 name: "Route",
-                 step_type: "route",
-                 config: %{
-                   "route_config" => %{
-                     "version" => 2,
-                     "match_policy" => "exactly_one",
-                     "rules" => [
-                       %{
-                         "id" => "approved",
-                         "when" => %{
-                           "ref" => "previous_output.route.result",
-                           "op" => "eq",
-                           "value" => "approved"
-                         },
-                         "transition" => %{
-                           "type" => "intra_workflow",
-                           "step_id" => "00000000-0000-0000-0000-000000000001"
+               WorkflowSteps.insert(
+                 workflow,
+                 workflow_step_attrs(%{
+                   name: "Route",
+                   step_type: "route",
+                   config: %{
+                     "route_config" => %{
+                       "version" => 2,
+                       "match_policy" => "exactly_one",
+                       "rules" => [
+                         %{
+                           "id" => "approved",
+                           "when" => %{
+                             "ref" => "previous_output.route.result",
+                             "op" => "eq",
+                             "value" => "approved"
+                           },
+                           "transition" => %{
+                             "type" => "intra_workflow",
+                             "step_id" => "00000000-0000-0000-0000-000000000001"
+                           }
                          }
-                       }
-                     ]
+                       ]
+                     }
                    }
-                 }
-               })
+                 })
+               )
 
       assert %{config: %{route_config: ["$.version: only version 1 is supported"]}} =
                errors_on(changeset)
@@ -302,11 +314,14 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
 
       for {condition, default, expected_path} <- cases do
         assert {:error, changeset} =
-                 WorkflowSteps.insert(workflow, %{
-                   name: "Route",
-                   step_type: "route",
-                   config: %{"route_config" => route_config(condition, default)}
-                 })
+                 WorkflowSteps.insert(
+                   workflow,
+                   workflow_step_attrs(%{
+                     name: "Route",
+                     step_type: "route",
+                     config: %{"route_config" => route_config(condition, default)}
+                   })
+                 )
 
         assert %{config: %{route_config: [message]}} = errors_on(changeset)
         assert message =~ expected_path
@@ -318,14 +333,17 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
       {_project, workflow} = create_workflow(user)
 
       assert {:ok, route} =
-               WorkflowSteps.insert(workflow, %{
-                 name: "Route",
-                 step_type: "route",
-                 config: %{
-                   "route_config" =>
-                     route_config(%{"ref" => "task.level", "op" => "eq", "value" => "task"})
-                 }
-               })
+               WorkflowSteps.insert(
+                 workflow,
+                 workflow_step_attrs(%{
+                   name: "Route",
+                   step_type: "route",
+                   config: %{
+                     "route_config" =>
+                       route_config(%{"ref" => "task.level", "op" => "eq", "value" => "task"})
+                   }
+                 })
+               )
 
       assert route.config.route_config != nil
     end
@@ -335,7 +353,10 @@ defmodule Sacrum.Accounts.WorkflowStepsTest do
       {_project, workflow} = create_workflow(user)
 
       assert {:ok, route} =
-               WorkflowSteps.insert(workflow, %{name: "Route", step_type: "route"})
+               WorkflowSteps.insert(
+                 workflow,
+                 workflow_step_attrs(%{name: "Route", step_type: "route"})
+               )
 
       assert route.step_type == :route
       assert route.config.route_config == nil

@@ -216,7 +216,8 @@ defmodule Sacrum.WorkflowBundles.Manifest do
   defp normalize_step(_step, workflow_path, index),
     do: {:error, error("#{workflow_path}.steps[#{index}]", "must be an object")}
 
-  defp validate_harness(nil, _path), do: :ok
+  defp validate_harness(nil, path),
+    do: {:error, error("#{path}.harness", "is required")}
 
   defp validate_harness(harness, path) do
     if harness in WorkflowStep.harnesses() do

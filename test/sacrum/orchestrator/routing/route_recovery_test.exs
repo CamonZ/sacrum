@@ -252,6 +252,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteRecoveryTest do
     step_attrs =
       %{
         name: attrs.name,
+        harness: "codex",
         step_order: attrs.step_order,
         step_type: step_type,
         workflow_id: workflow.id,
@@ -260,7 +261,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteRecoveryTest do
       |> Map.merge(Map.take(attrs, [:config]))
       |> put_default_config(step_type)
 
-    {:ok, step} = Accounts.WorkflowSteps.insert(user.id, step_attrs)
+    {:ok, step} = Accounts.WorkflowSteps.insert(user.id, workflow_step_attrs(step_attrs))
     step
   end
 

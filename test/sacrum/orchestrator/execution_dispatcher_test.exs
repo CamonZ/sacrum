@@ -47,7 +47,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
     {:ok, step} =
       Accounts.WorkflowSteps.insert(
         user.id,
-        default_attrs |> Map.merge(attrs) |> put_default_config()
+        workflow_step_attrs(default_attrs |> Map.merge(attrs) |> put_default_config())
       )
 
     Sacrum.Repo.preload(step, :workflow)
@@ -232,12 +232,15 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
 
     test "allows a promptless route draft to be saved", ctx do
       assert {:ok, route} =
-               Accounts.WorkflowSteps.insert(ctx.user.id, %{
-                 name: "Unconfigured route",
-                 step_type: "route",
-                 workflow_id: ctx.workflow.id,
-                 project_id: ctx.project.id
-               })
+               Accounts.WorkflowSteps.insert(
+                 ctx.user.id,
+                 workflow_step_attrs(%{
+                   name: "Unconfigured route",
+                   step_type: "route",
+                   workflow_id: ctx.workflow.id,
+                   project_id: ctx.project.id
+                 })
+               )
 
       assert route.step_type == :route
       assert route.config.route_config == nil

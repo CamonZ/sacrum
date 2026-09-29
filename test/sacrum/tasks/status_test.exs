@@ -31,7 +31,10 @@ defmodule Sacrum.Tasks.StatusTest do
 
   defp create_step(workflow, attrs \\ %{}) do
     {:ok, step} =
-      Accounts.WorkflowSteps.insert(workflow, Map.merge(%{name: "Test Step"}, attrs))
+      Accounts.WorkflowSteps.insert(
+        workflow,
+        workflow_step_attrs(Map.merge(%{name: "Test Step"}, attrs))
+      )
 
     step
   end
