@@ -63,6 +63,14 @@ defmodule SacrumWeb.Graphql.Types.ProjectType do
       arg(:description, :string)
       arg(:slug, :string)
 
+      arg(:codex_installed, non_null(:boolean),
+        description: "Whether the GUI has Codex installed."
+      )
+
+      arg(:claude_installed, non_null(:boolean),
+        description: "Whether the GUI has Claude installed."
+      )
+
       resolve(fn args, %{context: %{current_user: user}} ->
         Accounts.Projects.insert(user.id, args)
       end)
