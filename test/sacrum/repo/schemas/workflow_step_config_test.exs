@@ -186,29 +186,22 @@ defmodule Sacrum.Repo.Schemas.WorkflowStepConfigTest do
       end
     end
 
-    test "authored scripts and schemas have actionable size/depth bounds" do
-      assert %{config: %{script: ["must be at most 262144 bytes"]}} =
-               errors_on(
-                 execute(Map.put(@execute_config, "script", String.duplicate("x", 262_145)))
-               )
-
-      for {schema, expected} <- [
-            {%{"enum" => Enum.to_list(1..4097)},
-             "$.output_schema.enum: must have at most 4096 entries"},
-            {%{"description" => String.duplicate("x", 1_048_577)},
-             "$.output_schema: must encode to at most 1048576 bytes"},
-            {%{type: "object"}, "$.output_schema: must use string keys"}
-          ] do
-        assert %{config: %{output_schema: [^expected]}} =
-                 errors_on(execute(Map.put(@execute_config, "output_schema", schema)))
-      end
+    test "authored scripts and schemas are accepted at any size or depth" do
+      large_script = String.duplicate("x", 262_145)
+      assert execute(Map.put(@execute_config, "script", large_script)).valid?
 
       deep = Enum.reduce(1..33, nil, fn _, value -> [value] end)
 
-      assert %{config: %{output_schema: [message]}} =
-               errors_on(execute(Map.put(@execute_config, "output_schema", %{"enum" => deep})))
+      for schema <- [
+            %{"enum" => Enum.to_list(1..4097)},
+            %{"description" => String.duplicate("x", 1_048_577)},
+            %{"enum" => [deep]}
+          ] do
+        assert execute(Map.put(@execute_config, "output_schema", schema)).valid?
+      end
 
-      assert message =~ "nesting depth at most 32"
+      assert %{config: %{output_schema: ["$.output_schema: must use string keys"]}} =
+               errors_on(execute(Map.put(@execute_config, "output_schema", %{type: "object"})))
     end
 
     test "patches authored fields without casting the server snapshot" do

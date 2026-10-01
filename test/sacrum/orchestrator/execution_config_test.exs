@@ -94,7 +94,7 @@ defmodule Sacrum.Orchestrator.ExecutionConfigTest do
     refute Map.has_key?(PromptContext.build_execution_context(%{}), "previous_output")
   end
 
-  test "whole context and rendered source bounds reject expansion before snapshotting" do
+  test "large, deep, and wide contexts and rendered scripts are accepted" do
     config = %Config.Execute{script: "transform(execution.previous_output)", output_schema: %{}}
 
     for value <- [
@@ -102,17 +102,14 @@ defmodule Sacrum.Orchestrator.ExecutionConfigTest do
           String.duplicate("x", 1_048_577),
           Enum.reduce(1..33, nil, fn _, value -> [value] end)
         ] do
-      assert {:error, %{path: path, message: message}} =
-               ExecutionConfig.render(%WorkflowStep{config: config}, %{"value" => value})
+      context = %{"value" => value}
 
-      assert String.starts_with?(path, "$.context")
-      assert message =~ "at most"
+      assert {:ok, %Config.Execute{context: ^context}} =
+               ExecutionConfig.render(%WorkflowStep{config: config}, context)
     end
 
-    assert {:error, %{path: "$.script", message: message}} =
-             ScriptRenderer.render("{{ value }}", %{"value" => String.duplicate("x", 262_145)})
-
-    assert message =~ "262144 bytes"
+    script = String.duplicate("x", 262_145)
+    assert {:ok, ^script} = ScriptRenderer.render("{{ value }}", %{"value" => script})
   end
 
   test "context rejects non-JSON roots, keys, and values with precise paths" do
@@ -131,10 +128,10 @@ defmodule Sacrum.Orchestrator.ExecutionConfigTest do
 
     key = "items.with.\"quotes\""
 
-    assert {:error, %{path: path, message: "must have at most 4096 entries"}} =
-             Config.Execute.validate_context(%{key => Enum.to_list(1..4097)})
+    assert {:error, %{path: path, message: "must contain only JSON values"}} =
+             Config.Execute.validate_context(%{key => [1, :unexpected]})
 
-    assert path == "$.context[#{inspect(key)}]"
+    assert path == "$.context[#{inspect(key)}][1]"
   end
 
   test "LLM previous-output interpolation and Liquid conditions retain legacy semantics" do

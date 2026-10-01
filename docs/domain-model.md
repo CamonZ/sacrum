@@ -397,11 +397,10 @@ objects, and empty strings retain their values. Strings inside the context
 remain data, including strings that look like templates; they are not rendered
 a second time.
 
-Authored and rendered scripts are limited to 262,144 bytes. The complete context
-and output schema are each limited to 1,048,576 encoded JSON bytes, nesting depth
-32, and 4,096 entries per collection. An invalid or oversized context fails
-before an execution row or daemon command is created; no context is silently
-truncated.
+Scripts, output schemas and contexts have no size, depth or collection limits.
+The context must be a JSON object with string keys and JSON values; an invalid
+context fails before an execution row or daemon command is created, and no
+context is silently truncated.
 
 `script` uses strict Solid rendering. Parse errors, missing variables, rendering
 errors, and object/array source interpolation fail with a script field path;
