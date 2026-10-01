@@ -2,7 +2,6 @@ defmodule Sacrum.Orchestrator.ScriptRenderer do
   @moduledoc "Strict Liquid rendering for daemon-owned execute scripts."
 
   alias Sacrum.Orchestrator.ScriptInterpolation
-  alias Sacrum.Repo.Schemas.WorkflowStep.Config.Execute
 
   @spec render(String.t(), map()) :: {:ok, String.t()} | {:error, map()}
   def render(script, context) do
@@ -47,25 +46,15 @@ defmodule Sacrum.Orchestrator.ScriptRenderer do
   defp guard_interpolations(value), do: value
 
   defp validate_rendered_script(script) do
-    cond do
-      String.trim(script) == "" ->
-        {:error,
-         %{
-           code: :step_config_render_failed,
-           path: "$.script",
-           message: "must not render to an empty script"
-         }}
-
-      byte_size(script) > Execute.max_script_bytes() ->
-        {:error,
-         %{
-           code: :step_config_render_failed,
-           path: "$.script",
-           message: "must render to at most #{Execute.max_script_bytes()} bytes"
-         }}
-
-      true ->
-        {:ok, script}
+    if String.trim(script) == "" do
+      {:error,
+       %{
+         code: :step_config_render_failed,
+         path: "$.script",
+         message: "must not render to an empty script"
+       }}
+    else
+      {:ok, script}
     end
   end
 

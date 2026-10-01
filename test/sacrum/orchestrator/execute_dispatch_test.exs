@@ -367,29 +367,24 @@ defmodule Sacrum.Orchestrator.ExecuteDispatchTest do
     assert payload.context === execution.config.context
   end
 
-  test "whole context byte, depth, and collection bounds fail before any row or broadcast", ctx do
-    for {output, expected_message} <- [
-          {Enum.to_list(1..4097), "must have at most 4096 entries"},
-          {String.duplicate("x", 1_048_577), "must encode to at most 1048576 bytes"},
-          {String.duplicate("x", 400_000), "must encode to at most 1048576 bytes"},
-          {Enum.reduce(1..33, nil, fn _, value -> [value] end),
-           "must have nesting depth at most 32"}
+  test "large, deep, and wide previous outputs dispatch without truncation", ctx do
+    for output <- [
+          Enum.to_list(1..4097),
+          String.duplicate("x", 1_048_577),
+          Enum.reduce(1..33, nil, fn _, value -> [value] end)
         ] do
       {:ok, run} =
         Accounts.TaskRuns.insert(ctx.user.id, ctx.project.id, ctx.task.id, %{status: :queued})
 
       completed(%{ctx | task_run: run}, ctx.prepare, output)
 
-      assert {:error, {:config_render_failed, %{path: path, message: ^expected_message}}} =
+      assert {:ok, execution} =
                ExecutionDispatcher.create_and_dispatch(ctx.task, ctx.transform, run)
 
-      assert String.starts_with?(path, "$.context")
-      assert Repo.get_by(StepExecution, task_run_id: run.id, step_id: ctx.transform.id) == nil
-      assert Repo.get!(Sacrum.Repo.Schemas.TaskRun, run.id).status == :failed
-      refute_receive %Phoenix.Socket.Broadcast{event: "run_step"}
+      assert Map.fetch!(execution.config.context["execution"], "previous_output") === output
+      assert_receive %Phoenix.Socket.Broadcast{event: "run_step", payload: payload}
+      assert payload.context === execution.config.context
     end
-
-    assert Repo.get!(Task, ctx.task.id).started_at == nil
   end
 
   test "daemon completion advances an execute step through the existing TaskRun lifecycle", ctx do
