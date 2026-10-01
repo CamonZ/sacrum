@@ -470,7 +470,7 @@ defmodule Sacrum.Orchestrator.PromptRendererTest do
 
       context = PromptContext.build_execution_context(execution_data)
 
-      assert context["previous_output"] == ""
+      refute Map.has_key?(context, "previous_output")
       assert context["run_count"] == 0
       assert context["completed_count"] == 0
       assert context["failed_count"] == 0

@@ -11,19 +11,25 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep.Config do
 
   require Logger
 
-  alias __MODULE__.{LlmInference, Route, StructuredInference, WaitChildren}
+  alias __MODULE__.{Execute, LlmInference, Route, StructuredInference, WaitChildren}
 
   @version 1
 
   @types [
     llm_inference: LlmInference,
     structured_inference: StructuredInference,
+    execute: Execute,
     route: Route,
     wait_children: WaitChildren
   ]
 
   @type t ::
-          LlmInference.t() | StructuredInference.t() | Route.t() | WaitChildren.t() | nil
+          LlmInference.t()
+          | StructuredInference.t()
+          | Execute.t()
+          | Route.t()
+          | WaitChildren.t()
+          | nil
 
   @doc "The variant embedded schemas keyed by `step_type`."
   @spec types() :: keyword(module())
@@ -32,6 +38,11 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep.Config do
   @doc "The variant schema for `step_type`, or nil for null-config types."
   @spec module(atom()) :: module() | nil
   def module(step_type), do: Keyword.get(@types, step_type)
+
+  @doc "The authorable fields for a config variant, excluding runtime snapshots."
+  @spec definition_fields(module()) :: [atom()]
+  def definition_fields(Execute), do: Execute.definition_fields()
+  def definition_fields(module), do: module.__schema__(:fields)
 
   @spec validate_version(Ecto.Changeset.t()) :: Ecto.Changeset.t()
   def validate_version(changeset) do

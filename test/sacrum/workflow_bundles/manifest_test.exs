@@ -82,6 +82,42 @@ defmodule Sacrum.WorkflowBundles.ManifestTest do
   end
 
   describe "step config" do
+    test "execute definitions accept authored config and reject runtime context and obsolete input" do
+      config = %{
+        "version" => 1,
+        "script" => "transform(task)",
+        "output_schema" => %{"type" => "object"}
+      }
+
+      step = %{
+        "step_ref" => "execute",
+        "name" => "Execute",
+        "step_type" => "execute",
+        "config" => config
+      }
+
+      assert {:ok, bundle} = Manifest.validate(structured_bundle(step))
+      assert hd(hd(bundle.workflows).steps).config == config
+
+      assert {:error,
+              %{path: "workflows[0].steps[0].harness", message: "must be null for execute steps"}} =
+               Manifest.validate(structured_bundle(Map.put(step, "harness", "codex")))
+
+      assert {:error, %{path: "workflows[0].steps[0].harness", message: "is required"}} =
+               Manifest.validate(structured_bundle(Map.delete(structured_step(), "harness")))
+
+      for key <- ["input", "context"] do
+        for value <- [nil, %{}] do
+          invalid = put_in(step, ["config", key], value)
+
+          assert {:error, %{path: path, message: "is not supported for execute steps"}} =
+                   Manifest.validate(structured_bundle(invalid))
+
+          assert path == "workflows[0].steps[0].config.#{key}"
+        end
+      end
+    end
+
     test "keeps a structured inference config unchanged" do
       assert {:ok, bundle} = Manifest.validate(structured_bundle(structured_step()))
 

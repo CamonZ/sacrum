@@ -94,6 +94,59 @@ defmodule Sacrum.Realtime.CommandBroadcasterTest do
     assert payload.verbose_daemon_logging
   end
 
+  test "execute wire payload uses only the saved execute snapshot and envelope", ctx do
+    config = %WorkflowStep.Config.Execute{
+      version: 1,
+      script: "transform(execution.previous_output)",
+      context: %{
+        "task" => %{},
+        "execution" => %{},
+        "inputs" => %{},
+        "steps" => %{},
+        "workflow" => %{},
+        "artifacts" => %{}
+      },
+      output_schema: %{"type" => "object"}
+    }
+
+    data = ctx.data
+    data = put_in(data.execution.config, config)
+    # Even a mutable step carrying inference metadata cannot affect this request.
+    data =
+      Map.put(data, :step, %WorkflowStep{
+        harness: "codex",
+        config: %WorkflowStep.Config.LlmInference{prompt: "changed"}
+      })
+
+    assert :ok = CommandBroadcaster.broadcast_run_step(data, ctx.daemon_id)
+    assert_receive %Phoenix.Socket.Broadcast{event: "run_step", payload: payload}
+
+    assert payload == %{
+             id: data.execution.id,
+             task_id: data.execution.task_id,
+             project_id: data.execution.project_id,
+             worktree: "/tmp/worktree",
+             step_type: "execute",
+             version: 1,
+             script: config.script,
+             context: config.context,
+             output_schema: config.output_schema
+           }
+
+    for value <- [nil, false, 36, "", [], %{}] do
+      context = put_in(config.context["execution"]["previous_output"], value)
+      data = put_in(data.execution.config.context, context)
+      assert :ok = CommandBroadcaster.broadcast_run_step(data, ctx.daemon_id)
+      assert_receive %Phoenix.Socket.Broadcast{event: "run_step", payload: payload}
+      assert Map.fetch!(payload, :context) === context
+
+      refute Enum.any?(
+               [:input, :harness, :agent_config, :provider, :model, :prompt],
+               &Map.has_key?(payload, &1)
+             )
+    end
+  end
+
   test "requires a daemon id but does not require a live or matching registry session", ctx do
     assert {:error, :workspace_required} = CommandBroadcaster.broadcast_run_step(ctx.data, nil)
     :ok = Sacrum.DaemonConnectionRegistry.unregister(ctx.daemon_id)

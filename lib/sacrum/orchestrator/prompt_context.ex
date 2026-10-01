@@ -1,7 +1,8 @@
 defmodule Sacrum.Orchestrator.PromptContext do
   @moduledoc """
-  Builds string-keyed context maps for Solid/Liquid template rendering from
-  task, execution, and workflow data.
+  Builds the shared typed context from task, execution, and workflow data.
+  Liquid templates consume it during rendering; execute steps snapshot all
+  six namespaces unchanged for daemon-owned variable binding.
 
   All keys at every nesting level are strings — Solid requires it.
   """
@@ -24,8 +25,8 @@ defmodule Sacrum.Orchestrator.PromptContext do
   }
 
   @doc """
-  Builds the complete `%{"task" => ..., "execution" => ..., "workflow" => ..., "artifacts" => ...}`
-  context for Solid rendering.
+  Builds the complete `task`, `execution`, `inputs`, `steps`, `workflow`, and
+  `artifacts` context for rendering and execution snapshots.
 
   `task` should have associations preloaded (see `PromptRenderer.preload_for_rendering/1`).
   `execution_data` is the map returned by `ExecutionHistory.build_execution_data/3`.
@@ -215,17 +216,16 @@ defmodule Sacrum.Orchestrator.PromptContext do
   """
   @spec build_execution_context(map()) :: map()
   def build_execution_context(execution_data) when is_map(execution_data) do
-    previous_output = get_in(execution_data, [:previous, :output]) || ""
-
-    reject_nil_values(%{
-      "previous_output" => coerce_previous_output(previous_output),
+    %{
       "run_count" => execution_data[:run_count] || 0,
       "completed_count" => execution_data[:completed_count] || 0,
       "failed_count" => execution_data[:failed_count] || 0,
       "duration_ms" => execution_data[:duration_ms],
       "history" => build_history_list(execution_data[:history] || []),
       "handoff" => execution_data[:handoff]
-    })
+    }
+    |> reject_nil_values()
+    |> put_previous_output(execution_data[:previous])
   end
 
   def build_execution_context(_), do: %{}
@@ -331,10 +331,12 @@ defmodule Sacrum.Orchestrator.PromptContext do
   defp count_workflow_steps(%{workflow_steps: steps}) when is_list(steps), do: length(steps)
   defp count_workflow_steps(_), do: 0
 
-  defp coerce_previous_output(output) when is_binary(output) or is_map(output) or is_list(output),
-    do: output
+  # Missing output differs from an existing JSON null. Liquid still renders
+  # an absent optional prompt variable as empty text; typed bindings stay strict.
+  defp put_previous_output(context, %{output: output}),
+    do: Map.put(context, "previous_output", output)
 
-  defp coerce_previous_output(output), do: to_string(output)
+  defp put_previous_output(context, _missing), do: context
 
   defp reject_nil_values(map), do: Map.reject(map, fn {_k, v} -> v == nil end)
 end

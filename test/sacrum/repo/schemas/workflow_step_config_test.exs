@@ -122,6 +122,109 @@ defmodule Sacrum.Repo.Schemas.WorkflowStepConfigTest do
     end
   end
 
+  describe "execute" do
+    @execute_config %{
+      "version" => 1,
+      "script" => "transform(execution.previous_output)",
+      "output_schema" => %{"type" => "object"}
+    }
+
+    defp execute(config, attrs \\ %{}) do
+      WorkflowStep.create_changeset(
+        %WorkflowStep{},
+        Map.merge(%{name: "Transform", step_type: "execute", config: config}, attrs)
+      )
+    end
+
+    test "registers provider-independent definitions with only authored fields" do
+      assert :execute in WorkflowStep.step_types()
+      assert Config.module(:execute) == Config.Execute
+      assert Config.definition_fields(Config.Execute) == [:version, :script, :output_schema]
+      changeset = execute(@execute_config)
+      assert changeset.valid?, inspect(errors_on(changeset))
+      assert %Config.Execute{version: 1, context: nil} = get_field(changeset, :config)
+    end
+
+    test "requires version, nonempty script, and valid output schema" do
+      for script <- [nil, "", " \n "] do
+        assert %{config: %{script: ["can't be blank"]}} =
+                 errors_on(execute(Map.put(@execute_config, "script", script)))
+      end
+
+      assert %{config: %{version: ["only version 1 is supported"]}} =
+               errors_on(execute(Map.put(@execute_config, "version", 2)))
+
+      assert %{config: %{version: ["can't be blank"]}} =
+               errors_on(execute(Map.put(@execute_config, "version", nil)))
+
+      assert %{config: %{output_schema: ["can't be blank"]}} =
+               errors_on(execute(Map.delete(@execute_config, "output_schema")))
+
+      assert %{config: %{output_schema: ["must be a valid JSON Schema"]}} =
+               errors_on(
+                 execute(Map.put(@execute_config, "output_schema", %{"type" => "invalid"}))
+               )
+    end
+
+    test "rejects obsolete input, authored context, provider harnesses, and inference config" do
+      for harness <- WorkflowStep.harnesses() do
+        assert %{harness: ["must be null for execute steps"]} =
+                 errors_on(execute(@execute_config, %{harness: harness}))
+      end
+
+      step = execute(@execute_config) |> apply_changes()
+
+      for key <- ["input", "context", "prompt", "agent_config", "provider", "model", "state"] do
+        message = "$.#{key}: is not supported for execute steps"
+
+        for value <- [nil, false, %{}] do
+          assert %{config: [^message]} = errors_on(execute(Map.put(@execute_config, key, value)))
+
+          assert %{config: [^message]} =
+                   errors_on(WorkflowStep.update_changeset(step, %{config: %{key => value}}))
+        end
+      end
+    end
+
+    test "authored scripts and schemas have actionable size/depth bounds" do
+      assert %{config: %{script: ["must be at most 262144 bytes"]}} =
+               errors_on(
+                 execute(Map.put(@execute_config, "script", String.duplicate("x", 262_145)))
+               )
+
+      for {schema, expected} <- [
+            {%{"enum" => Enum.to_list(1..4097)},
+             "$.output_schema.enum: must have at most 4096 entries"},
+            {%{"description" => String.duplicate("x", 1_048_577)},
+             "$.output_schema: must encode to at most 1048576 bytes"},
+            {%{type: "object"}, "$.output_schema: must use string keys"}
+          ] do
+        assert %{config: %{output_schema: [^expected]}} =
+                 errors_on(execute(Map.put(@execute_config, "output_schema", schema)))
+      end
+
+      deep = Enum.reduce(1..33, nil, fn _, value -> [value] end)
+
+      assert %{config: %{output_schema: [message]}} =
+               errors_on(execute(Map.put(@execute_config, "output_schema", %{"enum" => deep})))
+
+      assert message =~ "nesting depth at most 32"
+    end
+
+    test "patches authored fields without casting the server snapshot" do
+      config = %Config.Execute{
+        script: "original",
+        output_schema: %{"type" => "object"},
+        context: %{"execution" => %{"previous_output" => false}}
+      }
+
+      patched = Config.Execute.changeset(config, %{"script" => "changed", "context" => %{}})
+      assert patched.valid?
+      assert apply_changes(patched).context === config.context
+      assert apply_changes(patched).output_schema == config.output_schema
+    end
+  end
+
   describe "update" do
     setup do
       step = %WorkflowStep{

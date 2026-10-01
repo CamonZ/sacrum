@@ -179,13 +179,14 @@ capabilities and does not probe the client's machine.
 **`workflow_step_type.ex`** — 4 mutations (all via `Accounts.WorkflowSteps`)
 | Mutation | Arguments | Returns |
 |----------|-----------|---------|
-| `createWorkflowStep` | `workflow_id!`, `name!`, `goal`, `step_order`, `harness!`, `step_type`, `config`, `persistence_options` | `:workflow_step` |
+| `createWorkflowStep` | `workflow_id!`, `name!`, `goal`, `step_order`, `harness`, `step_type`, `config`, `persistence_options` | `:workflow_step` |
 | `updateWorkflowStep` | `id!`, `name`, `goal`, `step_order`, `harness`, `step_type`, `config`, `persistence_options` | `:workflow_step` |
 | `deleteWorkflowStep` | `id!` | `:workflow_step` |
 | `syncStepTransitions` | `id!`, `transitions!` (list of `StepTransitionInput`) | `:workflow_step` |
 
-Workflow steps require an explicit `harness` selector with the values `codex`,
-`claude`, and `typesafe`; Sacrum does not infer or default it from config.
+Workflow steps other than `execute` require an explicit `harness` selector with
+the values `codex`, `claude`, and `typesafe`; Sacrum does not infer or default it
+from config. `execute` is provider-independent and rejects a non-null harness.
 Built-in providers must use their matching harness: `openai`/`codex` with
 `codex`, `anthropic`/`claude` with `claude`, and `typesafe` with `typesafe`.
 These checks apply to `llm_inference` `agent_config.provider` and
@@ -240,10 +241,12 @@ general JSON Schema validation.
 ### Step types and step configuration
 
 `WorkflowStep.stepType` is one of `llm_inference`, `structured_inference`,
-`route`, `wait_children`, `human_input`, `stop`, or `finish`. The former `execute` and `evaluate` types
-behaved identically and were merged into `llm_inference`; neither name is
-accepted any more. A step's type is fixed when it is created; updates that
-change it are rejected, so a different kind of step is a new step.
+`execute`, `route`, `wait_children`, `human_input`, `stop`, or `finish`. The old
+provider-inference `execute` and `evaluate` types were migrated to
+`llm_inference`; the new `execute` type delegates script evaluation to the
+daemon, and `evaluate` remains unsupported. A step's type is fixed when it is
+created; updates that change it are rejected, so a different kind of step is a
+new step.
 
 Type-specific settings live in one closed, versioned `config` object, a
 polymorphic embedded schema whose variant is selected by `stepType`:
@@ -252,6 +255,7 @@ polymorphic embedded schema whose variant is selected by `stepType`:
 |------------|--------------|-------------------------------|
 | `llm_inference` | `LlmInferenceStepConfig` | `prompt`, `output_schema`, `agents`, `skills`, `agent_config` |
 | `structured_inference` | `StructuredInferenceStepConfig` | `provider`, `model`, `state`, `questions` (all required) |
+| `execute` | `ExecuteStepConfig` | `script`, `output_schema` (required); server-written `context` on dispatched executions |
 | `route` | `RouteStepConfig` | `route_config` |
 | `wait_children` | `WaitChildrenStepConfig` | `output_schema` (for artifact persistence) |
 | `human_input`, `stop`, `finish` | — | `config` is `null` |
@@ -265,7 +269,8 @@ Every `StepExecution` records the step config it ran with in
 `StepExecution.config`, in the same `step_type`-discriminated shape and
 `WorkflowStepConfig` GraphQL union as `WorkflowStep.config`, with templates
 rendered: `llm_inference` stores its rendered `prompt`, `structured_inference`
-its resolved `state`; other fields are copied as configured, and
+its resolved `state`, and `execute` its rendered `script` and complete typed
+`PromptContext` snapshot in `config.context`; other fields are copied as configured, and
 `human_input`, `stop`, and `finish` executions have a null `config`. It is
 written by the server when the execution is created and cannot be set or
 changed through `createStepExecution`/`updateStepExecution`; an execution
@@ -364,6 +369,77 @@ Later steps read answers by path from `execution.previous_output` and
 `steps.<name>.output`, e.g. `previous_output.<question>.choice`, `.score`,
 `.noul`, `.confidence`, or `.probabilities.<option|level>`.
 
+### Execute steps
+
+An `execute` step delegates an opaque script to the daemon. Sacrum does not
+select or implement its scripting engine. The authored version-1 config
+requires a non-blank `script` and a valid `output_schema` object. It rejects
+authored `input` and `context` fields, inference settings such as `agent_config`,
+`provider`, and `model`, and a non-null harness.
+
+At dispatch, Sacrum supplies the complete string-keyed `PromptContext` used for
+interpolation, without an authored input binding. The daemon receives these
+namespaces as JSON data and owns binding them to script variables:
+
+| Namespace | Contents |
+|-----------|----------|
+| `task` | ID, title, description, level, tags, worktree, code references, and present section lists |
+| `execution` | Present `previous_output` and handoff, terminal attempt counts, and nearest-first history; history outputs remain stored text |
+| `steps` | Latest completed named-step outputs, decoded using their execution snapshot schemas |
+| `workflow` | Workflow name, current step/goal, step count, and present output schema |
+| `inputs` | Caller-supplied input map; currently empty in the normal dispatch path |
+| `artifacts` | Scoped project/task/TaskRun and preceding-execution logical-name-to-ID mappings; no artifact bodies |
+
+Prior and named-step output come only from completed attempts in the current
+user/project/task/TaskRun. A new run never restores another run's output.
+Missing optional fields stay absent; present JSON null, false, numbers, arrays,
+objects, and empty strings retain their values. Strings inside the context
+remain data, including strings that look like templates; they are not rendered
+a second time.
+
+Authored and rendered scripts are limited to 262,144 bytes. The complete context
+and output schema are each limited to 1,048,576 encoded JSON bytes, nesting depth
+32, and 4,096 entries per collection. An invalid or oversized context fails
+before an execution row or daemon command is created; no context is silently
+truncated.
+
+`script` uses strict Solid rendering. Parse errors, missing variables, rendering
+errors, and object/array source interpolation fail with a script field path;
+there is no raw-template fallback. Structured values are available through the
+daemon's context bindings. LLM prompt rendering retains its existing behavior.
+
+For example, a `prepare` step returns
+`{"name":"example","quantity":3,"unit_price":12}` with an output schema.
+For a daemon supporting property access and arithmetic, the authored config can
+use the prior output directly:
+
+```json
+{
+  "version": 1,
+  "script": "execution.previous_output.quantity * execution.previous_output.unit_price",
+  "output_schema": {"type": "number"}
+}
+```
+
+Before dispatch, Sacrum persists the rendered `script`, complete JSON `context`,
+`version`, and `output_schema` together in `StepExecution.config` with the
+`execute` discriminator. `config.context` is server-written and read-only;
+it is null on step definitions and unrendered execution configs. It is separate
+from the mutable `StepExecution.context` field used for execution metadata and
+route audit. The daemon-channel `run_step` command carries the existing
+`id`, `task_id`, `project_id`, and `worktree` envelope plus
+`step_type: "execute"`, `version: 1`, `script`, `context`, and `output_schema`.
+It omits `harness`, `agent_config`, `provider`, and `model`. The request uses
+the execution snapshot, so later definition edits cannot change the attempt.
+
+The daemon binds the provided namespaces using its own runtime, evaluates the
+script, converts the result to JSON, validates it, and reports through the existing
+`updateStepExecution` completed/failed path. Sacrum also validates completed
+output against the snapshot schema. The example yields the number `36`; a later
+step resolves `{{ steps.transform.output }}` as that number. Failed attempts retain
+the existing retry/failure policy. Artifact host functions, shell commands,
+and GUI/CLI authoring are outside this pure-transformation milestone.
+
 ### Route predecessors and output references
 
 A route owns its handoff. Predecessors do not need to know they feed a route or
@@ -374,8 +450,9 @@ properties the route compares and hands off:
   `llm_inference` steps with an outgoing edge to a route must configure
   `output_schema` (graph validation rejects the edge or route otherwise, with
   `$.predecessors[<transition>].output_schema`). `structured_inference` steps
-  use the answers schema derived from their questions. Other step types have
-  no output schema and cannot feed a route.
+  use the answers schema derived from their questions. `execute` steps can
+  feed a route when their required output schema is an object schema. Other
+  step types without a predecessor output schema cannot feed a route.
 - Rule references `previous_output.<path>` and handoff references
   `{{ previous_output.<path> }}` are resolved with one schema-path resolver
   against **every** incoming predecessor schema when the route is saved.

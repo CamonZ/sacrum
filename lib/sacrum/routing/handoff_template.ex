@@ -460,7 +460,9 @@ defmodule Sacrum.Routing.HandoffTemplate do
 
   defp valid_segment?(segment), do: Regex.match?(@segment, segment)
 
-  defp path_for_key(path, key) do
+  @doc false
+  @spec path_for_key(String.t(), String.t()) :: String.t()
+  def path_for_key(path, key) do
     if valid_segment?(key), do: "#{path}.#{key}", else: "#{path}[#{inspect(key)}]"
   end
 

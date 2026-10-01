@@ -8,6 +8,54 @@ defmodule Sacrum.Repo.WorkflowBundlesTest do
   alias Sacrum.Repo.Users
   alias Sacrum.Repo.Schemas.{StepTransition, Workflow, WorkflowStep, WorkflowTransition}
 
+  test "imports authored execute config and rejects runtime context or obsolete input" do
+    {user, project} = create_project()
+
+    config = %{
+      "version" => 1,
+      "script" => "transform(task)",
+      "output_schema" => %{"type" => "object"}
+    }
+
+    bundle = %{
+      "workflows" => [
+        %{
+          "workflow_ref" => "execute",
+          "name" => "Execute",
+          "steps" => [
+            %{
+              "step_ref" => "transform",
+              "name" => "Transform",
+              "step_type" => "execute",
+              "config" => config
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, result} = Sacrum.Accounts.WorkflowBundles.import(user.id, project.id, bundle)
+    step = Repo.get!(WorkflowStep, get_in(result.step_mappings, ["execute", "transform"]))
+    assert step.step_type == :execute
+    assert step.harness == nil
+    assert step.config.context == nil
+    assert step.config.script == config["script"]
+    assert step.config.output_schema == config["output_schema"]
+
+    for key <- ["input", "context"], value <- [nil, %{}] do
+      invalid =
+        put_in(bundle, ["workflows", Access.at(0), "steps", Access.at(0), "config", key], value)
+
+      assert {:error, %Ecto.Changeset{} = changeset} =
+               Sacrum.Accounts.WorkflowBundles.import(user.id, project.id, invalid)
+
+      assert {message, _} = changeset.errors[:bundle]
+      assert message == "workflows[0].steps[0].config.#{key}: is not supported for execute steps"
+    end
+
+    assert Repo.aggregate(from(w in Workflow, where: w.name == "Execute"), :count) == 1
+  end
+
   test "imports workflows without changing the project's default" do
     {user, project} = create_project()
 

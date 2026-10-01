@@ -411,17 +411,26 @@ no destination `execution.handoff`; transition target metadata remains only in
 
 ### Workflow Step Type and Config
 
-`WorkflowStep.stepType` and `StepExecution.stepType` report `llm_inference` for
-every former `execute`/`evaluate` step; the two were behaviorally identical and
-neither name is accepted or reported any more. Clients must treat
-`llm_inference` as the daemon-driven work step.
+Historical provider-inference `execute`/`evaluate` steps were migrated to
+`llm_inference`. The new `execute` type is a provider-independent script
+evaluated by the daemon's runtime; it has no harness. `evaluate` remains
+unsupported. `llm_inference` remains the daemon-driven prompt step.
 `structured_inference` is also daemon-driven; its completed `output` is the
 provider's JSON answers map, keyed by the `questions` in its execution `config`.
 
 `StepExecution.prompt` has been removed. `StepExecution.config` is the
 `WorkflowStepConfig` union the execution ran with, templates rendered: read the
-rendered prompt from `config { ... on LlmInferenceStepConfig { prompt } }` and
-the resolved structured-inference input from `StructuredInferenceStepConfig.state`.
+rendered prompt from `config { ... on LlmInferenceStepConfig { prompt } }`,
+the resolved structured-inference input from `StructuredInferenceStepConfig.state`,
+and execute script/context/schema from `ExecuteStepConfig`. On dispatched
+execute attempts, `config.context` is the entire typed `PromptContext` used for
+rendering: `task`, `execution`, `inputs`, `steps`, `workflow`, and `artifacts`.
+It preserves present null/false/empty values and literal template-looking data;
+missing optional fields stay absent. Named-step and previous outputs use only
+the current TaskRun's completed attempts and their snapshot schemas. Artifact
+bindings contain identities only. `config.context` is null on definitions and
+unrendered execution configs; it cannot be authored or overwritten by clients.
+The separate mutable `StepExecution.context` metadata/audit field is unchanged.
 It is null for `human_input`, `stop`, and `finish` executions. Channel
 `step_execution_*` payloads carry `config` in place of `prompt` (CDC
 after-images include the `__type__` tag, as for workflow steps).
@@ -435,6 +444,8 @@ currentStep {
   stepType
   config {
     ... on LlmInferenceStepConfig { version prompt outputSchema agents skills agentConfig }
+    ... on StructuredInferenceStepConfig { version provider model state questions }
+    ... on ExecuteStepConfig { version script context outputSchema }
     ... on RouteStepConfig { version routeConfig }
     ... on WaitChildrenStepConfig { version outputSchema }
   }
@@ -450,6 +461,18 @@ settings arrive per embedded field (for example
 `config.route_config: $.version: only version 1 is supported`); graph-level
 route validation errors still arrive on `route_config`. `step_created` and
 `step_updated` channel payloads carry `config` in place of the flat fields.
+
+`createWorkflowStep` accepts an omitted `harness` only for `execute`; other
+types retain their existing requirement. Execute rejects provider settings and
+a non-null harness. Its authored config requires `version: 1`, non-blank
+`script`, and a valid `output_schema`; obsolete `input` and authored `context`
+keys are rejected. Script/template failures and context-bound violations prevent
+dispatch. The daemon request has explicit `step_type: "execute"` and snapshot
+`version`, `script`, complete JSON `context`, and `output_schema` fields alongside
+the existing identity/worktree envelope. The daemon owns scripting-engine choice
+and native namespace binding. Consumers of the earlier execute PoC `input`
+payload must adopt this context contract; existing inference payloads are unchanged.
+Completion and failure still use the existing execution and TaskRun lifecycle.
 
 ## WebSocket Contract
 

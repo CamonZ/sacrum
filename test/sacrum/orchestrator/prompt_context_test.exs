@@ -717,8 +717,7 @@ defmodule Sacrum.Orchestrator.PromptContextTest do
       assert context["run_count"] == 0
       assert context["completed_count"] == 0
       assert context["failed_count"] == 0
-      # previous_output defaults to empty string when not provided
-      assert context["previous_output"] == ""
+      refute Map.has_key?(context, "previous_output")
     end
   end
 
