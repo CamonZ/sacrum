@@ -69,6 +69,12 @@ defmodule Sacrum.DataCase do
   end
 
   def workflow_step_attrs(attrs) do
+    if to_string(Map.get(attrs, :step_type) || Map.get(attrs, "step_type")) == "execute",
+      do: attrs,
+      else: put_default_harness(attrs)
+  end
+
+  defp put_default_harness(attrs) do
     harness_key =
       cond do
         Map.has_key?(attrs, :harness) -> :harness

@@ -16,6 +16,7 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
   @config_types %{
     Config.LlmInference => :llm_inference_step_config,
     Config.StructuredInference => :structured_inference_step_config,
+    Config.Execute => :execute_step_config,
     Config.Route => :route_step_config,
     Config.WaitChildren => :wait_children_step_config
   }
@@ -123,6 +124,7 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
     types([
       :llm_inference_step_config,
       :structured_inference_step_config,
+      :execute_step_config,
       :route_step_config,
       :wait_children_step_config
     ])
@@ -150,6 +152,16 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
   object :route_step_config do
     field :version, non_null(:integer)
     field :route_config, :json
+  end
+
+  object :execute_step_config do
+    field :version, non_null(:integer)
+    field :script, non_null(:string)
+
+    field :context, :json,
+      description: "Server-recorded context snapshot; null on authored workflow definitions."
+
+    field :output_schema, non_null(:json)
   end
 
   object :wait_children_step_config do
@@ -206,7 +218,7 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
       arg(:name, non_null(:string))
       arg(:goal, :string)
       arg(:step_order, :integer)
-      arg(:harness, non_null(:string))
+      arg(:harness, :string)
       arg(:step_type, :string)
       arg(:config, :json)
       arg(:persistence_options, :json)

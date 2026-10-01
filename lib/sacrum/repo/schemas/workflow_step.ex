@@ -13,6 +13,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
   @step_types [
     :llm_inference,
     :structured_inference,
+    :execute,
     :route,
     :wait_children,
     :human_input,
@@ -65,10 +66,10 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     step
     |> cast(attrs, @create_fields)
     |> cast_config(attrs)
+    |> validate_harness()
     |> validate_provider_harness()
     |> validate_provider_output_schema()
     |> validate_required([:name])
-    |> validate_required([:harness])
     |> validate_length(:name, min: 1, max: 255)
     |> validate_inclusion(:harness, @harnesses)
     |> validate_persistence_options()
@@ -82,9 +83,9 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     |> cast(attrs, @update_fields)
     |> validate_step_type_unchanged(attrs)
     |> cast_config(attrs)
+    |> validate_harness()
     |> validate_provider_harness()
     |> validate_provider_output_schema()
-    |> validate_required([:harness])
     |> validate_length(:name, min: 1, max: 255)
     |> validate_inclusion(:harness, @harnesses)
     |> validate_persistence_options()
@@ -110,6 +111,16 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
 
   defp output_schema_key(:structured_inference), do: :questions
   defp output_schema_key(_step_type), do: :output_schema
+
+  defp validate_harness(changeset) do
+    if get_field(changeset, :step_type) == :execute do
+      if is_nil(get_field(changeset, :harness)),
+        do: changeset,
+        else: add_error(changeset, :harness, "must be null for execute steps")
+    else
+      validate_required(changeset, [:harness])
+    end
+  end
 
   # A step's type is fixed at creation; a different kind of step is a new step.
   defp validate_step_type_unchanged(changeset, attrs) do
@@ -159,7 +170,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
   end
 
   defp cast_variant(changeset, module, step_type, config) do
-    allowed = Enum.map(module.__schema__(:fields), &Atom.to_string/1)
+    allowed = Enum.map(Config.definition_fields(module), &Atom.to_string/1)
 
     case config |> Map.keys() |> Enum.map(&to_string/1) |> Enum.reject(&(&1 in allowed)) do
       [] ->

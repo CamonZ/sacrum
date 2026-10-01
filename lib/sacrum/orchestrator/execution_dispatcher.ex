@@ -7,9 +7,9 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   run_step event to the daemon.
 
   The dispatcher is the single source of StepExecution row creation for
-  llm_inference and structured_inference steps. A config that cannot be
-  rendered (such as a missing required reference in structured_inference
-  `state`) fails the dispatch before any execution row is created.
+  llm_inference, structured_inference, and execute steps. A config that cannot
+  be rendered (such as a missing Liquid script reference or an invalid
+  execute script template) fails before any execution row is created.
   Deterministic route executions are created locally by the route handler. Transitions (advance_to_step, move_to_step) only update
   current_step_id; daemon-backed execution rows are created at dispatch time.
 

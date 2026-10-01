@@ -207,7 +207,7 @@ defmodule Sacrum.WorkflowBundles.Manifest do
          {:ok, step_ref} <- required_text(step, "step_ref", path),
          {:ok, name} <- required_text(step, "name", path),
          normalized = atom_fields(step, @step_fields, %{step_ref: step_ref, name: name}),
-         :ok <- validate_harness(normalized.harness, path),
+         :ok <- validate_step_harness(normalized, path),
          :ok <- validate_step_config(normalized, path) do
       {:ok, normalized}
     end
@@ -215,6 +215,13 @@ defmodule Sacrum.WorkflowBundles.Manifest do
 
   defp normalize_step(_step, workflow_path, index),
     do: {:error, error("#{workflow_path}.steps[#{index}]", "must be an object")}
+
+  defp validate_step_harness(%{step_type: "execute", harness: nil}, _path), do: :ok
+
+  defp validate_step_harness(%{step_type: "execute"}, path),
+    do: {:error, error("#{path}.harness", "must be null for execute steps")}
+
+  defp validate_step_harness(%{harness: harness}, path), do: validate_harness(harness, path)
 
   defp validate_harness(nil, path),
     do: {:error, error("#{path}.harness", "is required")}
@@ -260,7 +267,7 @@ defmodule Sacrum.WorkflowBundles.Manifest do
   end
 
   defp validate_config_fields(module, step_type, config, path) do
-    allowed = Enum.map(module.__schema__(:fields), &Atom.to_string/1)
+    allowed = Enum.map(Config.definition_fields(module), &Atom.to_string/1)
 
     case config
          |> Map.keys()

@@ -9,8 +9,8 @@ defmodule Sacrum.Realtime.CommandBroadcaster do
 
   @doc """
   Sends run_step for a started execution. The request comes from the
-  execution's rendered config; `harness` and `verbose_daemon_logging` are read
-  from the step.
+  execution's rendered config. Inference reads `harness` from the step;
+  execute omits it. `verbose_daemon_logging` is read from the step.
   """
   @spec broadcast_run_step(map(), String.t() | nil) :: :ok | {:error, atom()}
   def broadcast_run_step(%{execution: execution} = data, daemon_id) do
@@ -22,7 +22,7 @@ defmodule Sacrum.Realtime.CommandBroadcaster do
         worktree: Task.workspace_worktree(data.task)
       }
       |> Map.merge(request_payload(execution.config))
-      |> put_present(:harness, Map.get(data.step, :harness))
+      |> put_harness(execution.config, data.step)
       |> put_present(:verbose_daemon_logging, data.step.verbose_daemon_logging || nil)
 
     broadcast(daemon_id, "run_step", payload)
@@ -39,6 +39,16 @@ defmodule Sacrum.Realtime.CommandBroadcaster do
     }
   end
 
+  defp request_payload(%Config.Execute{} = config) do
+    %{
+      step_type: "execute",
+      version: config.version,
+      script: config.script,
+      context: config.context,
+      output_schema: config.output_schema
+    }
+  end
+
   defp request_payload(config) do
     put_present(
       %{
@@ -52,6 +62,11 @@ defmodule Sacrum.Realtime.CommandBroadcaster do
 
   defp put_present(payload, _key, nil), do: payload
   defp put_present(payload, key, value), do: Map.put(payload, key, value)
+
+  defp put_harness(payload, %Config.Execute{}, _step), do: payload
+
+  defp put_harness(payload, _config, step),
+    do: put_present(payload, :harness, Map.get(step, :harness))
 
   @spec broadcast_cancel_step(map(), String.t() | nil) :: :ok | {:error, atom()}
   def broadcast_cancel_step(execution, daemon_id) do
