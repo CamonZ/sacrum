@@ -470,8 +470,11 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     end)
   end
 
-  defp persist_wait_children_output(data, step, %{waiting_execution: %StepExecution{id: id}}) do
-    OutputArtifact.persist(data, step, id)
+  # The waiting execution may belong to an earlier run of this task (retry after
+  # a failed wake), so persist from the row completed in this transaction
+  # rather than re-fetching it scoped to the current run.
+  defp persist_wait_children_output(data, step, %{waiting_execution: %StepExecution{} = execution}) do
+    OutputArtifact.persist(data, step, execution)
   end
 
   defp persist_wait_children_output(data, step, _changes) do
