@@ -8,6 +8,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
   alias Sacrum.Orchestrator.FSMData
   alias Sacrum.Orchestrator.ExecutionPool
   alias Sacrum.Orchestrator.TaskOrchestrator
+  alias Sacrum.Orchestrator.Routing.WaitChildren
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{StepExecution, TaskRun}
   alias Sacrum.Repo.TaskDependencies
@@ -1225,16 +1226,40 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       task
     end
 
-    defp setup_wait_children_parent do
-      build_wait_children_parent()
+    defp create_child_workflow(user, project) do
+      child_workflow = create_workflow(user, project)
+      child_step = create_step(user, child_workflow, %{name: "child_step", step_order: 1})
+      {:ok, _} = Accounts.Workflows.update(child_workflow, %{initial_step_id: child_step.id})
+      child_workflow
     end
 
-    defp build_wait_children_parent(_opts \\ []) do
+    defp create_completed_child_task(user, project, parent_task) do
+      child_task =
+        user
+        |> create_child_task(project, parent_task)
+        |> assign_workflow_to_task(create_child_workflow(user, project))
+
+      {:ok, child_task} =
+        Repo.update(Ecto.Changeset.change(child_task, %{completed_at: DateTime.utc_now()}))
+
+      child_task
+    end
+
+    defp wait_children_executions(task_id) do
+      Repo.all(
+        from(e in StepExecution,
+          where: e.task_id == ^task_id and e.step_type == :wait_children,
+          order_by: [asc: e.inserted_at]
+        )
+      )
+    end
+
+    defp setup_wait_children_parent(wait_step_attrs \\ %{}) do
       user = create_user()
       project = create_project(user)
       workflow = create_workflow(user, project)
 
-      wait_step = create_wait_children_step(user, workflow)
+      wait_step = create_wait_children_step(user, workflow, wait_step_attrs)
 
       final_step =
         create_step(user, workflow, %{name: "final_step", step_order: 2, step_type: "finish"})
@@ -2161,7 +2186,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       assert is_nil(task_run.outcome_kind) or task_run.outcome_kind != :orchestrator_failed
     end
 
-    test "wait_children entry with no children does not insert a waiting StepExecution" do
+    test "wait_children entry with no children leaves no waiting StepExecution" do
       %{user: user, parent_task: parent_task} = setup_wait_children_parent()
 
       pid = start_orchestrator(parent_task, user)
@@ -2191,6 +2216,165 @@ defmodule Sacrum.Orchestrator.TaskOrchestratorTest do
       assert snapshot["snapshot_type"] == "wait_children_status"
       assert snapshot["counts"]["total_direct_children"] == 0
       assert snapshot["direct_children"] == []
+    end
+
+    test "wait_children entry with all children already completed advances immediately" do
+      %{user: user, project: project, parent_task: parent_task, final_step: final_step} =
+        setup_wait_children_parent(%{
+          persistence_options: %{"artifact" => %{"logical_name" => "children_result"}},
+          config: %{"output_schema" => %{"type" => "object"}}
+        })
+
+      child_task = create_completed_child_task(user, project, parent_task)
+
+      pid = start_orchestrator(parent_task, user)
+      wait_for_exit(pid)
+
+      assert reload_task(parent_task).current_step_id == final_step.id
+
+      assert [%StepExecution{status: "completed"} = execution] =
+               wait_children_executions(parent_task.id)
+
+      assert execution.handoff["child_ids"] == [child_task.id]
+
+      snapshot = Jason.decode!(execution.output)
+      assert snapshot["counts"]["total_direct_children"] == 1
+      assert snapshot["counts"]["direct_done"] == 1
+      assert [%{"id" => child_id, "state" => "done"}] = snapshot["direct_children"]
+      assert child_id == child_task.id
+
+      assert [%{logical_name: "children_result", body: body}] =
+               Accounts.Artifacts.list_for_subject(user.id, project.id, "task", parent_task.id)
+
+      assert Jason.decode!(body)["counts"]["direct_done"] == 1
+
+      assert Repo.all(from(tr in TaskRun, where: tr.task_id == ^child_task.id)) == []
+    end
+
+    test "restart after satisfied wait_children entry completes the recorded execution once" do
+      %{user: user, project: project, parent_task: parent_task, final_step: final_step} =
+        setup_wait_children_parent()
+
+      child_task = create_completed_child_task(user, project, parent_task)
+      parent_task = reload_task(parent_task)
+      {:ok, task_run} = Accounts.TaskRuns.insert(user.id, project.id, parent_task.id)
+
+      # Entry commits, then the orchestrator dies before the outgoing transition.
+      data = %FSMData{
+        user_id: user.id,
+        project_id: project.id,
+        task: parent_task,
+        task_run_id: task_run.id,
+        steps: %{},
+        transitions: %{},
+        slot_id: nil
+      }
+
+      assert {:advance_parent, _} = WaitChildren.handle_wait_children_entry(data)
+
+      assert [%StepExecution{id: execution_id, status: "waiting"}] =
+               wait_children_executions(parent_task.id)
+
+      {:ok, pid} =
+        TaskOrchestrator.start_link(
+          task_id: parent_task.id,
+          user_id: user.id,
+          task_run_id: task_run.id
+        )
+
+      wait_for_exit(pid)
+
+      assert reload_task(parent_task).current_step_id == final_step.id
+
+      assert [%StepExecution{id: ^execution_id, status: "completed"} = execution] =
+               wait_children_executions(parent_task.id)
+
+      assert execution.handoff["child_ids"] == [child_task.id]
+      assert Repo.all(from(tr in TaskRun, where: tr.task_id == ^child_task.id)) == []
+    end
+
+    test "retry after a failed satisfied wait_children transition reuses the recorded execution" do
+      %{
+        user: user,
+        project: project,
+        parent_task: parent_task,
+        wait_step: wait_step,
+        final_step: final_step
+      } =
+        setup_wait_children_parent(%{
+          persistence_options: %{"artifact" => %{"logical_name" => "children_result"}},
+          config: %{"output_schema" => %{"type" => "object", "required" => ["missing"]}}
+        })
+
+      child_task = create_completed_child_task(user, project, parent_task)
+
+      capture_log(fn ->
+        pid = start_orchestrator(parent_task, user)
+        wait_for_exit(pid)
+      end)
+
+      assert reload_task(parent_task).current_step_id == wait_step.id
+      assert latest_task_run(parent_task.id).status == :failed
+
+      assert [%StepExecution{id: execution_id, status: "waiting"}] =
+               wait_children_executions(parent_task.id)
+
+      {:ok, _} =
+        Accounts.WorkflowSteps.update(wait_step, %{
+          config: %{"output_schema" => %{"type" => "object"}}
+        })
+
+      pid = start_orchestrator(parent_task, user)
+      wait_for_exit(pid)
+
+      assert reload_task(parent_task).current_step_id == final_step.id
+
+      assert [%StepExecution{id: ^execution_id, status: "completed"}] =
+               wait_children_executions(parent_task.id)
+
+      assert [%{logical_name: "children_result"}] =
+               Accounts.Artifacts.list_for_subject(user.id, project.id, "task", parent_task.id)
+
+      assert Repo.all(from(tr in TaskRun, where: tr.task_id == ^child_task.id)) == []
+    end
+
+    test "wait_children with completed and incomplete children wakes only after the rest complete" do
+      %{user: user, project: project, parent_task: parent_task, wait_step: wait_step} =
+        ctx = setup_wait_children_parent()
+
+      completed_child = create_completed_child_task(user, project, parent_task)
+
+      incomplete_child =
+        user
+        |> create_child_task(project, parent_task)
+        |> assign_workflow_to_task(create_child_workflow(user, project))
+
+      pid = start_orchestrator(parent_task, user)
+      wait_for_exit(pid)
+
+      assert reload_task(parent_task).current_step_id == wait_step.id
+
+      assert [%StepExecution{id: execution_id, status: "waiting"} = execution] =
+               wait_children_executions(parent_task.id)
+
+      assert Enum.sort(execution.handoff["child_ids"]) ==
+               Enum.sort([completed_child.id, incomplete_child.id])
+
+      assert Repo.all(from(tr in TaskRun, where: tr.task_id == ^completed_child.id)) == []
+
+      {:ok, _} =
+        Repo.update(Ecto.Changeset.change(incomplete_child, %{completed_at: DateTime.utc_now()}))
+
+      Sacrum.Orchestrator.Scheduler.notify_task_completed(incomplete_child.id, %{
+        status: "completed"
+      })
+
+      wait_for_task_step(parent_task, ctx.final_step.id)
+
+      assert [%StepExecution{id: ^execution_id, status: "completed"}] =
+               wait_children_executions(parent_task.id)
+
+      cleanup_spawned_orchestrators([incomplete_child.id, parent_task.id])
     end
 
     test "wait_children entry with one or more children still parks in waiting state" do

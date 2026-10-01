@@ -2,9 +2,14 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
   @moduledoc """
   Handles wait_children step transitions.
 
-  On entry: schedules each direct child, persists a 'waiting' StepExecution
-  with the child IDs in its handoff and a machine-readable child-state snapshot
-  in its output, releases the pool slot and exits.
+  On entry: persists a 'waiting' StepExecution with the direct child IDs in its
+  handoff and a machine-readable child-state snapshot in its output.
+
+  When every direct child is already completed and none is parked (including
+  the no-children case), entry keeps the run active and advances straight to
+  the outgoing transition, which completes the waiting execution atomically
+  with the step advance. Otherwise entry schedules the incomplete children,
+  marks the run waiting, releases the pool slot and exits.
 
   On child completion (via `Scheduler.notify_task_completed/2`):
   `should_wake_parent/1` returns `:wake` when every child is completed and
@@ -28,22 +33,11 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
           | {:advance_parent, FSMData.t()}
           | {:error_parent, FSMData.t()}
   def handle_wait_children_entry(data) do
-    task_id = data.task.id
+    children = TaskHierarchy.get_children(data.task)
 
-    case TaskHierarchy.get_children(data.task) do
-      [] ->
-        Logger.info(
-          "[TaskOrchestrator:#{task_id}] wait_children entry with no children, advancing through outgoing transition"
-        )
-
-        case enter_without_children(data) do
-          {:ok, _changes} -> {:advance_parent, data}
-          {:error, _reason} -> {:error_parent, data}
-        end
-
-      children ->
-        enter_with_children(data, children)
-    end
+    if all_done_and_not_parked?(children),
+      do: enter_satisfied_wait(data, children),
+      else: enter_with_children(data, children)
   end
 
   @spec enter_with_children(FSMData.t(), [Task.t()]) ::
@@ -52,8 +46,7 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
     task_id = data.task.id
 
     with :ok <- ensure_children_have_workflows(children),
-         child_ids = Enum.map(children, & &1.id),
-         {:ok, %{child_runs: child_runs}} <- enter_waiting_state(data, child_ids, children),
+         {:ok, %{child_runs: child_runs}} <- enter_waiting_state(data, children),
          :ok <- schedule_all_children(child_runs) do
       Logger.info(
         "[TaskOrchestrator:#{task_id}] Entered wait_children, scheduled #{length(children)} children"
@@ -72,44 +65,53 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
     end
   end
 
-  @spec enter_without_children(FSMData.t()) :: {:ok, map()} | {:error, term()}
-  defp enter_without_children(data) do
-    with {:ok, task_run} <- Lookup.fetch(data.task_run_id) do
-      commit_completed_empty_wait(data, task_run, completed_empty_wait_attrs(data))
+  # The waiting execution is completed by the outgoing transition in the same
+  # transaction that advances the task, so a restart between the two resumes
+  # through the existing waiting-execution recovery instead of re-entering.
+  @spec enter_satisfied_wait(FSMData.t(), [Task.t()]) ::
+          {:advance_parent, FSMData.t()} | {:error_parent, FSMData.t()}
+  defp enter_satisfied_wait(data, children) do
+    task_id = data.task.id
+
+    case persist_satisfied_wait(data, children) do
+      {:ok, _execution} ->
+        Logger.info(
+          "[TaskOrchestrator:#{task_id}] wait_children entry found all #{length(children)} children done, advancing through outgoing transition"
+        )
+
+        {:advance_parent, data}
+
+      {:error, reason} ->
+        Logger.error(
+          "[TaskOrchestrator:#{task_id}] Failed in satisfied wait_children entry: #{inspect(reason)}"
+        )
+
+        ExecutionPool.release_slot(data.slot_id)
+        {:error_parent, %{data | slot_id: nil}}
     end
   end
 
-  defp completed_empty_wait_attrs(data) do
-    step = wait_children_step(data)
+  @spec persist_satisfied_wait(FSMData.t(), [Task.t()]) ::
+          {:ok, StepExecution.t()} | {:error, term()}
+  defp persist_satisfied_wait(data, children) do
+    attrs = waiting_execution_attrs(data, children)
 
-    %{
-      task_id: data.task.id,
-      task_run_id: data.task_run_id,
-      workflow_id: data.task.workflow_id,
-      step_id: data.task.current_step_id,
-      step_name: step.name,
-      step_type: step.step_type,
-      status: "completed",
-      handoff: %{"child_ids" => []},
-      output: snapshot_output(data.task, [])
-    }
+    with {:ok, task_run} <- Lookup.fetch(data.task_run_id) do
+      Repo.transaction(fn -> commit_satisfied_wait(data, attrs, task_run) end)
+    end
   end
 
-  defp commit_completed_empty_wait(data, task_run, attrs) do
-    Repo.transaction(fn ->
-      with {:ok, execution} <- Repo.insert(waiting_step_execution_changeset(data, attrs)),
-           {:ok, updated_task_run} <- update_latest_step_execution(task_run, execution.id) do
-        %{execution: execution, task_run: updated_task_run}
-      else
-        {:error, reason} -> Repo.rollback(reason)
-      end
-    end)
-  end
-
-  defp update_latest_step_execution(task_run, execution_id) do
-    task_run
-    |> TaskRun.update_changeset(%{latest_step_execution_id: execution_id})
-    |> Repo.update()
+  @spec commit_satisfied_wait(FSMData.t(), map(), TaskRun.t()) :: StepExecution.t()
+  defp commit_satisfied_wait(data, attrs, task_run) do
+    with {:ok, execution} <- Repo.insert(waiting_step_execution_changeset(data, attrs)),
+         {:ok, _task_run} <-
+           task_run
+           |> TaskRun.update_changeset(%{latest_step_execution_id: execution.id})
+           |> Repo.update() do
+      execution
+    else
+      {:error, reason} -> Repo.rollback(reason)
+    end
   end
 
   @spec should_wake_parent(Task.t()) :: :wake | :no_wake | {:error, term()}
@@ -131,13 +133,20 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
       else: {:error, :child_missing_workflow}
   end
 
-  @spec enter_waiting_state(FSMData.t(), [binary()], [Task.t()]) ::
-          {:ok, map()} | {:error, term()}
-  defp enter_waiting_state(data, child_ids, children) do
-    step = wait_children_step(data)
-    output = snapshot_output(data.task, children)
+  @spec enter_waiting_state(FSMData.t(), [Task.t()]) :: {:ok, map()} | {:error, term()}
+  defp enter_waiting_state(data, children) do
+    attrs = waiting_execution_attrs(data, children)
 
-    attrs = %{
+    with {:ok, task_run} <- Lookup.fetch(data.task_run_id) do
+      Repo.transaction(fn -> commit_waiting_state(data, attrs, task_run, children) end)
+    end
+  end
+
+  @spec waiting_execution_attrs(FSMData.t(), [Task.t()]) :: map()
+  defp waiting_execution_attrs(data, children) do
+    step = wait_children_step(data)
+
+    %{
       task_id: data.task.id,
       task_run_id: data.task_run_id,
       workflow_id: data.task.workflow_id,
@@ -145,13 +154,9 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
       step_name: step.name,
       step_type: step.step_type,
       status: "waiting",
-      handoff: %{"child_ids" => child_ids},
-      output: output
+      handoff: %{"child_ids" => Enum.map(children, & &1.id)},
+      output: snapshot_output(data.task, children)
     }
-
-    with {:ok, task_run} <- Lookup.fetch(data.task_run_id) do
-      Repo.transaction(fn -> commit_waiting_state(data, attrs, task_run, children) end)
-    end
   end
 
   @spec wait_children_step(FSMData.t()) :: WorkflowStep.t() | map()
@@ -434,13 +439,14 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
 
   @spec all_done_and_not_parked?([Task.t()]) :: boolean()
   defp all_done_and_not_parked?(children) do
-    Enum.all?(children, fn task ->
-      not is_nil(task.completed_at) and not has_waiting_execution?(task.id)
-    end)
+    Enum.all?(children, &(not is_nil(&1.completed_at))) and none_parked?(children)
   end
 
-  @spec has_waiting_execution?(binary()) :: boolean()
-  defp has_waiting_execution?(task_id) do
-    Repo.exists?(from(e in StepExecution, where: e.task_id == ^task_id and e.status == "waiting"))
+  @spec none_parked?([Task.t()]) :: boolean()
+  defp none_parked?(children) do
+    children
+    |> Enum.map(& &1.id)
+    |> parked_task_id_map()
+    |> map_size() == 0
   end
 end

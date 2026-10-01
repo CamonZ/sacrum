@@ -110,7 +110,7 @@ steps do not produce a structured output execution.
 | `execute` | Default. Runs the step's prompt and produces output. |
 | `evaluate` | Assesses output of a previous step. Emits structured JSON matching `output_schema`. |
 | `route` | Local deterministic decision step. Requires a valid `route_config`; evaluates the preceding step output and task context to choose a declared intra- or inter-workflow transition, with an optional handoff. It does not run a prompt on a daemon. |
-| `wait_children` | Parks the parent run while child tasks execute, persists a child-state JSON snapshot on the `StepExecution.output`, then resumes when all children complete. |
+| `wait_children` | Persists a child-state JSON snapshot on `StepExecution.output`; parks the parent while incomplete direct children execute, or advances immediately when all direct children are already complete and none is parked. |
 | `human_input` | Parks the run for generic human response. It has no config yet: the submitted response is stored on the step execution without schema validation, and then the same run resumes. |
 | `stop` | Ends the current TaskRun at a run boundary without completing the task. The next workflow run advances through its single outgoing transition before dispatching the next executable step. It is never sent to the daemon. |
 

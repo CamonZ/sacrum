@@ -19,6 +19,79 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildrenTest do
   import Ecto.Query
 
   describe "handle_wait_children_entry/1 with dependencies" do
+    test "advances immediately when all children are completed and not parked" do
+      ctx = setup_workflows()
+      parent = create_parent(ctx)
+
+      completed_child_1 =
+        ctx
+        |> create_child(parent, "Completed Child 1")
+        |> complete_task()
+
+      completed_child_2 =
+        ctx
+        |> create_child(parent, "Completed Child 2")
+        |> complete_task()
+
+      track_orchestrator_cleanup([parent.id, completed_child_1.id, completed_child_2.id])
+
+      data = build_parent_fsm_data(ctx, parent)
+      assert {:advance_parent, _} = WaitChildren.handle_wait_children_entry(data)
+
+      # The outgoing transition completes this execution atomically with the
+      # step advance; entry only records it and keeps the run active.
+      execution = waiting_execution(parent.id)
+      assert execution.step_type == :wait_children
+
+      assert Enum.sort(execution.handoff["child_ids"]) ==
+               Enum.sort([completed_child_1.id, completed_child_2.id])
+
+      snapshot = Jason.decode!(execution.output)
+      assert snapshot["counts"]["total_direct_children"] == 2
+      assert snapshot["counts"]["direct_done"] == 2
+
+      assert snapshot["direct_children"]
+             |> Enum.map(& &1["state"])
+             |> Enum.sort() == ["done", "done"]
+
+      parent_run = Repo.get!(TaskRun, data.task_run_id)
+      assert parent_run.latest_step_execution_id == execution.id
+      refute parent_run.status == :waiting
+
+      assert active_task_runs(completed_child_1.id) == []
+      assert active_task_runs(completed_child_2.id) == []
+    end
+
+    test "does not advance when a completed child still has a waiting execution" do
+      ctx = setup_workflows()
+      parent = create_parent(ctx)
+
+      completed_child =
+        ctx
+        |> create_child(parent, "Parked Completed Child")
+        |> complete_task()
+
+      {:ok, _waiting_execution} =
+        Accounts.StepExecutions.insert(ctx.user.id, %{
+          "task_id" => completed_child.id,
+          "project_id" => ctx.project.id,
+          "workflow_id" => ctx.child_workflow.id,
+          "step_name" => "child_wait",
+          "status" => "waiting"
+        })
+
+      track_orchestrator_cleanup([parent.id, completed_child.id])
+
+      data = build_parent_fsm_data(ctx, parent)
+      assert {:stop_parent, _} = WaitChildren.handle_wait_children_entry(data)
+
+      assert Repo.exists?(
+               from(e in StepExecution,
+                 where: e.task_id == ^parent.id and e.status == "waiting"
+               )
+             )
+    end
+
     test "keeps completed children in handoff but starts only incomplete children" do
       ctx = setup_workflows()
       parent = create_parent(ctx)
