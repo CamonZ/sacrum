@@ -15,6 +15,10 @@ defmodule Sacrum.Application do
       # Daemon presence tracking
       Sacrum.DaemonRegistry,
       {Registry, keys: :unique, name: Sacrum.DaemonConnectionRegistry},
+      # Per-execution harness session-log ingestion; starts before and stops
+      # after the Endpoint that serves its requests
+      {Registry, keys: :unique, name: Sacrum.Accounts.SessionLogs.IngestionRegistry},
+      {DynamicSupervisor, name: Sacrum.Accounts.SessionLogs.IngestionSupervisor},
       # Start to serve requests before Absinthe.Subscription
       SacrumWeb.Endpoint,
       # Absinthe subscriptions (must come after Endpoint)

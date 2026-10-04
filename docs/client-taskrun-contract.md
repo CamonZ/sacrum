@@ -503,7 +503,7 @@ Handle these events for run-aware GUI/CLI state:
 | `task_run_updated` | Upsert TaskRun and replace `task.runControls` with payload `run_controls`; TaskRun events remain authoritative replacement updates after task events. |
 | `task_run_step_changed` | Emitted whenever a task's `current_step_id` changes while a TaskRun exists, and at run-end paths (completion, retry exhaustion, stop). Lets pipeline views decrement the `from_step_id` bucket and increment the `to_step_id` bucket without refetching. |
 | `task_step_changed` | Emitted whenever a task's `current_step_id` changes outside orchestrator execution (manual `assign_workflow`, `advance_to_step`, `move_to_step`). Same pipeline use as `task_run_step_changed`, without `task_run_id` / `status` since no run is involved. |
-| `session_log_created` | Append log to the matching step execution. New events include the required `harness:<event_id>` logical key. |
+| `session_log_created` | Append log to the matching step execution. New events include the required `harness:<event_id>` logical key. Streaming text deltas arrive here without a stored row and are superseded by the item's persisted final snapshot; a delta may be delivered more than once. |
 | `session_log_updated` | Historical row updates only; harness ingestion retries emit no log update. |
 | `code_ref_created` / `code_ref_updated` / `code_ref_deleted` | Upsert/remove task or section code references in detail/evidence stores by id. |
 | `artifact_created` / `artifact_updated` / `artifact_deleted` | Upsert/remove project-scoped file rows by id, including full file bodies. |

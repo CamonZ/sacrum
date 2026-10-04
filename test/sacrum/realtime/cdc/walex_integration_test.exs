@@ -1126,7 +1126,7 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
       :ok = subscribe_project(project.id)
 
       {:ok, log} =
-        SessionLogs.insert(
+        Accounts.SessionLogs.insert(
           user.id,
           Sacrum.HarnessFixture.with_event(%{
             step_execution_id: execution.id,
@@ -1145,6 +1145,65 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
         },
         1_000
       )
+    end)
+  end
+
+  test "text deltas are published directly and only the final snapshot is projected" do
+    with_project(fn user, project ->
+      {workflow, step, _next_step} = create_workflow_with_steps(user, project)
+      task = create_task(project, "CDC text deltas", %{workflow_id: workflow.id})
+
+      {:ok, execution} =
+        %StepExecution{user_id: user.id, task_id: task.id, project_id: project.id}
+        |> StepExecution.create_changeset(%{
+          task_id: task.id,
+          workflow_id: workflow.id,
+          step_id: step.id,
+          step_name: step.name,
+          status: "started"
+        })
+        |> Repo.insert()
+
+      :ok = subscribe_project(project.id)
+
+      ingest = fn event ->
+        Accounts.SessionLogs.insert(user.id, Map.put(event, :step_execution_id, execution.id))
+      end
+
+      for {id, text} <- [{"delta-1", "Hel"}, {"delta-2", "lo"}] do
+        delta = Sacrum.HarnessFixture.text(id, "delta", text)
+        assert {:ok, %{id: log_id}} = ingest.(delta)
+
+        assert_project_broadcast(
+          "session_log_created",
+          %{
+            id: log_id,
+            step_execution_id: execution.id,
+            project_id: project.id,
+            content: delta.content,
+            logical_key: delta.logical_key
+          }
+        )
+      end
+
+      snapshot = Sacrum.HarnessFixture.text("snapshot", "snapshot", "Hello", sequence: 3)
+      assert {:ok, log} = ingest.(snapshot)
+
+      assert_project_broadcast(
+        "session_log_created",
+        %{id: log.id, content: snapshot.content, logical_key: snapshot.logical_key},
+        1_000
+      )
+
+      refute_project_broadcast("session_log_created", 200)
+
+      assert {:ok, _late} = ingest.(Sacrum.HarnessFixture.text("late", "delta", "!"))
+      refute_project_broadcast("session_log_created", 200)
+
+      assert [%{id: persisted_id}] =
+               SessionLogs.all(conditions: [step_execution_id: execution.id])
+
+      assert persisted_id == log.id
     end)
   end
 

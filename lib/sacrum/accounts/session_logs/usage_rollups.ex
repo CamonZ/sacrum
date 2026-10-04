@@ -1,72 +1,71 @@
 defmodule Sacrum.Accounts.SessionLogs.UsageRollups do
   @moduledoc """
-  Rolls normalized harness session-log usage into StepExecution.
+  Rolls normalized harness session-log usage into StepExecution counters.
+
+  Totals are folded one persisted log at a time, so the same state can be seeded
+  from history and then advanced incrementally as new logs commit.
   """
 
-  import Ecto.Query
-
   alias Sacrum.Accounts.SessionLogs.HarnessEventV1Usage
-  alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.{SessionLog, StepExecution}
+  alias Sacrum.Repo.Schemas.SessionLog
 
-  @doc "Refresh usage while the caller holds the execution row lock."
-  @spec refresh_step_execution(StepExecution.t()) ::
-          {:ok, StepExecution.t()} | {:error, Ecto.Changeset.t()}
-  def refresh_step_execution(%StepExecution{} = execution) do
-    parsed_logs = parsed_logs(execution.id)
+  @type usage :: %{
+          input_tokens: non_neg_integer(),
+          cache_read_input_tokens: non_neg_integer(),
+          output_tokens: non_neg_integer(),
+          total_tokens: non_neg_integer()
+        }
 
-    execution
-    |> StepExecution.update_changeset(
-      refresh_attrs(aggregate_usage(parsed_logs), deterministic_context(parsed_logs))
-    )
-    |> Repo.update()
-  end
+  @type t :: %{total: usage(), contexts: %{String.t() => map()}}
 
-  defp parsed_logs(step_execution_id) do
-    SessionLog
-    |> where([log], log.step_execution_id == ^step_execution_id and log.format == "harness")
-    |> Repo.all()
-    |> Enum.map(&{&1, rollup_from_log(&1)})
-  end
+  @spec new() :: t()
+  def new, do: %{total: empty_usage(), contexts: %{}}
 
-  defp aggregate_usage(parsed_logs) do
-    Enum.reduce(parsed_logs, empty_usage(), fn
-      {_log, %{delta: usage}}, acc when not is_nil(usage) -> merge_usage(acc, usage)
-      {_log, _rollup}, acc -> acc
-    end)
-  end
+  @doc "Fold one persisted log into the rollup."
+  @spec add(t(), SessionLog.t()) :: t()
+  def add(rollup, %SessionLog{format: "harness"} = log) do
+    case HarnessEventV1Usage.parse(log) do
+      {:ok, event} ->
+        rollup
+        |> add_delta(harness_delta_usage(event.turn_delta))
+        |> add_context(log, event, harness_context_usage(event.session_snapshot))
 
-  defp deterministic_context(parsed_logs) do
-    harness_candidates =
-      parsed_logs
-      |> Enum.reduce(%{}, fn
-        {log, %{context: context, stream_id: stream_id, sequence: sequence}}, candidates
-        when not is_nil(context) ->
-          candidate =
-            log
-            |> context_candidate(context)
-            |> Map.put(:sequence, sequence)
-
-          Map.update(candidates, stream_id, candidate, fn current ->
-            later_stream_candidate(current, candidate)
-          end)
-
-        {_log, _rollup}, candidates ->
-          candidates
-      end)
-      |> Map.values()
-
-    case Enum.max_by(harness_candidates, & &1.insertion_order, fn -> nil end) do
-      nil -> empty_usage()
-      candidate -> candidate.usage
+      :error ->
+        rollup
     end
   end
 
-  defp context_candidate(log, usage) do
-    %{
+  def add(rollup, %SessionLog{}), do: rollup
+
+  @doc "StepExecution attributes for the rollup."
+  @spec attrs(t()) :: map()
+  def attrs(%{total: total, contexts: contexts}) do
+    latest =
+      contexts
+      |> Map.values()
+      |> Enum.max_by(& &1.insertion_order, fn -> %{usage: empty_usage()} end)
+
+    refresh_attrs(total, latest.usage)
+  end
+
+  defp add_delta(rollup, nil), do: rollup
+  defp add_delta(rollup, usage), do: %{rollup | total: merge_usage(rollup.total, usage)}
+
+  defp add_context(rollup, _log, _event, nil), do: rollup
+
+  defp add_context(rollup, log, event, usage) do
+    candidate = %{
+      sequence: event.sequence,
       insertion_order: {DateTime.to_unix(log.inserted_at, :microsecond), log.id},
       usage: usage
     }
+
+    contexts =
+      Map.update(rollup.contexts, event.stream_id, candidate, fn current ->
+        later_stream_candidate(current, candidate)
+      end)
+
+    %{rollup | contexts: contexts}
   end
 
   defp later_stream_candidate(current, candidate) do
@@ -75,21 +74,6 @@ defmodule Sacrum.Accounts.SessionLogs.UsageRollups do
       candidate
     else
       current
-    end
-  end
-
-  defp rollup_from_log(%SessionLog{format: "harness"} = log) do
-    case HarnessEventV1Usage.parse(log) do
-      {:ok, event} ->
-        %{
-          stream_id: event.stream_id,
-          sequence: event.sequence,
-          delta: harness_delta_usage(event.turn_delta),
-          context: harness_context_usage(event.session_snapshot)
-        }
-
-      :error ->
-        nil
     end
   end
 

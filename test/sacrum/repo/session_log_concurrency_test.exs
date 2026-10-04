@@ -3,11 +3,12 @@ defmodule Sacrum.Repo.SessionLogConcurrencyTest do
 
   import Ecto.Query
   alias Ecto.Adapters.SQL.Sandbox
+  alias Sacrum.Accounts
   alias Sacrum.Repo
   alias Sacrum.Repo.{Projects, SessionLogs, StepExecutions, Tasks, Users, Workflows}
   alias Sacrum.Repo.Schemas.{SessionLog, StepExecution}
 
-  test "independent connections serialize concurrent retries and out-of-order usage" do
+  test "the ingestion process serializes concurrent retries and out-of-order usage" do
     context =
       Sandbox.unboxed_run(Repo, fn ->
         unique = System.unique_integer([:positive])
@@ -60,8 +61,7 @@ defmodule Sacrum.Repo.SessionLogConcurrencyTest do
                       :write -> :ok
                     end
 
-                    SessionLogs.insert(context.user.id, %{
-                      project_id: context.project.id,
+                    Accounts.SessionLogs.insert(context.user.id, %{
                       step_execution_id: context.execution.id,
                       logical_key: "harness:" <> event["event_id"],
                       content: Jason.encode!(event)
@@ -79,7 +79,21 @@ defmodule Sacrum.Repo.SessionLogConcurrencyTest do
 
             assert length(Enum.uniq(backends)) == 3
             Enum.each(writers, &send(&1.pid, :write))
-            await_blocked(backends, System.monotonic_time(:millisecond) + 5_000)
+            # Writers queue in the execution's ingestion process, so only the
+            # write it is handling reaches the row lock. That write cannot finish
+            # while the lock is held, so once the other two calls are queued
+            # behind it no further writer can reach the lock.
+            deadline = System.monotonic_time(:millisecond) + 5_000
+
+            await(deadline, "no writer reached the execution lock", fn ->
+              blocked_count(backends) > 0
+            end)
+
+            await(deadline, "the other writers did not queue in the ingestion process", fn ->
+              queued_calls(context.execution.id) == 2
+            end)
+
+            assert blocked_count(backends) == 1
             writers
           end)
 
@@ -103,7 +117,21 @@ defmodule Sacrum.Repo.SessionLogConcurrencyTest do
     end)
   end
 
-  defp await_blocked(backends, deadline) do
+  defp await(deadline, message, done?) do
+    unless done?.() do
+      assert System.monotonic_time(:millisecond) < deadline, message
+      await(deadline, message, done?)
+    end
+  end
+
+  defp queued_calls(execution_id) do
+    case Registry.lookup(Sacrum.Accounts.SessionLogs.IngestionRegistry, execution_id) do
+      [{pid, _value}] -> pid |> Process.info(:message_queue_len) |> elem(1)
+      [] -> 0
+    end
+  end
+
+  defp blocked_count(backends) do
     Repo.query!("SELECT pg_stat_clear_snapshot()")
 
     %{rows: [[count]]} =
@@ -112,12 +140,7 @@ defmodule Sacrum.Repo.SessionLogConcurrencyTest do
         [backends]
       )
 
-    if count != length(backends) do
-      assert System.monotonic_time(:millisecond) < deadline,
-             "writers did not all contend on execution lock"
-
-      await_blocked(backends, deadline)
-    end
+    count
   end
 
   defp event(id, sequence, input) do

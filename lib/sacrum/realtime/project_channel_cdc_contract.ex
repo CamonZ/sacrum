@@ -612,7 +612,7 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
       payload_keys: @session_log_event_payload_keys,
       schema_version: @schema_version,
       completeness:
-        "Complete log projection keyed by step_execution_id; clients append this event."
+        "Complete log projection keyed by step_execution_id; clients append this event. Streaming text deltas are published directly by session-log ingestion with the same payload and no stored row."
     },
     %{
       event: "session_log_updated",
