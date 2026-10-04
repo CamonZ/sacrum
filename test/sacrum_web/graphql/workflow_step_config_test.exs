@@ -396,4 +396,65 @@ defmodule SacrumWeb.Graphql.WorkflowStepConfigTest do
     assert [%{"message" => message}] = result["errors"]
     assert message =~ "Unknown argument \"prompt\""
   end
+
+  test "llm_inference session config and execution session ids round-trip",
+       %{conn: conn, user: user, workflow: workflow} do
+    config = %{"prompt" => "Implement", "session" => %{"name" => "implementer", "mode" => "new"}}
+
+    created =
+      conn
+      |> authenticate(user)
+      |> graphql("""
+      mutation { createWorkflowStep(workflowId: "#{workflow.id}", name: "implement", stepType: "llm_inference", harness: "codex", config: #{json_arg(config)}) { id config { ... on LlmInferenceStepConfig { session { name mode } } } } }
+      """)
+      |> json_response(200)
+
+    refute created["errors"]
+    step = created["data"]["createWorkflowStep"]
+    assert step["config"]["session"] == %{"name" => "implementer", "mode" => "new"}
+
+    {:ok, task} =
+      Accounts.Tasks.insert(user.id, workflow.project_id, %{title: "Session", level: "ticket"})
+
+    execution =
+      %Sacrum.Repo.Schemas.StepExecution{
+        user_id: user.id,
+        project_id: workflow.project_id,
+        task_id: task.id,
+        workflow_id: workflow.id,
+        step_id: step["id"],
+        step_name: "implement",
+        status: "started",
+        session_name: "implementer",
+        resume_session_id: "native-0"
+      }
+      |> Sacrum.Repo.insert!()
+
+    updated =
+      conn
+      |> recycle()
+      |> authenticate(user)
+      |> graphql("""
+      mutation { updateStepExecution(id: "#{execution.id}", nativeSessionId: "native-1") { sessionName resumeSessionId nativeSessionId } }
+      """)
+      |> json_response(200)
+
+    assert updated["data"]["updateStepExecution"] == %{
+             "sessionName" => "implementer",
+             "resumeSessionId" => "native-0",
+             "nativeSessionId" => "native-1"
+           }
+
+    rejected =
+      conn
+      |> recycle()
+      |> authenticate(user)
+      |> graphql("""
+      mutation { updateStepExecution(id: "#{execution.id}", resumeSessionId: "forged") { id } }
+      """)
+      |> json_response(200)
+
+    assert [%{"message" => message}] = rejected["errors"]
+    assert message =~ "Unknown argument \"resumeSessionId\""
+  end
 end

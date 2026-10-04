@@ -22,7 +22,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
 
   alias Sacrum.Accounts.StepExecutions
 
-  alias Sacrum.Orchestrator.{ExecutionConfig, ExecutionHistory, PromptContext}
+  alias Sacrum.Orchestrator.{ExecutionConfig, ExecutionHistory, PromptContext, SessionBinding}
 
   alias Sacrum.Orchestrator.TaskRuns.Failure
   alias Sacrum.Realtime.CommandBroadcaster
@@ -118,8 +118,21 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   end
 
   defp dispatch_new_execution(task, step, task_run, handoff) do
-    with {:ok, config} <- render_config(task, step, task_run, handoff) do
-      commit_and_broadcast_dispatch(task, step, task_run, handoff, config)
+    with {:ok, config} <- render_config(task, step, task_run, handoff),
+         {:ok, session} <- resolve_session(task_run, step, config) do
+      commit_and_broadcast_dispatch(task, step, task_run, handoff, config, session)
+    end
+  end
+
+  # A named session that cannot be resumed fails the dispatch rather than
+  # silently starting another conversation.
+  @spec resolve_session(TaskRun.t(), WorkflowStep.t(), Config.t()) ::
+          {:ok, SessionBinding.resolution()} | {:error, term()}
+  defp resolve_session(task_run, step, config) do
+    with {:error, reason} <- SessionBinding.resolve(task_run, step, config) do
+      Logger.error("[ExecutionDispatcher] create_and_dispatch failed: #{inspect(reason)}")
+      mark_dispatch_failure(task_run, reason)
+      {:error, reason}
     end
   end
 
@@ -144,11 +157,12 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
           WorkflowStep.t(),
           TaskRun.t(),
           handoff(),
-          Config.t()
+          Config.t(),
+          SessionBinding.resolution()
         ) ::
           {:ok, StepExecution.t()} | {:error, term()}
-  defp commit_and_broadcast_dispatch(task, step, task_run, handoff, config) do
-    case insert_and_stamp(task, step, task_run, handoff, config) do
+  defp commit_and_broadcast_dispatch(task, step, task_run, handoff, config, session) do
+    case insert_and_stamp(task, step, task_run, handoff, config, session) do
       {:ok, %{execution: execution, task: task, task_run: updated_task_run}} ->
         case broadcast_dispatch(task, step, execution, updated_task_run) do
           {:ok, _execution} = result ->
@@ -175,15 +189,23 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   # TaskRun cursor/status, and updates task timestamps/derived status in one
   # transaction. The task changeset is built after the execution insert so
   # derive/1 sees the new execution.
-  @spec insert_and_stamp(Task.t(), WorkflowStep.t(), TaskRun.t(), handoff(), Config.t()) ::
+  @spec insert_and_stamp(
+          Task.t(),
+          WorkflowStep.t(),
+          TaskRun.t(),
+          handoff(),
+          Config.t(),
+          SessionBinding.resolution()
+        ) ::
           {:ok, map()} | {:error, atom(), term(), map()}
-  defp insert_and_stamp(task, step, task_run, handoff, config) do
+  defp insert_and_stamp(task, step, task_run, handoff, config, session) do
     Multi.new()
     |> Multi.insert(
       :execution,
       task
       |> execution_changeset(step, task_run, handoff, model_attrs(config))
       |> StepExecution.put_config(config)
+      |> StepExecution.put_session(session.name, session.resume_session_id)
     )
     |> Multi.update(:task_run, fn %{execution: execution} ->
       TaskRun.update_changeset(task_run, %{
