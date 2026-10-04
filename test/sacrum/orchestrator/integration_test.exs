@@ -369,6 +369,14 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
     do_wait_until(fun, description, deadline)
   end
 
+  defp wait_for_queue_length(expected, timeout \\ 2000) do
+    wait_until(
+      fn -> ExecutionPool.pool_status().queue_length == expected end,
+      "execution pool queue length #{expected}",
+      timeout
+    )
+  end
+
   defp do_wait_for_execution_count(task_id, expected, deadline) do
     actual = length(executions_for_task(task_id))
 
@@ -621,6 +629,50 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
       assert second.id != first_exec.id
 
       assert_run_step_for(second.id, "step_2")
+    end
+
+    test "a mid-run daemon limit change blocks the stale orchestrator's next slot request" do
+      %{user: user, project: project, steps: [_s1, s2, _s3], task: task} =
+        setup_linear_workflow(step_count: 3)
+
+      daemon_id = Sacrum.Repo.Schemas.Task.workspace_daemon(task)
+      {:ok, _daemon} = Accounts.Daemons.set_max_concurrency(user.id, daemon_id, 2)
+
+      subscribe_daemon(task)
+      pid = start_orchestrator(task, user)
+      wait_for_state(pid, :executing)
+      first_exec = latest_started_execution(task.id)
+      assert_run_step_for(first_exec.id, "step_1")
+
+      {:ok, held_slot} =
+        ExecutionPool.request_slot(self(), :infinity,
+          daemon_id: daemon_id,
+          daemon_max_concurrency: 2,
+          attempt_id: Ecto.UUID.generate()
+        )
+
+      on_exit(fn -> ExecutionPool.release_slot(held_slot) end)
+      assert ExecutionPool.pool_status().per_daemon[daemon_id].in_use == 2
+
+      {:ok, _daemon} = Accounts.Daemons.set_max_concurrency(user.id, daemon_id, 1)
+      assert ExecutionPool.pool_status().per_daemon[daemon_id].configured == 1
+
+      simulate_daemon_completion(task.id, project.id, "step 1 output")
+      wait_for_queue_length(1)
+
+      assert Repo.get!(Sacrum.Repo.Schemas.Task, task.id).current_step_id == s2.id
+      assert ExecutionPool.pool_status().per_daemon[daemon_id].in_use == 1
+      assert ExecutionPool.pool_status().per_daemon[daemon_id].configured == 1
+      refute_receive %Phoenix.Socket.Broadcast{event: "run_step"}, 100
+
+      :ok = ExecutionPool.release_slot(held_slot)
+      wait_for_state(pid, :executing)
+      second_exec = latest_started_execution(task.id)
+      assert second_exec.step_name == "step_2"
+      assert_run_step_for(second_exec.id, "step_2")
+      assert ExecutionPool.pool_status().per_daemon[daemon_id].in_use == 1
+
+      simulate_daemon_completion(task.id, project.id, "step 2 output")
     end
   end
 

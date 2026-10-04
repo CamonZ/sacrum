@@ -80,6 +80,15 @@ defmodule Sacrum.Orchestrator.ExecutionPool do
     GenServer.call(server, {:release_task_group, task_group_id})
   end
 
+  @doc "Updates the authoritative daemon admission limit without revoking active slots."
+  @spec update_daemon_limit(String.t(), pos_integer() | nil) :: :ok
+  def update_daemon_limit(daemon_id, limit),
+    do: update_daemon_limit(__MODULE__, daemon_id, limit)
+
+  @spec update_daemon_limit(GenServer.server(), String.t(), pos_integer() | nil) :: :ok
+  def update_daemon_limit(server, daemon_id, limit) when is_binary(daemon_id),
+    do: GenServer.call(server, {:update_daemon_limit, daemon_id, normalize_limit(limit)})
+
   @impl true
   def init(_opts) do
     state = %{
@@ -163,6 +172,11 @@ defmodule Sacrum.Orchestrator.ExecutionPool do
     {:reply, :ok, %{state | task_groups: release_task_group_if_idle(state, task_group_id)}}
   end
 
+  def handle_call({:update_daemon_limit, daemon_id, limit}, _from, state) do
+    state = put_in(state, [:daemon_limits, daemon_id], limit)
+    {:reply, :ok, serve_queue(state)}
+  end
+
   @impl true
   def handle_info(:retry_queue, state) do
     state = serve_queue(%{state | retry_timer: nil})
@@ -235,7 +249,11 @@ defmodule Sacrum.Orchestrator.ExecutionPool do
 
   defp remember_daemon_limit(state, %{daemon_id: daemon_id, daemon_max_concurrency: limit})
        when is_binary(daemon_id) do
-    %{state | daemon_limits: Map.put(state.daemon_limits, daemon_id, normalize_limit(limit))}
+    if Map.has_key?(state.daemon_limits, daemon_id) do
+      state
+    else
+      %{state | daemon_limits: Map.put(state.daemon_limits, daemon_id, normalize_limit(limit))}
+    end
   end
 
   defp remember_daemon_limit(state, _request), do: state
@@ -379,7 +397,6 @@ defmodule Sacrum.Orchestrator.ExecutionPool do
         in_use: Map.put(state.in_use, slot_id, entry),
         in_use_by_scope: increment_scope(state.in_use_by_scope, scope),
         in_use_by_daemon: increment_daemon(state.in_use_by_daemon, daemon_id),
-        daemon_limits: put_limit(state.daemon_limits, daemon_id, request.daemon_max_concurrency),
         monitors: Map.put(state.monitors, monitor_ref, slot_id)
     }
 
@@ -516,14 +533,6 @@ defmodule Sacrum.Orchestrator.ExecutionPool do
       count -> Map.put(counts, id, count - 1)
     end
   end
-
-  defp put_limit(limits, nil, _limit), do: limits
-  defp put_limit(limits, id, nil), do: Map.put(limits, id, nil)
-
-  defp put_limit(limits, id, limit) when is_integer(limit) and limit > 0,
-    do: Map.put(limits, id, limit)
-
-  defp put_limit(limits, _id, _limit), do: limits
 
   defp normalize_request(opts) do
     %{

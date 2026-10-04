@@ -278,6 +278,63 @@ defmodule Sacrum.Orchestrator.ExecutionPoolTest do
     end
   end
 
+  describe "daemon limit updates" do
+    test "stale nil and old limits cannot loosen an updated cap or revoke active slots", %{
+      pool: pool
+    } do
+      slots =
+        Enum.map(1..2, fn _ ->
+          {:ok, slot} = request_slot(pool, self(), :infinity, daemon_max_concurrency: 3)
+          slot
+        end)
+
+      assert :ok = ExecutionPool.update_daemon_limit(pool, "test-daemon", 1)
+
+      parent = self()
+
+      Enum.each([nil, 3], fn stale_limit ->
+        {:ok, _waiter} =
+          Task.start(fn ->
+            result =
+              request_slot(pool, self(), :infinity,
+                daemon_max_concurrency: stale_limit,
+                attempt_id: Ecto.UUID.generate()
+              )
+
+            send(parent, {:stale_request_result, self(), result})
+
+            receive do
+              :release ->
+                {:ok, slot_id} = result
+                ExecutionPool.release_slot(pool, slot_id)
+            end
+          end)
+      end)
+
+      wait_for_queue(pool, 2)
+      assert ExecutionPool.pool_status(pool).in_use_by_daemon == %{"test-daemon" => 2}
+      assert ExecutionPool.pool_status(pool).per_daemon["test-daemon"].configured == 1
+      refute_receive {:stale_request_result, _, _}, 50
+
+      :ok = ExecutionPool.release_slot(pool, hd(slots))
+      refute_receive {:stale_request_result, _, _}, 50
+
+      :ok = ExecutionPool.release_slot(pool, List.last(slots))
+      assert_receive {:stale_request_result, first_waiter, {:ok, first_slot}}, 1000
+      assert ExecutionPool.pool_status(pool).in_use_by_daemon == %{"test-daemon" => 1}
+      assert ExecutionPool.pool_status(pool).per_daemon["test-daemon"].configured == 1
+      assert ExecutionPool.pool_status(pool).queue_length == 1
+
+      :ok = ExecutionPool.release_slot(pool, first_slot)
+      assert_receive {:stale_request_result, second_waiter, {:ok, second_slot}}, 1000
+
+      send(first_waiter, :release)
+      send(second_waiter, :release)
+      assert :ok = ExecutionPool.release_slot(pool, second_slot)
+      assert ExecutionPool.pool_status(pool).in_use_count == 0
+    end
+  end
+
   describe "root-scoped concurrency" do
     test "does not grant more slots than a root limit", %{pool: pool} do
       parent = self()

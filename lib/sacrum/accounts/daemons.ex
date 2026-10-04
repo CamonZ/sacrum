@@ -7,6 +7,7 @@ defmodule Sacrum.Accounts.Daemons do
     default_order: [asc: :inserted_at]
 
   alias Sacrum.DaemonHealth
+  alias Sacrum.Orchestrator.ExecutionPool
   alias Sacrum.Repo.Daemons, as: DaemonsRepo
   alias Sacrum.Repo.Schemas.Daemon
 
@@ -50,7 +51,7 @@ defmodule Sacrum.Accounts.Daemons do
           {:ok, Daemon.t()} | {:error, :not_found | Ecto.Changeset.t()}
   def set_max_concurrency(user_id, daemon_id, max_concurrency) do
     with {:ok, daemon} <- get_by(user_id, conditions: [id: daemon_id]) do
-      DaemonsRepo.update_max_concurrency(daemon, max_concurrency)
+      update_max_concurrency(daemon, max_concurrency)
     end
   end
 
@@ -59,7 +60,14 @@ defmodule Sacrum.Accounts.Daemons do
           {:ok, Daemon.t()} | {:error, :not_found | Ecto.Changeset.t()}
   def clear_max_concurrency(user_id, daemon_id) do
     with {:ok, daemon} <- get_by(user_id, conditions: [id: daemon_id]) do
-      DaemonsRepo.update_max_concurrency(daemon, nil)
+      update_max_concurrency(daemon, nil)
+    end
+  end
+
+  defp update_max_concurrency(daemon, max_concurrency) do
+    with {:ok, updated} <- DaemonsRepo.update_max_concurrency(daemon, max_concurrency) do
+      :ok = ExecutionPool.update_daemon_limit(updated.id, updated.max_concurrency)
+      {:ok, updated}
     end
   end
 
