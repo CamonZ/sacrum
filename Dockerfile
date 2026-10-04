@@ -1,14 +1,14 @@
 # Find eligible builder and runner images on Docker Hub. We use Ubuntu/Debian
 # instead of Alpine to avoid DNS resolution issues in production.
 #
-# https://hub.docker.com/r/hexpm/elixir/tags?name=1.19.4-erlang-28.0-debian-bookworm-
+# https://hub.docker.com/r/hexpm/elixir/tags?name=1.20.4-erlang-29.1.1-debian-bookworm-20260918-slim
 # https://hub.docker.com/_/debian?tab=tags&name=bookworm-slim
 #
 # https://hexdocs.pm/phoenix/releases.html
 #
-ARG ELIXIR_VERSION=1.19.5
-ARG OTP_VERSION=28.4.1
-ARG DEBIAN_VERSION=bookworm-20260316-slim
+ARG ELIXIR_VERSION=1.20.4
+ARG OTP_VERSION=29.1.1
+ARG DEBIAN_VERSION=bookworm-20260918-slim
 
 ARG BUILDER_IMAGE="hexpm/elixir:${ELIXIR_VERSION}-erlang-${OTP_VERSION}-debian-${DEBIAN_VERSION}"
 ARG RUNNER_IMAGE="debian:${DEBIAN_VERSION}"
