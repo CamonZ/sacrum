@@ -5,7 +5,7 @@ defmodule Sacrum.MixProject do
     [
       app: :sacrum,
       version: System.get_env("SACRUM_VERSION", "0.1.0"),
-      elixir: "~> 1.15",
+      elixir: "~> 1.20",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
