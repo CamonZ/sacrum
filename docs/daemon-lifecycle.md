@@ -76,6 +76,9 @@ limit or `null` for unlimited, `in_use` is the number of active step slots
 tracked by the in-memory coordinator, and `available` is the remaining
 capacity or `null` when unlimited. Lowering a limit does not interrupt existing
 steps; it only pauses new admission until occupancy falls below the new limit.
+Changing or clearing the limit updates the in-memory admission coordinator;
+queued and future reservations use the new value, while existing slots remain
+active until their owning steps release them.
 The occupancy map is process-local and is rebuilt as orchestration processes
 request and release slots; it is not a durable step-attempt ledger.
 
