@@ -48,11 +48,11 @@ defmodule Sacrum.Repo.SessionLogsTest do
           Map.put(Sacrum.HarnessFixture.attrs("text"), :format, "openai"),
           %{logical_key: "harness:invalid", content: "not json"}
         ] do
-      assert {:error, changeset} =
-               SessionLogs.insert(
-                 execution.user_id,
-                 Map.merge(attrs, %{project_id: project.id, step_execution_id: execution.id})
-               )
+      changeset =
+        SessionLogs.changeset(
+          execution.user_id,
+          Map.merge(attrs, %{project_id: project.id, step_execution_id: execution.id})
+        )
 
       refute changeset.valid?
     end
@@ -63,19 +63,19 @@ defmodule Sacrum.Repo.SessionLogsTest do
   test "requires content and execution" do
     {execution, project} = create_execution()
 
-    assert {:error, changeset} =
-             SessionLogs.insert(execution.user_id, %{
-               project_id: project.id,
-               step_execution_id: execution.id
-             })
+    changeset =
+      SessionLogs.changeset(execution.user_id, %{
+        project_id: project.id,
+        step_execution_id: execution.id
+      })
 
     assert %{content: ["can't be blank"]} = errors_on(changeset)
 
-    assert {:error, changeset} =
-             SessionLogs.insert(
-               execution.user_id,
-               Map.merge(Sacrum.HarnessFixture.attrs("text"), %{project_id: project.id})
-             )
+    changeset =
+      SessionLogs.changeset(
+        execution.user_id,
+        Map.merge(Sacrum.HarnessFixture.attrs("text"), %{project_id: project.id})
+      )
 
     assert %{step_execution_id: ["can't be blank"]} = errors_on(changeset)
   end

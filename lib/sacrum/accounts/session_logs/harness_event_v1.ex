@@ -24,7 +24,8 @@ defmodule Sacrum.Accounts.SessionLogs.HarnessEventV1 do
          true <- nonempty_string?(event["type"]),
          {:ok, data} <- Map.fetch(event, "data"),
          true <- logical_key == "harness:" <> event["event_id"],
-         true <- payload?(event["type"], data) do
+         true <- payload?(event["type"], data),
+         true <- text_delta_identity?(event) do
       {:ok, event}
     else
       _ -> :error
@@ -32,6 +33,29 @@ defmodule Sacrum.Accounts.SessionLogs.HarnessEventV1 do
   end
 
   def decode(_content, _logical_key), do: :error
+
+  @doc """
+  The semantics and item key `{stream_id, item_id}` of a text item event.
+  Returns `nil` for other events and for text without an item id.
+  """
+  @spec text_item(map()) :: {String.t(), {String.t(), String.t()}} | nil
+  def text_item(%{"type" => "text", "semantics" => semantics, "stream_id" => stream_id} = event) do
+    item_id = get_in(event, ["correlation", "item_id"])
+    if nonempty_string?(item_id), do: {semantics, {stream_id, item_id}}
+  end
+
+  def text_item(_event), do: nil
+
+  # Deltas are never stored; their text reaches storage only through the item's
+  # final snapshot, so each one must name its item and carry text.
+  defp text_delta_identity?(
+         %{"type" => "text", "semantics" => "delta", "data" => %{"text" => text}} = event
+       )
+       when is_binary(text),
+       do: match?({"delta", _key}, text_item(event))
+
+  defp text_delta_identity?(%{"type" => "text", "semantics" => "delta"}), do: false
+  defp text_delta_identity?(_event), do: true
 
   defp payload?("usage", %{} = data) do
     optional?(data, "turn_delta", &usage?(&1, :turn)) and

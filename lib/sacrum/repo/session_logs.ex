@@ -8,8 +8,9 @@ defmodule Sacrum.Repo.SessionLogs do
   - `get!/1` returns log or raises
   - `get_by/1` returns `{:ok, log}` or `{:error, :not_found}`
   - `all/0` returns `[log]`
-  - `insert/2` returns `{:ok, log}`, `{:error, changeset}`, or
-    `{:error, :event_identity_conflict}` for an immutable harness event key
+  - `persist/3` returns `{:ok, log, rollup}`, `{:error, changeset}`,
+    `{:error, :not_found}`, or `{:error, :event_identity_conflict}` for an
+    immutable harness event key
 
   ## Preload Strategy
 
@@ -24,46 +25,77 @@ defmodule Sacrum.Repo.SessionLogs do
   alias Sacrum.Repo.Schemas.{SessionLog, StepExecution}
 
   @doc """
-  Insert a new session log with user_id.
-  Extracts step_execution_id and project_id from attrs.
+  Build the create changeset for a session log owned by user_id.
+  Takes step_execution_id and project_id from attrs.
   """
-  @spec insert(String.t(), map()) ::
-          {:ok, SessionLog.t()}
+  @spec changeset(String.t(), map()) :: Ecto.Changeset.t()
+  def changeset(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
+    SessionLog.create_changeset(
+      %SessionLog{
+        user_id: user_id,
+        step_execution_id:
+          Map.get(attrs, "step_execution_id") || Map.get(attrs, :step_execution_id),
+        project_id: Map.get(attrs, "project_id") || Map.get(attrs, :project_id)
+      },
+      attrs
+    )
+  end
+
+  @doc """
+  Persist a valid log and its usage counters in one transaction.
+
+  A newly inserted log is folded into `rollup` and the execution counters are
+  written from the result. Redelivery of an identical event returns the stored
+  row and leaves the rollup unchanged. `opts` are passed to the transaction.
+  """
+  @spec persist(Ecto.Changeset.t(), UsageRollups.t(), keyword()) ::
+          {:ok, SessionLog.t(), UsageRollups.t()}
           | {:error, Ecto.Changeset.t() | :event_identity_conflict | :not_found}
-  def insert(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
-    step_execution_id = Map.get(attrs, "step_execution_id") || Map.get(attrs, :step_execution_id)
-    project_id = Map.get(attrs, "project_id") || Map.get(attrs, :project_id)
+  def persist(changeset, rollup, opts \\ [])
 
-    changeset =
-      SessionLog.create_changeset(
-        %SessionLog{
-          user_id: user_id,
-          step_execution_id: step_execution_id,
-          project_id: project_id
-        },
-        attrs
-      )
+  def persist(%Ecto.Changeset{valid?: true} = changeset, rollup, opts) do
+    log = Ecto.Changeset.apply_changes(changeset)
 
-    if changeset.valid? do
-      result =
-        Ecto.Multi.new()
-        |> Ecto.Multi.run(:execution, fn _repo, _changes ->
-          lock_execution(step_execution_id, user_id, project_id)
-        end)
-        |> Ecto.Multi.run(:log, fn _repo, _changes -> insert_immutable_event(changeset) end)
-        |> Ecto.Multi.run(:rollup, fn _repo, %{execution: execution} ->
-          UsageRollups.refresh_step_execution(execution)
-        end)
-        |> Repo.transaction()
+    result =
+      Ecto.Multi.new()
+      |> Ecto.Multi.run(:execution, fn _repo, _changes ->
+        lock_execution(log.step_execution_id, log.user_id, log.project_id)
+      end)
+      |> Ecto.Multi.run(:log, fn _repo, _changes -> insert_immutable_event(changeset) end)
+      |> Ecto.Multi.run(:rollup, fn _repo, %{execution: execution, log: log} ->
+        rollup_inserted(execution, log, rollup)
+      end)
+      |> Repo.transaction(opts)
 
-      case result do
-        {:ok, %{log: log}} -> {:ok, log}
-        {:error, _operation, reason, _changes} -> {:error, reason}
-      end
-    else
-      {:error, changeset}
+    case result do
+      {:ok, %{log: {log, _inserted?}, rollup: rollup}} -> {:ok, log, rollup}
+      {:error, _operation, reason, _changes} -> {:error, reason}
     end
   end
+
+  def persist(%Ecto.Changeset{} = changeset, _rollup, _opts), do: {:error, changeset}
+
+  @doc "All harness logs for an execution, oldest first."
+  @spec harness_logs(String.t(), keyword()) :: [SessionLog.t()]
+  def harness_logs(step_execution_id, opts \\ []) do
+    SessionLog
+    |> where([log], log.step_execution_id == ^step_execution_id and log.format == "harness")
+    |> order_by([log], asc: log.inserted_at, asc: log.id)
+    |> Repo.all(opts)
+  end
+
+  defp rollup_inserted(execution, {log, true}, rollup) do
+    rollup = UsageRollups.add(rollup, log)
+
+    with {:ok, _execution} <-
+           execution
+           |> StepExecution.update_changeset(UsageRollups.attrs(rollup))
+           |> Repo.update() do
+      {:ok, rollup}
+    end
+  end
+
+  defp rollup_inserted(_execution, {_log, false}, rollup), do: {:ok, rollup}
 
   defp lock_execution(execution_id, user_id, project_id) do
     query =
@@ -85,7 +117,7 @@ defmodule Sacrum.Repo.SessionLogs do
     content = Ecto.Changeset.get_field(changeset, :content)
     format = Ecto.Changeset.get_field(changeset, :format)
 
-    with {:ok, _log} <-
+    with {:ok, inserted} <-
            Repo.insert(changeset,
              on_conflict: :nothing,
              conflict_target:
@@ -100,12 +132,10 @@ defmodule Sacrum.Repo.SessionLogs do
              )
            ) do
       if persisted.content == content and persisted.format == format do
-        {:ok, persisted}
+        {:ok, {persisted, persisted.id == inserted.id}}
       else
         {:error, :event_identity_conflict}
       end
     end
   end
-
-  defoverridable insert: 2
 end

@@ -29,9 +29,14 @@ after each event.
 
 Repo, Accounts, and routing paths must not emit these default-client events
 directly. They commit rows; `Sacrum.Realtime.Cdc.Projector`
-owns the ProjectChannel payload construction for regular clients. The only
+owns the ProjectChannel payload construction for regular clients. The
 imperative ProjectChannel broadcasts are daemon commands such as `run_step` and
-`cancel_step`.
+`cancel_step`, and streaming text deltas: harness `text` events with `delta`
+semantics are never stored. The execution's session-log ingestion process
+publishes each one directly as `session_log_created`, with the same payload a
+persisted log projects. The item's final `snapshot` text is persisted and
+arrives through CDC like any other log. A retried delta may be published
+again, and a client that reconnects mid-stream only recovers persisted logs.
 
 Channel payloads use `snake_case` keys. GraphQL uses `camelCase`.
 
@@ -65,7 +70,7 @@ instead of silently applying a payload with an unsupported shape.
 | `task_run_updated` | Status projection | `task_runs` update after image with before `status` and `latest_step_execution_id`, plus server-side run-control enrichment inputs. | Same full TaskRun row plus replacement `run_controls`; clients should prefer these controls over local recomputation. |
 | `task_run_step_changed` | Semantic delta | Derived from `tasks` and `task_runs`; see below. | `{task_run_id, task_id, from_step_id, to_step_id, status, level}`. |
 | `task_step_changed` | Semantic delta | Derived from `tasks`; see below. | `{task_id, from_step_id, to_step_id, workflow_id, level}`. |
-| `session_log_created` | Entity projection | `session_logs` insert after image. | Full log row: `id`, `step_execution_id`, `project_id`, `content`, `format`, nullable `logical_key`, timestamps. Clients append. |
+| `session_log_created` | Entity projection | `session_logs` insert after image; text deltas are published directly without a row. | Full log row: `id`, `step_execution_id`, `project_id`, `content`, `format`, nullable `logical_key`, timestamps. Clients upsert by `id` or `logical_key` and merge text deltas into their item's final snapshot. A delta's `id` names no stored row. |
 | `session_log_updated` | Entity projection | `session_logs` update after image. | Full log row: `id`, `step_execution_id`, `project_id`, `content`, `format`, nullable `logical_key`, timestamps. Clients replace by `id`. |
 | `section_created` | Entity projection | `task_sections` insert after image. | Full section row: `id`, `task_id`, `project_id`, type/content/order/done fields, timestamps. |
 | `section_updated` | Entity projection | `task_sections` update after image. | Same full section row. |

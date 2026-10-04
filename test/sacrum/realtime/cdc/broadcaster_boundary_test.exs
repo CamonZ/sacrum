@@ -9,7 +9,10 @@ defmodule Sacrum.Realtime.Cdc.BroadcasterBoundaryTest do
     "lib/sacrum_web/graphql"
   ]
 
+  # Session-log ingestion publishes streaming text deltas, which have no row
+  # for CDC to project.
   @allowed_project_channel_callers [
+    "lib/sacrum/accounts/session_logs/ingestion.ex",
     "lib/sacrum/realtime/cdc/projector.ex",
     "lib/sacrum/realtime/command_broadcaster.ex"
   ]

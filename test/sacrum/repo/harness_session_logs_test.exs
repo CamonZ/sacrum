@@ -1,6 +1,9 @@
 defmodule Sacrum.Repo.HarnessSessionLogsTest do
   use Sacrum.DataCase, async: false
 
+  import ExUnit.CaptureLog
+
+  alias Sacrum.Accounts
   alias Sacrum.Repo
   alias Sacrum.Repo.{Projects, SessionLogs, StepExecutions, Tasks, Users, Workflows}
   alias Sacrum.Repo.Schemas.{SessionLog, StepExecution}
@@ -169,7 +172,7 @@ defmodule Sacrum.Repo.HarnessSessionLogsTest do
     assert {:ok, first} = insert_harness(context, event)
 
     assert {:error, changeset} =
-             SessionLogs.insert(context.user.id, %{
+             Accounts.SessionLogs.insert(context.user.id, %{
                project_id: context.project.id,
                step_execution_id: context.execution.id,
                format: "anthropic",
@@ -225,7 +228,7 @@ defmodule Sacrum.Repo.HarnessSessionLogsTest do
 
     for {logical_key, content} <- malformed_rows do
       assert {:error, changeset} =
-               SessionLogs.insert(context.user.id, %{
+               Accounts.SessionLogs.insert(context.user.id, %{
                  project_id: context.project.id,
                  step_execution_id: context.execution.id,
                  format: "harness",
@@ -390,15 +393,30 @@ defmodule Sacrum.Repo.HarnessSessionLogsTest do
            ]
   end
 
-  test "rollup failure rolls back the inserted event", context do
+  test "rollup failure rolls back the event and keeps the ingestion process", context do
     Repo.query!(
       "ALTER TABLE step_executions ADD CONSTRAINT injected_rollup_failure CHECK (session_total_tokens <= 5)"
     )
 
     event = harness_event("rollback", "stream", 1, turn_delta: usage(10, 2, 3, 1, 5))
-    assert_raise Ecto.ConstraintError, fn -> insert_harness(context, event) end
+
+    log =
+      capture_log(fn ->
+        assert {:error, :ingestion_failed} = insert_harness(context, event)
+      end)
+
+    assert log =~ "Ecto.ConstraintError"
     assert SessionLogs.all(conditions: [step_execution_id: context.execution.id]) == []
     assert reload(context.execution).session_total_tokens == nil
+
+    [{ingestion, _value}] =
+      Registry.lookup(Sacrum.Accounts.SessionLogs.IngestionRegistry, context.execution.id)
+
+    assert {:ok, _log} = insert_harness(context, harness_event("after", "stream", 2))
+    assert reload(context.execution).session_total_tokens == 2
+
+    assert [{^ingestion, _value}] =
+             Registry.lookup(Sacrum.Accounts.SessionLogs.IngestionRegistry, context.execution.id)
   end
 
   test "accepts the existing daemon mutation with a nullable logicalKey variable", context do
@@ -466,7 +484,7 @@ defmodule Sacrum.Repo.HarnessSessionLogsTest do
         handler,
         [:sacrum, :repo, :query],
         fn _, _, metadata, _ ->
-          if self() == owner, do: send(owner, {:mutation_query, metadata.query})
+          send(owner, {:mutation_query, self(), metadata.query})
         end,
         nil
       )
@@ -476,9 +494,15 @@ defmodule Sacrum.Repo.HarnessSessionLogsTest do
     assert {:ok, %{data: %{"createSessionLog" => %{"format" => "harness"}}}} =
              Absinthe.run(query, SacrumWeb.Graphql.Schema, context: %{current_user: context.user})
 
-    queries = collect_queries([])
-    # Authorization SELECT plus five persistence/rollup statements. Sandbox
-    # wraps the transaction with SAVEPOINT/RELEASE, equivalent to BEGIN/COMMIT.
+    [{ingestion, _value}] =
+      Registry.lookup(Sacrum.Accounts.SessionLogs.IngestionRegistry, context.execution.id)
+
+    queries =
+      for {pid, query} <- collect_queries([]), pid in [owner, ingestion], do: query
+
+    # Authorization SELECT, the ingestion process's one-time history read, and
+    # four persistence/rollup statements. Sandbox wraps the transaction with
+    # SAVEPOINT/RELEASE, equivalent to BEGIN/COMMIT.
     statements = Enum.reject(queries, &Regex.match?(~r/^(begin|commit|savepoint|release)/i, &1))
     assert length(statements) == 6
     assert length(queries) == 8
@@ -486,14 +510,14 @@ defmodule Sacrum.Repo.HarnessSessionLogsTest do
 
   defp collect_queries(queries) do
     receive do
-      {:mutation_query, query} -> collect_queries([query | queries])
+      {:mutation_query, pid, query} -> collect_queries([{pid, query} | queries])
     after
       0 -> Enum.reverse(queries)
     end
   end
 
   defp insert_harness(context, event) do
-    SessionLogs.insert(context.user.id, %{
+    Accounts.SessionLogs.insert(context.user.id, %{
       project_id: context.project.id,
       step_execution_id: context.execution.id,
       format: "harness",

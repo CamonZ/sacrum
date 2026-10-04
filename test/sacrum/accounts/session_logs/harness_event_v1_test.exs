@@ -6,10 +6,28 @@ defmodule Sacrum.Accounts.SessionLogs.HarnessEventV1Test do
   @tokens %{"input_tokens" => 1, "cached_input_tokens" => 0, "output_tokens" => 2}
 
   test "non-usage payloads and metadata remain opaque and unchanged" do
-    for type <- ["text", "tool_call", "control_requested", "turn_finished", "future_v1_event"],
+    for type <- ["tool_call", "control_requested", "turn_finished", "future_v1_event"],
         data <- [nil, "opaque", [1, 2], %{"usage" => "client-owned"}] do
       event = event(type, data) |> Map.put("future_metadata", 42)
       assert {:ok, ^event} = decode(event)
+    end
+
+    snapshot = event("text", nil) |> Map.put("semantics", "snapshot")
+    assert {:ok, ^snapshot} = decode(snapshot)
+  end
+
+  test "text deltas require an item id and string text" do
+    delta = event("text", %{"text" => "Hel"}) |> Map.put("correlation", %{"item_id" => "item"})
+    assert {:ok, ^delta} = decode(delta)
+    assert HarnessEventV1.text_item(delta) == {"delta", {"stream", "item"}}
+
+    for invalid <- [
+          Map.delete(delta, "correlation"),
+          put_in(delta, ["correlation", "item_id"], ""),
+          put_in(delta, ["data", "text"], nil),
+          Map.put(delta, "data", "Hel")
+        ] do
+      assert :error = decode(invalid)
     end
   end
 
