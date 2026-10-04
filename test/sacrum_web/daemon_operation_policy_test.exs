@@ -185,12 +185,12 @@ defmodule SacrumWeb.DaemonTokenGraphqlTest do
       |> daemon_auth(ctx.daemon, ctx.reconnect)
       |> post("/graphql", %{
         query:
-          "mutation { createSessionLog(stepExecutionId: \"#{execution.id}\", content: \"log\") { id content } }"
+          "mutation { createSessionLog(stepExecutionId: \"#{execution.id}\", content: #{Jason.encode!(Sacrum.HarnessFixture.content("log"))}, logicalKey: \"#{Sacrum.HarnessFixture.attrs("log").logical_key}\") { id content } }"
       })
       |> json_response(200)
 
     assert log["errors"] == nil
-    assert log["data"]["createSessionLog"]["content"] == "log"
+    assert log["data"]["createSessionLog"]["content"] == Sacrum.HarnessFixture.content("log")
   end
 
   test "legitimate account callers retain their project and GraphQL access", ctx do

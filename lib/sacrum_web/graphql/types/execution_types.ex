@@ -355,16 +355,11 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
     field :create_session_log, :session_log do
       arg(:step_execution_id, non_null(:uuid4))
       arg(:content, non_null(:string))
-      arg(:format, :string)
+      arg(:format, :string, default_value: "harness")
       arg(:logical_key, :string)
 
       resolve(fn args, %{context: %{current_user: user}} ->
-        exec_id = Map.get(args, :step_execution_id)
-
-        with {:ok, exec} <- Accounts.StepExecutions.get_by(user.id, conditions: [id: exec_id]) do
-          attrs = Map.put(args, :project_id, exec.project_id)
-          Accounts.SessionLogs.insert(user.id, attrs)
-        end
+        Accounts.SessionLogs.insert(user.id, args)
       end)
     end
 

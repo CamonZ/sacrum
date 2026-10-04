@@ -18,7 +18,7 @@ Sacrum is an API-only workflow engine and task management system built with Phoe
 - Repeatable workflow runs via `WorkflowStep.step_type == "stop"`, which ends
   the current TaskRun at a run boundary without completing the task
 
-**Execution tracking** — Durable `TaskRun` records track automation lifecycle for a task run. `StepExecution` records track individual step attempts inside a run, including the step name, attempt status, the nullable harness used when applicable, and optional LLM metadata (model, provider, token counts, cost, duration). Session logs attach free-text content to executions.
+**Execution tracking** — Durable `TaskRun` records track automation lifecycle for a task run. `StepExecution` records track individual step attempts inside a run, including the step name, attempt status, the nullable harness used when applicable, and optional LLM metadata (model, provider, token counts, cost, duration). Session logs attach immutable normalized HarnessEventV1 JSON events to executions.
 
 **Artifact files** — Projects contain named text files whose contents are stored in `Artifact.body`. `ArtifactLink` records attach those files to projects, tasks, task sections, workflows, task runs, and step executions.
 
@@ -233,7 +233,7 @@ general JSON Schema validation.
 | Mutation | Arguments | Returns |
 |----------|-----------|---------|
 | `updateStepExecution` | `id!`, `step_name`, `status`, `context`, `output`, `transition_result`, `model`, `model_provider`, `harness`, `input_tokens`, `output_tokens`, `session_input_tokens`, `session_cache_read_input_tokens`, `session_output_tokens`, `session_total_tokens`, `context_window_input_tokens`, `context_window_cache_read_input_tokens`, `context_window_total_tokens`, `cost`, `duration_ms` | `:step_execution` |
-| `createSessionLog` | `step_execution_id!`, `content!`, `format` (`anthropic` default, or `openai`), optional opaque `logical_key` for in-place updates | `:session_log` |
+| `createSessionLog` | `step_execution_id!`, `content!`, `format` (`harness` default and sole supported value), `logical_key` (nullable GraphQL argument; required by ingestion validation, `harness:<event_id>`) | `:session_log` |
 | `cancelStepExecution` | `step_execution_id!` | `:step_execution` |
 
 > **Implementation:** See `lib/sacrum_web/graphql/schema.ex` for the root schema and `lib/sacrum_web/graphql/types/*.ex` for type definitions. `!` denotes required arguments.
@@ -725,8 +725,8 @@ do not receive those imperative work commands. See
 | `task_run_created` / `task_run_updated` | TaskRun fields | TaskRun lifecycle changes |
 | `task_run_step_changed` | `{schema_version, task_run_id, task_id, from_step_id, to_step_id, status, level}` | Emitted at root or child run start, whenever a task's `current_step_id` changes while a TaskRun exists, and at run-end paths (`to_step_id` is `nil`). Lets pipeline views decrement the source step bucket and increment the destination bucket without refetching. |
 | `task_step_changed` | `{schema_version, task_id, from_step_id, to_step_id, workflow_id, level}` | Emitted when `current_step_id` changes outside orchestrator execution (`assign_workflow`, `advance_to_step`, `move_to_step`). Mirrors `task_run_step_changed` for the manual-move case where no TaskRun exists; only fires when `from != to`. |
-| `session_log_created` | Log fields, including nullable `logical_key` | New log entry attached |
-| `session_log_updated` | Log fields, including nullable `logical_key` | Existing logical-key log row updated in place |
+| `session_log_created` | Log fields, including required `logical_key` for new events | New immutable event attached |
+| `session_log_updated` | Log fields, including nullable `logical_key` | Historical row updates only; ingestion retries do not update events |
 | `section_created` / `section_updated` / `section_deleted` | Section fields | Task section changes |
 | `code_ref_created` / `code_ref_updated` / `code_ref_deleted` | Code reference fields: task/section owner, path, line range, name, description, timestamps | Task detail and evidence reference changes |
 | `run_step` | Execution + step config, project ID | **Daemon channel only** — Run a step |

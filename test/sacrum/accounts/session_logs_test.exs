@@ -6,9 +6,7 @@ defmodule Sacrum.Accounts.SessionLogsTest do
   alias Sacrum.Accounts.Workflows
   alias Sacrum.Accounts.Tasks
   alias Sacrum.Accounts.Projects
-  alias Sacrum.Repo
   alias Sacrum.Repo.Users
-  alias Sacrum.Repo.Schemas.{SessionLog, StepExecution}
 
   @valid_user_attrs %{
     email: "test@example.com",
@@ -38,143 +36,24 @@ defmodule Sacrum.Accounts.SessionLogsTest do
     {project, execution}
   end
 
-  describe "insert/2" do
-    test "creates session log scoped to user_id, project_id, and step_execution_id" do
-      user = create_user()
-      {project, execution} = create_step_execution(user)
+  test "derives project ownership and rejects another user's execution" do
+    user = create_user()
+    {project, execution} = create_step_execution(user)
+    other = create_user(%{email: "other@example.com", username: "other", password: "password123"})
 
-      assert {:ok, %SessionLog{} = log} =
-               SessionLogs.insert(user.id, %{
-                 "step_execution_id" => execution.id,
-                 "project_id" => project.id,
-                 "content" => "Session started"
-               })
+    attrs =
+      Map.merge(Sacrum.HarnessFixture.attrs("Session started"), %{
+        step_execution_id: execution.id,
+        project_id: Ecto.UUID.generate()
+      })
 
-      assert log.user_id == user.id
-      assert log.project_id == project.id
-      assert log.step_execution_id == execution.id
-      assert log.content == "Session started"
-      assert log.format == "anthropic"
-    end
-
-    test "accepts only supported session log formats" do
-      changeset =
-        SessionLog.create_changeset(%SessionLog{}, %{
-          "step_execution_id" => Ecto.UUID.generate(),
-          "content" => "Session started",
-          "format" => "anthropic"
-        })
-
-      assert changeset.valid?
-
-      harness_changeset =
-        SessionLog.create_changeset(%SessionLog{}, %{
-          "step_execution_id" => Ecto.UUID.generate(),
-          "content" => "{}",
-          "format" => "harness"
-        })
-
-      assert harness_changeset.valid?
-
-      changeset =
-        SessionLog.create_changeset(%SessionLog{}, %{
-          "step_execution_id" => Ecto.UUID.generate(),
-          "content" => "Session started",
-          "format" => "codex"
-        })
-
-      assert %{format: ["is invalid"]} = errors_on(changeset)
-    end
-
-    test "rolls up Anthropic usage into the owning step execution" do
-      user = create_user()
-      {project, execution} = create_step_execution(user)
-
-      assert {:ok, %SessionLog{}} =
-               SessionLogs.insert(user.id, %{
-                 "step_execution_id" => execution.id,
-                 "project_id" => project.id,
-                 "format" => "anthropic",
-                 "content" =>
-                   Jason.encode!(%{
-                     "usage" => %{
-                       "input_tokens" => 100,
-                       "cache_creation_input_tokens" => 20,
-                       "cache_read_input_tokens" => 30,
-                       "output_tokens" => 40
-                     }
-                   })
-               })
-
-      reloaded = Repo.get!(StepExecution, execution.id)
-      assert reloaded.session_input_tokens == 150
-      assert reloaded.session_cache_read_input_tokens == 30
-      assert reloaded.session_output_tokens == 40
-      assert reloaded.session_total_tokens == 190
-      assert reloaded.context_window_input_tokens == 150
-      assert reloaded.context_window_cache_read_input_tokens == 30
-      assert reloaded.context_window_total_tokens == 190
-    end
-
-    test "rolls up OpenAI usage without requiring cache creation tokens" do
-      user = create_user()
-      {project, execution} = create_step_execution(user)
-
-      assert {:ok, %SessionLog{}} =
-               SessionLogs.insert(user.id, %{
-                 "step_execution_id" => execution.id,
-                 "project_id" => project.id,
-                 "format" => "openai",
-                 "content" =>
-                   Jason.encode!(%{
-                     "usage" => %{
-                       "input_tokens" => 100,
-                       "input_token_details" => %{"cached_tokens" => 30},
-                       "output_tokens" => 25
-                     }
-                   })
-               })
-
-      reloaded = Repo.get!(StepExecution, execution.id)
-      assert reloaded.session_input_tokens == 100
-      assert reloaded.session_cache_read_input_tokens == 30
-      assert reloaded.session_output_tokens == 25
-      assert reloaded.session_total_tokens == 125
-      assert reloaded.context_window_input_tokens == 100
-      assert reloaded.context_window_cache_read_input_tokens == 30
-      assert reloaded.context_window_total_tokens == 125
-    end
-
-    test "rolls up Codex cache reads reported as cached_input_tokens" do
-      user = create_user()
-      {project, execution} = create_step_execution(user)
-
-      # Codex `exec --json` emits cache reads on the turn.completed usage under
-      # the `cached_input_tokens` key, distinct from other OpenAI response
-      # shapes — the rollup must recognize it or cache reads silently read 0.
-      assert {:ok, %SessionLog{}} =
-               SessionLogs.insert(user.id, %{
-                 "step_execution_id" => execution.id,
-                 "project_id" => project.id,
-                 "format" => "openai",
-                 "content" =>
-                   Jason.encode!(%{
-                     "type" => "turn.completed",
-                     "usage" => %{
-                       "input_tokens" => 1500,
-                       "cached_input_tokens" => 200,
-                       "output_tokens" => 800,
-                       "reasoning_output_tokens" => 120
-                     }
-                   })
-               })
-
-      reloaded = Repo.get!(StepExecution, execution.id)
-      assert reloaded.session_input_tokens == 1500
-      assert reloaded.session_cache_read_input_tokens == 200
-      assert reloaded.session_output_tokens == 800
-      assert reloaded.context_window_cache_read_input_tokens == 200
-    end
+    assert {:error, :not_found} = SessionLogs.insert(other.id, attrs)
+    assert {:ok, log} = SessionLogs.insert(user.id, attrs)
+    assert log.project_id == project.id
+    assert log.user_id == user.id
+    assert log.format == "harness"
+    assert log.content == Sacrum.HarnessFixture.content("Session started")
+    assert {:error, :not_found} = SessionLogs.insert(user.id, %{})
   end
 
   describe "get_by/2" do
@@ -188,18 +67,24 @@ defmodule Sacrum.Accounts.SessionLogsTest do
       {project2, execution2} = create_step_execution(user2)
 
       {:ok, log} =
-        SessionLogs.insert(user1.id, %{
-          "step_execution_id" => execution1.id,
-          "project_id" => project1.id,
-          "content" => "User1 log"
-        })
+        SessionLogs.insert(
+          user1.id,
+          Sacrum.HarnessFixture.with_event(%{
+            "step_execution_id" => execution1.id,
+            "project_id" => project1.id,
+            "content" => "User1 log"
+          })
+        )
 
       {:ok, _} =
-        SessionLogs.insert(user2.id, %{
-          "step_execution_id" => execution2.id,
-          "project_id" => project2.id,
-          "content" => "User2 log"
-        })
+        SessionLogs.insert(
+          user2.id,
+          Sacrum.HarnessFixture.with_event(%{
+            "step_execution_id" => execution2.id,
+            "project_id" => project2.id,
+            "content" => "User2 log"
+          })
+        )
 
       # User1 can access their log
       assert {:ok, found} = SessionLogs.get_by(user1.id, conditions: [id: log.id])
@@ -222,18 +107,24 @@ defmodule Sacrum.Accounts.SessionLogsTest do
       {project2, execution2} = create_step_execution(user2)
 
       {:ok, _} =
-        SessionLogs.insert(user1.id, %{
-          "step_execution_id" => execution1.id,
-          "project_id" => project1.id,
-          "content" => "User1 log"
-        })
+        SessionLogs.insert(
+          user1.id,
+          Sacrum.HarnessFixture.with_event(%{
+            "step_execution_id" => execution1.id,
+            "project_id" => project1.id,
+            "content" => "User1 log"
+          })
+        )
 
       {:ok, _} =
-        SessionLogs.insert(user2.id, %{
-          "step_execution_id" => execution2.id,
-          "project_id" => project2.id,
-          "content" => "User2 log"
-        })
+        SessionLogs.insert(
+          user2.id,
+          Sacrum.HarnessFixture.with_event(%{
+            "step_execution_id" => execution2.id,
+            "project_id" => project2.id,
+            "content" => "User2 log"
+          })
+        )
 
       logs = SessionLogs.list_by(user1.id)
       assert length(logs) == 1

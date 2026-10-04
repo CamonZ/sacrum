@@ -357,46 +357,64 @@ defmodule SacrumWeb.Graphql.TaskRunApiTest do
         })
 
       {:ok, parent_log} =
-        Accounts.SessionLogs.insert(user.id, %{
-          project_id: project.id,
-          step_execution_id: parent_execution.id,
-          content: "parent output"
-        })
+        Accounts.SessionLogs.insert(
+          user.id,
+          Sacrum.HarnessFixture.with_event(%{
+            project_id: project.id,
+            step_execution_id: parent_execution.id,
+            content: "parent output"
+          })
+        )
 
       {:ok, parent_followup_log} =
-        Accounts.SessionLogs.insert(user.id, %{
-          project_id: project.id,
-          step_execution_id: parent_followup_execution.id,
-          content: "parent followup output"
-        })
+        Accounts.SessionLogs.insert(
+          user.id,
+          Sacrum.HarnessFixture.with_event(%{
+            project_id: project.id,
+            step_execution_id: parent_followup_execution.id,
+            content: "parent followup output"
+          })
+        )
 
       {:ok, child_log} =
-        Accounts.SessionLogs.insert(user.id, %{
-          project_id: project.id,
-          step_execution_id: child_execution.id,
-          content: "child output"
-        })
+        Accounts.SessionLogs.insert(
+          user.id,
+          Sacrum.HarnessFixture.with_event(%{
+            project_id: project.id,
+            step_execution_id: child_execution.id,
+            content: "child output"
+          })
+        )
 
       {:ok, grandchild_log} =
-        Accounts.SessionLogs.insert(user.id, %{
-          project_id: project.id,
-          step_execution_id: grandchild_execution.id,
-          content: "grandchild output"
-        })
+        Accounts.SessionLogs.insert(
+          user.id,
+          Sacrum.HarnessFixture.with_event(%{
+            project_id: project.id,
+            step_execution_id: grandchild_execution.id,
+            content: "grandchild output"
+          })
+        )
 
       {:ok, sibling_log} =
-        Accounts.SessionLogs.insert(user.id, %{
-          project_id: project.id,
-          step_execution_id: sibling_execution.id,
-          content: "sibling output"
-        })
+        Accounts.SessionLogs.insert(
+          user.id,
+          Sacrum.HarnessFixture.with_event(%{
+            project_id: project.id,
+            step_execution_id: sibling_execution.id,
+            content: "sibling output"
+          })
+        )
 
       {:ok, parent_legacy_log} =
-        Accounts.SessionLogs.insert(user.id, %{
-          project_id: project.id,
-          step_execution_id: parent_legacy_execution.id,
-          content: "parent legacy output"
-        })
+        Accounts.SessionLogs.insert(
+          user.id,
+          Sacrum.HarnessFixture.with_event(%{
+            project_id: project.id,
+            step_execution_id: parent_legacy_execution.id,
+            content: "parent legacy output"
+          })
+        )
 
       result =
         graphql_result(conn, user, """
@@ -444,10 +462,9 @@ defmodule SacrumWeb.Graphql.TaskRunApiTest do
       returned_execution_ids = Enum.map(trace["stepExecutions"], & &1["id"])
       returned_log_ids = Enum.map(trace["sessionLogs"], & &1["id"])
 
-      assert [
-               %{"sessionLogs" => [%{"content" => "parent output"}]},
-               %{"sessionLogs" => [%{"content" => "parent followup output"}]}
-             ] = trace["stepExecutions"]
+      assert Enum.map(trace["stepExecutions"], fn execution ->
+               Enum.map(execution["sessionLogs"], & &1["content"])
+             end) == [[parent_log.content], [parent_followup_log.content]]
 
       refute child.id in Enum.map(trace["taskRuns"], & &1["id"])
       refute grandchild.id in Enum.map(trace["taskRuns"], & &1["id"])
@@ -543,39 +560,54 @@ defmodule SacrumWeb.Graphql.TaskRunApiTest do
         })
 
       {:ok, parent_log} =
-        Accounts.SessionLogs.insert(user.id, %{
-          project_id: project.id,
-          step_execution_id: parent_execution.id,
-          content: "parent output"
-        })
+        Accounts.SessionLogs.insert(
+          user.id,
+          Sacrum.HarnessFixture.with_event(%{
+            project_id: project.id,
+            step_execution_id: parent_execution.id,
+            content: "parent output"
+          })
+        )
 
       {:ok, child_log} =
-        Accounts.SessionLogs.insert(user.id, %{
-          project_id: project.id,
-          step_execution_id: child_execution.id,
-          content: "child output"
-        })
+        Accounts.SessionLogs.insert(
+          user.id,
+          Sacrum.HarnessFixture.with_event(%{
+            project_id: project.id,
+            step_execution_id: child_execution.id,
+            content: "child output"
+          })
+        )
 
       {:ok, grandchild_log} =
-        Accounts.SessionLogs.insert(user.id, %{
-          project_id: project.id,
-          step_execution_id: grandchild_execution.id,
-          content: "grandchild output"
-        })
+        Accounts.SessionLogs.insert(
+          user.id,
+          Sacrum.HarnessFixture.with_event(%{
+            project_id: project.id,
+            step_execution_id: grandchild_execution.id,
+            content: "grandchild output"
+          })
+        )
 
       {:ok, sibling_log} =
-        Accounts.SessionLogs.insert(user.id, %{
-          project_id: project.id,
-          step_execution_id: sibling_execution.id,
-          content: "sibling output"
-        })
+        Accounts.SessionLogs.insert(
+          user.id,
+          Sacrum.HarnessFixture.with_event(%{
+            project_id: project.id,
+            step_execution_id: sibling_execution.id,
+            content: "sibling output"
+          })
+        )
 
       {:ok, child_legacy_log} =
-        Accounts.SessionLogs.insert(user.id, %{
-          project_id: project.id,
-          step_execution_id: child_legacy_execution.id,
-          content: "child legacy output"
-        })
+        Accounts.SessionLogs.insert(
+          user.id,
+          Sacrum.HarnessFixture.with_event(%{
+            project_id: project.id,
+            step_execution_id: child_legacy_execution.id,
+            content: "child legacy output"
+          })
+        )
 
       result =
         graphql_result(conn, user, """
@@ -611,7 +643,8 @@ defmodule SacrumWeb.Graphql.TaskRunApiTest do
       assert Enum.map(trace["taskRuns"], & &1["id"]) == [child.id]
       assert Enum.map(trace["stepExecutions"], & &1["id"]) == [child_execution.id]
       assert Enum.map(trace["sessionLogs"], & &1["id"]) == [child_log.id]
-      assert [%{"sessionLogs" => [%{"content" => "child output"}]}] = trace["stepExecutions"]
+      assert [found] = trace["stepExecutions"]
+      assert Enum.map(found["sessionLogs"], & &1["content"]) == [child_log.content]
 
       returned_execution_ids = Enum.map(trace["stepExecutions"], & &1["id"])
       returned_log_ids = Enum.map(trace["sessionLogs"], & &1["id"])

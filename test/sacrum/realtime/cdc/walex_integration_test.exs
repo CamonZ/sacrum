@@ -1126,11 +1126,14 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
       :ok = subscribe_project(project.id)
 
       {:ok, log} =
-        SessionLogs.insert(user.id, %{
-          step_execution_id: execution.id,
-          project_id: project.id,
-          content: "CDC log"
-        })
+        SessionLogs.insert(
+          user.id,
+          Sacrum.HarnessFixture.with_event(%{
+            step_execution_id: execution.id,
+            project_id: project.id,
+            content: "CDC log"
+          })
+        )
 
       assert_project_broadcast(
         "session_log_created",
@@ -1138,14 +1141,14 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
           id: log.id,
           step_execution_id: execution.id,
           project_id: project.id,
-          content: "CDC log"
+          content: Sacrum.HarnessFixture.content("CDC log")
         },
         1_000
       )
     end)
   end
 
-  test "logical-key session log mutations project created then updated" do
+  test "immutable session log retries project only one created event" do
     with_project(fn user, project ->
       {workflow, step, _next_step} = create_workflow_with_steps(user, project)
       task = create_task(project, "CDC logical session log", %{workflow_id: workflow.id})
@@ -1163,65 +1166,54 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
 
       :ok = subscribe_project(project.id)
 
+      attrs = Sacrum.HarnessFixture.attrs("first snapshot")
+
       first_log =
         run_graphql!(user, """
         mutation {
           createSessionLog(
             stepExecutionId: "#{execution.id}"
-            logicalKey: "system/thinking_tokens"
-            content: "first snapshot"
-            format: "anthropic"
+            logicalKey: "#{attrs.logical_key}"
+            content: #{Jason.encode!(attrs.content)}
+            format: "harness"
           ) { id content logicalKey }
         }
         """)
         |> get_in(["createSessionLog"])
 
-      assert first_log["content"] == "first snapshot"
-      assert first_log["logicalKey"] == "system/thinking_tokens"
+      assert first_log["content"] == attrs.content
+      assert first_log["logicalKey"] == attrs.logical_key
 
-      created_payload =
-        assert_project_broadcast(
-          "session_log_created",
-          %{
-            id: first_log["id"],
-            step_execution_id: execution.id,
-            project_id: project.id,
-            content: "first snapshot",
-            logical_key: "system/thinking_tokens"
-          },
-          1_000
-        )
+      assert_project_broadcast(
+        "session_log_created",
+        %{
+          id: first_log["id"],
+          step_execution_id: execution.id,
+          project_id: project.id,
+          content: attrs.content,
+          logical_key: attrs.logical_key
+        },
+        1_000
+      )
 
       second_log =
         run_graphql!(user, """
         mutation {
           createSessionLog(
             stepExecutionId: "#{execution.id}"
-            logicalKey: "system/thinking_tokens"
-            content: "latest snapshot"
-            format: "anthropic"
+            logicalKey: "#{attrs.logical_key}"
+            content: #{Jason.encode!(attrs.content)}
+            format: "harness"
           ) { id content logicalKey }
         }
         """)
         |> get_in(["createSessionLog"])
 
       assert second_log["id"] == first_log["id"]
-      assert second_log["content"] == "latest snapshot"
+      assert second_log["content"] == attrs.content
 
-      updated_payload =
-        assert_project_broadcast(
-          "session_log_updated",
-          %{
-            id: first_log["id"],
-            step_execution_id: execution.id,
-            project_id: project.id,
-            content: "latest snapshot",
-            logical_key: "system/thinking_tokens"
-          },
-          1_000
-        )
-
-      assert updated_payload.inserted_at == created_payload.inserted_at
+      refute_project_broadcast("session_log_created", 100)
+      refute_project_broadcast("session_log_updated", 100)
 
       listed_logs =
         run_graphql!(user, """
@@ -1235,15 +1227,10 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
         """)
         |> get_in(["sessionLogs"])
 
-      assert [
-               %{
-                 "id" => id,
-                 "content" => "latest snapshot",
-                 "logicalKey" => "system/thinking_tokens"
-               }
-             ] = listed_logs
-
-      assert id == first_log["id"]
+      assert [found] = listed_logs
+      assert found["id"] == first_log["id"]
+      assert found["content"] == attrs.content
+      assert found["logicalKey"] == attrs.logical_key
     end)
   end
 

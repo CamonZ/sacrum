@@ -19,56 +19,65 @@ defmodule Sacrum.Repo.SessionLogs do
   use Sacrum.GenericRepo, schema: Sacrum.Repo.Schemas.SessionLog
 
   import Ecto.Query
+  alias Sacrum.Accounts.SessionLogs.UsageRollups
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.SessionLog
-  alias Sacrum.SessionLogRollups
-
-  @harness_format "harness"
+  alias Sacrum.Repo.Schemas.{SessionLog, StepExecution}
 
   @doc """
   Insert a new session log with user_id.
   Extracts step_execution_id and project_id from attrs.
   """
   @spec insert(String.t(), map()) ::
-          {:ok, SessionLog.t()} | {:error, Ecto.Changeset.t() | :event_identity_conflict}
+          {:ok, SessionLog.t()}
+          | {:error, Ecto.Changeset.t() | :event_identity_conflict | :not_found}
   def insert(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
     step_execution_id = Map.get(attrs, "step_execution_id") || Map.get(attrs, :step_execution_id)
     project_id = Map.get(attrs, "project_id") || Map.get(attrs, :project_id)
 
-    Repo.transaction(fn ->
-      changeset =
-        SessionLog.create_changeset(
-          %SessionLog{
-            user_id: user_id,
-            step_execution_id: step_execution_id,
-            project_id: project_id
-          },
-          attrs
-        )
+    changeset =
+      SessionLog.create_changeset(
+        %SessionLog{
+          user_id: user_id,
+          step_execution_id: step_execution_id,
+          project_id: project_id
+        },
+        attrs
+      )
 
-      logical_key = Ecto.Changeset.get_field(changeset, :logical_key)
-      format = Ecto.Changeset.get_field(changeset, :format)
+    if changeset.valid? do
+      result =
+        Ecto.Multi.new()
+        |> Ecto.Multi.run(:execution, fn _repo, _changes ->
+          lock_execution(step_execution_id, user_id, project_id)
+        end)
+        |> Ecto.Multi.run(:log, fn _repo, _changes -> insert_immutable_event(changeset) end)
+        |> Ecto.Multi.run(:rollup, fn _repo, %{execution: execution} ->
+          UsageRollups.refresh_step_execution(execution)
+        end)
+        |> Repo.transaction()
 
-      with {:ok, log} <-
-             insert_or_upsert(changeset, logical_key, format),
-           {:ok, _execution} <- rollup_step_execution(log, logical_key) do
-        log
-      else
-        {:error, reason} -> Repo.rollback(reason)
+      case result do
+        {:ok, %{log: log}} -> {:ok, log}
+        {:error, _operation, reason, _changes} -> {:error, reason}
       end
-    end)
+    else
+      {:error, changeset}
+    end
   end
 
-  defp insert_or_upsert(changeset, "harness:" <> _event_id, _format),
-    do: insert_immutable_event(changeset)
+  defp lock_execution(execution_id, user_id, project_id) do
+    query =
+      from execution in StepExecution,
+        where:
+          execution.id == ^execution_id and execution.user_id == ^user_id and
+            execution.project_id == ^project_id,
+        lock: "FOR UPDATE"
 
-  defp insert_or_upsert(changeset, logical_key, @harness_format) when is_binary(logical_key),
-    do: insert_immutable_event(changeset)
-
-  defp insert_or_upsert(changeset, logical_key, _format) when is_binary(logical_key),
-    do: upsert_by_logical_key(changeset)
-
-  defp insert_or_upsert(changeset, _logical_key, _format), do: Repo.insert(changeset)
+    case Repo.one(query) do
+      nil -> {:error, :not_found}
+      execution -> {:ok, execution}
+    end
+  end
 
   defp insert_immutable_event(changeset) do
     step_execution_id = Ecto.Changeset.get_field(changeset, :step_execution_id)
@@ -97,20 +106,6 @@ defmodule Sacrum.Repo.SessionLogs do
       end
     end
   end
-
-  defp upsert_by_logical_key(changeset) do
-    Repo.insert(changeset,
-      on_conflict: {:replace, [:content, :format, :updated_at]},
-      conflict_target:
-        {:unsafe_fragment, "(step_execution_id, logical_key) WHERE logical_key IS NOT NULL"},
-      returning: true
-    )
-  end
-
-  defp rollup_step_execution(log, logical_key) when is_binary(logical_key),
-    do: SessionLogRollups.refresh_step_execution(log)
-
-  defp rollup_step_execution(log, _logical_key), do: SessionLogRollups.rollup_step_execution(log)
 
   defoverridable insert: 2
 end
