@@ -35,8 +35,8 @@ defmodule Sacrum.Repo.HarnessSessionLogsTest do
   end
 
   test "harness is accepted by both schema and database constraints", context do
-    assert SessionLog.supported_formats() == ["openai", "anthropic", "harness"]
-    assert SessionLog.default_format() == "anthropic"
+    assert SessionLog.supported_formats() == ["harness"]
+    assert SessionLog.default_format() == "harness"
 
     assert {:ok, %SessionLog{format: "harness"}} =
              insert_harness(context, harness_event("schema-event", "schema-stream", 1))
@@ -48,8 +48,8 @@ defmodule Sacrum.Repo.HarnessSessionLogsTest do
       WHERE conname = 'session_logs_format_check'
       """)
 
-    assert constraint_definition =~ "openai"
-    assert constraint_definition =~ "anthropic"
+    refute constraint_definition =~ "openai"
+    refute constraint_definition =~ "anthropic"
     assert constraint_definition =~ "harness"
   end
 
@@ -168,7 +168,7 @@ defmodule Sacrum.Repo.HarnessSessionLogsTest do
     event = harness_event("protected", "stream-1", 1, turn_delta: usage(3, 1, 2, 1, 5))
     assert {:ok, first} = insert_harness(context, event)
 
-    assert {:error, :event_identity_conflict} =
+    assert {:error, changeset} =
              SessionLogs.insert(context.user.id, %{
                project_id: context.project.id,
                step_execution_id: context.execution.id,
@@ -177,11 +177,12 @@ defmodule Sacrum.Repo.HarnessSessionLogsTest do
                content: Jason.encode!(%{"usage" => %{"input_tokens" => 999}})
              })
 
+    assert %{format: ["is invalid"]} = errors_on(changeset)
     assert Repo.get!(SessionLog, first.id).format == "harness"
     assert reload(context.execution).session_total_tokens == 5
   end
 
-  test "malformed and unsupported rows remain stored and do not block later valid usage",
+  test "malformed events are rejected before persistence",
        context do
     malformed_rows = [
       {"harness:not-json", "not json"},
@@ -199,12 +200,6 @@ defmodule Sacrum.Repo.HarnessSessionLogsTest do
            "cost_microusd" => 3
          },
          session_snapshot: session_usage(50, 10, 5, 1, 8)
-       )
-       |> Jason.encode!()},
-      {"harness:unknown",
-       harness_event("unknown", "stream-1", 3,
-         type: "future_usage",
-         data: %{"usage" => usage(100, 30, 20, 10, 500)}
        )
        |> Jason.encode!()},
       {"harness:not-the-event-id",
@@ -229,7 +224,7 @@ defmodule Sacrum.Repo.HarnessSessionLogsTest do
     ]
 
     for {logical_key, content} <- malformed_rows do
-      assert {:ok, %SessionLog{} = stored} =
+      assert {:error, changeset} =
                SessionLogs.insert(context.user.id, %{
                  project_id: context.project.id,
                  step_execution_id: context.execution.id,
@@ -238,9 +233,9 @@ defmodule Sacrum.Repo.HarnessSessionLogsTest do
                  content: content
                })
 
-      assert Repo.get!(SessionLog, stored.id).content == content
-      assert_session(reload(context.execution), input: 0, cached: 0, output: 0, total: 0)
-      assert_context(reload(context.execution), input: 0, cached: 0, total: 0)
+      assert %{content: [_]} = errors_on(changeset)
+      assert reload(context.execution).session_total_tokens == nil
+      assert reload(context.execution).context_window_total_tokens == nil
     end
 
     valid =
@@ -249,7 +244,7 @@ defmodule Sacrum.Repo.HarnessSessionLogsTest do
     assert {:ok, _log} = insert_harness(context, valid)
 
     assert length(SessionLogs.all(conditions: [step_execution_id: context.execution.id])) ==
-             length(malformed_rows) + 1
+             1
 
     assert_session(reload(context.execution), input: 7, cached: 2, output: 4, total: 11)
   end
@@ -279,7 +274,7 @@ defmodule Sacrum.Repo.HarnessSessionLogsTest do
         turn_delta: usage(10, 3, 4, 2, 20),
         session_snapshot: %{
           "tokens" => %{
-            "input_tokens" => 50,
+            "input_tokens" => -1,
             "cached_input_tokens" => 10,
             "output_tokens" => 5
           },
@@ -287,9 +282,11 @@ defmodule Sacrum.Repo.HarnessSessionLogsTest do
         }
       )
 
-    assert {:ok, _log} = insert_harness(context, event)
-    assert_session(reload(context.execution), input: 0, cached: 0, output: 0, total: 0)
-    assert_context(reload(context.execution), input: 0, cached: 0, total: 0)
+    assert {:error, changeset} = insert_harness(context, event)
+    assert %{content: [_]} = errors_on(changeset)
+    assert Repo.aggregate(SessionLog, :count) == 0
+    assert reload(context.execution).session_total_tokens == nil
+    assert reload(context.execution).context_window_total_tokens == nil
   end
 
   test "context replay selects highest sequence per stream then latest inserted stream",
@@ -334,111 +331,165 @@ defmodule Sacrum.Repo.HarnessSessionLogsTest do
     assert_context(reload(context.execution), input: 60, cached: 6, total: 66)
   end
 
-  test "mixed provider and harness formats are additive without semantic deduplication",
+  test "historical provider and malformed rows remain readable and excluded from new rollups",
        context do
-    assert {:ok, _anthropic} =
-             SessionLogs.insert(context.user.id, %{
-               project_id: context.project.id,
-               step_execution_id: context.execution.id,
-               format: "anthropic",
-               content:
-                 Jason.encode!(%{
-                   "usage" => %{
-                     "input_tokens" => 10,
-                     "cache_creation_input_tokens" => 2,
-                     "cache_read_input_tokens" => 3,
-                     "output_tokens" => 4
-                   }
-                 })
-             })
+    Repo.query!("ALTER TABLE session_logs DROP CONSTRAINT session_logs_format_check")
+    Repo.query!("ALTER TABLE session_logs DROP CONSTRAINT session_logs_logical_key_check")
+    now = DateTime.utc_now()
 
-    assert {:ok, _openai} =
-             SessionLogs.insert(context.user.id, %{
-               project_id: context.project.id,
-               step_execution_id: context.execution.id,
-               format: "openai",
-               content:
-                 Jason.encode!(%{
-                   "response" => %{
-                     "usage" => %{
-                       "input_tokens" => 20,
-                       "cached_input_tokens" => 5,
-                       "output_tokens" => 6
-                     }
-                   }
-                 })
-             })
+    rows =
+      for {format, key, content} <- [
+            {"anthropic", nil, "old transcript"},
+            {"openai", "legacy:opaque", "old provider"},
+            {"harness", "harness:invalid", "not json"}
+          ] do
+        %{
+          id: Ecto.UUID.generate(),
+          user_id: context.user.id,
+          project_id: context.project.id,
+          step_execution_id: context.execution.id,
+          format: format,
+          logical_key: key,
+          content: content,
+          inserted_at: now,
+          updated_at: now
+        }
+      end
 
-    harness =
-      harness_event("mixed-harness", "stream-1", 1,
-        turn_delta: usage(30, 7, 8, 3, 100),
-        session_snapshot: session_usage(90, 9, 10, 4, 200, context_tokens: 95)
+    assert {3, nil} = Repo.insert_all(SessionLog, rows)
+
+    Repo.query!(
+      "ALTER TABLE session_logs ADD CONSTRAINT session_logs_format_check CHECK (format = 'harness') NOT VALID"
+    )
+
+    Repo.query!(
+      "ALTER TABLE session_logs ADD CONSTRAINT session_logs_logical_key_check CHECK (logical_key IS NOT NULL AND logical_key LIKE 'harness:_%' AND length(logical_key) <= 255) NOT VALID"
+    )
+
+    assert {:ok, _} =
+             insert_harness(
+               context,
+               harness_event("new", "stream", 1, turn_delta: usage(7, 2, 3, 1, 5))
+             )
+
+    for historical <- rows do
+      assert Repo.get!(SessionLog, historical.id).content == historical.content
+    end
+
+    assert_session(reload(context.execution), input: 7, cached: 2, output: 3, total: 10)
+    assert_context(reload(context.execution), input: 0, cached: 0, total: 0)
+
+    %{rows: constraints} =
+      Repo.query!(
+        "SELECT conname, convalidated FROM pg_constraint WHERE conrelid = 'session_logs'::regclass AND contype = 'c' ORDER BY conname"
       )
 
-    assert {:ok, _harness} = insert_harness(context, harness)
-
-    execution = reload(context.execution)
-    assert_session(execution, input: 65, cached: 15, output: 18, total: 83)
-    assert_context(execution, input: 90, cached: 9, total: 95)
+    assert constraints == [
+             ["session_logs_format_check", false],
+             ["session_logs_logical_key_check", false]
+           ]
   end
 
-  test "updating an older provider key preserves deterministic harness context", context do
-    provider_attrs = %{
-      project_id: context.project.id,
-      step_execution_id: context.execution.id,
-      format: "anthropic",
-      logical_key: "system/thinking_tokens",
-      content: anthropic_content(10, 2, 3, 4)
+  test "rollup failure rolls back the inserted event", context do
+    Repo.query!(
+      "ALTER TABLE step_executions ADD CONSTRAINT injected_rollup_failure CHECK (session_total_tokens <= 5)"
+    )
+
+    event = harness_event("rollback", "stream", 1, turn_delta: usage(10, 2, 3, 1, 5))
+    assert_raise Ecto.ConstraintError, fn -> insert_harness(context, event) end
+    assert SessionLogs.all(conditions: [step_execution_id: context.execution.id]) == []
+    assert reload(context.execution).session_total_tokens == nil
+  end
+
+  test "accepts the existing daemon mutation with a nullable logicalKey variable", context do
+    query = """
+    mutation CreateLog(
+      $step_execution_id: Uuid4!,
+      $content: String!,
+      $format: String,
+      $logicalKey: String
+    ) {
+      create_session_log(
+        step_execution_id: $step_execution_id,
+        content: $content,
+        format: $format,
+        logicalKey: $logicalKey
+      ) { id }
+    }
+    """
+
+    event = harness_event("daemon-compatible", "stream", 1, turn_delta: usage(7, 2, 3, 1, 5))
+
+    variables = %{
+      "step_execution_id" => context.execution.id,
+      "content" => Jason.encode!(event),
+      "format" => "harness",
+      "logicalKey" => "harness:daemon-compatible"
     }
 
-    assert {:ok, provider_log} = SessionLogs.insert(context.user.id, provider_attrs)
+    options = [variables: variables, context: %{current_user: context.user}]
 
-    harness =
-      harness_event("mixed-context", "stream-1", 1,
-        turn_delta: usage(30, 7, 8, 3, 100),
-        session_snapshot: session_usage(90, 9, 10, 4, 200, context_tokens: 95)
+    assert {:ok, %{data: %{"create_session_log" => %{"id" => id}}}} =
+             Absinthe.run(query, SacrumWeb.Graphql.Schema, options)
+
+    assert {:ok, %{data: %{"create_session_log" => %{"id" => ^id}}}} =
+             Absinthe.run(query, SacrumWeb.Graphql.Schema, options)
+
+    assert_session(reload(context.execution), input: 7, cached: 2, output: 3, total: 10)
+
+    for invalid <- [Map.delete(variables, "logicalKey"), Map.put(variables, "logicalKey", nil)] do
+      assert {:ok, %{errors: errors}} =
+               Absinthe.run(query, SacrumWeb.Graphql.Schema,
+                 variables: invalid,
+                 context: %{current_user: context.user}
+               )
+
+      assert Enum.any?(errors, &String.contains?(&1.message, "logical_key"))
+    end
+
+    assert [%SessionLog{id: ^id}] =
+             SessionLogs.all(conditions: [step_execution_id: context.execution.id])
+  end
+
+  test "database-call count for the authorized GraphQL mutation", context do
+    event = harness_event("query-count", "stream", 1, turn_delta: usage(10, 2, 3, 1, 5))
+
+    query = """
+    mutation { createSessionLog(stepExecutionId: "#{context.execution.id}", logicalKey: "harness:query-count", content: #{Jason.encode!(Jason.encode!(event))}) { id format } }
+    """
+
+    owner = self()
+    handler = {__MODULE__, make_ref()}
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:sacrum, :repo, :query],
+        fn _, _, metadata, _ ->
+          if self() == owner, do: send(owner, {:mutation_query, metadata.query})
+        end,
+        nil
       )
 
-    assert {:ok, harness_log} = insert_harness(context, harness)
-    assert_context(reload(context.execution), input: 90, cached: 9, total: 95)
+    on_exit(fn -> :telemetry.detach(handler) end)
 
-    assert {:ok, updated_provider} =
-             SessionLogs.insert(context.user.id, %{
-               provider_attrs
-               | content: anthropic_content(20, 4, 5, 6)
-             })
+    assert {:ok, %{data: %{"createSessionLog" => %{"format" => "harness"}}}} =
+             Absinthe.run(query, SacrumWeb.Graphql.Schema, context: %{current_user: context.user})
 
-    assert updated_provider.id == provider_log.id
-    assert_session(reload(context.execution), input: 59, cached: 12, output: 14, total: 73)
-    assert_context(reload(context.execution), input: 90, cached: 9, total: 95)
-
-    assert {:ok, replayed_harness} = insert_harness(context, harness)
-    assert replayed_harness.id == harness_log.id
-    assert_session(reload(context.execution), input: 59, cached: 12, output: 14, total: 73)
-    assert_context(reload(context.execution), input: 90, cached: 9, total: 95)
+    queries = collect_queries([])
+    # Authorization SELECT plus five persistence/rollup statements. Sandbox
+    # wraps the transaction with SAVEPOINT/RELEASE, equivalent to BEGIN/COMMIT.
+    statements = Enum.reject(queries, &Regex.match?(~r/^(begin|commit|savepoint|release)/i, &1))
+    assert length(statements) == 6
+    assert length(queries) == 8
   end
 
-  test "legacy keyed refresh remains replace-on-conflict", context do
-    attrs = %{
-      project_id: context.project.id,
-      step_execution_id: context.execution.id,
-      format: "anthropic",
-      logical_key: "system/thinking_tokens",
-      content: anthropic_content(10, 2, 3, 4)
-    }
-
-    assert {:ok, first} = SessionLogs.insert(context.user.id, attrs)
-
-    assert {:ok, updated} =
-             SessionLogs.insert(context.user.id, %{
-               attrs
-               | content: anthropic_content(20, 4, 5, 6)
-             })
-
-    assert updated.id == first.id
-    assert updated.content != first.content
-    assert_session(reload(context.execution), input: 29, cached: 5, output: 6, total: 35)
-    assert_context(reload(context.execution), input: 29, cached: 5, total: 35)
+  defp collect_queries(queries) do
+    receive do
+      {:mutation_query, query} -> collect_queries([query | queries])
+    after
+      0 -> Enum.reverse(queries)
+    end
   end
 
   defp insert_harness(context, event) do
@@ -498,17 +549,6 @@ defmodule Sacrum.Repo.HarnessSessionLogsTest do
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
-
-  defp anthropic_content(input, cache_create, cache_read, output) do
-    Jason.encode!(%{
-      "usage" => %{
-        "input_tokens" => input,
-        "cache_creation_input_tokens" => cache_create,
-        "cache_read_input_tokens" => cache_read,
-        "output_tokens" => output
-      }
-    })
-  end
 
   defp reload(execution), do: Repo.get!(StepExecution, execution.id)
 

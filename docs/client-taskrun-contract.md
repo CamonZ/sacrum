@@ -503,8 +503,8 @@ Handle these events for run-aware GUI/CLI state:
 | `task_run_updated` | Upsert TaskRun and replace `task.runControls` with payload `run_controls`; TaskRun events remain authoritative replacement updates after task events. |
 | `task_run_step_changed` | Emitted whenever a task's `current_step_id` changes while a TaskRun exists, and at run-end paths (completion, retry exhaustion, stop). Lets pipeline views decrement the `from_step_id` bucket and increment the `to_step_id` bucket without refetching. |
 | `task_step_changed` | Emitted whenever a task's `current_step_id` changes outside orchestrator execution (manual `assign_workflow`, `advance_to_step`, `move_to_step`). Same pipeline use as `task_run_step_changed`, without `task_run_id` / `status` since no run is involved. |
-| `session_log_created` | Append log to the matching step execution. Payload includes `logical_key` when the daemon supplied an opaque logical key. |
-| `session_log_updated` | Replace the existing log row by `id` for logical-key upserts; do not append a second transcript line. |
+| `session_log_created` | Append log to the matching step execution. New events include the required `harness:<event_id>` logical key. |
+| `session_log_updated` | Historical row updates only; harness ingestion retries emit no log update. |
 | `code_ref_created` / `code_ref_updated` / `code_ref_deleted` | Upsert/remove task or section code references in detail/evidence stores by id. |
 | `artifact_created` / `artifact_updated` / `artifact_deleted` | Upsert/remove project-scoped file rows by id, including full file bodies. |
 | `artifact_link_created` / `artifact_link_updated` / `artifact_link_deleted` | Upsert/remove subject attachments by id using `artifact_id`, subject identity, nullable `logical_name`, and the versioned JSON `metadata` envelope. |
@@ -513,13 +513,27 @@ Channel payloads are snake_case. GraphQL fields are camelCase.
 Default-client channel payloads include `schema_version: 1`; clients should
 reject unknown versions as a binding/contract mismatch.
 
-Session logs are append-only unless the daemon sends a `logicalKey` through
-`createSessionLog`. For logical-key writes, the first write emits
-`session_log_created`; later writes for the same `(step_execution_id, logical_key)`
-emit `session_log_updated` with the same `id`, original `inserted_at`, latest
-`content`, latest `format`, latest `updated_at`, and `logical_key`. Clients
-should key log rows by `id` and treat `logical_key` as opaque backend/daemon
-metadata.
+Session logs accept only normalized HarnessEventV1 JSON with `format: "harness"`
+(the default). `logicalKey` remains nullable in GraphQL for existing daemon
+operations declaring `$logicalKey: String`; ingestion validation requires a
+non-null value equal to `harness:<event_id>`. The V1
+envelope, matching identity, and usage counters consumed by Sacrum are validated
+before persistence. Non-usage payloads and unused metadata remain opaque and
+are stored unchanged, including future event types. This is a storage/accounting
+boundary, not full validation of the producer's payload contract.
+
+Events are immutable within a step execution. An identical byte-for-byte content
+retry returns the original row, including its timestamps, and emits no log CDC
+change. A different payload for the same identity returns
+`event_identity_conflict`; it does not replace the row. Clients key rows by `id`.
+
+Only top-level `usage` events contribute to totals: `turn_delta` is summed once
+per identity, and `session_snapshot` supplies context. Cached and reasoning
+counters are subsets, not additions to input/output. For context, the highest
+sequence per stream wins; the latest inserted winning stream wins across
+streams. Full harness-log rescans remain intentional; incremental aggregation
+is a separate optimization. Provider-format and no-key ingestion are rejected.
+
 
 Standalone daemon reporting uses the same GraphQL mutations and response
 shapes as account-authenticated clients. The request must include the daemon's

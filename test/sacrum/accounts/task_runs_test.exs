@@ -375,46 +375,64 @@ defmodule Sacrum.Accounts.TaskRunsTest do
         })
 
       {:ok, root_log} =
-        SessionLogs.insert(user.id, %{
-          "project_id" => project.id,
-          "step_execution_id" => root_execution.id,
-          "content" => "root output"
-        })
+        SessionLogs.insert(
+          user.id,
+          Sacrum.HarnessFixture.with_event(%{
+            "project_id" => project.id,
+            "step_execution_id" => root_execution.id,
+            "content" => "root output"
+          })
+        )
 
       {:ok, child_log} =
-        SessionLogs.insert(user.id, %{
-          "project_id" => project.id,
-          "step_execution_id" => child_execution.id,
-          "content" => "child output"
-        })
+        SessionLogs.insert(
+          user.id,
+          Sacrum.HarnessFixture.with_event(%{
+            "project_id" => project.id,
+            "step_execution_id" => child_execution.id,
+            "content" => "child output"
+          })
+        )
 
       {:ok, grandchild_log} =
-        SessionLogs.insert(user.id, %{
-          "project_id" => project.id,
-          "step_execution_id" => grandchild_execution.id,
-          "content" => "grandchild output"
-        })
+        SessionLogs.insert(
+          user.id,
+          Sacrum.HarnessFixture.with_event(%{
+            "project_id" => project.id,
+            "step_execution_id" => grandchild_execution.id,
+            "content" => "grandchild output"
+          })
+        )
 
       {:ok, sibling_log} =
-        SessionLogs.insert(user.id, %{
-          "project_id" => project.id,
-          "step_execution_id" => sibling_execution.id,
-          "content" => "sibling output"
-        })
+        SessionLogs.insert(
+          user.id,
+          Sacrum.HarnessFixture.with_event(%{
+            "project_id" => project.id,
+            "step_execution_id" => sibling_execution.id,
+            "content" => "sibling output"
+          })
+        )
 
       {:ok, legacy_log} =
-        SessionLogs.insert(user.id, %{
-          "project_id" => project.id,
-          "step_execution_id" => legacy_execution.id,
-          "content" => "legacy output"
-        })
+        SessionLogs.insert(
+          user.id,
+          Sacrum.HarnessFixture.with_event(%{
+            "project_id" => project.id,
+            "step_execution_id" => legacy_execution.id,
+            "content" => "legacy output"
+          })
+        )
 
       {:ok, mismatched_owner_log} =
-        SessionLogs.insert(other_user.id, %{
-          "project_id" => project.id,
-          "step_execution_id" => mismatched_owner_execution.id,
-          "content" => "mismatched owner output"
-        })
+        SessionLogs.insert(
+          other_user.id,
+          Sacrum.HarnessFixture.with_event(%{
+            "project_id" => project.id,
+            "step_execution_id" => mismatched_owner_execution.id,
+            "content" => "mismatched owner output"
+          })
+        )
 
       root_execution_ids =
         user.id

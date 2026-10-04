@@ -10,6 +10,7 @@ defmodule Sacrum.Accounts.SessionLogs do
     preloads: [],
     default_order: [asc: :inserted_at]
 
+  alias Sacrum.Accounts.StepExecutions
   alias Sacrum.Repo.Schemas.SessionLog
 
   @doc """
@@ -17,8 +18,33 @@ defmodule Sacrum.Accounts.SessionLogs do
   Extracts step_execution_id and project_id from attrs.
   """
   @spec insert(String.t(), map()) ::
-          {:ok, SessionLog.t()} | {:error, Ecto.Changeset.t() | :event_identity_conflict}
+          {:ok, SessionLog.t()}
+          | {:error,
+             Ecto.Changeset.t() | :event_identity_conflict | :not_found | :invalid_attributes}
   def insert(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
-    RepoModule.insert(user_id, attrs)
+    normalized = Enum.map(attrs, fn {key, value} -> {to_string(key), value} end)
+    keys = Enum.map(normalized, &elem(&1, 0))
+
+    if length(Enum.uniq(keys)) == length(keys) do
+      insert_normalized(user_id, Map.new(normalized))
+    else
+      {:error, :invalid_attributes}
+    end
+  end
+
+  defp insert_normalized(user_id, attrs) do
+    case Ecto.UUID.cast(Map.get(attrs, "step_execution_id")) do
+      {:ok, execution_id} ->
+        case StepExecutions.get_by(user_id, conditions: [id: execution_id]) do
+          {:ok, execution} ->
+            RepoModule.insert(user_id, Map.put(attrs, "project_id", execution.project_id))
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      :error ->
+        {:error, :not_found}
+    end
   end
 end

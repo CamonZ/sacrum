@@ -4376,20 +4376,20 @@ defmodule SacrumWeb.Graphql.SchemaTest do
           mutation {
             createSessionLog(
               stepExecutionId: "#{exec.id}"
-              content: "Log entry content"
-              format: "anthropic"
+              content: #{Jason.encode!(Sacrum.HarnessFixture.content("Log entry content"))}
+              logicalKey: "#{Sacrum.HarnessFixture.attrs("Log entry content").logical_key}"
             ) { id content format stepExecutionId }
           }
         """)
         |> json_response(200)
 
       data = result["data"]["createSessionLog"]
-      assert data["content"] == "Log entry content"
-      assert data["format"] == "anthropic"
+      assert data["content"] == Sacrum.HarnessFixture.content("Log entry content")
+      assert data["format"] == "harness"
       assert data["stepExecutionId"] == exec.id
     end
 
-    test "upserts a session log by logicalKey", %{user: user, project: project} do
+    test "retries a session log by immutable logicalKey", %{user: user, project: project} do
       {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Task"})
       {:ok, wf} = Accounts.Workflows.insert(user.id, project.id, %{name: "WF"})
 
@@ -4408,18 +4408,21 @@ defmodule SacrumWeb.Graphql.SchemaTest do
           mutation {
             createSessionLog(
               stepExecutionId: "#{exec.id}"
-              logicalKey: "system/thinking_tokens"
-              content: "first snapshot"
-              format: "anthropic"
+              logicalKey: "harness:graphql-event"
+              content: #{Jason.encode!(Sacrum.HarnessFixture.content("first snapshot") |> Jason.decode!() |> Map.put("event_id", "graphql-event") |> Jason.encode!())}
+              format: "harness"
             ) { id content format logicalKey }
           }
         """)
         |> json_response(200)
 
       first_log = first["data"]["createSessionLog"]
-      assert first_log["content"] == "first snapshot"
-      assert first_log["format"] == "anthropic"
-      assert first_log["logicalKey"] == "system/thinking_tokens"
+
+      assert first_log["content"] |> Jason.decode!() |> get_in(["data", "text"]) ==
+               "first snapshot"
+
+      assert first_log["format"] == "harness"
+      assert first_log["logicalKey"] == "harness:graphql-event"
 
       second =
         build_conn()
@@ -4428,9 +4431,9 @@ defmodule SacrumWeb.Graphql.SchemaTest do
           mutation {
             createSessionLog(
               stepExecutionId: "#{exec.id}"
-              logicalKey: "system/thinking_tokens"
-              content: "latest snapshot"
-              format: "openai"
+              logicalKey: "harness:graphql-event"
+              content: #{Jason.encode!(Sacrum.HarnessFixture.content("first snapshot") |> Jason.decode!() |> Map.put("event_id", "graphql-event") |> Jason.encode!())}
+              format: "harness"
             ) { id content format logicalKey }
           }
         """)
@@ -4438,9 +4441,12 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
       second_log = second["data"]["createSessionLog"]
       assert second_log["id"] == first_log["id"]
-      assert second_log["content"] == "latest snapshot"
-      assert second_log["format"] == "openai"
-      assert second_log["logicalKey"] == "system/thinking_tokens"
+
+      assert second_log["content"] |> Jason.decode!() |> get_in(["data", "text"]) ==
+               "first snapshot"
+
+      assert second_log["format"] == "harness"
+      assert second_log["logicalKey"] == "harness:graphql-event"
 
       result =
         build_conn()
@@ -4452,9 +4458,9 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
       assert [found] = result["data"]["sessionLogs"]
       assert found["id"] == first_log["id"]
-      assert found["content"] == "latest snapshot"
-      assert found["format"] == "openai"
-      assert found["logicalKey"] == "system/thinking_tokens"
+      assert found["content"] |> Jason.decode!() |> get_in(["data", "text"]) == "first snapshot"
+      assert found["format"] == "harness"
+      assert found["logicalKey"] == "harness:graphql-event"
     end
 
     test "rejects unsupported session log format", %{conn: conn, user: user, project: project} do
@@ -4477,6 +4483,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
             createSessionLog(
               stepExecutionId: "#{exec.id}"
               content: "Log entry content"
+              logicalKey: "harness:invalid"
               format: "codex"
             ) { id content format }
           }
@@ -4505,11 +4512,14 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         })
 
       {:ok, log} =
-        Accounts.SessionLogs.insert(user.id, %{
-          step_execution_id: exec.id,
-          project_id: project.id,
-          content: "A log"
-        })
+        Accounts.SessionLogs.insert(
+          user.id,
+          Sacrum.HarnessFixture.with_event(%{
+            step_execution_id: exec.id,
+            project_id: project.id,
+            content: "A log"
+          })
+        )
 
       result =
         conn
@@ -4521,8 +4531,8 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
       assert [found] = result["data"]["sessionLogs"]
       assert found["id"] == log.id
-      assert found["content"] == "A log"
-      assert found["format"] == "anthropic"
+      assert found["content"] == Sacrum.HarnessFixture.content("A log")
+      assert found["format"] == "harness"
     end
   end
 
@@ -5142,11 +5152,14 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         })
 
       {:ok, log} =
-        Accounts.SessionLogs.insert(user.id, %{
-          step_execution_id: exec.id,
-          project_id: project.id,
-          content: "Log entry"
-        })
+        Accounts.SessionLogs.insert(
+          user.id,
+          Sacrum.HarnessFixture.with_event(%{
+            step_execution_id: exec.id,
+            project_id: project.id,
+            content: "Log entry"
+          })
+        )
 
       result =
         conn
@@ -5158,7 +5171,7 @@ defmodule SacrumWeb.Graphql.SchemaTest do
 
       assert [log_data] = result["data"]["stepExecution"]["sessionLogs"]
       assert log_data["id"] == log.id
-      assert log_data["content"] == "Log entry"
+      assert log_data["content"] == Sacrum.HarnessFixture.content("Log entry")
     end
   end
 
@@ -7441,11 +7454,14 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         })
 
       {:ok, log} =
-        Accounts.SessionLogs.insert(user.id, %{
-          step_execution_id: exec.id,
-          project_id: project.id,
-          content: "A log"
-        })
+        Accounts.SessionLogs.insert(
+          user.id,
+          Sacrum.HarnessFixture.with_event(%{
+            step_execution_id: exec.id,
+            project_id: project.id,
+            content: "A log"
+          })
+        )
 
       result =
         conn
@@ -7595,11 +7611,14 @@ defmodule SacrumWeb.Graphql.SchemaTest do
         })
 
       {:ok, _log} =
-        Accounts.SessionLogs.insert(user.id, %{
-          step_execution_id: exec.id,
-          project_id: project.id,
-          content: "Secret log"
-        })
+        Accounts.SessionLogs.insert(
+          user.id,
+          Sacrum.HarnessFixture.with_event(%{
+            step_execution_id: exec.id,
+            project_id: project.id,
+            content: "Secret log"
+          })
+        )
 
       result =
         conn
