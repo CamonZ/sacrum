@@ -22,15 +22,9 @@ defmodule SacrumWeb.Graphql.Types.ProjectType do
     end
 
     field :artifacts, list_of(:artifact) do
-      arg(:limit, :integer, default_value: 50)
-      arg(:offset, :integer, default_value: 0)
-
-      resolve(fn project, %{limit: limit, offset: offset}, %{context: %{current_user: user}} ->
+      resolve(fn project, _args, %{context: %{current_user: user}} ->
         artifacts =
-          Accounts.Artifacts.list_for_subject(user.id, project.id, "project", project.id,
-            limit: limit,
-            offset: offset
-          )
+          Accounts.Artifacts.list_for_subject(user.id, project.id, "project", project.id)
 
         {:ok, artifacts}
       end)
