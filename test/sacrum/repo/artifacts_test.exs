@@ -140,7 +140,7 @@ defmodule Sacrum.Repo.ArtifactsTest do
     end
   end
 
-  describe "list_for_project/3" do
+  describe "list_for_project/2" do
     setup [:setup_artifact_project]
 
     test "lists Markdown and JSON files only within the user and project scope", %{
@@ -181,7 +181,7 @@ defmodule Sacrum.Repo.ArtifactsTest do
     end
   end
 
-  describe "list_for_subject/5" do
+  describe "list_for_subject/4" do
     setup [:setup_artifact_project]
 
     test "returns only files linked to the scoped subject", %{user: user, project: project} do
@@ -232,15 +232,15 @@ defmodule Sacrum.Repo.ArtifactsTest do
       assert [] = Artifacts.list_for_subject(other_user.id, project.id, "task", task.id)
     end
 
-    test "applies pagination after task scope and preserves attachment metadata", %{
+    test "returns more than 50 scoped attachments in deterministic order with metadata", %{
       user: user,
       project: project
     } do
       task = create_task(project)
-      other_task = create_task(project, "Other paginated subject")
+      other_task = create_task(project, "Other subject")
 
       direct_artifacts =
-        for index <- 1..3 do
+        for index <- 1..55 do
           {:ok, artifact} =
             Artifacts.insert(
               user.id,
@@ -276,19 +276,23 @@ defmodule Sacrum.Repo.ArtifactsTest do
 
       all_direct = Artifacts.list_for_subject(user.id, project.id, "task", task.id)
 
-      page =
-        Artifacts.list_for_subject(user.id, project.id, "task", task.id,
-          limit: 2,
-          offset: 1
-        )
+      expected_ids = direct_artifacts |> Enum.reverse() |> Enum.map(& &1.id)
+      assert Enum.map(all_direct, & &1.id) == expected_ids
 
-      assert Enum.map(page, & &1.id) ==
-               all_direct |> Enum.map(& &1.id) |> Enum.slice(1, 2)
+      assert Enum.map(Artifacts.list_for_project(user.id, project.id), & &1.id) ==
+               [unrelated.id | expected_ids]
 
-      assert Enum.all?(
-               page,
-               &(&1.id in Enum.map(direct_artifacts, fn artifact -> artifact.id end))
-             )
+      assert [] == Artifacts.list_for_subject(user.id, project.id, "project", project.id)
+      assert [] == Artifacts.list_for_subject(user.id, Ecto.UUID.generate(), "task", task.id)
+
+      tied_at = ~U[2026-01-01 00:00:00.000000Z]
+      Sacrum.Repo.update_all(Artifact, set: [inserted_at: tied_at])
+
+      assert Enum.map(Artifacts.list_for_subject(user.id, project.id, "task", task.id), & &1.id) ==
+               Enum.sort(expected_ids, :desc)
+
+      assert Enum.map(Artifacts.list_for_project(user.id, project.id), & &1.id) ==
+               Enum.sort([unrelated.id | expected_ids], :desc)
 
       metadata_artifact = Enum.find(all_direct, &(&1.id == Enum.at(direct_artifacts, 1).id))
       assert metadata_artifact.logical_name == "result"

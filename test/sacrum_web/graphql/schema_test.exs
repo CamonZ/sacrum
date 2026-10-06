@@ -194,26 +194,115 @@ defmodule SacrumWeb.Graphql.SchemaTest do
                  "updatedAt" => DateTime.to_iso8601(json.updated_at)
                }
              ]
+    end
+  end
 
-      first_page =
+  describe "complete artifact lists" do
+    setup [:setup_user_and_project]
+
+    test "returns every project, task, and section attachment beyond 50", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Complete attachments"})
+
+      {:ok, section} =
+        Accounts.Sections.insert(user.id, %{
+          task_id: task.id,
+          project_id: project.id,
+          section_type: "context",
+          content: "Evidence"
+        })
+
+      metadata = %{
+        "version" => 1,
+        "content_kind" => "result",
+        "format" => "json",
+        "origin" => "test",
+        "presentation" => "raw",
+        "extensions" => %{}
+      }
+
+      artifacts =
+        for index <- 1..55 do
+          artifact =
+            create_artifact(user, project, %{filename: "result-#{index}.json", body: "#{index}"})
+
+          for {type, id} <- [
+                {"project", project.id},
+                {"task", task.id},
+                {"task_section", section.id}
+              ] do
+            {:ok, _link} =
+              ArtifactLinks.insert(user.id, project.id, artifact.id, %{
+                subject_type: type,
+                subject_id: id,
+                logical_name: "result_#{index}",
+                metadata: metadata
+              })
+          end
+
+          artifact
+        end
+
+      create_artifact(user, project, %{filename: "unlinked.json"})
+
+      result =
         conn
-        |> recycle()
         |> authenticate(user)
-        |> graphql(~s|{ project(id: "#{project.id}") { artifacts(limit: 1) { id } } }|)
+        |> graphql("""
+          { project(id: "#{project.id}") { artifacts { id body logicalName metadata } }
+            task(id: "#{task.id}") { artifacts { id body logicalName metadata }
+              sections { id artifacts { id body logicalName metadata } evidence { id body logicalName metadata } } } }
+        """)
         |> json_response(200)
 
-      second_page =
-        conn
-        |> recycle()
-        |> authenticate(user)
-        |> graphql(~s|{ project(id: "#{project.id}") { artifacts(limit: 1, offset: 1) { id } } }|)
-        |> json_response(200)
+      refute Map.has_key?(result, "errors")
 
-      paged_ids =
-        first_page["data"]["project"]["artifacts"] ++
-          second_page["data"]["project"]["artifacts"]
+      expected =
+        artifacts
+        |> Enum.reverse()
+        |> Enum.map(fn artifact ->
+          index = artifact.body
 
-      assert MapSet.new(paged_ids, & &1["id"]) == MapSet.new([markdown.id, json.id])
+          %{
+            "id" => artifact.id,
+            "body" => index,
+            "logicalName" => "result_#{index}",
+            "metadata" => metadata
+          }
+        end)
+
+      assert result["data"]["project"]["artifacts"] == expected
+      assert result["data"]["task"]["artifacts"] == expected
+      found_section = Enum.find(result["data"]["task"]["sections"], &(&1["id"] == section.id))
+      assert found_section["artifacts"] == expected
+      assert found_section["evidence"] == expected
+      assert length(ArtifactsRepo.list_for_project(user.id, project.id)) == 56
+    end
+
+    test "rejects removed pagination arguments on project and task artifacts", %{
+      conn: conn,
+      user: user,
+      project: project
+    } do
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Argument validation"})
+
+      for {type, id} <- [{"project", project.id}, {"task", task.id}],
+          argument <- ["limit", "offset"] do
+        result =
+          conn
+          |> recycle()
+          |> authenticate(user)
+          |> graphql(~s|{ #{type}(id: "#{id}") { artifacts(#{argument}: 1) { id } } }|)
+          |> json_response(200)
+
+        assert [%{"message" => message}] = result["errors"]
+        assert message =~ "Unknown argument"
+        assert message =~ argument
+        refute Map.has_key?(result, "data")
+      end
     end
   end
 
@@ -645,31 +734,6 @@ defmodule SacrumWeb.Graphql.SchemaTest do
                  "logicalName" => "result"
                }
              ]
-
-      all_ids =
-        conn
-        |> recycle()
-        |> authenticate(user)
-        |> graphql(~s|{ task(id: "#{task.id}") { artifacts { id } } }|)
-        |> json_response(200)
-        |> get_in(["data", "task", "artifacts"])
-        |> Enum.map(& &1["id"])
-
-      paged_ids =
-        for offset <- 0..1 do
-          conn
-          |> recycle()
-          |> authenticate(user)
-          |> graphql(
-            ~s|{ task(id: "#{task.id}") { artifacts(limit: 1, offset: #{offset}) { id } } }|
-          )
-          |> json_response(200)
-          |> get_in(["data", "task", "artifacts"])
-          |> Enum.map(& &1["id"])
-        end
-        |> List.flatten()
-
-      assert paged_ids == Enum.take(all_ids, 2)
     end
 
     test "creates and reads a harness conversation attachment with provenance metadata", %{

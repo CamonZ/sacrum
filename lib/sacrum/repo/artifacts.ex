@@ -12,14 +12,10 @@ defmodule Sacrum.Repo.Artifacts do
   alias Sacrum.Repo.Schemas.ArtifactLink
   alias Sacrum.Repo.Schemas.Project
 
-  @default_limit 50
-  @default_offset 0
-
   defguardp is_user_project_scope(user_id, project_id)
             when is_binary(user_id) and is_binary(project_id)
 
   defguardp is_attrs(attrs) when is_map(attrs)
-  defguardp is_options(opts) when is_list(opts)
 
   @spec get_in_scope(String.t(), String.t()) :: {:ok, Artifact.t()} | {:error, :not_found}
   def get_in_scope(user_id, artifact_id)
@@ -59,23 +55,21 @@ defmodule Sacrum.Repo.Artifacts do
     |> Repo.update()
   end
 
-  @spec list_for_project(String.t(), String.t(), keyword()) :: [Artifact.t()]
-  def list_for_project(user_id, project_id, opts \\ [])
-      when is_user_project_scope(user_id, project_id) and is_options(opts) do
+  @spec list_for_project(String.t(), String.t()) :: [Artifact.t()]
+  def list_for_project(user_id, project_id)
+      when is_user_project_scope(user_id, project_id) do
     Artifact
     |> where_in_scope(user_id, project_id)
     |> apply_artifact_order()
-    |> apply_offset(opts)
-    |> apply_limit(opts)
     |> Repo.all()
   end
 
-  @spec list_for_subject(String.t(), String.t(), String.t(), String.t(), keyword()) :: [
+  @spec list_for_subject(String.t(), String.t(), String.t(), String.t()) :: [
           Artifact.t()
         ]
-  def list_for_subject(user_id, project_id, subject_type, subject_id, opts \\ [])
+  def list_for_subject(user_id, project_id, subject_type, subject_id)
       when is_user_project_scope(user_id, project_id) and is_binary(subject_type) and
-             is_binary(subject_id) and is_options(opts) do
+             is_binary(subject_id) do
     query = subject_artifacts_query(user_id, project_id, subject_type, subject_id)
 
     query
@@ -85,8 +79,6 @@ defmodule Sacrum.Repo.Artifacts do
     })
     |> distinct(true)
     |> apply_artifact_order()
-    |> apply_offset(opts)
-    |> apply_limit(opts)
     |> Repo.all()
   end
 
@@ -166,30 +158,9 @@ defmodule Sacrum.Repo.Artifacts do
     order_by(query, [artifact], desc: artifact.inserted_at, desc: artifact.id)
   end
 
-  defp apply_limit(query, opts) do
-    limit(query, ^limit_option(opts))
-  end
-
-  defp apply_offset(query, opts) do
-    offset(query, ^offset_option(opts))
-  end
-
   defp project_exists?(user_id, project_id) do
     Project
     |> where([project], project.id == ^project_id and project.user_id == ^user_id)
     |> Repo.exists?()
-  end
-
-  defp limit_option(opts) do
-    opts
-    |> Keyword.get(:limit, @default_limit)
-    |> min(@default_limit)
-    |> max(1)
-  end
-
-  defp offset_option(opts) do
-    opts
-    |> Keyword.get(:offset, @default_offset)
-    |> max(0)
   end
 end

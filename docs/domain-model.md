@@ -98,7 +98,7 @@ Queries and mutations are grouped by resource in `lib/sacrum_web/graphql/types/`
 | `projects` | — | List all user's projects |
 | `project` | `id!` | Single project by ID |
 
-The `Project.artifacts(limit: 50, offset: 0)` field returns the caller's project-linked artifacts newest first. `limit` is clamped to `1..50`, and `offset` is clamped to zero or greater for offset-based pagination. Each attachment-context artifact exposes `id`, `filename`, `body`, `logicalName`, `metadata`, `insertedAt`, and `updatedAt`. Linked files are also exposed on `Task.artifacts`, `TaskSection.artifacts`, and `TaskSection.evidence`.
+`Project.artifacts`, `Task.artifacts`, `TaskSection.artifacts`, and `TaskSection.evidence` return the complete authorized set of files linked to that subject, without pagination arguments or a page-size cap. Results are ordered by `inserted_at` descending, then UUID descending to break timestamp ties. Each attachment-context artifact exposes `id`, `filename`, `body`, `logicalName`, `metadata`, `insertedAt`, and `updatedAt`. Clients and daemons must request `artifacts { ... }` without `limit` or `offset`, and consume the returned list directly; older queries supplying either argument fail GraphQL validation. Repository project lists use `list_for_project/2`; repository and Accounts subject lists use `list_for_subject/4`. Identity-only prompt retrieval is also complete and remains body-free.
 
 **`workflow_type.ex`** — Workflow queries
 | Query | Arguments | Description |
