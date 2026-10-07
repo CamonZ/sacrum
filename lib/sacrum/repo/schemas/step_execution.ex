@@ -42,6 +42,13 @@ defmodule Sacrum.Repo.Schemas.StepExecution do
     field :duration_ms, :integer
     field :handoff, :map
 
+    # Named TaskRun conversation. `session_name` and `resume_session_id` are
+    # pinned by the server at dispatch; `native_session_id` is the harness
+    # conversation id the daemon reports for this execution.
+    field :session_name, :string
+    field :resume_session_id, :string
+    field :native_session_id, :string
+
     belongs_to :task_run, Sacrum.Repo.Schemas.TaskRun
     belongs_to :task, Sacrum.Repo.Schemas.Task
     belongs_to :workflow, Sacrum.Repo.Schemas.Workflow
@@ -57,7 +64,7 @@ defmodule Sacrum.Repo.Schemas.StepExecution do
   @token_fields ~w(input_tokens output_tokens session_input_tokens session_cache_read_input_tokens session_output_tokens session_total_tokens context_window_input_tokens context_window_cache_read_input_tokens context_window_total_tokens)a
   @create_fields ~w(task_id task_run_id step_name step_type status context output transition_result model model_provider harness cost duration_ms workflow_id step_id handoff)a ++
                    @token_fields
-  @update_fields ~w(task_run_id step_name status context output transition_result model model_provider harness cost duration_ms handoff)a ++
+  @update_fields ~w(task_run_id step_name status context output transition_result model model_provider harness cost duration_ms handoff native_session_id)a ++
                    @token_fields
 
   @spec create_changeset(t(), map()) :: Ecto.Changeset.t()
@@ -75,6 +82,15 @@ defmodule Sacrum.Repo.Schemas.StepExecution do
   @doc "Records the rendered config an execution runs with."
   @spec put_config(Ecto.Changeset.t(), Config.t()) :: Ecto.Changeset.t()
   def put_config(changeset, config), do: put_change(changeset, :config, config)
+
+  @doc "Records the session name and resume id an execution was dispatched with."
+  @spec put_session(Ecto.Changeset.t(), String.t() | nil, String.t() | nil) ::
+          Ecto.Changeset.t()
+  def put_session(changeset, session_name, resume_session_id) do
+    changeset
+    |> put_change(:session_name, session_name)
+    |> put_change(:resume_session_id, resume_session_id)
+  end
 
   @spec update_changeset(t(), map()) :: Ecto.Changeset.t()
   def update_changeset(execution, attrs) do

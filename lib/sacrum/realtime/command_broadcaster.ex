@@ -10,7 +10,8 @@ defmodule Sacrum.Realtime.CommandBroadcaster do
   @doc """
   Sends run_step for a started execution. The request comes from the
   execution's rendered config. Inference reads `harness` from the step;
-  execute omits it. `verbose_daemon_logging` is read from the step.
+  execute omits it. `verbose_daemon_logging` is read from the step, and
+  `session` from the execution's pinned session name and resume id.
   """
   @spec broadcast_run_step(map(), String.t() | nil) :: :ok | {:error, atom()}
   def broadcast_run_step(%{execution: execution} = data, daemon_id) do
@@ -24,6 +25,7 @@ defmodule Sacrum.Realtime.CommandBroadcaster do
       |> Map.merge(request_payload(execution.config))
       |> put_harness(execution.config, data.step)
       |> put_present(:verbose_daemon_logging, data.step.verbose_daemon_logging || nil)
+      |> put_present(:session, session_payload(execution))
 
     broadcast(daemon_id, "run_step", payload)
   end
@@ -58,6 +60,16 @@ defmodule Sacrum.Realtime.CommandBroadcaster do
       :output_schema,
       config && Map.get(config, :output_schema)
     )
+  end
+
+  # Only executions dispatched with a named session carry one; the daemon
+  # starts a new conversation or resumes the pinned native id.
+  defp session_payload(execution) do
+    case {Map.get(execution, :session_name), Map.get(execution, :resume_session_id)} do
+      {nil, _resume_id} -> nil
+      {_name, nil} -> %{mode: "new"}
+      {_name, resume_id} -> %{mode: "resume", resume_id: resume_id}
+    end
   end
 
   defp put_present(payload, _key, nil), do: payload

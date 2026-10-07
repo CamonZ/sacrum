@@ -253,7 +253,7 @@ polymorphic embedded schema whose variant is selected by `stepType`:
 
 | `stepType` | GraphQL type | Fields (besides `version: 1`) |
 |------------|--------------|-------------------------------|
-| `llm_inference` | `LlmInferenceStepConfig` | `prompt`, `output_schema`, `agents`, `skills`, `agent_config` |
+| `llm_inference` | `LlmInferenceStepConfig` | `prompt`, `output_schema`, `agents`, `skills`, `agent_config`, `session` |
 | `structured_inference` | `StructuredInferenceStepConfig` | `provider`, `model`, `state`, `questions` (all required) |
 | `execute` | `ExecuteStepConfig` | `script`, `output_schema` (required); server-written `context` on dispatched executions |
 | `route` | `RouteStepConfig` | `route_config` |
@@ -300,6 +300,26 @@ until a valid `route_config` is saved. The daemon `run_step` payload includes
 the step's canonical `harness` value alongside the existing `prompt`,
 `agent_config`, `output_schema`, `worktree`, and optional
 `verbose_daemon_logging` fields.
+
+### Named sessions
+
+An `llm_inference` step may set `session: {name, mode}` to start or continue a
+named conversation within its TaskRun. `mode` is `new`, `resume`, or
+`resume_or_new`; names are 1-255 bytes. Without `session`, every dispatch is an
+independent conversation.
+
+There is no separate session registry. The binding for a name is the
+`native_session_id` of the run's most recent completed execution with that
+`session_name` that reported one. At dispatch the server records
+`session_name` and, when resuming, `resume_session_id` on the new execution,
+then sends `session: {mode: "new"}` or `session: {mode: "resume", resume_id}`
+in `run_step`. `resume` with no binding fails the dispatch with
+`session_not_found`, and a binding recorded under a different harness fails
+with `session_harness_mismatch`; neither silently starts a new conversation.
+The daemon reports the conversation id through `updateStepExecution`'s
+`nativeSessionId`. Other runs, failed executions, and other names are never
+selected, and session data never enters prompts, `PromptContext`, or step
+outputs.
 
 ### Structured inference steps
 

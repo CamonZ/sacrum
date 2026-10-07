@@ -132,6 +132,19 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
     field :cost, :decimal
     field :duration_ms, :integer
     field :handoff, :json
+
+    field :session_name, :string do
+      description("Named TaskRun conversation this execution started or resumed.")
+    end
+
+    field :resume_session_id, :string do
+      description("Native conversation id this execution was dispatched to resume.")
+    end
+
+    field :native_session_id, :string do
+      description("Native conversation id the daemon reported for this execution.")
+    end
+
     field :inserted_at, :datetime
     field :updated_at, :datetime
 
@@ -328,6 +341,7 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
       arg(:context_window_total_tokens, :integer)
       arg(:cost, :decimal)
       arg(:duration_ms, :integer)
+      arg(:native_session_id, :string)
 
       resolve(fn %{id: id} = args, %{context: %{current_user: user}} ->
         Logger.info(

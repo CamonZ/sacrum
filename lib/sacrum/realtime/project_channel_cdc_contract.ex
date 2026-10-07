@@ -92,7 +92,7 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
     transition_result model model_provider harness input_tokens output_tokens cost duration_ms handoff
     session_input_tokens session_cache_read_input_tokens session_output_tokens session_total_tokens
     context_window_input_tokens context_window_cache_read_input_tokens context_window_total_tokens
-    inserted_at updated_at
+    session_name resume_session_id native_session_id inserted_at updated_at
   )a
 
   @step_execution_event_payload_keys [:schema_version | @step_execution_payload_keys]
