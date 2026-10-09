@@ -57,7 +57,8 @@ defmodule Sacrum.Routing.RouteConfigTest do
 
     assert decoded.default == %{
              transition: %{type: :inter_workflow, workflow_id: @inter_workflow_id},
-             handoff: nil
+             handoff: nil,
+             session: nil
            }
   end
 
@@ -161,6 +162,49 @@ defmodule Sacrum.Routing.RouteConfigTest do
                  "handoff" => %{"message" => "{{ task.title }}"}
                })
              )
+  end
+
+  test "decodes session directives on rules and the default" do
+    config =
+      base_config()
+      |> put_in(["rules", Access.at(0), "session"], %{"mode" => "resume"})
+      |> Map.put("default", %{
+        "transition" => %{"type" => "intra_workflow", "step_id" => @intra_step_id},
+        "session" => %{"mode" => "fork", "step_id" => @inter_workflow_id}
+      })
+
+    assert {:ok, %{rules: [rule], default: default}} = RouteConfig.decode(config)
+    assert rule.session == %{mode: :resume, step_id: nil}
+    assert default.session == %{mode: :fork, step_id: @inter_workflow_id}
+
+    new = put_in(base_config(), ["rules", Access.at(0), "session"], %{"mode" => "new"})
+    assert {:ok, %{rules: [%{session: %{mode: :new, step_id: nil}}]}} = RouteConfig.decode(new)
+
+    assert {:ok, %{rules: [%{session: nil}]}} = RouteConfig.decode(base_config())
+  end
+
+  test "rejects malformed session directives at their submitted paths" do
+    for {session, path} <- [
+          {"resume", "$.rules[0].session"},
+          {%{}, "$.rules[0].session.mode"},
+          {%{"mode" => "resume_or_new"}, "$.rules[0].session.mode"},
+          {%{"mode" => "resume", "name" => "impl"}, "$.rules[0].session.name"},
+          {%{"mode" => "resume", "step_id" => "not-a-uuid"}, "$.rules[0].session.step_id"},
+          {%{"mode" => "new", "step_id" => @intra_step_id}, "$.rules[0].session.step_id"}
+        ] do
+      config = put_in(base_config(), ["rules", Access.at(0), "session"], session)
+
+      assert {:error, %{code: :route_config_invalid, path: ^path}} = RouteConfig.decode(config),
+             inspect(session)
+    end
+
+    default =
+      Map.put(base_config(), "default", %{
+        "transition" => %{"type" => "intra_workflow", "step_id" => @intra_step_id},
+        "session" => %{"mode" => "branch"}
+      })
+
+    assert {:error, %{path: "$.default.session.mode"}} = RouteConfig.decode(default)
   end
 
   defp base_config do

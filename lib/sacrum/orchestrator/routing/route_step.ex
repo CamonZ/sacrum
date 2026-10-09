@@ -65,7 +65,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
         committed,
         dest_id,
         transition_type,
-        result.handoff,
+        result,
         route_plan
       )
     else
@@ -252,7 +252,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
          %{task: updated_task, route_execution: route_execution},
          dest_id,
          transition_type,
-         handoff,
+         result,
          route_plan
        ) do
     RouteDecision.log_route_decision(
@@ -260,13 +260,18 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
       route_execution.id,
       dest_id,
       transition_type,
-      handoff
+      result.handoff
     )
 
     if data.slot_id, do: ExecutionPool.release_slot(data.slot_id)
 
     handle_route_continuation(
-      %{data | slot_id: nil, pending_handoff: handoff},
+      %{
+        data
+        | slot_id: nil,
+          pending_handoff: result.handoff,
+          pending_session: RouteAudit.session(result)
+      },
       data.task.id,
       updated_task,
       transition_type,

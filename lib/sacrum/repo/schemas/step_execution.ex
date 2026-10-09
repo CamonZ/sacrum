@@ -42,12 +42,15 @@ defmodule Sacrum.Repo.Schemas.StepExecution do
     field :duration_ms, :integer
     field :handoff, :map
 
-    # Named TaskRun conversation. `session_name` and `resume_session_id` are
-    # pinned by the server at dispatch; `native_session_id` is the harness
-    # conversation id the daemon reports for this execution.
-    field :session_name, :string
+    # Provider conversation of an llm_inference execution. The server pins
+    # `resume_session_id` (the native id resumed or forked),
+    # `conversation_root_execution_id` (itself for new and fork, the source's
+    # root on resume) and `forked_from_execution_id` at dispatch;
+    # `native_session_id` is the conversation id the daemon reports.
     field :resume_session_id, :string
     field :native_session_id, :string
+    field :conversation_root_execution_id, :binary_id
+    field :forked_from_execution_id, :binary_id
 
     belongs_to :task_run, Sacrum.Repo.Schemas.TaskRun
     belongs_to :task, Sacrum.Repo.Schemas.Task
@@ -83,13 +86,17 @@ defmodule Sacrum.Repo.Schemas.StepExecution do
   @spec put_config(Ecto.Changeset.t(), Config.t()) :: Ecto.Changeset.t()
   def put_config(changeset, config), do: put_change(changeset, :config, config)
 
-  @doc "Records the session name and resume id an execution was dispatched with."
-  @spec put_session(Ecto.Changeset.t(), String.t() | nil, String.t() | nil) ::
-          Ecto.Changeset.t()
-  def put_session(changeset, session_name, resume_session_id) do
+  @doc """
+  Records a new execution's preallocated id and the conversation it was
+  dispatched into.
+  """
+  @spec put_session(Ecto.Changeset.t(), map()) :: Ecto.Changeset.t()
+  def put_session(changeset, session) do
     changeset
-    |> put_change(:session_name, session_name)
-    |> put_change(:resume_session_id, resume_session_id)
+    |> put_change(:id, session.id)
+    |> put_change(:resume_session_id, session.resume_session_id)
+    |> put_change(:conversation_root_execution_id, session.conversation_root_execution_id)
+    |> put_change(:forked_from_execution_id, session.forked_from_execution_id)
   end
 
   @spec update_changeset(t(), map()) :: Ecto.Changeset.t()

@@ -40,7 +40,15 @@ defmodule Sacrum.Orchestrator.Routing.HumanInput do
       )
 
       ExecutionPool.release_slot(data.slot_id)
-      {:parked, %{data | current_execution_id: execution.id, slot_id: nil, pending_handoff: nil}}
+
+      {:parked,
+       %{
+         data
+         | current_execution_id: execution.id,
+           slot_id: nil,
+           pending_handoff: nil,
+           pending_session: nil
+       }}
     else
       {:error, reason} ->
         Logger.error(

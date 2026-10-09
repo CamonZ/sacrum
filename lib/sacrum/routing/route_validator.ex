@@ -185,6 +185,7 @@ defmodule Sacrum.Routing.RouteValidator do
   defp validate_configured(route_step, route_config, snapshot) do
     with :ok <- validate_route_step_type(route_step),
          {:ok, program} <- RouteConfig.decode(route_config),
+         :ok <- validate_sessions(route_step, program, snapshot),
          {:ok, type_environment} <-
            RoutePredecessors.derive_type_environment(predecessor_schemas(route_step, snapshot)),
          :ok <- RoutePredecessors.validate(program, type_environment),
@@ -441,6 +442,86 @@ defmodule Sacrum.Routing.RouteValidator do
          "#{path}.workflow_id",
          "must enter a configured step in the destination workflow"
        )}
+    end
+  end
+
+  #
+  # Session directives: the destination and the referenced conversation step
+  # must be llm_inference steps of this workflow on the same harness. They
+  # read only steps, so they are checked even while predecessor and target
+  # edges may still be missing from an authoring draft.
+  #
+
+  defp validate_sessions(route_step, program, snapshot) do
+    program.rules
+    |> Enum.with_index(fn rule, index -> {rule, "$.rules[#{index}].session"} end)
+    |> Enum.concat(if program.default, do: [{program.default, "$.default.session"}], else: [])
+    |> Enum.reduce_while(:ok, fn {decision, path}, :ok ->
+      case validate_session(route_step, decision, path, snapshot) do
+        :ok -> {:cont, :ok}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp validate_session(_route_step, %{session: nil}, _path, _snapshot), do: :ok
+
+  defp validate_session(
+         route_step,
+         %{session: session, transition: transition},
+         path,
+         snapshot
+       ) do
+    with {:ok, destination} <- session_destination(route_step, transition, path, snapshot) do
+      validate_session_source(route_step, destination, session, path, snapshot)
+    end
+  end
+
+  defp session_destination(route_step, %{type: :intra_workflow, step_id: step_id}, path, snapshot) do
+    case Map.get(snapshot.steps, step_id) do
+      %{step_type: :llm_inference, workflow_id: workflow_id} = step
+      when workflow_id == route_step.workflow_id ->
+        {:ok, step}
+
+      _step ->
+        session_destination(route_step, nil, path, snapshot)
+    end
+  end
+
+  defp session_destination(_route_step, _transition, path, _snapshot) do
+    {:error,
+     error(
+       :route_session_invalid,
+       path,
+       "requires an intra_workflow transition to an llm_inference step"
+     )}
+  end
+
+  defp validate_session_source(_route_step, _destination, %{step_id: nil}, _path, _snapshot),
+    do: :ok
+
+  defp validate_session_source(route_step, destination, %{step_id: step_id}, path, snapshot) do
+    case Map.get(snapshot.steps, step_id) do
+      %{step_type: :llm_inference, workflow_id: workflow_id, harness: harness}
+      when workflow_id == route_step.workflow_id and harness == destination.harness ->
+        :ok
+
+      %{step_type: :llm_inference, workflow_id: workflow_id}
+      when workflow_id == route_step.workflow_id ->
+        {:error,
+         error(
+           :route_session_invalid,
+           "#{path}.step_id",
+           "must use the same harness as the destination step"
+         )}
+
+      _step ->
+        {:error,
+         error(
+           :route_session_invalid,
+           "#{path}.step_id",
+           "must be an llm_inference step in this workflow"
+         )}
     end
   end
 

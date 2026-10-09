@@ -235,6 +235,49 @@ defmodule Sacrum.WorkflowBundles.ManifestTest do
       assert get_in(route_config, ["rules", Access.at(0), "handoff", "opaque_id"]) ==
                "00000000-0000-0000-0000-000000000099"
     end
+
+    test "maps session step refs to step ids and rejects unresolved refs" do
+      session_path = ["workflows", Access.at(0), "steps", Access.at(1), "config", "route_config"]
+
+      bundle =
+        valid_bundle()
+        |> put_in(session_path ++ ["rules", Access.at(0), "session"], %{
+          "mode" => "fork",
+          "step_ref" => "start"
+        })
+        |> put_in(session_path ++ ["default", "session"], %{"mode" => "new"})
+
+      {:ok, normalized} = Manifest.validate(bundle)
+      start_id = Ecto.UUID.generate()
+
+      step_ids = %{
+        {"build", "start"} => start_id,
+        {"build", "route"} => Ecto.UUID.generate(),
+        {"build", "finish"} => Ecto.UUID.generate()
+      }
+
+      assert {:ok, remapped} =
+               Manifest.remap_routes(normalized, %{"build" => Ecto.UUID.generate()}, step_ids)
+
+      route_config =
+        hd(remapped.workflows).steps |> Enum.at(1) |> get_in([:config, "route_config"])
+
+      assert get_in(route_config, ["rules", Access.at(0), "session"]) ==
+               %{"mode" => "fork", "step_id" => start_id}
+
+      assert get_in(route_config, ["default", "session"]) == %{"mode" => "new"}
+
+      {:ok, unresolved} =
+        bundle
+        |> put_in(session_path ++ ["rules", Access.at(0), "session", "step_ref"], "missing")
+        |> Manifest.validate()
+
+      assert {:error,
+              %{
+                path: "workflows[0].steps[1].config.route_config.rules[0].session.step_ref",
+                message: "is not a known step ref"
+              }} = remap_with_generated_ids(unresolved)
+    end
   end
 
   defp valid_bundle do

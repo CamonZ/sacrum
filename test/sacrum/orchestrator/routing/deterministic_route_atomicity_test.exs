@@ -5,7 +5,7 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
 
   alias Sacrum.Accounts
   alias Sacrum.Orchestrator.ExecutionDispatcher
-  alias Sacrum.Orchestrator.Routing.RouteStep
+  alias Sacrum.Orchestrator.Routing.{RouteRecovery, RouteStep}
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{StepExecution, Task, TaskRun}
   alias Sacrum.Routing.RouteConfig
@@ -185,6 +185,111 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
       assert Repo.get!(StepExecution, destination_execution.id).handoff == fixture.handoff
     end
 
+    test "records the session directive and applies it with the handoff to the destination" do
+      fixture =
+        configured_intra_fixture(
+          route_handoff_template(),
+          &%{"mode" => "fork", "step_id" => &1.id}
+        )
+
+      {:ok, source_execution} =
+        fixture.source_execution
+        |> Ecto.Changeset.change(
+          harness: fixture.destination.harness,
+          native_session_id: "native-source",
+          conversation_root_execution_id: fixture.source_execution.id
+        )
+        |> Repo.update()
+
+      session = %{"mode" => "fork", "step_id" => source_execution.step_id}
+
+      assert {:next_state, :awaiting_execution, returned_data} =
+               RouteStep.handle_deterministic_route_step(
+                 fixture.data,
+                 fixture.route,
+                 fixture.program
+               )
+
+      assert returned_data.pending_session == session
+
+      assert %StepExecution{context: %{"route" => %{"session" => ^session}}} =
+               deterministic_audit(fixture.task.id, fixture.route.id)
+
+      updated_task =
+        Task
+        |> Repo.get!(fixture.task.id)
+        |> Sacrum.Orchestrator.PromptRenderer.preload_for_rendering()
+
+      assert {:ok, destination_execution} =
+               ExecutionDispatcher.create_and_dispatch(
+                 updated_task,
+                 fixture.destination,
+                 fixture.task_run,
+                 returned_data.pending_handoff,
+                 session: returned_data.pending_session
+               )
+
+      assert %{
+               handoff: handoff,
+               resume_session_id: "native-source",
+               forked_from_execution_id: forked_from,
+               conversation_root_execution_id: root
+             } = Repo.get!(StepExecution, destination_execution.id)
+
+      assert handoff == fixture.handoff
+      assert forked_from == source_execution.id
+      assert root == destination_execution.id
+
+      # After a restart nothing is pending in memory; the retry still follows
+      # the failed attempt.
+      {:ok, _failed} =
+        Accounts.StepExecutions.update(destination_execution, %{status: "failed"})
+
+      restarted = %{
+        returned_data
+        | task: updated_task,
+          pending_handoff: nil,
+          pending_session: nil
+      }
+
+      assert {:ok, %{pending_handoff: nil, pending_session: nil}} =
+               RouteRecovery.restore(restarted)
+
+      assert {:ok, retry} =
+               ExecutionDispatcher.create_and_dispatch(
+                 updated_task,
+                 fixture.destination,
+                 fixture.task_run,
+                 nil,
+                 session: nil
+               )
+
+      assert %{
+               handoff: ^handoff,
+               resume_session_id: "native-source",
+               forked_from_execution_id: ^forked_from,
+               conversation_root_execution_id: retry_root
+             } = Repo.get!(StepExecution, retry.id)
+
+      assert retry_root == retry.id
+    end
+
+    test "a rule without a session directive records none and dispatches a new conversation" do
+      fixture = configured_intra_fixture()
+
+      assert {:next_state, :awaiting_execution, %{pending_session: nil}} =
+               RouteStep.handle_deterministic_route_step(
+                 fixture.data,
+                 fixture.route,
+                 fixture.program
+               )
+
+      assert %StepExecution{context: %{"route" => route}} =
+               deterministic_audit(fixture.task.id, fixture.route.id)
+
+      refute Map.has_key?(route, "session")
+    end
+
     test "atomically persists an inter-workflow audit with the terminal TaskRun outcome" do
       fixture = configured_inter_fixture()
 
@@ -354,7 +459,7 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
     end
   end
 
-  defp configured_intra_fixture(handoff_template \\ route_handoff_template()) do
+  defp configured_intra_fixture(handoff_template \\ route_handoff_template(), session \\ nil) do
     user = create_user()
     project = create_project(user)
     workflow = create_workflow(user, project, "Intra route workflow")
@@ -377,7 +482,8 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
           "route_config" =>
             route_config(
               %{"type" => "intra_workflow", "step_id" => destination.id},
-              handoff_template
+              handoff_template,
+              session && session.(source)
             )
         }
       })
@@ -809,7 +915,8 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
       steps: steps,
       transitions: transitions,
       slot_id: nil,
-      pending_handoff: nil
+      pending_handoff: nil,
+      pending_session: nil
     }
   end
 
@@ -839,19 +946,22 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
     task_run
   end
 
-  defp route_config(transition, handoff_template) do
+  defp route_config(transition, handoff_template, session \\ nil) do
     rule =
-      maybe_put_handoff(
-        %{
-          "id" => "approved",
-          "when" => %{
-            "ref" => "previous_output.route.result",
-            "op" => "eq",
-            "value" => "approved"
+      maybe_put_session(
+        maybe_put_handoff(
+          %{
+            "id" => "approved",
+            "when" => %{
+              "ref" => "previous_output.route.result",
+              "op" => "eq",
+              "value" => "approved"
+            },
+            "transition" => transition
           },
-          "transition" => transition
-        },
-        handoff_template
+          handoff_template
+        ),
+        session
       )
 
     %{
@@ -877,6 +987,9 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
       "visit" => 1
     }
   end
+
+  defp maybe_put_session(decision, nil), do: decision
+  defp maybe_put_session(decision, session), do: Map.put(decision, "session", session)
 
   defp maybe_put_handoff(decision, nil), do: decision
   defp maybe_put_handoff(decision, handoff), do: Map.put(decision, "handoff", handoff)

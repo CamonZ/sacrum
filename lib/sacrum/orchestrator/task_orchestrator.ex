@@ -691,7 +691,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
            data.task_run,
            data.pending_handoff,
            reuse_active: true,
-           active_execution: data.current_execution
+           active_execution: data.current_execution,
+           session: data.pending_session
          ) do
       {:ok, execution} ->
         :ok = ExecutionEvents.subscribe(execution.id)
@@ -705,7 +706,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
            data
            | current_execution: execution,
              current_execution_id: execution.id,
-             pending_handoff: nil
+             pending_handoff: nil,
+             pending_session: nil
          }}
 
       {:error, reason} ->

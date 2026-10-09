@@ -18,6 +18,8 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
 
   require Logger
 
+  import Ecto.Query, only: [from: 2]
+
   alias Ecto.Multi
 
   alias Sacrum.Accounts.StepExecutions
@@ -34,13 +36,26 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
   alias Sacrum.Tasks.Status
 
   @typep handoff :: map() | nil
+  # The new execution's id with its resolved conversation fields.
+  @typep session :: %{
+           required(:id) => Ecto.UUID.t(),
+           required(:resume_session_id) => String.t() | nil,
+           required(:conversation_root_execution_id) => Ecto.UUID.t() | nil,
+           required(:forked_from_execution_id) => Ecto.UUID.t() | nil
+         }
 
   @doc """
   Creates a "started" StepExecution for the current step and broadcasts run_step
   to the daemon. Route steps are evaluated locally and cannot be dispatched.
 
   `handoff` is attached to the new row when present (typically supplied by the
-  orchestrator from FSMData after a route step).
+  orchestrator from FSMData after a route step). The `:session` option is the
+  route decision's session directive for an `llm_inference` destination;
+  without one the execution starts a new conversation.
+
+  When the TaskRun cursor is a failed execution of `step`, the new execution
+  is its retry: it carries the failed attempt's handoff and conversation and
+  ignores `handoff` and `:session`.
   """
   @spec create_and_dispatch(
           Task.t(),
@@ -61,7 +76,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
           {:ok, execution}
 
         _ ->
-          dispatch_new_execution(task, step, task_run, handoff)
+          dispatch_new_execution(task, step, task_run, handoff, Keyword.get(opts, :session))
       end
     else
       {:error, reason} = err ->
@@ -117,19 +132,51 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
     end
   end
 
-  defp dispatch_new_execution(task, step, task_run, handoff) do
+  # The execution id is allocated up front because a new or forked
+  # conversation is rooted at the execution itself. A retry is recognised from
+  # the persisted cursor rather than FSM state so a restart retries the same
+  # way.
+  defp dispatch_new_execution(task, step, task_run, handoff, directive) do
+    execution_id = Ecto.UUID.generate()
+    failed = failed_attempt(task_run, step)
+    handoff = if failed, do: failed.handoff, else: handoff
+
     with {:ok, config} <- render_config(task, step, task_run, handoff),
-         {:ok, session} <- resolve_session(task_run, step, config) do
-      commit_and_broadcast_dispatch(task, step, task_run, handoff, config, session)
+         {:ok, session} <- entry_session(task_run, step, failed, directive, execution_id) do
+      commit_and_broadcast_dispatch(
+        task,
+        step,
+        task_run,
+        handoff,
+        config,
+        Map.put(session, :id, execution_id)
+      )
     end
   end
 
-  # A named session that cannot be resumed fails the dispatch rather than
-  # silently starting another conversation.
-  @spec resolve_session(TaskRun.t(), WorkflowStep.t(), Config.t()) ::
+  @spec failed_attempt(TaskRun.t(), WorkflowStep.t()) :: StepExecution.t() | nil
+  defp failed_attempt(task_run, step) do
+    Repo.one(
+      from(e in StepExecution,
+        join: run in TaskRun,
+        on: run.latest_step_execution_id == e.id,
+        where: run.id == ^task_run.id and e.step_id == ^step.id and e.status == "failed"
+      )
+    )
+  end
+
+  defp entry_session(_task_run, step, %StepExecution{} = failed, _directive, execution_id),
+    do: {:ok, SessionBinding.retry(step, failed, execution_id)}
+
+  defp entry_session(task_run, step, nil, directive, execution_id),
+    do: resolve_session(task_run, step, directive, execution_id)
+
+  # A conversation that cannot be resumed or forked fails the dispatch rather
+  # than silently starting another one.
+  @spec resolve_session(TaskRun.t(), WorkflowStep.t(), map() | nil, Ecto.UUID.t()) ::
           {:ok, SessionBinding.resolution()} | {:error, term()}
-  defp resolve_session(task_run, step, config) do
-    with {:error, reason} <- SessionBinding.resolve(task_run, step, config) do
+  defp resolve_session(task_run, step, directive, execution_id) do
+    with {:error, reason} <- SessionBinding.resolve(task_run, step, directive, execution_id) do
       Logger.error("[ExecutionDispatcher] create_and_dispatch failed: #{inspect(reason)}")
       mark_dispatch_failure(task_run, reason)
       {:error, reason}
@@ -158,7 +205,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
           TaskRun.t(),
           handoff(),
           Config.t(),
-          SessionBinding.resolution()
+          session()
         ) ::
           {:ok, StepExecution.t()} | {:error, term()}
   defp commit_and_broadcast_dispatch(task, step, task_run, handoff, config, session) do
@@ -195,7 +242,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
           TaskRun.t(),
           handoff(),
           Config.t(),
-          SessionBinding.resolution()
+          session()
         ) ::
           {:ok, map()} | {:error, atom(), term(), map()}
   defp insert_and_stamp(task, step, task_run, handoff, config, session) do
@@ -205,7 +252,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcher do
       task
       |> execution_changeset(step, task_run, handoff, model_attrs(config))
       |> StepExecution.put_config(config)
-      |> StepExecution.put_session(session.name, session.resume_session_id)
+      |> StepExecution.put_session(session)
     )
     |> Multi.update(:task_run, fn %{execution: execution} ->
       TaskRun.update_changeset(task_run, %{

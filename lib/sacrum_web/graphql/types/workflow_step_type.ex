@@ -139,22 +139,6 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
     field :agents, list_of(:string)
     field :skills, list_of(:string)
     field :agent_config, :json
-
-    field :session, :llm_session_config do
-      description("Named TaskRun conversation this step starts or resumes; null for none.")
-    end
-  end
-
-  # The session config is a string-keyed map.
-  object :llm_session_config do
-    field :name, non_null(:string) do
-      resolve(fn session, _args, _resolution -> {:ok, session["name"]} end)
-    end
-
-    field :mode, non_null(:string) do
-      description("new, resume, or resume_or_new.")
-      resolve(fn session, _args, _resolution -> {:ok, session["mode"]} end)
-    end
   end
 
   object :structured_inference_step_config do
