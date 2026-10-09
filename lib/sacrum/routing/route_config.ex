@@ -37,12 +37,25 @@ defmodule Sacrum.Routing.RouteConfig do
             }
 
   @type handoff_template :: map() | nil
-  @type decision :: %{transition: target(), handoff: handoff_template()}
+
+  @typedoc """
+  How the destination `llm_inference` execution enters a conversation.
+  `step_id` names the step whose conversation is resumed or forked; nil
+  means the destination step itself.
+  """
+  @type session_directive ::
+          %{mode: :new, step_id: nil} | %{mode: :resume | :fork, step_id: String.t() | nil}
+  @type decision :: %{
+          transition: target(),
+          handoff: handoff_template(),
+          session: session_directive() | nil
+        }
   @type rule :: %{
           id: String.t(),
           when: expression(),
           transition: target(),
-          handoff: handoff_template()
+          handoff: handoff_template(),
+          session: session_directive() | nil
         }
   @type t :: %{version: 1, match_policy: :exactly_one, rules: [rule()], default: decision() | nil}
   @type error :: %{
@@ -88,6 +101,8 @@ defmodule Sacrum.Routing.RouteConfig do
   @levels MapSet.new(["epic", "ticket", "task"])
 
   @rule_id ~r/^[A-Za-z0-9][A-Za-z0-9._-]*$/
+
+  @session_modes %{"new" => :new, "resume" => :resume, "fork" => :fork}
 
   @doc """
   The closed set of task levels routable by rule predicates.
@@ -139,7 +154,7 @@ defmodule Sacrum.Routing.RouteConfig do
   defp decode_rules(_rules), do: {:error, error("$.rules", "must be an array")}
 
   defp decode_rule(rule, path) when is_map(rule) do
-    with :ok <- validate_keys(rule, ["id", "when", "transition"], ["handoff"], path),
+    with :ok <- validate_keys(rule, ["id", "when", "transition"], ["handoff", "session"], path),
          {:ok, id} <- decode_rule_id(Map.fetch!(rule, "id"), "#{path}.id"),
          {:ok, condition} <- decode_expression(Map.fetch!(rule, "when"), "#{path}.when"),
          {:ok, decision} <- decode_decision_fields(rule, path) do
@@ -336,7 +351,7 @@ defmodule Sacrum.Routing.RouteConfig do
   defp decode_default(nil), do: {:ok, nil}
 
   defp decode_default(default) when is_map(default) do
-    with :ok <- validate_keys(default, ["transition"], ["handoff"], "$.default") do
+    with :ok <- validate_keys(default, ["transition"], ["handoff", "session"], "$.default") do
       decode_decision_fields(default, "$.default")
     end
   end
@@ -345,8 +360,9 @@ defmodule Sacrum.Routing.RouteConfig do
 
   defp decode_decision_fields(map, path) do
     with {:ok, transition} <- decode_target(Map.fetch!(map, "transition"), "#{path}.transition"),
-         {:ok, handoff} <- decode_handoff(map, "#{path}.handoff") do
-      {:ok, %{transition: transition, handoff: handoff}}
+         {:ok, handoff} <- decode_handoff(map, "#{path}.handoff"),
+         {:ok, session} <- decode_session(map, "#{path}.session") do
+      {:ok, %{transition: transition, handoff: handoff, session: session}}
     end
   end
 
@@ -370,6 +386,39 @@ defmodule Sacrum.Routing.RouteConfig do
       {:ok, handoff} -> HandoffTemplate.decode(handoff, path)
       :error -> {:ok, nil}
     end
+  end
+
+  # Which steps a directive may reference depends on the workflow graph and
+  # is checked by `RouteValidator`; decoding only fixes its shape.
+  defp decode_session(decision, path) do
+    case Map.fetch(decision, "session") do
+      {:ok, session} when is_map(session) -> decode_session_fields(session, path)
+      {:ok, _session} -> {:error, error(path, "must be an object")}
+      :error -> {:ok, nil}
+    end
+  end
+
+  defp decode_session_fields(session, path) do
+    with :ok <- validate_keys(session, ["mode"], ["step_id"], path),
+         {:ok, mode} <- decode_session_mode(Map.fetch!(session, "mode"), "#{path}.mode") do
+      decode_session_step(mode, Map.fetch(session, "step_id"), "#{path}.step_id")
+    end
+  end
+
+  defp decode_session_mode(mode, path) do
+    case Map.fetch(@session_modes, mode) do
+      {:ok, mode} -> {:ok, mode}
+      :error -> {:error, error(path, "must be new, resume, or fork")}
+    end
+  end
+
+  defp decode_session_step(mode, :error, _path), do: {:ok, %{mode: mode, step_id: nil}}
+
+  defp decode_session_step(:new, {:ok, _step_id}, path),
+    do: {:error, error(path, "is not allowed with mode new")}
+
+  defp decode_session_step(mode, {:ok, step_id}, path) do
+    with {:ok, step_id} <- decode_uuid(step_id, path), do: {:ok, %{mode: mode, step_id: step_id}}
   end
 
   defp uses_open_domain?(%{when: condition}) do

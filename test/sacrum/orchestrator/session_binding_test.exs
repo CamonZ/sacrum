@@ -3,79 +3,52 @@ defmodule Sacrum.Orchestrator.SessionBindingTest do
 
   alias Sacrum.Accounts
   alias Sacrum.Orchestrator.{ExecutionDispatcher, PromptRenderer}
-  alias Sacrum.Repo.Schemas.{StepExecution, Task}
+  alias Sacrum.Repo.Schemas.{StepExecution, Task, WorkflowStep}
   alias Sacrum.Repo.Schemas.WorkflowStep.Config.LlmInference
 
   @config %{"agent_config" => %{"model" => "test-model"}, "prompt" => "do the work"}
 
-  describe "llm_inference session config" do
-    test "is optional and normalizes to string keys" do
-      assert %{valid?: true} = changeset = LlmInference.changeset(%LlmInference{}, @config)
-      assert Ecto.Changeset.get_field(changeset, :session) == nil
+  test "llm_inference step config rejects session" do
+    refute Map.has_key?(%LlmInference{}, :session)
 
-      changeset =
-        LlmInference.changeset(
-          %LlmInference{},
-          Map.put(@config, "session", %{name: "implementer", mode: "resume_or_new"})
-        )
+    changeset =
+      WorkflowStep.create_changeset(%WorkflowStep{}, %{
+        "name" => "Implement",
+        "step_type" => "llm_inference",
+        "harness" => "codex",
+        "config" => Map.put(@config, "session", %{"name" => "impl", "mode" => "new"})
+      })
 
-      assert changeset.valid?
-
-      assert Ecto.Changeset.get_field(changeset, :session) == %{
-               "name" => "implementer",
-               "mode" => "resume_or_new"
-             }
-    end
-
-    test "rejects invalid sessions" do
-      for {session, message} <- [
-            {%{"name" => " ", "mode" => "new"}, "$.name: must not be blank"},
-            {%{"name" => String.duplicate("a", 256), "mode" => "new"},
-             "$.name: must be at most 255 bytes"},
-            {%{"name" => "impl", "mode" => "fork"},
-             "$.mode: must be one of new, resume, resume_or_new"},
-            {%{"name" => "impl", "mode" => "new", "id" => "x"}, "$.id: is not supported"},
-            {%{"name" => "impl"}, "must have string name and mode"}
-          ] do
-        changeset = LlmInference.changeset(%LlmInference{}, Map.put(@config, "session", session))
-        assert {^message, _} = changeset.errors[:session], inspect(session)
-      end
-    end
+    assert "$.session: is not supported for llm_inference steps" in errors_on(changeset).config
   end
 
   describe "dispatch" do
     setup :setup_context
 
-    test "without a session sends no session and pins nothing", ctx do
-      step = create_step(ctx, "Plain", nil)
+    test "without a directive starts a new conversation rooted at the execution", ctx do
+      step = create_step(ctx, "Implement")
 
       assert {:ok, execution} = dispatch(ctx, step)
-      assert %{session_name: nil, resume_session_id: nil} = execution
-      assert_receive %Phoenix.Socket.Broadcast{event: "run_step", payload: payload}
-      refute Map.has_key?(payload, :session)
-    end
 
-    test "new starts the named session", ctx do
-      step = create_step(ctx, "Implement", %{"name" => "implementer", "mode" => "new"})
+      assert %{
+               conversation_root_execution_id: root,
+               forked_from_execution_id: nil,
+               resume_session_id: nil
+             } = execution
 
-      assert {:ok, execution} = dispatch(ctx, step)
-      assert %{session_name: "implementer", resume_session_id: nil} = execution
+      assert root == execution.id
       assert_receive %Phoenix.Socket.Broadcast{event: "run_step", payload: payload}
       assert payload.session == %{mode: "new"}
     end
 
-    test "resume fails without a binding and creates no execution", ctx do
-      step = create_step(ctx, "Revise", %{"name" => "implementer", "mode" => "resume"})
+    test "a new directive also starts a new conversation", ctx do
+      step = create_step(ctx, "Implement")
+      complete(dispatch!(ctx, step), "native-1")
+      flush_broadcasts()
 
-      assert {:error, {:session_not_found, "implementer"}} = dispatch(ctx, step)
-      assert Repo.get_by(StepExecution, task_run_id: ctx.task_run.id) == nil
-      refute_receive %Phoenix.Socket.Broadcast{event: "run_step"}
-    end
-
-    test "resume_or_new starts new without a binding", ctx do
-      step = create_step(ctx, "Revise", %{"name" => "implementer", "mode" => "resume_or_new"})
-
-      assert {:ok, %{session_name: "implementer", resume_session_id: nil}} = dispatch(ctx, step)
+      assert {:ok, execution} = dispatch(ctx, step, %{"mode" => "new"})
+      assert execution.conversation_root_execution_id == execution.id
+      assert execution.resume_session_id == nil
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "run_step",
@@ -83,96 +56,185 @@ defmodule Sacrum.Orchestrator.SessionBindingTest do
       }
     end
 
-    test "resumes the latest completed same-name session of this run only", ctx do
-      implement = create_step(ctx, "Implement", %{"name" => "implementer", "mode" => "new"})
-      notes = create_step(ctx, "Notes", %{"name" => "notes", "mode" => "new"})
-      revise = create_step(ctx, "Revise", %{"name" => "implementer", "mode" => "resume"})
+    test "steps without a conversation send no session", ctx do
+      step = create_step(ctx, "Transform", step_type: "execute")
 
-      complete(dispatch!(ctx, implement), "native-1")
-      complete(dispatch!(ctx, implement), "native-2")
-      complete(dispatch!(ctx, notes), "native-notes")
-      fail(dispatch!(ctx, implement), "native-failed")
-      complete(dispatch!(ctx, implement), nil)
+      assert {:ok, execution} = dispatch(ctx, step)
+      assert %{conversation_root_execution_id: nil, resume_session_id: nil} = execution
+      assert_receive %Phoenix.Socket.Broadcast{event: "run_step", payload: payload}
+      refute Map.has_key?(payload, :session)
+    end
 
-      other_run = create_task_run(ctx)
-      complete(dispatch!(ctx, implement, other_run), "native-other-run")
+    test "resume follows the referenced step's conversation, including other steps' turns",
+         ctx do
+      a = create_step(ctx, "A")
+      b = create_step(ctx, "B")
+      c = create_step(ctx, "C")
+
+      a1 = dispatch!(ctx, a)
+      complete(a1, "native-a")
+
+      b1 = dispatch!(ctx, b, resume(a))
+      assert b1.resume_session_id == "native-a"
+      assert b1.conversation_root_execution_id == a1.id
+      complete(b1, "native-b")
+
+      fail(dispatch!(ctx, b, resume(a)), "native-failed")
+      complete(dispatch!(ctx, a, nil, create_task_run(ctx)), "native-other-run")
       flush_broadcasts()
 
-      assert {:ok, execution} = dispatch(ctx, revise)
-      assert %{session_name: "implementer", resume_session_id: "native-2"} = execution
+      assert {:ok, c1} = dispatch(ctx, c, resume(a))
+      assert %{resume_session_id: "native-b", forked_from_execution_id: nil} = c1
+      assert c1.conversation_root_execution_id == a1.id
 
       assert_receive %Phoenix.Socket.Broadcast{event: "run_step", payload: payload}
-      assert payload.session == %{mode: "resume", resume_id: "native-2"}
+      assert payload.session == %{mode: "resume", resume_id: "native-b"}
       refute payload.prompt =~ "native"
-      refute Map.has_key?(payload.agent_config, "session")
     end
 
-    test "unrelated steps between creation and resume do not affect the binding", ctx do
-      implement = create_step(ctx, "Implement", %{"name" => "implementer", "mode" => "new"})
-      writer = create_step(ctx, "Release notes", nil)
-      revise = create_step(ctx, "Revise", %{"name" => "implementer", "mode" => "resume"})
+    test "resuming the destination step continues its own latest turn",
+         ctx do
+      a = create_step(ctx, "A")
+      complete(dispatch!(ctx, a), "native-1")
+      complete(dispatch!(ctx, a, resume(a)), "native-2")
 
-      complete(dispatch!(ctx, implement), "native-impl")
+      assert {:ok, %{resume_session_id: "native-2"}} = dispatch(ctx, a, resume(a))
+    end
 
-      writer_execution = dispatch!(ctx, writer)
-      complete(writer_execution, "native-writer")
-      assert %{session_name: nil, resume_session_id: nil} = writer_execution
+    test "resume never falls back to an older conversation of the step", ctx do
+      a = create_step(ctx, "A")
+      b = create_step(ctx, "B")
+      complete(dispatch!(ctx, a), "native-old")
+      complete(dispatch!(ctx, a, %{"mode" => "new"}), nil)
 
+      assert {:error, {:session_not_found, id}} = dispatch(ctx, b, resume(a))
+      assert id == a.id
+    end
+
+    test "a retry continues the failed attempt's conversation without a directive", ctx do
+      a = create_step(ctx, "A")
+      a1 = dispatch!(ctx, a)
+      complete(a1, "native-a")
+
+      new = create_step(ctx, "New")
+      fail(dispatch!(ctx, new, %{"mode" => "new"}), nil)
+      assert {:ok, retried} = dispatch(ctx, new)
+      assert retried.conversation_root_execution_id == retried.id
+      assert %{resume_session_id: nil, forked_from_execution_id: nil} = retried
+
+      resume = create_step(ctx, "Resume")
+      fail(dispatch!(ctx, resume, resume(a)), "native-failed")
       flush_broadcasts()
 
-      assert {:ok, %{resume_session_id: "native-impl"}} = dispatch(ctx, revise)
+      assert {:ok, retried} = dispatch(ctx, resume)
+      assert retried.conversation_root_execution_id == a1.id
+      assert %{resume_session_id: "native-a", forked_from_execution_id: nil} = retried
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "run_step", payload: payload}
+      assert payload.session == %{mode: "resume", resume_id: "native-a"}
+
+      fork = create_step(ctx, "Fork")
+      fail(dispatch!(ctx, fork, fork(a)), nil)
+      assert {:ok, retried} = dispatch(ctx, fork)
+      assert retried.conversation_root_execution_id == retried.id
+      assert %{resume_session_id: "native-a", forked_from_execution_id: forked_from} = retried
+      assert forked_from == a1.id
     end
 
-    test "a resumed execution's reported id becomes the binding", ctx do
-      implement = create_step(ctx, "Implement", %{"name" => "implementer", "mode" => "new"})
-      revise = create_step(ctx, "Revise", %{"name" => "implementer", "mode" => "resume"})
+    test "only a failed latest execution of the same step is retried", ctx do
+      a = create_step(ctx, "A")
+      b = create_step(ctx, "B")
+      complete(dispatch!(ctx, a), "native-a")
+      fail(dispatch!(ctx, b, resume(a)), nil)
 
-      complete(dispatch!(ctx, implement), "native-1")
-      complete(dispatch!(ctx, revise), "native-1b")
-
-      assert {:ok, %{resume_session_id: "native-1b"}} = dispatch(ctx, revise)
+      assert {:ok, entered} = dispatch(ctx, a)
+      assert entered.conversation_root_execution_id == entered.id
+      assert entered.resume_session_id == nil
     end
 
-    test "fails when the bound session belongs to another harness", ctx do
-      implement = create_step(ctx, "Implement", %{"name" => "implementer", "mode" => "new"})
+    test "resume and fork fail without a completed execution and start nothing", ctx do
+      a = create_step(ctx, "A")
+      b = create_step(ctx, "B")
+      _started = dispatch!(ctx, a)
+      flush_broadcasts()
 
-      revise =
-        create_step(ctx, "Revise", %{"name" => "implementer", "mode" => "resume"},
-          harness: "claude"
-        )
+      for directive <- [resume(a), fork(a)] do
+        assert {:error, {:session_not_found, id}} = dispatch(ctx, b, directive)
+        assert id == a.id
+      end
 
-      implement_execution = dispatch!(ctx, implement)
-      complete(implement_execution, "native-1")
+      assert Repo.aggregate(StepExecution, :count) == 1
+      refute_receive %Phoenix.Socket.Broadcast{event: "run_step"}
+    end
 
-      assert {:error, {:session_harness_mismatch, mismatch}} = dispatch(ctx, revise)
+    test "fails when the conversation belongs to another harness", ctx do
+      a = create_step(ctx, "A")
+      b = create_step(ctx, "B", harness: "claude")
+      a1 = dispatch!(ctx, a)
+      complete(a1, "native-1")
 
-      assert mismatch == %{
-               name: "implementer",
-               bound: implement_execution.harness,
-               step: "claude"
-             }
+      assert {:error, {:session_harness_mismatch, mismatch}} = dispatch(ctx, b, resume(a))
+      assert mismatch == %{step_id: a.id, bound: a1.harness, step: "claude"}
+    end
+
+    test "fork roots a new conversation that later resumes keep apart from the source", ctx do
+      a = create_step(ctx, "A")
+      f = create_step(ctx, "F")
+      g = create_step(ctx, "G")
+
+      a1 = dispatch!(ctx, a)
+      complete(a1, "native-a")
+      flush_broadcasts()
+
+      assert {:ok, f1} = dispatch(ctx, f, fork(a))
+      assert f1.conversation_root_execution_id == f1.id
+      assert f1.forked_from_execution_id == a1.id
+      assert f1.resume_session_id == "native-a"
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "run_step", payload: payload}
+      assert payload.session == %{mode: "fork", resume_id: "native-a"}
+
+      # A second fork of the same source while the first is still running.
+      g1 = dispatch!(ctx, g, fork(a))
+      assert %{forked_from_execution_id: forked_from, resume_session_id: "native-a"} = g1
+      assert forked_from == a1.id
+
+      complete(f1, "native-f")
+      complete(g1, "native-g")
+
+      assert {:ok, %{resume_session_id: "native-a"} = resumed_a} = dispatch(ctx, a, resume(a))
+      assert resumed_a.conversation_root_execution_id == a1.id
+
+      assert {:ok, %{resume_session_id: "native-f"} = resumed_f} = dispatch(ctx, f, resume(f))
+      assert resumed_f.conversation_root_execution_id == f1.id
+
+      assert {:ok, %{resume_session_id: "native-g"}} = dispatch(ctx, g, resume(g))
     end
 
     test "reusing an active execution keeps its pinned resume id", ctx do
-      implement = create_step(ctx, "Implement", %{"name" => "implementer", "mode" => "new"})
-      revise = create_step(ctx, "Revise", %{"name" => "implementer", "mode" => "resume"})
+      a = create_step(ctx, "A")
+      b = create_step(ctx, "B")
 
-      complete(dispatch!(ctx, implement), "native-1")
-      active = dispatch!(ctx, revise)
+      complete(dispatch!(ctx, a), "native-1")
+      active = dispatch!(ctx, b, resume(a))
       assert active.resume_session_id == "native-1"
 
-      complete(dispatch!(ctx, implement), "native-2")
-
       assert {:ok, reused} =
-               ExecutionDispatcher.create_and_dispatch(ctx.task, revise, ctx.task_run, nil,
+               ExecutionDispatcher.create_and_dispatch(ctx.task, b, ctx.task_run, nil,
                  reuse_active: true,
-                 active_execution: active
+                 active_execution: active,
+                 session: fork(a)
                )
 
       assert reused.id == active.id
-      assert Repo.get!(StepExecution, active.id).resume_session_id == "native-1"
+
+      assert %{resume_session_id: "native-1", forked_from_execution_id: nil} =
+               Repo.get!(StepExecution, active.id)
     end
   end
+
+  defp resume(step), do: %{"mode" => "resume", "step_id" => step.id}
+  defp fork(step), do: %{"mode" => "fork", "step_id" => step.id}
 
   defp setup_context(_) do
     {:ok, user} =
@@ -197,7 +259,7 @@ defmodule Sacrum.Orchestrator.SessionBindingTest do
       })
 
     # A workflow needs a step before it can be assigned.
-    _first = create_step(%{user: user, project: project, workflow: workflow}, "First", nil)
+    _first = create_step(%{user: user, project: project, workflow: workflow}, "First")
     {:ok, task} = Sacrum.Repo.TaskWorkflows.assign_workflow(task, workflow)
     task = PromptRenderer.preload_for_rendering(task)
 
@@ -216,28 +278,39 @@ defmodule Sacrum.Orchestrator.SessionBindingTest do
     task_run
   end
 
-  defp create_step(ctx, name, session, opts \\ []) do
-    config = if session, do: Map.put(@config, "session", session), else: @config
-
+  defp create_step(ctx, name, opts \\ []) do
     attrs =
-      workflow_step_attrs(%{
+      case opts[:step_type] do
+        "execute" ->
+          %{
+            "step_type" => "execute",
+            "config" => %{"script" => "output", "output_schema" => %{"type" => "object"}}
+          }
+
+        nil ->
+          %{"config" => @config}
+      end
+      |> Map.merge(%{
         "name" => name,
         "step_order" => System.unique_integer([:positive]),
         "workflow_id" => ctx.workflow.id,
-        "project_id" => ctx.project.id,
-        "config" => config
+        "project_id" => ctx.project.id
       })
+      |> workflow_step_attrs()
 
     attrs = if harness = opts[:harness], do: Map.put(attrs, "harness", harness), else: attrs
     {:ok, step} = Accounts.WorkflowSteps.insert(ctx.user.id, attrs)
     Repo.preload(step, :workflow)
   end
 
-  defp dispatch(ctx, step, task_run \\ nil),
-    do: ExecutionDispatcher.create_and_dispatch(ctx.task, step, task_run || ctx.task_run)
+  defp dispatch(ctx, step, directive \\ nil, task_run \\ nil) do
+    ExecutionDispatcher.create_and_dispatch(ctx.task, step, task_run || ctx.task_run, nil,
+      session: directive
+    )
+  end
 
-  defp dispatch!(ctx, step, task_run \\ nil) do
-    {:ok, execution} = dispatch(ctx, step, task_run)
+  defp dispatch!(ctx, step, directive \\ nil, task_run \\ nil) do
+    {:ok, execution} = dispatch(ctx, step, directive, task_run)
     execution
   end
 

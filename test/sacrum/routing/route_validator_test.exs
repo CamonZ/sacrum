@@ -371,6 +371,163 @@ defmodule Sacrum.Routing.RouteValidatorTest do
                "approved.probabilities.yes in [0.8, 1], approved.confidence in [0.5, 1]"
   end
 
+  describe "session directives" do
+    setup context do
+      source = create_step(context, "review", 1, config: %{"output_schema" => verdict_schema()})
+      implement = create_step(context, "implement", 2)
+      done = create_step(context, "done", 3, step_type: "human_input")
+      claude = create_step(context, "claude", 4, harness: "claude")
+      other_workflow = create_workflow(context.user, context.project, "Other")
+      foreign = create_step(%{context | workflow: other_workflow}, "foreign", 1)
+
+      route =
+        create_route(
+          context,
+          "route",
+          5,
+          route_config([
+            verdict_rule("needs_changes", intra_target(implement.id))
+            |> Map.put("session", %{"mode" => "resume"}),
+            verdict_rule("ready", intra_target(done.id))
+          ])
+        )
+
+      create_step_transition(context.user, source, route)
+      create_step_transition(context.user, route, implement)
+      create_step_transition(context.user, route, done)
+      create_workflow_transition(context.user, context.workflow, other_workflow)
+
+      Map.merge(context, %{
+        source: source,
+        implement: implement,
+        done: done,
+        claude: claude,
+        foreign: foreign,
+        other_workflow: other_workflow,
+        route: route
+      })
+    end
+
+    test "accepts new, resume and fork on rules and the default", context do
+      assert :ok = validate(context.route)
+
+      config =
+        %{
+          "version" => 1,
+          "match_policy" => "exactly_one",
+          "rules" => [
+            verdict_rule("needs_changes", intra_target(context.implement.id))
+            |> Map.put("session", %{"mode" => "fork", "step_id" => context.source.id}),
+            verdict_rule("ready", intra_target(context.done.id))
+          ],
+          "default" => %{
+            "transition" => intra_target(context.implement.id),
+            "session" => %{"mode" => "new"}
+          }
+        }
+
+      assert :ok = validate(persist_invalid_route_config(context.route, config))
+    end
+
+    test "rejects directives whose destination is not an intra_workflow llm_inference step",
+         context do
+      for rule <- [
+            verdict_rule("needs_changes", intra_target(context.done.id)),
+            verdict_rule("needs_changes", inter_target(context.other_workflow.id))
+          ] do
+        route =
+          persist_invalid_route_config(
+            context.route,
+            route_config([
+              Map.put(rule, "session", %{"mode" => "new"}),
+              verdict_rule("ready", intra_target(context.implement.id))
+            ])
+          )
+
+        assert {:error,
+                %{
+                  code: :route_session_invalid,
+                  path: "$.rules[0].session",
+                  message: "requires an intra_workflow transition to an llm_inference step"
+                }} = validate(route)
+      end
+    end
+
+    test "rejects a step_id that is not a same-workflow, same-harness llm_inference step",
+         context do
+      for {step, message} <- [
+            {context.done, "must be an llm_inference step in this workflow"},
+            {context.foreign, "must be an llm_inference step in this workflow"},
+            {context.claude, "must use the same harness as the destination step"}
+          ] do
+        route =
+          persist_invalid_route_config(
+            context.route,
+            route_config(
+              [
+                verdict_rule("needs_changes", intra_target(context.implement.id)),
+                verdict_rule("ready", intra_target(context.done.id))
+              ],
+              nil
+            )
+            |> Map.put("default", %{
+              "transition" => intra_target(context.implement.id),
+              "session" => %{"mode" => "resume", "step_id" => step.id}
+            })
+          )
+
+        assert {:error,
+                %{code: :route_session_invalid, path: "$.default.session.step_id"} = error} =
+                 validate(route)
+
+        assert error.message == message
+      end
+    end
+
+    test "rejects saving a directive with its path", context do
+      config =
+        route_config([
+          verdict_rule("needs_changes", intra_target(context.implement.id)),
+          verdict_rule("ready", intra_target(context.done.id))
+          |> Map.put("session", %{"mode" => "resume"})
+        ])
+
+      assert {:error, changeset} =
+               Accounts.WorkflowSteps.update(context.route, %{
+                 "config" => %{"route_config" => config}
+               })
+
+      assert errors_on(changeset).route_config == [
+               "$.rules[1].session: requires an intra_workflow transition to an llm_inference step"
+             ]
+    end
+
+    test "rejects a directive to a missing step in a draft without edges", context do
+      config =
+        route_config([
+          verdict_rule("needs_changes", intra_target(Ecto.UUID.generate()))
+          |> Map.put("session", %{"mode" => "new"}),
+          verdict_rule("ready", intra_target(context.done.id))
+        ])
+
+      attrs =
+        workflow_step_attrs(%{
+          "name" => "draft",
+          "step_order" => 6,
+          "workflow_id" => context.workflow.id,
+          "project_id" => context.project.id,
+          "step_type" => "route",
+          "config" => %{"route_config" => config}
+        })
+
+      assert {:error, changeset} = Accounts.WorkflowSteps.insert(context.user.id, attrs)
+
+      assert errors_on(changeset).route_config == [
+               "$.rules[0].session: requires an intra_workflow transition to an llm_inference step"
+             ]
+    end
+  end
+
   defp create_user do
     suffix = System.unique_integer([:positive])
 

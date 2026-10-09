@@ -22,6 +22,27 @@ defmodule Sacrum.Orchestrator.Routing.RouteRecoveryTest do
 
     assert {:ok, recovered} = RouteRecovery.restore(fsm_data(user, project, task, task_run))
     assert recovered.pending_handoff == %{"review" => "required"}
+    assert recovered.pending_session == nil
+  end
+
+  test "restores the persisted session directive with the handoff" do
+    %{user: user, project: project, task: task, route: route, destination: destination} =
+      fixture()
+
+    task_run = create_task_run(user, task)
+    session = %{"mode" => "resume", "step_id" => destination.id}
+
+    route_execution =
+      create_route_execution(user, task, route, task_run, destination.id, nil, %{
+        "session" => session
+      })
+
+    {:ok, task} = Repo.update(Ecto.Changeset.change(task, current_step_id: destination.id))
+    task_run = update_cursor(task_run, route_execution.id)
+
+    assert {:ok, recovered} = RouteRecovery.restore(fsm_data(user, project, task, task_run))
+    assert recovered.pending_session == session
+    assert recovered.pending_handoff == nil
   end
 
   test "leaves ordinary TaskRun cursors unchanged" do
@@ -205,7 +226,11 @@ defmodule Sacrum.Orchestrator.Routing.RouteRecoveryTest do
         status: "completed",
         handoff: handoff,
         context: %{
-          "route" => %{"mode" => "deterministic", "source_execution_id" => Ecto.UUID.generate()}
+          "route" =>
+            Map.merge(
+              %{"mode" => "deterministic", "source_execution_id" => Ecto.UUID.generate()},
+              Map.take(opts, ["session"])
+            )
         },
         transition_result:
           Jason.encode!(%{"dest_id" => destination_id, "transition_type" => transition_type})
@@ -220,7 +245,8 @@ defmodule Sacrum.Orchestrator.Routing.RouteRecoveryTest do
       project_id: project.id,
       task: task,
       task_run_id: task_run.id,
-      pending_handoff: nil
+      pending_handoff: nil,
+      pending_session: nil
     }
   end
 

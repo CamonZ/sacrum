@@ -2,8 +2,9 @@ defmodule Sacrum.WorkflowBundles.RouteRefs do
   @moduledoc """
   Resolves portable route references after the importer has allocated IDs.
 
-  Only `transition` values in route rules and the default decision are touched;
-  the rest of the route configuration remains opaque JSON.
+  Only `transition` values and `session.step_ref` in route rules and the
+  default decision are touched; the rest of the route configuration remains
+  opaque JSON.
   """
 
   alias Sacrum.Routing.{RouteConfig, Traverse}
@@ -102,12 +103,36 @@ defmodule Sacrum.WorkflowBundles.RouteRefs do
 
   defp remap_transition(%{"transition" => target} = entry, path, workflow_ref, step_ref, context) do
     with {:ok, target} <-
-           remap_target(target, workflow_ref, step_ref, context, "#{path}.transition") do
+           remap_target(target, workflow_ref, step_ref, context, "#{path}.transition"),
+         {:ok, entry} <- remap_session(entry, "#{path}.session", workflow_ref, context) do
       {:ok, Map.put(entry, "transition", target)}
     end
   end
 
   defp remap_transition(entry, _path, _workflow_ref, _step_ref, _context), do: {:ok, entry}
+
+  # A session directive may name any step of the route's own workflow; the
+  # route config validation that follows checks the rest.
+  defp remap_session(
+         %{"session" => %{"step_ref" => _ref} = session} = entry,
+         path,
+         workflow_ref,
+         context
+       ) do
+    with {:ok, ref} <- required_ref(session, "step_ref", path),
+         {:ok, id} <-
+           fetch_id(
+             context.step_ids,
+             {workflow_ref, ref},
+             "#{path}.step_ref",
+             "is not a known step ref"
+           ) do
+      {:ok,
+       Map.put(entry, "session", session |> Map.delete("step_ref") |> Map.put("step_id", id))}
+    end
+  end
+
+  defp remap_session(entry, _path, _workflow_ref, _context), do: {:ok, entry}
 
   defp remap_target(%{"type" => type} = target, workflow_ref, step_ref, context, path)
        when type in ["intra_workflow", "inter_workflow"] do

@@ -133,16 +133,23 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
     field :duration_ms, :integer
     field :handoff, :json
 
-    field :session_name, :string do
-      description("Named TaskRun conversation this execution started or resumed.")
-    end
-
     field :resume_session_id, :string do
-      description("Native conversation id this execution was dispatched to resume.")
+      description("Native conversation id this execution was dispatched to resume or fork.")
     end
 
     field :native_session_id, :string do
       description("Native conversation id the daemon reported for this execution.")
+    end
+
+    field :conversation_root_execution_id, :id do
+      description(
+        "Execution that started this execution's conversation: itself for new and forked " <>
+          "conversations, the source's root when resumed. Null for steps without a conversation."
+      )
+    end
+
+    field :forked_from_execution_id, :id do
+      description("Execution whose conversation this execution forked, when forked.")
     end
 
     field :inserted_at, :datetime

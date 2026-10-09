@@ -253,7 +253,7 @@ polymorphic embedded schema whose variant is selected by `stepType`:
 
 | `stepType` | GraphQL type | Fields (besides `version: 1`) |
 |------------|--------------|-------------------------------|
-| `llm_inference` | `LlmInferenceStepConfig` | `prompt`, `output_schema`, `agents`, `skills`, `agent_config`, `session` |
+| `llm_inference` | `LlmInferenceStepConfig` | `prompt`, `output_schema`, `agents`, `skills`, `agent_config` |
 | `structured_inference` | `StructuredInferenceStepConfig` | `provider`, `model`, `state`, `questions` (all required) |
 | `execute` | `ExecuteStepConfig` | `script`, `output_schema` (required); server-written `context` on dispatched executions |
 | `route` | `RouteStepConfig` | `route_config` |
@@ -301,25 +301,48 @@ the step's canonical `harness` value alongside the existing `prompt`,
 `agent_config`, `output_schema`, `worktree`, and optional
 `verbose_daemon_logging` fields.
 
-### Named sessions
+### Conversations
 
-An `llm_inference` step may set `session: {name, mode}` to start or continue a
-named conversation within its TaskRun. `mode` is `new`, `resume`, or
-`resume_or_new`; names are 1-255 bytes. Without `session`, every dispatch is an
-independent conversation.
+Every `llm_inference` execution runs in a provider conversation. How it enters
+one is decided by the route decision that led to the step (see "Route session
+directives"), never by the step's config; entering without a directive (the
+first step, a linear transition, a rule without `session`) starts a new
+conversation, so every `llm_inference` execution reports a native id that can
+later be resumed or forked.
 
-There is no separate session registry. The binding for a name is the
-`native_session_id` of the run's most recent completed execution with that
-`session_name` that reported one. At dispatch the server records
-`session_name` and, when resuming, `resume_session_id` on the new execution,
-then sends `session: {mode: "new"}` or `session: {mode: "resume", resume_id}`
-in `run_step`. `resume` with no binding fails the dispatch with
-`session_not_found`, and a binding recorded under a different harness fails
-with `session_harness_mismatch`; neither silently starts a new conversation.
-The daemon reports the conversation id through `updateStepExecution`'s
-`nativeSessionId`. Other runs, failed executions, and other names are never
-selected, and session data never enters prompts, `PromptContext`, or step
-outputs.
+There is no separate session registry. At dispatch the server records on the
+new execution:
+
+- `conversation_root_execution_id`: the execution itself for `new` and `fork`,
+  the source turn's root for `resume`. A TaskRun's executions sharing a root
+  form one conversation.
+- `forked_from_execution_id`: the source turn of a `fork`.
+- `resume_session_id`: the source turn's native id for `resume` and `fork`.
+
+`resume` and `fork` name a step. Its conversation is the one its latest
+completed execution in the TaskRun belongs to, and the source turn is that
+conversation's latest completed execution with a `native_session_id`, whichever
+step added it: if A starts a conversation and B resumes it, a later resume of
+A's conversation continues from B's turn. A fork starts its own conversation,
+so later resumes of the source ignore it and resumes of the forked step follow
+it; two forks of one source can run in parallel. `run_step` carries
+`session: {mode: "new"}`, `{mode: "resume", resume_id}`, or
+`{mode: "fork", resume_id}` (the source id in both cases). A step with no
+completed turn, or whose latest completed execution's conversation has no
+turn with a native id, fails the dispatch with `session_not_found` rather than
+falling back to an older conversation, and a source turn
+recorded under another harness fails with `session_harness_mismatch`; neither
+silently starts a new conversation. The daemon reports the conversation id
+through `updateStepExecution`'s `nativeSessionId`. Other runs and failed
+executions are never selected, and session data never enters prompts,
+`PromptContext`, handoffs, or step outputs.
+
+A retry enters the step as the failed attempt did. Dispatch treats a TaskRun
+whose cursor (`latest_step_execution_id`) is a failed execution of the same
+step as a retry, so this holds after an orchestrator restart too: the new
+execution carries the failed attempt's handoff and `resume_session_id`, stays
+in a resumed conversation, and for `new` and `fork` is rooted at itself
+(keeping `forked_from_execution_id`).
 
 ### Structured inference steps
 
@@ -663,6 +686,35 @@ For example:
 This extends the configuration language only; it does not migrate, backfill,
 or reinterpret existing workflow definitions.
 
+### Route session directives
+
+Each deterministic rule and the default decision may also set
+`session: {"mode": "new" | "resume" | "fork", "step_id"?: "<uuid>"}` beside its
+`transition` and `handoff`, choosing how the destination `llm_inference`
+execution enters a conversation (see "Conversations"). `step_id` names the
+step whose conversation is resumed or forked and defaults to the destination;
+it is not allowed with `new`. Saving rejects unknown keys or modes, a
+directive on a decision whose destination is not an `intra_workflow`
+`llm_inference` step, and a `step_id` that is not an `llm_inference` step of
+the same workflow on the destination's harness, with the
+`$.rules[<i>].session` or `$.default.session` path.
+
+The selected decision's directive is recorded on the route execution as
+`context.route.session` with `step_id` resolved (`{"mode": "new"}` or
+`{"mode": "resume" | "fork", "step_id": ...}`), restored from there after a
+restart, and applied together with the handoff to the same destination
+execution.
+
+```json
+{
+  "id": "needs_changes",
+  "when": {"ref": "previous_output.verdict", "op": "eq", "value": "needs_changes"},
+  "transition": {"type": "intra_workflow", "step_id": "<implement>"},
+  "handoff": {"how": "{{ previous_output.explanation }}"},
+  "session": {"mode": "resume"}
+}
+```
+
 ### Workflow bundles
 
 `importWorkflowBundle(projectId!, bundle!)` imports a portable bundle of
@@ -688,7 +740,9 @@ and step configuration"):
   validated as an empty one;
 - in a route step's `config.route_config`, transition `step_ref` and
   `workflow_ref` targets must be outgoing edges and are remapped to the new
-  ids, after which the route config is validated.
+  ids, and a decision's `session.step_ref` must name a step of the same
+  workflow and is remapped to `session.step_id`; then the route config is
+  validated.
 
 Config values are stored unchanged; a `structured_inference` `state` keeps its
 JSON type (string, object, or array).

@@ -1,6 +1,7 @@
 defmodule Sacrum.Orchestrator.Routing.RouteRecovery do
   @moduledoc """
-  Restores `pending_handoff` from a committed deterministic route audit.
+  Restores `pending_handoff` and `pending_session` from a committed
+  deterministic route audit.
 
   Recovery is opportunistic: a missing run or a non-route cursor leaves FSM
   data unchanged. It fails only when a deterministic audit's recorded
@@ -12,8 +13,9 @@ defmodule Sacrum.Orchestrator.Routing.RouteRecovery do
   @type error :: :route_recovery_inconsistent
 
   @doc """
-  Returns FSM data with the persisted handoff when the TaskRun cursor is a
-  committed local route decision. Ordinary cursors are left unchanged.
+  Returns FSM data with the persisted handoff and session directive when the
+  TaskRun cursor is a committed local route decision. Ordinary cursors are
+  left unchanged.
   """
   @spec restore(map()) :: {:ok, map()} | {:error, error()}
   def restore(%{task_run_id: nil} = data), do: {:ok, data}
@@ -38,7 +40,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteRecovery do
   defp restore_deterministic(data, execution) do
     with :ok <- validate_destination(execution, data.task),
          {:ok, handoff} <- fetch_handoff(execution) do
-      {:ok, %{data | pending_handoff: handoff}}
+      {:ok, %{data | pending_handoff: handoff, pending_session: fetch_session(execution)}}
     end
   end
 
@@ -46,6 +48,11 @@ defmodule Sacrum.Orchestrator.Routing.RouteRecovery do
     do: {:ok, handoff}
 
   defp fetch_handoff(_execution), do: {:error, :route_recovery_inconsistent}
+
+  defp fetch_session(%{context: %{"route" => %{"session" => session}}}) when is_map(session),
+    do: session
+
+  defp fetch_session(_execution), do: nil
 
   defp validate_destination(execution, task) do
     with {:ok, %{"dest_id" => destination, "transition_type" => transition_type}} <-

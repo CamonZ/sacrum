@@ -397,24 +397,121 @@ defmodule SacrumWeb.Graphql.WorkflowStepConfigTest do
     assert message =~ "Unknown argument \"prompt\""
   end
 
-  test "llm_inference session config and execution session ids round-trip",
+  test "llm_inference config rejects session; route decisions carry it and executions expose conversations",
        %{conn: conn, user: user, workflow: workflow} do
-    config = %{"prompt" => "Implement", "session" => %{"name" => "implementer", "mode" => "new"}}
-
-    created =
+    rejected =
       conn
       |> authenticate(user)
       |> graphql("""
-      mutation { createWorkflowStep(workflowId: "#{workflow.id}", name: "implement", stepType: "llm_inference", harness: "codex", config: #{json_arg(config)}) { id config { ... on LlmInferenceStepConfig { session { name mode } } } } }
+      mutation { createWorkflowStep(workflowId: "#{workflow.id}", name: "bad", stepType: "llm_inference", harness: "codex", config: #{json_arg(%{"prompt" => "x", "session" => %{"name" => "impl", "mode" => "new"}})}) { id } }
+      """)
+      |> json_response(200)
+
+    assert [%{"message" => message}] = rejected["errors"]
+    assert message =~ "session: is not supported for llm_inference steps"
+
+    {:ok, implement} =
+      Accounts.WorkflowSteps.insert(
+        user.id,
+        workflow_step_attrs(%{
+          "name" => "implement",
+          "workflow_id" => workflow.id,
+          "project_id" => workflow.project_id,
+          "config" => %{"prompt" => "Implement"}
+        })
+      )
+
+    {:ok, review} =
+      Accounts.WorkflowSteps.insert(
+        user.id,
+        workflow_step_attrs(%{
+          "name" => "review",
+          "workflow_id" => workflow.id,
+          "project_id" => workflow.project_id,
+          "config" => %{"prompt" => "Review", "output_schema" => review_schema()}
+        })
+      )
+
+    route_config = fn session ->
+      %{
+        "version" => 1,
+        "match_policy" => "exactly_one",
+        "rules" => [
+          %{
+            "id" => "ticket",
+            "when" => %{"ref" => "task.level", "op" => "eq", "value" => "ticket"},
+            "transition" => %{"type" => "intra_workflow", "step_id" => implement.id},
+            "session" => session
+          }
+        ],
+        "default" => %{"transition" => %{"type" => "intra_workflow", "step_id" => implement.id}}
+      }
+    end
+
+    resume = %{"mode" => "resume"}
+
+    created =
+      conn
+      |> recycle()
+      |> authenticate(user)
+      |> graphql("""
+      mutation { createWorkflowStep(workflowId: "#{workflow.id}", name: "route", stepType: "route", harness: "codex", config: #{json_arg(%{"route_config" => route_config.(resume)})}) { id config { ... on RouteStepConfig { routeConfig } } } }
       """)
       |> json_response(200)
 
     refute created["errors"]
-    step = created["data"]["createWorkflowStep"]
-    assert step["config"]["session"] == %{"name" => "implementer", "mode" => "new"}
+    route = created["data"]["createWorkflowStep"]
+    assert route["config"]["routeConfig"] == route_config.(resume)
+
+    for {from, to} <- [{review.id, route["id"]}, {route["id"], implement.id}] do
+      {:ok, _transition} =
+        Accounts.StepTransitions.insert(user.id, %{
+          "from_step_id" => from,
+          "to_step_id" => to,
+          "project_id" => workflow.project_id
+        })
+    end
+
+    fork = %{"mode" => "fork", "step_id" => implement.id}
+
+    updated =
+      conn
+      |> recycle()
+      |> authenticate(user)
+      |> graphql("""
+      mutation { updateWorkflowStep(id: "#{route["id"]}", config: #{json_arg(%{"route_config" => route_config.(fork)})}) { config { ... on RouteStepConfig { routeConfig } } } }
+      """)
+      |> json_response(200)
+
+    refute updated["errors"]
+    assert updated["data"]["updateWorkflowStep"]["config"]["routeConfig"] == route_config.(fork)
+
+    invalid =
+      conn
+      |> recycle()
+      |> authenticate(user)
+      |> graphql("""
+      mutation { updateWorkflowStep(id: "#{route["id"]}", config: #{json_arg(%{"route_config" => route_config.(%{"mode" => "new", "step_id" => implement.id})})}) { id } }
+      """)
+      |> json_response(200)
+
+    assert [%{"message" => message}] = invalid["errors"]
+    assert message =~ "$.rules[0].session.step_id: is not allowed with mode new"
 
     {:ok, task} =
       Accounts.Tasks.insert(user.id, workflow.project_id, %{title: "Session", level: "ticket"})
+
+    source =
+      %Sacrum.Repo.Schemas.StepExecution{
+        user_id: user.id,
+        project_id: workflow.project_id,
+        task_id: task.id,
+        workflow_id: workflow.id,
+        step_id: implement.id,
+        step_name: "implement",
+        status: "completed"
+      }
+      |> Sacrum.Repo.insert!()
 
     execution =
       %Sacrum.Repo.Schemas.StepExecution{
@@ -422,39 +519,68 @@ defmodule SacrumWeb.Graphql.WorkflowStepConfigTest do
         project_id: workflow.project_id,
         task_id: task.id,
         workflow_id: workflow.id,
-        step_id: step["id"],
+        step_id: implement.id,
         step_name: "implement",
         status: "started",
-        session_name: "implementer",
-        resume_session_id: "native-0"
+        resume_session_id: "native-0",
+        forked_from_execution_id: source.id
       }
       |> Sacrum.Repo.insert!()
 
-    updated =
+    execution =
+      execution
+      |> Ecto.Changeset.change(conversation_root_execution_id: execution.id)
+      |> Sacrum.Repo.update!()
+
+    reported =
       conn
       |> recycle()
       |> authenticate(user)
       |> graphql("""
-      mutation { updateStepExecution(id: "#{execution.id}", nativeSessionId: "native-1") { sessionName resumeSessionId nativeSessionId } }
+      mutation { updateStepExecution(id: "#{execution.id}", nativeSessionId: "native-1") { resumeSessionId nativeSessionId conversationRootExecutionId forkedFromExecutionId } }
       """)
       |> json_response(200)
 
-    assert updated["data"]["updateStepExecution"] == %{
-             "sessionName" => "implementer",
+    assert reported["data"]["updateStepExecution"] == %{
              "resumeSessionId" => "native-0",
-             "nativeSessionId" => "native-1"
+             "nativeSessionId" => "native-1",
+             "conversationRootExecutionId" => execution.id,
+             "forkedFromExecutionId" => source.id
            }
 
-    rejected =
+    for field <- ["sessionName", "conversationRootExecutionId"] do
+      forged =
+        conn
+        |> recycle()
+        |> authenticate(user)
+        |> graphql("""
+        mutation { updateStepExecution(id: "#{execution.id}", #{field}: "forged") { id } }
+        """)
+        |> json_response(200)
+
+      assert [%{"message" => message}] = forged["errors"]
+      assert message =~ "Unknown argument \"#{field}\""
+    end
+
+    dropped =
       conn
       |> recycle()
       |> authenticate(user)
       |> graphql("""
-      mutation { updateStepExecution(id: "#{execution.id}", resumeSessionId: "forged") { id } }
+      query { stepExecutions(taskId: "#{task.id}") { sessionName } }
       """)
       |> json_response(200)
 
-    assert [%{"message" => message}] = rejected["errors"]
-    assert message =~ "Unknown argument \"resumeSessionId\""
+    assert [%{"message" => message}] = dropped["errors"]
+    assert message =~ "Cannot query field \"sessionName\""
+  end
+
+  defp review_schema do
+    %{
+      "type" => "object",
+      "properties" => %{"summary" => %{"type" => "string"}},
+      "required" => ["summary"],
+      "additionalProperties" => false
+    }
   end
 end

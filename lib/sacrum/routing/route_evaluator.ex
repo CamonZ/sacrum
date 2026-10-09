@@ -12,14 +12,16 @@ defmodule Sacrum.Routing.RouteEvaluator do
           matched_rule_id: String.t() | nil,
           used_default: boolean(),
           transition: map(),
-          handoff: map() | nil
+          handoff: map() | nil,
+          session: RouteConfig.session_directive() | nil
         }
 
   @type error :: %{code: atom(), path: String.t(), message: String.t()}
 
   @doc """
   Selects exactly one matching rule, or the explicit default when no rules
-  match, then renders only that decision's handoff template.
+  match, then renders only that decision's handoff template. The decision's
+  session directive is returned as decoded.
   """
   @spec evaluate(RouteConfig.t(), RouteContext.t()) :: {:ok, result()} | {:error, error()}
   def evaluate(%{rules: rules, default: default}, context) do
@@ -76,7 +78,7 @@ defmodule Sacrum.Routing.RouteEvaluator do
   end
 
   defp render_decision(
-         %{transition: transition, handoff: template},
+         %{transition: transition, handoff: template} = decision,
          context,
          path,
          matched_rule_id,
@@ -88,7 +90,8 @@ defmodule Sacrum.Routing.RouteEvaluator do
          matched_rule_id: matched_rule_id,
          used_default: used_default,
          transition: transition,
-         handoff: handoff
+         handoff: handoff,
+         session: Map.get(decision, :session)
        }}
     end
   end

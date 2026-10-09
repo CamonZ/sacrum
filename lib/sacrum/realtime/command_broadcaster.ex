@@ -11,7 +11,7 @@ defmodule Sacrum.Realtime.CommandBroadcaster do
   Sends run_step for a started execution. The request comes from the
   execution's rendered config. Inference reads `harness` from the step;
   execute omits it. `verbose_daemon_logging` is read from the step, and
-  `session` from the execution's pinned session name and resume id.
+  `session` from the execution's pinned conversation fields.
   """
   @spec broadcast_run_step(map(), String.t() | nil) :: :ok | {:error, atom()}
   def broadcast_run_step(%{execution: execution} = data, daemon_id) do
@@ -62,13 +62,16 @@ defmodule Sacrum.Realtime.CommandBroadcaster do
     )
   end
 
-  # Only executions dispatched with a named session carry one; the daemon
-  # starts a new conversation or resumes the pinned native id.
+  # Every llm_inference execution is rooted in a conversation; the daemon
+  # starts it, resumes the pinned native id, or forks from it. `resume_id`
+  # carries the source id for both resume and fork.
   defp session_payload(execution) do
-    case {Map.get(execution, :session_name), Map.get(execution, :resume_session_id)} do
-      {nil, _resume_id} -> nil
-      {_name, nil} -> %{mode: "new"}
-      {_name, resume_id} -> %{mode: "resume", resume_id: resume_id}
+    case {Map.get(execution, :conversation_root_execution_id),
+          Map.get(execution, :forked_from_execution_id), Map.get(execution, :resume_session_id)} do
+      {nil, _forked_from, _resume_id} -> nil
+      {_root, nil, nil} -> %{mode: "new"}
+      {_root, nil, resume_id} -> %{mode: "resume", resume_id: resume_id}
+      {_root, _forked_from, resume_id} -> %{mode: "fork", resume_id: resume_id}
     end
   end
 

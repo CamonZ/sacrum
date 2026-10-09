@@ -147,6 +147,27 @@ defmodule Sacrum.Realtime.CommandBroadcasterTest do
     end
   end
 
+  test "sends the conversation entry for new, resume and fork", ctx do
+    root = Ecto.UUID.generate()
+
+    for {fields, session} <- [
+          {%{conversation_root_execution_id: root}, %{mode: "new"}},
+          {%{conversation_root_execution_id: root, resume_session_id: "native-1"},
+           %{mode: "resume", resume_id: "native-1"}},
+          {%{
+             conversation_root_execution_id: root,
+             forked_from_execution_id: Ecto.UUID.generate(),
+             resume_session_id: "native-1"
+           }, %{mode: "fork", resume_id: "native-1"}}
+        ] do
+      data = %{ctx.data | execution: Map.merge(ctx.data.execution, fields)}
+
+      assert :ok = CommandBroadcaster.broadcast_run_step(data, ctx.daemon_id)
+      assert_receive %Phoenix.Socket.Broadcast{event: "run_step", payload: payload}
+      assert payload.session == session
+    end
+  end
+
   test "requires a daemon id but does not require a live or matching registry session", ctx do
     assert {:error, :workspace_required} = CommandBroadcaster.broadcast_run_step(ctx.data, nil)
     :ok = Sacrum.DaemonConnectionRegistry.unregister(ctx.daemon_id)

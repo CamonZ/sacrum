@@ -22,6 +22,7 @@ defmodule Sacrum.Orchestrator.FSMData do
     :current_execution,
     :slot_id,
     :pending_handoff,
+    :pending_session,
     steps: %{},
     transitions: %{},
     run_retry_attempt: 0
@@ -43,6 +44,7 @@ defmodule Sacrum.Orchestrator.FSMData do
           current_execution: StepExecution.t() | nil,
           slot_id: integer() | nil,
           pending_handoff: map() | nil,
+          pending_session: map() | nil,
           run_retry_attempt: non_neg_integer()
         }
 end

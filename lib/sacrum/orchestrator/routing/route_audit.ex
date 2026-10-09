@@ -3,7 +3,8 @@ defmodule Sacrum.Orchestrator.Routing.RouteAudit do
   Canonical persisted shape for a local deterministic route decision.
 
   `context.route` is the audit record. `transition_result` and `handoff` on
-  the StepExecution remain the destination and payload. Visit counting and
+  the StepExecution remain the destination and payload; `context.route.session`
+  is the selected decision's session directive, if any. Visit counting and
   restart recovery both read this same context shape.
   """
 
@@ -20,8 +21,8 @@ defmodule Sacrum.Orchestrator.Routing.RouteAudit do
   """
   @spec context(map(), map(), map(), map()) :: map()
   def context(provenance, program, route_context, result) do
-    %{
-      "route" => %{
+    route =
+      %{
         "mode" => @mode,
         "source_execution_id" => provenance.source_execution.id,
         "config_version" => program.version,
@@ -29,8 +30,27 @@ defmodule Sacrum.Orchestrator.Routing.RouteAudit do
         "used_default" => result.used_default,
         "context" => audit_context(program, route_context)
       }
-    }
+
+    case session(result) do
+      nil -> %{"route" => route}
+      session -> %{"route" => Map.put(route, "session", session)}
+    end
   end
+
+  @doc """
+  The session directive the destination is dispatched with, as recorded in
+  `context.route.session`: `%{"mode" => "new"}` or
+  `%{"mode" => "resume" | "fork", "step_id" => id}`, where an omitted
+  `step_id` names the destination step.
+  """
+  @spec session(map()) :: map() | nil
+  def session(%{session: %{mode: :new}}), do: %{"mode" => "new"}
+
+  def session(%{session: %{mode: mode, step_id: step_id}, transition: transition}) do
+    %{"mode" => Atom.to_string(mode), "step_id" => step_id || transition.step_id}
+  end
+
+  def session(_result), do: nil
 
   # Predecessor output is not copied wholesale: the audit keeps the task,
   # visit count, and only the output values the rules and handoff templates
