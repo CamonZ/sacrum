@@ -18,6 +18,7 @@ defmodule Sacrum.Routing.RouteValidator do
   """
 
   alias Sacrum.Repo.Schemas.WorkflowStep
+  alias Sacrum.Repo.Schemas.WorkflowStep.Config.WaitChildren
 
   alias Sacrum.Routing.{
     RouteConfig,
@@ -56,8 +57,8 @@ defmodule Sacrum.Routing.RouteValidator do
         }
 
   @doc """
-  Validates route steps, route configuration ownership and step transition
-  session directives in `owner_ids`.
+  Validates route steps, route configuration ownership, and step transition
+  and `wait_children` session directives in `owner_ids`.
 
   Destination workflows appear in the snapshot as support data so target
   checks can see their entry steps; their own routes are not subjects of
@@ -87,8 +88,9 @@ defmodule Sacrum.Routing.RouteValidator do
   defp validate_owner_routes(snapshot, owner_ids, authoring?, allow_incomplete?) do
     owners = MapSet.new(owner_ids)
 
-    with :ok <- validate_route_steps(snapshot, owners, authoring?, allow_incomplete?) do
-      validate_transition_sessions(snapshot, owners)
+    with :ok <- validate_route_steps(snapshot, owners, authoring?, allow_incomplete?),
+         :ok <- validate_transition_sessions(snapshot, owners) do
+      validate_wait_children_sessions(snapshot, owners)
     end
   end
 
@@ -459,10 +461,13 @@ defmodule Sacrum.Routing.RouteValidator do
   end
 
   #
-  # Session directives: the destination and the referenced conversation step
-  # must be llm_inference steps of this workflow on the same harness. They
-  # read only steps, so they are checked even while predecessor and target
-  # edges may still be missing from an authoring draft.
+  # Session directives: on an intra_workflow decision the destination and the
+  # referenced conversation step must be llm_inference steps of this workflow
+  # on the same harness. An inter_workflow decision stays in the same TaskRun,
+  # so it may resume or fork a conversation of this workflow; its destination
+  # step is chosen at route time, so it must name the step and the harness is
+  # checked at dispatch. They read only steps, so they are checked even while
+  # predecessor and target edges may still be missing from an authoring draft.
   #
 
   defp validate_sessions(route_step, program, snapshot) do
@@ -478,6 +483,22 @@ defmodule Sacrum.Routing.RouteValidator do
   end
 
   defp validate_session(_route_step, %{session: nil}, _path, _snapshot), do: :ok
+
+  defp validate_session(
+         route_step,
+         %{session: session, transition: %{type: :inter_workflow}},
+         path,
+         snapshot
+       ) do
+    with {:error, %{path: path, message: message}} <-
+           SessionDirective.validate_workflow_source(
+             session,
+             route_step.workflow_id,
+             path,
+             snapshot.steps
+           ),
+         do: {:error, error(:route_session_invalid, path, message)}
+  end
 
   defp validate_session(
          route_step,
@@ -506,7 +527,7 @@ defmodule Sacrum.Routing.RouteValidator do
      error(
        :route_session_invalid,
        path,
-       "requires an intra_workflow transition to an llm_inference step"
+       "requires an llm_inference destination step"
      )}
   end
 
@@ -566,6 +587,49 @@ defmodule Sacrum.Routing.RouteValidator do
 
       _step ->
         {:error, %{path: "$.session", message: "requires an llm_inference destination step"}}
+    end
+  end
+
+  #
+  # wait_children session directives: every child run forks a conversation
+  # of the parent run, named by an llm_inference step of the parent's
+  # workflow. The child's entry step and harness are checked at dispatch.
+  #
+
+  defp validate_wait_children_sessions(snapshot, owners) do
+    snapshot.steps
+    |> Map.values()
+    |> Enum.filter(&wait_children_session?(&1, owners))
+    |> Enum.sort_by(& &1.id)
+    |> Enum.reduce_while(:ok, fn step, :ok ->
+      case validate_wait_children_session(step, snapshot) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, Map.put(reason, :step_id, step.id)}}
+      end
+    end)
+  end
+
+  defp wait_children_session?(
+         %{step_type: :wait_children, config: %{session: %{}}} = step,
+         owners
+       ),
+       do: MapSet.member?(owners, step.workflow_id)
+
+  defp wait_children_session?(_step, _owners), do: false
+
+  defp validate_wait_children_session(step, snapshot) do
+    with {:ok, session} <- WaitChildren.decode_session(step.config.session),
+         :ok <-
+           SessionDirective.validate_workflow_source(
+             session,
+             step.workflow_id,
+             "$.session",
+             snapshot.steps
+           ) do
+      :ok
+    else
+      {:error, %{path: path, message: message}} ->
+        {:error, error(:wait_children_session_invalid, path, message)}
     end
   end
 

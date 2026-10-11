@@ -350,6 +350,70 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
       assert Repo.get!(StepExecution, fixture.source_execution.id).transition_result == nil
     end
 
+    test "an inter_workflow decision resumes a conversation of the route's workflow in the same run" do
+      fixture =
+        configured_inter_fixture(
+          destination_type: "llm_inference",
+          session: &%{"mode" => "resume", "step_id" => &1.id}
+        )
+
+      {:ok, source_execution} =
+        fixture.source_execution
+        |> Ecto.Changeset.change(
+          harness: fixture.destination.harness,
+          native_session_id: "native-source",
+          conversation_root_execution_id: fixture.source_execution.id
+        )
+        |> Repo.update()
+
+      session = %{"mode" => "resume", "step_id" => source_execution.step_id}
+
+      assert {:next_state, :awaiting_execution, returned_data} =
+               RouteStep.handle_deterministic_route_step(
+                 fixture.data,
+                 fixture.route,
+                 fixture.program
+               )
+
+      assert returned_data.pending_session == session
+
+      assert %StepExecution{context: %{"route" => %{"session" => ^session}}} =
+               deterministic_audit(fixture.task.id, fixture.route.id)
+
+      updated_task =
+        Task
+        |> Repo.get!(fixture.task.id)
+        |> Sacrum.Orchestrator.PromptRenderer.preload_for_rendering()
+
+      assert updated_task.workflow_id == fixture.destination_workflow.id
+
+      # A restart between the route commit and dispatch restores the directive.
+      assert {:ok, %{pending_session: ^session}} =
+               RouteRecovery.restore(%{
+                 returned_data
+                 | task: updated_task,
+                   pending_handoff: nil,
+                   pending_session: nil
+               })
+
+      assert {:ok, destination_execution} =
+               ExecutionDispatcher.create_and_dispatch(
+                 updated_task,
+                 fixture.destination,
+                 fixture.task_run,
+                 returned_data.pending_handoff,
+                 session: session
+               )
+
+      assert %{
+               resume_session_id: "native-source",
+               forked_from_execution_id: nil,
+               conversation_root_execution_id: root
+             } = Repo.get!(StepExecution, destination_execution.id)
+
+      assert root == source_execution.id
+    end
+
     test "rolls back every persistence stage without exposing a partial route decision" do
       Enum.each([:audit, :cursor, :task], fn stage ->
         fixture = configured_intra_fixture()
@@ -762,7 +826,9 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
     }
   end
 
-  defp configured_inter_fixture do
+  # `destination` is a finish step unless `:destination_type` is given;
+  # `:session` builds the rule's directive from the source step.
+  defp configured_inter_fixture(opts \\ []) do
     user = create_user()
     project = create_project(user)
     workflow = create_workflow(user, project, "Source route workflow")
@@ -776,9 +842,13 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
       })
 
     destination =
-      create_step(user, destination_workflow, %{"name" => "done", "step_type" => "finish"})
+      create_step(user, destination_workflow, %{
+        "name" => "done",
+        "step_type" => Keyword.get(opts, :destination_type, "finish")
+      })
 
     create_workflow_transition(user, workflow, destination_workflow, destination)
+    session = if session_for = opts[:session], do: session_for.(source)
 
     route =
       create_step(user, workflow, %{
@@ -789,7 +859,8 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
           "route_config" =>
             route_config(
               %{"type" => "inter_workflow", "workflow_id" => destination_workflow.id},
-              route_handoff_template()
+              route_handoff_template(),
+              session
             )
         }
       })

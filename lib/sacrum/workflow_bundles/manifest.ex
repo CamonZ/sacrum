@@ -5,8 +5,9 @@ defmodule Sacrum.WorkflowBundles.Manifest do
   The manifest is deliberately kept as JSON-shaped data at the transport
   boundary. This module validates its structural fields, normalizes them to
   atom-keyed internal values. RouteRefs resolves only the documented route
-  target references, and the importer remaps a step edge's `session.step_ref`;
-  opaque JSON fields are never traversed or rewritten.
+  target references and a `wait_children` step's `session.step_ref`, and the
+  importer remaps a step edge's `session.step_ref`; opaque JSON fields are
+  never traversed or rewritten.
 
   Each step carries its type's `config` object. Configs are checked against
   their variant changeset so errors carry the manifest path; route configs are
@@ -285,6 +286,15 @@ defmodule Sacrum.WorkflowBundles.Manifest do
   # error, in schema field order, is reported at its manifest path.
   defp validate_config(Config.Route, _config, _path), do: :ok
 
+  # A wait_children session names its fork source by `step_ref`; RouteRefs
+  # resolves it to a `step_id` before the step changeset runs.
+  defp validate_config(Config.WaitChildren, %{"session" => session} = config, path)
+       when not is_nil(session) do
+    with :ok <- validate_wait_children_session(session, "#{path}.session") do
+      validate_config(Config.WaitChildren, Map.delete(config, "session"), path)
+    end
+  end
+
   defp validate_config(module, config, path) do
     errors = Enum.reverse(module.changeset(struct(module), config).errors)
 
@@ -293,6 +303,18 @@ defmodule Sacrum.WorkflowBundles.Manifest do
       field -> {:error, config_error(field, Keyword.fetch!(errors, field), path)}
     end
   end
+
+  defp validate_wait_children_session(session, path) when is_map(session) do
+    with :ok <- validate_keys(session, ["mode"], ["step_ref"], path),
+         {:ok, _step_ref} <- required_text(session, "step_ref", path) do
+      if session["mode"] == "fork",
+        do: :ok,
+        else: {:error, error("#{path}.mode", "must be fork")}
+    end
+  end
+
+  defp validate_wait_children_session(_session, path),
+    do: {:error, error(path, "must be an object")}
 
   defp config_error(field, {_message, [validation: :required]}, path),
     do: error("#{path}.#{field}", "is required")

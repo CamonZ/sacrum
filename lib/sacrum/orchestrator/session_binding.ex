@@ -11,7 +11,12 @@ defmodule Sacrum.Orchestrator.SessionBinding do
   name a step: its conversation is the one its latest completed execution
   belongs to, and the source turn is that conversation's latest completed
   execution with a `native_session_id`, whichever step added it. There is no
-  separate registry, and other runs or failed executions are never selected.
+  separate registry, and failed executions are never selected.
+
+  The conversation is searched in the current TaskRun unless the directive
+  carries a `task_run_id`, which only the engine sets: on a run's entry
+  directive (`TaskRun.entry_session`) it names the run that stopped at a stop
+  step or a child run's parent. No other run is ever searched.
 
   A retry continues exactly as its failed attempt did, from the same source
   turn (see `retry/3`).
@@ -31,6 +36,7 @@ defmodule Sacrum.Orchestrator.SessionBinding do
           {:session_not_found, Ecto.UUID.t()}
           | {:session_harness_mismatch,
              %{step_id: Ecto.UUID.t(), bound: String.t() | nil, step: String.t() | nil}}
+          | {:session_requires_llm_inference, Ecto.UUID.t()}
 
   @none %{
     resume_session_id: nil,
@@ -40,24 +46,35 @@ defmodule Sacrum.Orchestrator.SessionBinding do
 
   @doc """
   Returns the conversation fields for execution `execution_id` of `step`.
-  Steps other than `llm_inference` have none.
+  Steps other than `llm_inference` have none, and a resume or fork directive
+  on one fails rather than being dropped.
   """
   @spec resolve(TaskRun.t(), WorkflowStep.t(), map() | nil, Ecto.UUID.t()) ::
           {:ok, resolution()} | {:error, error()}
   def resolve(task_run, %WorkflowStep{step_type: :llm_inference} = step, directive, execution_id) do
     case directive do
       %{"mode" => mode, "step_id" => source_step_id} when mode in ["resume", "fork"] ->
-        continue(task_run, step, mode, source_step_id, execution_id)
+        source_run_id = Map.get(directive, "task_run_id") || task_run.id
+        continue(source_run_id, step, mode, source_step_id, execution_id)
 
       _new ->
         {:ok, %{@none | conversation_root_execution_id: execution_id}}
     end
   end
 
-  def resolve(_task_run, _step, _directive, _execution_id), do: {:ok, @none}
+  def resolve(_task_run, step, directive, _execution_id) do
+    if continues?(directive),
+      do: {:error, {:session_requires_llm_inference, step.id}},
+      else: {:ok, @none}
+  end
 
-  defp continue(task_run, step, mode, source_step_id, execution_id) do
-    case latest_turn(task_run.id, source_step_id) do
+  @doc "Whether `directive` resumes or forks an existing conversation."
+  @spec continues?(map() | nil) :: boolean()
+  def continues?(%{"mode" => mode}) when mode in ["resume", "fork"], do: true
+  def continues?(_directive), do: false
+
+  defp continue(source_run_id, step, mode, source_step_id, execution_id) do
+    case latest_turn(source_run_id, source_step_id) do
       nil ->
         {:error, {:session_not_found, source_step_id}}
 

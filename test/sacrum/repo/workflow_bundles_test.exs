@@ -249,6 +249,96 @@ defmodule Sacrum.Repo.WorkflowBundlesTest do
     end
   end
 
+  describe "wait_children session directives" do
+    test "imports step_ref and remaps it to the parent workflow step's id" do
+      {user, project} = create_project()
+      bundle = wait_children_bundle(%{"mode" => "fork", "step_ref" => "plan"})
+
+      assert {:ok, result} = Sacrum.Accounts.WorkflowBundles.import(user.id, project.id, bundle)
+      ids = result.step_mappings["parent"]
+
+      assert Repo.get!(Sacrum.Repo.Schemas.WorkflowStep, ids["wait"]).config.session == %{
+               "mode" => "fork",
+               "step_id" => ids["plan"]
+             }
+    end
+
+    test "rejects a persisted step_id, an unresolved step_ref, a missing step_ref and resume" do
+      {user, project} = create_project()
+      path = "workflows[0].steps[1].config.session"
+
+      for {session, message} <- [
+            {%{"mode" => "fork", "step_id" => Ecto.UUID.generate()},
+             "#{path}.step_id: is not allowed"},
+            {%{"mode" => "fork", "step_ref" => "missing"},
+             "#{path}.step_ref: is not a known step ref"},
+            {%{"mode" => "fork"}, "#{path}.step_ref: is required"},
+            {%{"mode" => "resume", "step_ref" => "plan"}, "#{path}.mode: must be fork"},
+            {"fork", "#{path}: must be an object"}
+          ] do
+        assert {:error, %Ecto.Changeset{} = changeset} =
+                 Sacrum.Accounts.WorkflowBundles.import(
+                   user.id,
+                   project.id,
+                   wait_children_bundle(session)
+                 )
+
+        assert {^message, _} = changeset.errors[:bundle]
+      end
+    end
+
+    test "rejects a fork of a step the graph cannot honor and imports nothing" do
+      {user, project} = create_project()
+      bundle = wait_children_bundle(%{"mode" => "fork", "step_ref" => "done"})
+
+      assert {:error, %Ecto.Changeset{} = changeset} =
+               Sacrum.Accounts.WorkflowBundles.import(user.id, project.id, bundle)
+
+      assert {message, _} = changeset.errors[:bundle]
+      assert message =~ "$.session.step_id: must be an llm_inference step in this workflow"
+
+      assert Repo.aggregate(
+               from(w in Workflow, where: w.project_id == ^project.id and w.name == "Parent"),
+               :count
+             ) == 0
+    end
+  end
+
+  # plan -> wait -> done, where wait forks with `session`.
+  defp wait_children_bundle(session) do
+    %{
+      "workflows" => [
+        %{
+          "workflow_ref" => "parent",
+          "name" => "Parent",
+          "initial_step" => address("parent", "plan"),
+          "steps" => [
+            %{
+              "step_ref" => "plan",
+              "name" => "plan",
+              "step_type" => "llm_inference",
+              "harness" => "codex"
+            },
+            %{
+              "step_ref" => "wait",
+              "name" => "wait",
+              "step_type" => "wait_children",
+              "harness" => "codex",
+              "config" => %{"session" => session}
+            },
+            %{
+              "step_ref" => "done",
+              "name" => "done",
+              "step_type" => "finish",
+              "harness" => "codex"
+            }
+          ]
+        }
+      ],
+      "step_edges" => [step_edge("parent", "plan", "wait"), step_edge("parent", "wait", "done")]
+    }
+  end
+
   defp session_bundle(step_edges) do
     llm = &%{"step_ref" => &1, "name" => &1, "step_type" => "llm_inference", "harness" => "codex"}
 

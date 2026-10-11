@@ -23,6 +23,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   import Ecto.Query
 
   alias Sacrum.Orchestrator.{
+    EntrySession,
     ExecutionDispatcher,
     ExecutionPool,
     FSMData,
@@ -30,6 +31,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     PromptRenderer,
     Retry,
     Scheduler,
+    SessionBinding,
     TaskCompletion,
     TaskRunPlacement,
     WorkflowGraph
@@ -39,7 +41,7 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
   alias Sacrum.Orchestrator.Routing.{HumanInput, RouteRecovery, RouteStep, WaitChildren}
   alias Sacrum.Orchestrator.TaskRuns.{Failure, Lookup, Root}
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.{StepExecution, Task, TaskRun}
+  alias Sacrum.Repo.Schemas.{StepExecution, Task, TaskRun, WorkflowStep}
   alias Sacrum.Repo.TaskHierarchy
   alias Sacrum.Repo.TaskWorkflows
   alias Sacrum.Routing.RouteMode
@@ -254,13 +256,13 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
         )
 
         {:next_state, :awaiting_execution,
-         %{
+         EntrySession.seed(%{
            data
            | workflow: workflow,
              steps: steps,
              transitions: transitions,
              transition_sessions: transition_sessions
-         }}
+         })}
 
       {:error, reason} ->
         Logger.error("[TaskOrchestrator:#{task_id}] Failed to enter workflow: #{inspect(reason)}")
@@ -525,17 +527,14 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     next_transitions = WorkflowGraph.get_outgoing_transitions(data, stop_step_id)
 
     with {:ok, next_step_id} <- WorkflowGraph.select_single_transition(next_transitions),
-         {:ok, %{task: updated_task}} <- commit_stop_bypass(data, next_step_id) do
+         entry_session = EntrySession.stop_bypass(data, stop_step_id, next_step_id),
+         {:ok, %{task: updated_task}} <- commit_stop_bypass(data, next_step_id, entry_session) do
       Logger.info(
         "[TaskOrchestrator:#{task_id}] New TaskRun bypassed stop step=#{stop_step_id} to step=#{next_step_id}"
       )
 
-      {:keep_state,
-       %{
-         data
-         | task: updated_task,
-           pending_session: WorkflowGraph.transition_session(data, stop_step_id, next_step_id)
-       }, [{:state_timeout, 0, :run}]}
+      {:keep_state, %{data | task: updated_task, pending_session: entry_session},
+       [{:state_timeout, 0, :run}]}
     else
       {:error, reason} ->
         Logger.error(
@@ -546,11 +545,14 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     end
   end
 
-  @spec commit_stop_bypass(FSMData.t(), binary()) :: {:ok, map()} | {:error, term()}
-  defp commit_stop_bypass(data, next_step_id) do
+  # The entry directive is stored with the task advance so a restart before
+  # the destination dispatches still enters the boundary run's conversation.
+  @spec commit_stop_bypass(FSMData.t(), binary(), map() | nil) :: {:ok, map()} | {:error, term()}
+  defp commit_stop_bypass(data, next_step_id, entry_session) do
     Repo.transaction(fn ->
       with :ok <- WorkflowGraph.validate_stop_destination(data, next_step_id),
-           {:ok, changes} <- advance_task_step(data, next_step_id, %{}) do
+           {:ok, changes} <- advance_task_step(data, next_step_id, %{}),
+           {:ok, changes} <- put_entry_session(data, entry_session, changes) do
         changes
       else
         {:error, reason} -> Repo.rollback(reason)
@@ -583,6 +585,18 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
            ),
          {:ok, task} <- Repo.update(changeset) do
       {:ok, Map.put(changes, :task, task)}
+    end
+  end
+
+  @spec put_entry_session(FSMData.t(), map() | nil, map()) :: {:ok, map()} | {:error, term()}
+  defp put_entry_session(_data, nil, changes), do: {:ok, changes}
+
+  defp put_entry_session(data, entry_session, changes) do
+    with {:ok, task_run} <- Lookup.fetch(data.task_run_id) do
+      task_run
+      |> TaskRun.entry_session_changeset(entry_session)
+      |> Repo.update()
+      |> put_transaction_change(changes, :task_run)
     end
   end
 
@@ -792,6 +806,11 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     task_id = data.task.id
 
     case WorkflowGraph.get_current_step(data) do
+      {:ok, %{step_type: type} = step}
+      when type != :llm_inference and
+             data.pending_session != nil ->
+        reject_pending_session(data, step)
+
       {:ok, %{step_type: :finish}} ->
         complete_finish_step(data)
 
@@ -803,6 +822,25 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
 
       _ ->
         continue_awaiting_execution(task_id, data)
+    end
+  end
+
+  # A resume or fork that reaches a step outside llm_inference (a child's
+  # entry step, or an inter_workflow destination) fails the run rather than
+  # silently dropping the conversation. A new-conversation directive is moot.
+  @spec reject_pending_session(FSMData.t(), WorkflowStep.t()) :: fsm_transition()
+  defp reject_pending_session(data, step) do
+    if SessionBinding.continues?(data.pending_session) do
+      reason = {:session_requires_llm_inference, step.id}
+
+      Logger.error(
+        "[TaskOrchestrator:#{data.task.id}] Cannot enter step=#{step.id}: #{inspect(reason)}"
+      )
+
+      mark_run_failed_if_active(data, {:dispatch_failed, reason}, %{})
+      {:next_state, :failed, data}
+    else
+      handle_awaiting_execution(%{data | pending_session: nil})
     end
   end
 

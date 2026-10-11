@@ -1,6 +1,9 @@
 defmodule Sacrum.Orchestrator.Routing.WaitChildren.ChildRuns do
   @moduledoc """
   Child TaskRun creation and lineage reconciliation for wait-children routing.
+
+  A new child run carries the `wait_children` step's entry directive (see
+  `EntrySession.child/2`); a reconciled run keeps the one it was created with.
   """
 
   alias Sacrum.Accounts.TaskRuns
@@ -8,25 +11,33 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren.ChildRuns do
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{Task, TaskRun}
 
-  @spec get_or_create(Task.t(), TaskRun.t(), String.t()) :: {:ok, TaskRun.t()} | {:error, term()}
-  def get_or_create(%Task{} = child, %TaskRun{} = parent_task_run, triggered_by_step_execution_id)
+  @spec get_or_create(Task.t(), TaskRun.t(), String.t(), map() | nil) ::
+          {:ok, TaskRun.t()} | {:error, term()}
+  def get_or_create(
+        %Task{} = child,
+        %TaskRun{} = parent_task_run,
+        triggered_by_step_execution_id,
+        entry_session \\ nil
+      )
       when is_binary(triggered_by_step_execution_id) do
     case TaskRuns.get_active_for_task(child.user_id, child.id) do
       {:ok, %TaskRun{} = task_run} ->
         reconcile(task_run, parent_task_run, triggered_by_step_execution_id)
 
       {:error, :not_found} ->
-        create(child, parent_task_run, triggered_by_step_execution_id)
+        create(child, parent_task_run, triggered_by_step_execution_id, entry_session)
     end
   end
 
-  @spec create(Task.t(), TaskRun.t(), binary()) :: {:ok, TaskRun.t()} | {:error, term()}
-  defp create(%Task{} = child, %TaskRun{} = parent_task_run, trigger_id) do
+  @spec create(Task.t(), TaskRun.t(), binary(), map() | nil) ::
+          {:ok, TaskRun.t()} | {:error, term()}
+  defp create(%Task{} = child, %TaskRun{} = parent_task_run, trigger_id, entry_session) do
     TaskRuns.insert(child.user_id, child.project_id, child.id, %{
       status: :queued,
       parent_task_run_id: parent_task_run.id,
       root_task_run_id: root_task_run_id(parent_task_run),
-      triggered_by_step_execution_id: trigger_id
+      triggered_by_step_execution_id: trigger_id,
+      entry_session: entry_session
     })
   end
 

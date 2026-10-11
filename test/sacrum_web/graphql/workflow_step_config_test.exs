@@ -8,7 +8,7 @@ defmodule SacrumWeb.Graphql.WorkflowStepConfigTest do
   config {
     __typename
     ... on LlmInferenceStepConfig { version prompt agents skills agentConfig outputSchema }
-    ... on WaitChildrenStepConfig { version outputSchema }
+    ... on WaitChildrenStepConfig { version outputSchema session }
   }
   """
 
@@ -128,6 +128,42 @@ defmodule SacrumWeb.Graphql.WorkflowStepConfigTest do
       |> json_response(200)
 
     assert [%{"message" => "harness: can't be blank"}] = result["errors"]
+  end
+
+  test "wait_children saves and reads a fork directive and rejects resume",
+       %{conn: conn, user: user, workflow: workflow} do
+    {:ok, plan} =
+      Accounts.WorkflowSteps.insert(workflow, %{
+        name: "Plan",
+        step_type: "llm_inference",
+        harness: "codex",
+        config: %{"prompt" => "Plan"}
+      })
+
+    session = %{"mode" => "fork", "step_id" => plan.id}
+
+    created =
+      conn
+      |> authenticate(user)
+      |> graphql("""
+      mutation { createWorkflowStep(workflowId: "#{workflow.id}", name: "wait", stepType: "wait_children", harness: "codex", config: #{json_arg(%{"session" => session})}) { #{@config_fields} } }
+      """)
+      |> json_response(200)
+
+    refute created["errors"]
+    assert created["data"]["createWorkflowStep"]["config"]["session"] == session
+
+    rejected =
+      conn
+      |> recycle()
+      |> authenticate(user)
+      |> graphql("""
+      mutation { createWorkflowStep(workflowId: "#{workflow.id}", name: "wait again", stepType: "wait_children", harness: "codex", config: #{json_arg(%{"session" => %{session | "mode" => "resume"}})}) { id } }
+      """)
+      |> json_response(200)
+
+    assert [%{"message" => message}] = rejected["errors"]
+    assert message =~ "$.session.mode: must be fork"
   end
 
   test "execution context snapshot is readable and separate from mutable route audit context",

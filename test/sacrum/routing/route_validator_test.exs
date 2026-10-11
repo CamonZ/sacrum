@@ -429,27 +429,71 @@ defmodule Sacrum.Routing.RouteValidatorTest do
       assert :ok = validate(persist_invalid_route_config(context.route, config))
     end
 
-    test "rejects directives whose destination is not an intra_workflow llm_inference step",
+    test "rejects intra_workflow directives whose destination is not an llm_inference step",
          context do
-      for rule <- [
-            verdict_rule("needs_changes", intra_target(context.done.id)),
-            verdict_rule("needs_changes", inter_target(context.other_workflow.id))
+      route =
+        persist_invalid_route_config(
+          context.route,
+          route_config([
+            verdict_rule("needs_changes", intra_target(context.done.id))
+            |> Map.put("session", %{"mode" => "new"}),
+            verdict_rule("ready", intra_target(context.implement.id))
+          ])
+        )
+
+      assert {:error,
+              %{
+                code: :route_session_invalid,
+                path: "$.rules[0].session",
+                message: "requires an llm_inference destination step"
+              }} = validate(route)
+    end
+
+    test "accepts inter_workflow directives naming an llm_inference step of the route's workflow",
+         context do
+      for session <- [
+            %{"mode" => "new"},
+            %{"mode" => "resume", "step_id" => context.implement.id},
+            %{"mode" => "fork", "step_id" => context.claude.id}
           ] do
         route =
           persist_invalid_route_config(
             context.route,
             route_config([
-              Map.put(rule, "session", %{"mode" => "new"}),
-              verdict_rule("ready", intra_target(context.implement.id))
+              verdict_rule("needs_changes", inter_target(context.other_workflow.id))
+              |> Map.put("session", session),
+              verdict_rule("ready", intra_target(context.done.id))
+            ])
+          )
+
+        assert :ok = validate(route)
+      end
+    end
+
+    test "rejects inter_workflow resume or fork without a step of the route's workflow",
+         context do
+      for {session, message} <- [
+            {%{"mode" => "resume"}, "is required with mode resume or fork"},
+            {%{"mode" => "fork", "step_id" => context.foreign.id},
+             "must be an llm_inference step in this workflow"},
+            {%{"mode" => "resume", "step_id" => context.done.id},
+             "must be an llm_inference step in this workflow"}
+          ] do
+        route =
+          persist_invalid_route_config(
+            context.route,
+            route_config([
+              verdict_rule("needs_changes", inter_target(context.other_workflow.id))
+              |> Map.put("session", session),
+              verdict_rule("ready", intra_target(context.done.id))
             ])
           )
 
         assert {:error,
-                %{
-                  code: :route_session_invalid,
-                  path: "$.rules[0].session",
-                  message: "requires an intra_workflow transition to an llm_inference step"
-                }} = validate(route)
+                %{code: :route_session_invalid, path: "$.rules[0].session.step_id"} = error} =
+                 validate(route)
+
+        assert error.message == message
       end
     end
 
@@ -498,7 +542,7 @@ defmodule Sacrum.Routing.RouteValidatorTest do
                })
 
       assert errors_on(changeset).route_config == [
-               "$.rules[1].session: requires an intra_workflow transition to an llm_inference step"
+               "$.rules[1].session: requires an llm_inference destination step"
              ]
     end
 
@@ -523,7 +567,7 @@ defmodule Sacrum.Routing.RouteValidatorTest do
       assert {:error, changeset} = Accounts.WorkflowSteps.insert(context.user.id, attrs)
 
       assert errors_on(changeset).route_config == [
-               "$.rules[0].session: requires an intra_workflow transition to an llm_inference step"
+               "$.rules[0].session: requires an llm_inference destination step"
              ]
     end
   end

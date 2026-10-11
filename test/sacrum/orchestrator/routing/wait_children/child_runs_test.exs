@@ -41,6 +41,27 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren.ChildRunsTest do
     assert child_task.current_step_id
   end
 
+  test "get_or_create stores the entry session on a new run and a reconciled run keeps its own" do
+    user = create_user()
+    {project, parent_task, workflow} = create_task_with_workflow(user)
+    {:ok, child_task} = Tasks.insert(user.id, project.id, %{title: "Forking Child"})
+    {:ok, parent_run} = TaskRuns.insert(user.id, project.id, parent_task.id)
+    {:ok, trigger_execution} = waiting_execution(user, project, workflow, parent_task, parent_run)
+    step_id = Ecto.UUID.generate()
+    entry = %{"mode" => "fork", "step_id" => step_id, "task_run_id" => parent_run.id}
+
+    assert {:ok, child_run} =
+             ChildRuns.get_or_create(child_task, parent_run, trigger_execution.id, entry)
+
+    assert Repo.get!(TaskRun, child_run.id).entry_session == entry
+
+    assert {:ok, reconciled} =
+             ChildRuns.get_or_create(child_task, parent_run, trigger_execution.id, nil)
+
+    assert reconciled.id == child_run.id
+    assert Repo.get!(TaskRun, child_run.id).entry_session == entry
+  end
+
   test "get_or_create rejects a manual child root run" do
     user = create_user()
     {project, parent_task, workflow} = create_task_with_workflow(user)

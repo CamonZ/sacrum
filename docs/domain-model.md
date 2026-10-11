@@ -257,7 +257,7 @@ polymorphic embedded schema whose variant is selected by `stepType`:
 | `structured_inference` | `StructuredInferenceStepConfig` | `provider`, `model`, `state`, `questions` (all required) |
 | `execute` | `ExecuteStepConfig` | `script`, `output_schema` (required); server-written `context` on dispatched executions |
 | `route` | `RouteStepConfig` | `route_config` |
-| `wait_children` | `WaitChildrenStepConfig` | `output_schema` (for artifact persistence) |
+| `wait_children` | `WaitChildrenStepConfig` | `output_schema` (for artifact persistence), `session` (fork directive for child runs) |
 | `human_input`, `stop`, `finish` | — | `config` is `null` |
 
 `human_input` has no defined prompt or response contract yet: its waiting
@@ -320,6 +320,9 @@ new execution:
   form one conversation.
 - `forked_from_execution_id`: the source turn of a `fork`.
 - `resume_session_id`: the source turn's native id for `resume` and `fork`.
+  A run's first execution may take its source turn from a directly linked run
+  (see "Run entry session directives"); its root and fork source then point
+  into that run.
 
 `resume` and `fork` name a step. Its conversation is the one its latest
 completed execution in the TaskRun belongs to, and the source turn is that
@@ -334,9 +337,13 @@ completed turn, or whose latest completed execution's conversation has no
 turn with a native id, fails the dispatch with `session_not_found` rather than
 falling back to an older conversation, and a source turn
 recorded under another harness fails with `session_harness_mismatch`; neither
-silently starts a new conversation. The daemon reports the conversation id
-through `updateStepExecution`'s `nativeSessionId`. Other runs and failed
-executions are never selected, and session data never enters prompts,
+silently starts a new conversation. A `resume` or `fork` that reaches a step
+other than `llm_inference` fails the dispatch, or the run when the step is not
+dispatched (for example a `human_input` entry step), with
+`session_requires_llm_inference` instead of being dropped. The daemon reports
+the conversation id through `updateStepExecution`'s `nativeSessionId`. Failed
+executions are never selected, and neither are other runs, except the one run
+a run entry directive links; session data never enters prompts,
 `PromptContext`, handoffs, or step outputs.
 
 A retry enters the step as the failed attempt did. Dispatch treats a TaskRun
@@ -696,10 +703,17 @@ Each deterministic rule and the default decision may also set
 execution enters a conversation (see "Conversations"). `step_id` names the
 step whose conversation is resumed or forked and defaults to the destination;
 it is not allowed with `new`. Saving rejects unknown keys or modes, a
-directive on a decision whose destination is not an `intra_workflow`
+directive on an `intra_workflow` decision whose destination is not an
 `llm_inference` step, and a `step_id` that is not an `llm_inference` step of
 the same workflow on the destination's harness, with the
 `$.rules[<i>].session` or `$.default.session` path.
+
+An `inter_workflow` decision keeps the same TaskRun, so its destination
+workflow's entry step may resume or fork a conversation of the route's own
+workflow. The entry step is chosen at route time, so `resume` and `fork` must
+name `step_id` (an `llm_inference` step of the route's workflow); the harness
+is checked at dispatch (`session_harness_mismatch`), and an entry step that is
+not `llm_inference` fails with `session_requires_llm_inference`.
 
 The selected decision's directive is recorded on the route execution as
 `context.route.session` with `step_id` resolved (`{"mode": "new"}` or
@@ -740,10 +754,11 @@ directive (for example a harness or step type change) are rejected the same
 way, and TaskRun entry re-proves directives.
 
 When the orchestrator advances along an edge (after an `llm_inference`,
-`structured_inference`, `execute`, `human_input` or `wait_children` step, or
-bypassing a `stop` step) it dispatches the destination with the edge's
-directive, resolved like a route directive (`session_not_found`,
-`session_harness_mismatch`). After a restart between the advance and the
+`structured_inference`, `execute`, `human_input` or `wait_children` step) it
+dispatches the destination with the edge's directive, resolved like a route
+directive (`session_not_found`, `session_harness_mismatch`). The edge leaving a
+`stop` step is entered by a new TaskRun and resolves in the run that stopped
+there (see "Run entry session directives"). After a restart between the advance and the
 dispatch, the directive is re-read from the edge between the TaskRun cursor's
 step and the current step. Retries follow the failed attempt as above.
 
@@ -754,6 +769,42 @@ conversation may declare different `output_schema`s.
 ```json
 {"from_step_id": "<implement>", "to_step_id": "<self_review>", "session": {"mode": "resume"}}
 ```
+
+### Run entry session directives
+
+A conversation crosses a TaskRun boundary only when a directive asks, and only
+from the directly linked run. The engine stores the directive the run's first
+dispatch enters with as `TaskRun.entry_session`:
+`{"mode": "resume" | "fork", "step_id", "task_run_id"}`, where `task_run_id`
+names the linked run whose completed turns `step_id` is looked up in.
+`task_run_id` is never accepted from authoring input. The directive applies
+only while the run has no executions, including after a restart before the
+first dispatch; later turns resolve in the run itself, where a resumed
+execution keeps the linked run's conversation root.
+
+- **Stop step.** Bypassing a `stop` step whose outgoing edge carries a
+  directive writes the new run's `entry_session` in the bypass transaction,
+  naming the task's previous run when it ended at that stop step
+  (`outcome_kind: "run_boundary"`). If that run has no completed turn for
+  `step_id` (or there is no such run) the dispatch fails with
+  `session_not_found`, never a new conversation.
+- **Children.** A `wait_children` step's `config.session`
+  (`{"mode": "fork", "step_id"}`, `step_id` an `llm_inference` step of the
+  parent's workflow) gives every child run it creates an `entry_session`
+  forking that step's conversation in the parent run. Children only fork,
+  so no two runs take turns in one provider session; siblings fork
+  independently and the parent's later turns are unaffected. `resume`, `new`
+  and a missing `step_id` are rejected on save at `$.session`; a `step_id`
+  outside the parent's workflow or not `llm_inference` is rejected on the
+  config by graph validation. A child whose entry step is not
+  `llm_inference` fails with `session_requires_llm_inference`, and one on
+  another harness with `session_harness_mismatch`. A reconciled child run
+  keeps the `entry_session` it was created with. The directive applies to
+  every child; per-child selection is not supported.
+
+Claude stores sessions per working directory, and a child runs in its own
+worktree, so a Claude child can only fork a parent session the daemon can
+find from the child's directory. Codex sessions are not scoped by directory.
 
 ### Workflow bundles
 
@@ -782,7 +833,11 @@ and step configuration"):
   `workflow_ref` targets must be outgoing edges and are remapped to the new
   ids, and a decision's `session.step_ref` must name a step of the same
   workflow and is remapped to `session.step_id`; then the route config is
-  validated.
+  validated;
+- a `wait_children` step's `config.session` is `{"mode": "fork", "step_ref"}`;
+  `step_ref` names a step of the same workflow and is remapped to
+  `session.step_id`. A persisted `step_id`, a missing or unknown `step_ref`,
+  or another mode is rejected at `workflows[i].steps[j].config.session`.
 
 A step edge (`from`, `to`, `label`, `session`) may carry
 `session: {"mode", "step_ref"?}`. `step_ref` names a step of the edge's
@@ -981,7 +1036,7 @@ source of active controls after it is created.
 
 A parent run that dispatches child task runs and then waits for them maps to `TaskRun.status == :waiting`. This status is active and stoppable: the run still owns automation work even though it is not currently executing a daemon step.
 
-The current wait step may also have `StepExecution.status == "waiting"`, but that is attempt-level state. The parent run leaves `:waiting` when the orchestrator resumes after children complete, when stop succeeds, or when the run fails.
+The current wait step may also have `StepExecution.status == "waiting"`, but that is attempt-level state. A wait step whose config carries a fork `session` stamps each new child run's `entry_session` (see "Run entry session directives"). The parent run leaves `:waiting` when the orchestrator resumes after children complete, when stop succeeds, or when the run fails.
 
 ### Child Run Lineage
 

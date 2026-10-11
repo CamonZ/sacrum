@@ -211,6 +211,60 @@ defmodule Sacrum.Orchestrator.SessionBindingTest do
       assert {:ok, %{resume_session_id: "native-g"}} = dispatch(ctx, g, resume(g))
     end
 
+    test "a directive naming a linked run continues that run's conversation", ctx do
+      a = create_step(ctx, "A")
+      b = create_step(ctx, "B")
+      c = create_step(ctx, "C")
+      previous = ctx.task_run
+
+      a1 = dispatch!(ctx, a)
+      complete(a1, "native-a")
+      linked = create_task_run(ctx)
+
+      b1 = dispatch!(ctx, b, Map.put(resume(a), "task_run_id", previous.id), linked)
+      assert %{resume_session_id: "native-a", forked_from_execution_id: nil} = b1
+      assert b1.conversation_root_execution_id == a1.id
+      complete(b1, "native-b")
+
+      # Later turns of the linked run resolve in the run itself.
+      assert {:ok, c1} = dispatch(ctx, c, resume(b), linked)
+      assert c1.resume_session_id == "native-b"
+      assert c1.conversation_root_execution_id == a1.id
+
+      forked = create_task_run(ctx)
+      f1 = dispatch!(ctx, c, Map.put(fork(a), "task_run_id", previous.id), forked)
+      assert %{resume_session_id: "native-a", forked_from_execution_id: forked_from} = f1
+      assert forked_from == a1.id
+      assert f1.conversation_root_execution_id == f1.id
+    end
+
+    test "without a linked run, another run's conversation is never found", ctx do
+      a = create_step(ctx, "A")
+      complete(dispatch!(ctx, a), "native-a")
+
+      assert {:error, {:session_not_found, id}} =
+               dispatch(ctx, a, resume(a), create_task_run(ctx))
+
+      assert id == a.id
+    end
+
+    test "resume or fork into a step outside llm_inference fails and starts nothing", ctx do
+      a = create_step(ctx, "A")
+      transform = create_step(ctx, "Transform", step_type: "execute")
+      complete(dispatch!(ctx, a), "native-a")
+      flush_broadcasts()
+
+      for directive <- [resume(a), fork(a)] do
+        assert {:error, {:session_requires_llm_inference, id}} =
+                 dispatch(ctx, transform, directive)
+
+        assert id == transform.id
+      end
+
+      assert Repo.aggregate(StepExecution, :count) == 1
+      refute_receive %Phoenix.Socket.Broadcast{event: "run_step"}
+    end
+
     test "reusing an active execution keeps its pinned resume id", ctx do
       a = create_step(ctx, "A")
       b = create_step(ctx, "B")
