@@ -248,13 +248,19 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
     task_id = data.task.id
 
     case WorkflowGraph.load_validated_workflow_and_graph(data.user_id, data.task) do
-      {:ok, workflow, steps, transitions} ->
+      {:ok, workflow, steps, transitions, transition_sessions} ->
         Logger.info(
           "[TaskOrchestrator:#{task_id}] Loaded workflow #{workflow.id} with #{map_size(steps)} steps"
         )
 
         {:next_state, :awaiting_execution,
-         %{data | workflow: workflow, steps: steps, transitions: transitions}}
+         %{
+           data
+           | workflow: workflow,
+             steps: steps,
+             transitions: transitions,
+             transition_sessions: transition_sessions
+         }}
 
       {:error, reason} ->
         Logger.error("[TaskOrchestrator:#{task_id}] Failed to enter workflow: #{inspect(reason)}")
@@ -389,7 +395,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
       continue_after_step_transition(next_step_id, %{
         data
         | task: updated_task,
-          slot_id: nil
+          slot_id: nil,
+          pending_session: WorkflowGraph.transition_session(data, current_step.id, next_step_id)
       })
     else
       {:error, :no_outgoing_transitions} ->
@@ -430,7 +437,8 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
       continue_after_step_transition(next_step_id, %{
         data
         | task: updated_task,
-          slot_id: nil
+          slot_id: nil,
+          pending_session: WorkflowGraph.transition_session(data, current_step.id, next_step_id)
       })
     else
       {:error, :no_outgoing_transitions} ->
@@ -522,7 +530,12 @@ defmodule Sacrum.Orchestrator.TaskOrchestrator do
         "[TaskOrchestrator:#{task_id}] New TaskRun bypassed stop step=#{stop_step_id} to step=#{next_step_id}"
       )
 
-      {:keep_state, %{data | task: updated_task}, [{:state_timeout, 0, :run}]}
+      {:keep_state,
+       %{
+         data
+         | task: updated_task,
+           pending_session: WorkflowGraph.transition_session(data, stop_step_id, next_step_id)
+       }, [{:state_timeout, 0, :run}]}
     else
       {:error, reason} ->
         Logger.error(

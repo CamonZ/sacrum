@@ -163,6 +163,118 @@ defmodule Sacrum.Repo.WorkflowBundlesTest do
            ) == ["Backlog"]
   end
 
+  describe "step edge session directives" do
+    test "imports step_ref and remaps it to the source step's id" do
+      {user, project} = create_project()
+
+      bundle =
+        session_bundle([
+          Map.put(step_edge("pair", "implement", "review"), "session", %{
+            "mode" => "resume",
+            "step_ref" => "implement"
+          }),
+          Map.put(step_edge("pair", "review", "fix"), "session", %{"mode" => "fork"}),
+          step_edge("pair", "fix", "done")
+        ])
+
+      assert {:ok, result} = Sacrum.Accounts.WorkflowBundles.import(user.id, project.id, bundle)
+      ids = result.step_mappings["pair"]
+
+      sessions =
+        Repo.all(
+          from(t in StepTransition,
+            where: t.from_step_id in ^Map.values(ids),
+            select: {t.from_step_id, t.session}
+          )
+        )
+        |> Map.new()
+
+      assert sessions[ids["implement"]] == %{"mode" => "resume", "step_id" => ids["implement"]}
+      assert sessions[ids["review"]] == %{"mode" => "fork"}
+      assert sessions[ids["fix"]] == nil
+    end
+
+    test "rejects a persisted step_id, an unresolved step_ref and a bad mode at the edge path" do
+      {user, project} = create_project()
+
+      for {session, message} <- [
+            {%{"mode" => "resume", "step_id" => Ecto.UUID.generate()},
+             "step_edges[0].session.step_id: is not allowed"},
+            {%{"mode" => "resume", "step_ref" => "missing"},
+             "step_edges[0].session.step_ref: is not a known step ref"},
+            {%{"mode" => "new", "step_ref" => "implement"},
+             "step_edges[0].session.step_ref: is not allowed with mode new"},
+            {%{"mode" => "continue"}, "step_edges[0].session.mode: must be new, resume, or fork"},
+            {"resume", "step_edges[0].session: must be an object"}
+          ] do
+        bundle =
+          session_bundle([
+            Map.put(step_edge("pair", "implement", "review"), "session", session),
+            step_edge("pair", "review", "fix"),
+            step_edge("pair", "fix", "done")
+          ])
+
+        assert {:error, %Ecto.Changeset{} = changeset} =
+                 Sacrum.Accounts.WorkflowBundles.import(user.id, project.id, bundle)
+
+        assert {^message, _} = changeset.errors[:bundle]
+      end
+
+      assert Repo.aggregate(
+               from(w in Workflow, where: w.project_id == ^project.id and w.name == "Pair"),
+               :count
+             ) == 0
+    end
+
+    test "rejects a directive the graph cannot honor and imports nothing" do
+      {user, project} = create_project()
+
+      bundle =
+        session_bundle([
+          step_edge("pair", "implement", "review"),
+          step_edge("pair", "review", "fix"),
+          Map.put(step_edge("pair", "fix", "done"), "session", %{"mode" => "new"})
+        ])
+
+      assert {:error, %Ecto.Changeset{} = changeset} =
+               Sacrum.Accounts.WorkflowBundles.import(user.id, project.id, bundle)
+
+      assert {message, _} = changeset.errors[:bundle]
+      assert message =~ "$.session: requires an llm_inference destination step"
+
+      assert Repo.aggregate(
+               from(w in Workflow, where: w.project_id == ^project.id and w.name == "Pair"),
+               :count
+             ) == 0
+    end
+  end
+
+  defp session_bundle(step_edges) do
+    llm = &%{"step_ref" => &1, "name" => &1, "step_type" => "llm_inference", "harness" => "codex"}
+
+    %{
+      "workflows" => [
+        %{
+          "workflow_ref" => "pair",
+          "name" => "Pair",
+          "initial_step" => address("pair", "implement"),
+          "steps" => [
+            llm.("implement"),
+            llm.("review"),
+            llm.("fix"),
+            %{
+              "step_ref" => "done",
+              "name" => "done",
+              "step_type" => "finish",
+              "harness" => "codex"
+            }
+          ]
+        }
+      ],
+      "step_edges" => step_edges
+    }
+  end
+
   defp create_project do
     suffix = Ecto.UUID.generate()
 

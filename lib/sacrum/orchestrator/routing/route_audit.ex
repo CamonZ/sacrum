@@ -12,7 +12,7 @@ defmodule Sacrum.Orchestrator.Routing.RouteAudit do
 
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.StepExecution
-  alias Sacrum.Routing.{RouteConfig, RouteContext}
+  alias Sacrum.Routing.{RouteConfig, RouteContext, SessionDirective}
 
   @mode "deterministic"
 
@@ -44,11 +44,8 @@ defmodule Sacrum.Orchestrator.Routing.RouteAudit do
   `step_id` names the destination step.
   """
   @spec session(map()) :: map() | nil
-  def session(%{session: %{mode: :new}}), do: %{"mode" => "new"}
-
-  def session(%{session: %{mode: mode, step_id: step_id}, transition: transition}) do
-    %{"mode" => Atom.to_string(mode), "step_id" => step_id || transition.step_id}
-  end
+  def session(%{session: %{} = session, transition: transition}),
+    do: SessionDirective.entry(session, Map.get(transition, :step_id))
 
   def session(_result), do: nil
 

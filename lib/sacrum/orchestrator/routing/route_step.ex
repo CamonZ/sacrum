@@ -169,14 +169,15 @@ defmodule Sacrum.Orchestrator.Routing.RouteStep do
   @spec inter_workflow_next_state_decision(FSMData.t(), struct()) ::
           {:ok, tuple()} | {:error, term()}
   defp inter_workflow_next_state_decision(data, preview_task) do
-    with {:ok, workflow, steps, transitions} <-
+    with {:ok, workflow, steps, transitions, transition_sessions} <-
            WorkflowGraph.load_validated_workflow_and_graph(data.user_id, preview_task) do
       decision_data = %{
         data
         | task: preview_task,
           workflow: workflow,
           steps: steps,
-          transitions: transitions
+          transitions: transitions,
+          transition_sessions: transition_sessions
       }
 
       with :ok <-

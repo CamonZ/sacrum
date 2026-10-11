@@ -120,7 +120,7 @@ defmodule Sacrum.Orchestrator.WorkflowGraphTest do
 
       task = create_task(user, project, workflow)
 
-      {:ok, loaded_workflow, steps, transitions} =
+      {:ok, loaded_workflow, steps, transitions, transition_sessions} =
         WorkflowGraph.load_validated_workflow_and_graph(user.id, task)
 
       assert loaded_workflow.id == workflow.id
@@ -129,6 +129,7 @@ defmodule Sacrum.Orchestrator.WorkflowGraphTest do
       assert Map.has_key?(transitions, step1.id)
       assert transitions[step1.id] == [step2.id]
       assert transitions[step2.id] == []
+      assert transition_sessions == %{}
     end
 
     test "rejects a workflow whose configured route no longer matches the graph" do
@@ -202,7 +203,7 @@ defmodule Sacrum.Orchestrator.WorkflowGraphTest do
 
       task = create_task(user, project, workflow_a)
 
-      assert {:ok, loaded, steps, _transitions} =
+      assert {:ok, loaded, steps, _transitions, _transition_sessions} =
                WorkflowGraph.load_validated_workflow_and_graph(user.id, task)
 
       assert loaded.id == workflow_a.id

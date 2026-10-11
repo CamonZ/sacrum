@@ -12,23 +12,25 @@ defmodule Sacrum.Orchestrator.WorkflowGraph do
   alias Sacrum.Orchestrator.FSMData
   alias Sacrum.Repo.RouteValidation
   alias Sacrum.Repo.Schemas.{Task, Workflow, WorkflowStep}
-  alias Sacrum.Routing.RouteValidator
+  alias Sacrum.Routing.{RouteValidator, SessionDirective}
 
   @doc """
   Load a workflow and the step/transition maps the FSM walks.
 
   The maps come from the snapshot that was just validated, not from a
   second topology load. A hop to a different workflow is a new call.
+  `transition_sessions` holds the persisted session directive of each edge
+  that carries one, keyed by `{from_step_id, to_step_id}`.
   """
   @spec load_validated_workflow_and_graph(binary(), Task.t()) ::
-          {:ok, any(), map(), map()} | {:error, term()}
+          {:ok, any(), map(), map(), map()} | {:error, term()}
   def load_validated_workflow_and_graph(user_id, task) do
     with {:ok, workflow} <-
            Accounts.Workflows.get_by(user_id, conditions: [id: task.workflow_id]),
          {:ok, snapshot} <- RouteValidation.load_snapshot(workflow.id),
          :ok <- RouteValidator.validate_snapshot(snapshot, [workflow.id]) do
-      {steps, transitions} = owner_graph(snapshot, workflow)
-      {:ok, workflow, steps, transitions}
+      {steps, transitions, transition_sessions} = owner_graph(snapshot, workflow)
+      {:ok, workflow, steps, transitions, transition_sessions}
     end
   end
 
@@ -54,6 +56,21 @@ defmodule Sacrum.Orchestrator.WorkflowGraph do
   @spec get_outgoing_transitions(FSMData.t(), binary()) :: [binary()]
   def get_outgoing_transitions(data, from_step_id) do
     Map.get(data.transitions, from_step_id, [])
+  end
+
+  @doc """
+  The session directive the `from_step_id -> to_step_id` edge enters its
+  destination with, in the form `ExecutionDispatcher` takes (see
+  `SessionDirective.entry/2`), or nil when the edge carries none.
+  """
+  @spec transition_session(FSMData.t(), binary(), binary()) :: map() | nil
+  def transition_session(data, from_step_id, to_step_id) do
+    with %{} = session <- Map.get(data.transition_sessions, {from_step_id, to_step_id}),
+         {:ok, directive} <- SessionDirective.decode(session, "$.session") do
+      SessionDirective.entry(directive, to_step_id)
+    else
+      _none -> nil
+    end
   end
 
   @doc """
@@ -102,6 +119,13 @@ defmodule Sacrum.Orchestrator.WorkflowGraph do
         {id, Enum.map(Map.get(snapshot.step_edges, id, []), & &1.to_step_id)}
       end)
 
-    {steps, transitions}
+    transition_sessions =
+      for {id, _step} <- steps,
+          edge <- Map.get(snapshot.step_edges, id, []),
+          not is_nil(edge.session),
+          into: %{},
+          do: {{edge.from_step_id, edge.to_step_id}, edge.session}
+
+    {steps, transitions, transition_sessions}
   end
 end

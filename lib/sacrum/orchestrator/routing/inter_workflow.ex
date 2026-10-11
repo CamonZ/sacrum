@@ -56,13 +56,14 @@ defmodule Sacrum.Orchestrator.Routing.InterWorkflow do
           {:next_state, atom(), FSMData.t()} | {:stop, atom(), FSMData.t()}
   def handle_inter_route_continuation(data, task_id, updated_task) do
     case WorkflowGraph.load_validated_workflow_and_graph(data.user_id, updated_task) do
-      {:ok, workflow, steps, transitions} ->
+      {:ok, workflow, steps, transitions, transition_sessions} ->
         TaskCompletion.determine_next_state(updated_task.current_step_id, %{
           data
           | task: updated_task,
             workflow: workflow,
             steps: steps,
             transitions: transitions,
+            transition_sessions: transition_sessions,
             slot_id: nil
         })
 

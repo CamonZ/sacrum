@@ -9,6 +9,10 @@ defmodule Sacrum.Routing.RouteValidator do
   name the owner workflows whose routes to prove; the snapshot also holds
   support data (outgoing destinations) that those routes read.
 
+  Session directives on the owners' step transitions are proved against the
+  same snapshot, so a step edit that breaks one is rejected like one that
+  breaks a route.
+
   Loading snapshots and revalidating inside write transactions belongs to
   `Sacrum.Repo.RouteValidation`; this module performs no I/O.
   """
@@ -20,13 +24,15 @@ defmodule Sacrum.Routing.RouteValidator do
     RouteContext,
     RouteEvaluator,
     RouteOverlap,
-    RoutePredecessors
+    RoutePredecessors,
+    SessionDirective
   }
 
   @type step_edge :: %{
           transition_id: binary(),
           from_step_id: binary(),
-          to_step_id: binary()
+          to_step_id: binary(),
+          session: map() | nil
         }
 
   @type workflow_edge :: %{
@@ -50,7 +56,8 @@ defmodule Sacrum.Routing.RouteValidator do
         }
 
   @doc """
-  Validates route steps and route configuration ownership in `owner_ids`.
+  Validates route steps, route configuration ownership and step transition
+  session directives in `owner_ids`.
 
   Destination workflows appear in the snapshot as support data so target
   checks can see their entry steps; their own routes are not subjects of
@@ -80,6 +87,12 @@ defmodule Sacrum.Routing.RouteValidator do
   defp validate_owner_routes(snapshot, owner_ids, authoring?, allow_incomplete?) do
     owners = MapSet.new(owner_ids)
 
+    with :ok <- validate_route_steps(snapshot, owners, authoring?, allow_incomplete?) do
+      validate_transition_sessions(snapshot, owners)
+    end
+  end
+
+  defp validate_route_steps(snapshot, owners, authoring?, allow_incomplete?) do
     snapshot.steps
     |> Enum.filter(fn {_id, step} ->
       route_requires_validation?(step, authoring?) and
@@ -473,7 +486,7 @@ defmodule Sacrum.Routing.RouteValidator do
          snapshot
        ) do
     with {:ok, destination} <- session_destination(route_step, transition, path, snapshot) do
-      validate_session_source(route_step, destination, session, path, snapshot)
+      validate_session_source(destination, session, path, snapshot)
     end
   end
 
@@ -497,32 +510,71 @@ defmodule Sacrum.Routing.RouteValidator do
      )}
   end
 
-  defp validate_session_source(_route_step, _destination, %{step_id: nil}, _path, _snapshot),
-    do: :ok
+  defp validate_session_source(destination, session, path, snapshot) do
+    with {:error, %{path: path, message: message}} <-
+           SessionDirective.validate_source(session, destination, path, snapshot.steps),
+         do: {:error, error(:route_session_invalid, path, message)}
+  end
 
-  defp validate_session_source(route_step, destination, %{step_id: step_id}, path, snapshot) do
-    case Map.get(snapshot.steps, step_id) do
-      %{step_type: :llm_inference, workflow_id: workflow_id, harness: harness}
-      when workflow_id == route_step.workflow_id and harness == destination.harness ->
-        :ok
+  #
+  # Step transition session directives: an unconditional edge into an
+  # llm_inference step may carry the directive a route decision could. Edges
+  # leaving a route step may not; the route's decisions own those. Like route
+  # directives they read only steps, so drafts are checked too.
+  #
 
-      %{step_type: :llm_inference, workflow_id: workflow_id}
-      when workflow_id == route_step.workflow_id ->
-        {:error,
-         error(
-           :route_session_invalid,
-           "#{path}.step_id",
-           "must use the same harness as the destination step"
-         )}
+  defp validate_transition_sessions(snapshot, owners) do
+    snapshot.step_edges
+    |> Enum.flat_map(fn {_from_step_id, edges} -> edges end)
+    |> Enum.filter(&(not is_nil(&1.session)))
+    |> Enum.map(&{Map.get(snapshot.steps, &1.from_step_id), &1})
+    |> Enum.filter(fn {source, _edge} -> source && MapSet.member?(owners, source.workflow_id) end)
+    |> Enum.sort_by(fn {_source, edge} -> edge.transition_id end)
+    |> Enum.reduce_while(:ok, fn {source, edge}, :ok ->
+      case validate_transition_session(source, edge, snapshot) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, attach_transition(reason, edge)}}
+      end
+    end)
+  end
+
+  defp validate_transition_session(%{step_type: :route}, _edge, _snapshot) do
+    {:error,
+     error(
+       :step_transition_session_invalid,
+       "$.session",
+       "is not allowed on a transition leaving a route step; route decisions carry the session"
+     )}
+  end
+
+  defp validate_transition_session(_source, edge, snapshot) do
+    with {:ok, session} <- SessionDirective.decode(edge.session, "$.session"),
+         {:ok, destination} <- transition_destination(edge, snapshot),
+         :ok <-
+           SessionDirective.validate_source(session, destination, "$.session", snapshot.steps) do
+      :ok
+    else
+      {:error, %{path: path, message: message}} ->
+        {:error, error(:step_transition_session_invalid, path, message)}
+    end
+  end
+
+  defp transition_destination(edge, snapshot) do
+    case Map.get(snapshot.steps, edge.to_step_id) do
+      %{step_type: :llm_inference} = destination ->
+        {:ok, destination}
 
       _step ->
-        {:error,
-         error(
-           :route_session_invalid,
-           "#{path}.step_id",
-           "must be an llm_inference step in this workflow"
-         )}
+        {:error, %{path: "$.session", message: "requires an llm_inference destination step"}}
     end
+  end
+
+  defp attach_transition(reason, edge) do
+    Map.merge(reason, %{
+      transition_id: edge.transition_id,
+      from_step_id: edge.from_step_id,
+      to_step_id: edge.to_step_id
+    })
   end
 
   defp rule_index(program, rule_id), do: Enum.find_index(program.rules, &(&1.id == rule_id))

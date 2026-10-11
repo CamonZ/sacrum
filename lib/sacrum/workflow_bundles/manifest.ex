@@ -5,7 +5,8 @@ defmodule Sacrum.WorkflowBundles.Manifest do
   The manifest is deliberately kept as JSON-shaped data at the transport
   boundary. This module validates its structural fields, normalizes them to
   atom-keyed internal values. RouteRefs resolves only the documented route
-  target references; opaque JSON fields are never traversed or rewritten.
+  target references, and the importer remaps a step edge's `session.step_ref`;
+  opaque JSON fields are never traversed or rewritten.
 
   Each step carries its type's `config` object. Configs are checked against
   their variant changeset so errors carry the manifest path; route configs are
@@ -14,6 +15,7 @@ defmodule Sacrum.WorkflowBundles.Manifest do
 
   alias Sacrum.Repo.Schemas.WorkflowStep
   alias Sacrum.Repo.Schemas.WorkflowStep.Config
+  alias Sacrum.Routing.SessionDirective
   alias Sacrum.WorkflowBundles.RouteRefs
 
   @max_bytes 1_048_576
@@ -324,10 +326,11 @@ defmodule Sacrum.WorkflowBundles.Manifest do
     do: {:error, error("step_edges", "must be an array")}
 
   defp normalize_step_edge(edge, path) when is_map(edge) do
-    with :ok <- validate_keys(edge, ["from", "to"], ["label"], path),
+    with :ok <- validate_keys(edge, ["from", "to"], ["label", "session"], path),
          {:ok, from} <- required_address(edge, "from", path),
-         {:ok, to} <- required_address(edge, "to", path) do
-      {:ok, %{from: from, to: to, label: Map.get(edge, "label")}}
+         {:ok, to} <- required_address(edge, "to", path),
+         {:ok, session} <- optional_edge_session(edge, "#{path}.session") do
+      {:ok, %{from: from, to: to, label: Map.get(edge, "label"), session: session}}
     end
   end
 
@@ -335,10 +338,51 @@ defmodule Sacrum.WorkflowBundles.Manifest do
 
   defp validate_step_edge(edge, addresses, path) do
     with :ok <- validate_same_workflow(edge.from, edge.to, path),
-         :ok <- validate_address(edge.from, addresses, "#{path}.from") do
-      validate_address(edge.to, addresses, "#{path}.to")
+         :ok <- validate_address(edge.from, addresses, "#{path}.from"),
+         :ok <- validate_address(edge.to, addresses, "#{path}.to") do
+      validate_edge_session_ref(edge, addresses, "#{path}.session.step_ref")
     end
   end
+
+  # A step edge's session names its conversation step by `step_ref` within
+  # the edge's workflow; a persisted `step_id` cannot be carried across
+  # projects. The import's graph validation checks the step rules.
+  defp optional_edge_session(edge, path) do
+    case Map.fetch(edge, "session") do
+      :error -> {:ok, nil}
+      {:ok, nil} -> {:ok, nil}
+      {:ok, session} when is_map(session) -> normalize_edge_session(session, path)
+      {:ok, _session} -> {:error, error(path, "must be an object")}
+    end
+  end
+
+  defp normalize_edge_session(session, path) do
+    with :ok <- validate_keys(session, ["mode"], ["step_ref"], path),
+         {:ok, step_ref} <- optional_session_ref(session, path),
+         {:ok, directive} <-
+           SessionDirective.decode(Map.delete(session, "step_ref"), path),
+         :ok <- validate_session_ref_mode(directive, step_ref, path) do
+      {:ok, %{mode: directive.mode, step_ref: step_ref}}
+    end
+  end
+
+  defp optional_session_ref(session, path) do
+    if Map.has_key?(session, "step_ref"),
+      do: required_text(session, "step_ref", path),
+      else: {:ok, nil}
+  end
+
+  defp validate_session_ref_mode(%{mode: :new}, step_ref, path) when is_binary(step_ref),
+    do: {:error, error("#{path}.step_ref", "is not allowed with mode new")}
+
+  defp validate_session_ref_mode(_directive, _step_ref, _path), do: :ok
+
+  defp validate_edge_session_ref(%{session: %{step_ref: step_ref}, from: from}, addresses, path)
+       when is_binary(step_ref) do
+    validate_address(%{workflow_ref: from.workflow_ref, step_ref: step_ref}, addresses, path)
+  end
+
+  defp validate_edge_session_ref(_edge, _addresses, _path), do: :ok
 
   defp validate_workflow_edges(edges, workflows) when is_list(edges) do
     workflow_refs = MapSet.new(Enum.map(workflows, & &1.workflow_ref))

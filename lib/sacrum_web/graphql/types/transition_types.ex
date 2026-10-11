@@ -43,6 +43,15 @@ defmodule SacrumWeb.Graphql.Types.TransitionTypes do
   object :step_transition do
     field :id, :id
     field :label, :string
+
+    field :session, :json do
+      description("""
+      How the llm_inference destination enters a conversation when a run
+      advances along this edge: {mode: new|resume|fork, step_id?}. Null starts
+      a new conversation.
+      """)
+    end
+
     field :inserted_at, :datetime
     field :updated_at, :datetime
 
@@ -97,6 +106,11 @@ defmodule SacrumWeb.Graphql.Types.TransitionTypes do
       arg(:from_step_id, non_null(:uuid4))
       arg(:to_step_id, non_null(:uuid4))
       arg(:label, :string)
+
+      arg(:session, :json,
+        description:
+          "Session directive for an llm_inference destination: {mode: new|resume|fork, step_id?}."
+      )
 
       resolve(fn args, %{context: %{current_user: user}} ->
         from_step_id = Map.get(args, :from_step_id)
