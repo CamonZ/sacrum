@@ -182,7 +182,7 @@ capabilities and does not probe the client's machine.
 | `createWorkflowStep` | `workflow_id!`, `name!`, `goal`, `step_order`, `harness`, `step_type`, `config`, `persistence_options` | `:workflow_step` |
 | `updateWorkflowStep` | `id!`, `name`, `goal`, `step_order`, `harness`, `step_type`, `config`, `persistence_options` | `:workflow_step` |
 | `deleteWorkflowStep` | `id!` | `:workflow_step` |
-| `syncStepTransitions` | `id!`, `transitions!` (list of `StepTransitionInput`) | `:workflow_step` |
+| `syncStepTransitions` | `id!`, `transitions!` (list of `StepTransitionInput`: `to_step_id`, `label`, `session`) | `:workflow_step` |
 
 Workflow steps other than `execute` require an explicit `harness` selector with
 the values `codex`, `claude`, and `typesafe`; Sacrum does not infer or default it
@@ -226,7 +226,7 @@ general JSON Schema validation.
 |----------|-----------|---------|
 | `createWorkflowTransition` | `from_workflow_id!`, `to_workflow_id!`, `label`, `target_step_id` | `:workflow_transition` |
 | `deleteWorkflowTransition` | `id!` | `:workflow_transition` |
-| `createStepTransition` | `from_step_id!`, `to_step_id!`, `label` | `:step_transition` |
+| `createStepTransition` | `from_step_id!`, `to_step_id!`, `label`, `session` (JSON) | `:step_transition` |
 | `deleteStepTransition` | `id!` | `:step_transition` |
 
 **`execution_types.ex`** — 3 mutations (via `Accounts.StepExecutions` / `Accounts.SessionLogs`)
@@ -304,11 +304,13 @@ the step's canonical `harness` value alongside the existing `prompt`,
 ### Conversations
 
 Every `llm_inference` execution runs in a provider conversation. How it enters
-one is decided by the route decision that led to the step (see "Route session
-directives"), never by the step's config; entering without a directive (the
-first step, a linear transition, a rule without `session`) starts a new
-conversation, so every `llm_inference` execution reports a native id that can
-later be resumed or forked.
+one is decided by the path taken into the step, never by the step's config: a
+route decision chooses it for a conditional path (see "Route session
+directives") and a step transition for the unconditional one (see "Step
+transition session directives"). Entering without a directive (the first step,
+an edge or rule without `session`) starts a new conversation, so every
+`llm_inference` execution reports a native id that can later be resumed or
+forked.
 
 There is no separate session registry. At dispatch the server records on the
 new execution:
@@ -715,6 +717,44 @@ execution.
 }
 ```
 
+### Step transition session directives
+
+A `StepTransition` may carry the same
+`session: {"mode": "new" | "resume" | "fork", "step_id"?: "<uuid>"}` a route
+decision can, so consecutive `llm_inference` steps (A -> B with different
+prompts or output schemas) share one provider conversation without a route
+step in between. `createStepTransition` and `syncStepTransitions` accept it as
+JSON and `StepTransition.session` returns it; `null` (or an omitted session in
+a sync, which replaces the step's whole outgoing set) means a new
+conversation.
+
+Defaults and errors are those of route directives: `step_id` defaults to the
+destination and is not allowed with `new`. Saving rejects unknown keys or
+modes, a destination that is not an `llm_inference` step, a `step_id` that is
+not an `llm_inference` step of the same workflow on the destination's harness,
+and any directive on an edge leaving a `route` step, whose decisions own those
+paths. The error is on the `session` field and names the transition and the
+path, e.g. `step transition <from> -> <to> $.session.step_id: must use the same
+harness as the destination step`. Step edits that would break a stored
+directive (for example a harness or step type change) are rejected the same
+way, and TaskRun entry re-proves directives.
+
+When the orchestrator advances along an edge (after an `llm_inference`,
+`structured_inference`, `execute`, `human_input` or `wait_children` step, or
+bypassing a `stop` step) it dispatches the destination with the edge's
+directive, resolved like a route directive (`session_not_found`,
+`session_harness_mismatch`). After a restart between the advance and the
+dispatch, the directive is re-read from the edge between the TaskRun cursor's
+step and the current step. Retries follow the failed attempt as above.
+
+Claude (`--json-schema` beside `--resume`) and Codex (`turn/start`
+`outputSchema`) both take a per-turn output schema, so steps sharing a
+conversation may declare different `output_schema`s.
+
+```json
+{"from_step_id": "<implement>", "to_step_id": "<self_review>", "session": {"mode": "resume"}}
+```
+
 ### Workflow bundles
 
 `importWorkflowBundle(projectId!, bundle!)` imports a portable bundle of
@@ -743,6 +783,13 @@ and step configuration"):
   ids, and a decision's `session.step_ref` must name a step of the same
   workflow and is remapped to `session.step_id`; then the route config is
   validated.
+
+A step edge (`from`, `to`, `label`, `session`) may carry
+`session: {"mode", "step_ref"?}`. `step_ref` names a step of the edge's
+workflow and is remapped to `session.step_id`; a persisted `session.step_id`,
+an unknown `step_ref`, `step_ref` with `new`, or an unknown mode is rejected at
+`step_edges[i].session`. The imported graph is then validated like any
+authoring write.
 
 Config values are stored unchanged; a `structured_inference` `state` keeps its
 JSON type (string, object, or array).

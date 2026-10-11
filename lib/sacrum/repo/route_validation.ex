@@ -149,7 +149,12 @@ defmodule Sacrum.Repo.RouteValidation do
           join: source in WorkflowStep,
           on: source.id == t.from_step_id,
           where: source.workflow_id in ^support_ids,
-          select: %{id: t.id, from_step_id: t.from_step_id, to_step_id: t.to_step_id}
+          select: %{
+            id: t.id,
+            from_step_id: t.from_step_id,
+            to_step_id: t.to_step_id,
+            session: t.session
+          }
         )
       )
 
@@ -197,7 +202,12 @@ defmodule Sacrum.Repo.RouteValidation do
   end
 
   defp step_edge(edge) do
-    %{transition_id: edge.id, from_step_id: edge.from_step_id, to_step_id: edge.to_step_id}
+    %{
+      transition_id: edge.id,
+      from_step_id: edge.from_step_id,
+      to_step_id: edge.to_step_id,
+      session: edge.session
+    }
   end
 
   #
@@ -250,21 +260,28 @@ defmodule Sacrum.Repo.RouteValidation do
   Converts a route-validation error into a changeset error for the mutation
   caller while preserving its stable, path-aware explanation.
 
-  The diagnostic always lands on `:route_config`: it names the configured
-  route step whose configuration is now invalid, wherever the mutation that
-  broke it happened to originate.
+  A route diagnostic lands on `:route_config`: it names the configured route
+  step whose configuration is now invalid, wherever the mutation that broke it
+  happened to originate. A step transition session diagnostic lands on
+  `:session` and names the transition.
   """
   @spec error_changeset(Ecto.Changeset.t() | struct(), RouteValidator.error()) ::
           Ecto.Changeset.t()
   def error_changeset(%Ecto.Changeset{} = changeset, reason) do
-    Ecto.Changeset.add_error(changeset, :route_config, error_message(reason))
+    Ecto.Changeset.add_error(changeset, error_field(reason), error_message(reason))
   end
 
   def error_changeset(record, reason) do
     record
     |> Ecto.Changeset.change()
-    |> Ecto.Changeset.add_error(:route_config, error_message(reason))
+    |> Ecto.Changeset.add_error(error_field(reason), error_message(reason))
   end
+
+  defp error_field(%{code: :step_transition_session_invalid}), do: :session
+  defp error_field(_reason), do: :route_config
+
+  defp error_message(%{code: :step_transition_session_invalid} = reason),
+    do: "#{StepTransition.describe(reason)} #{reason.path}: #{reason.message}"
 
   defp error_message(%{path: path, message: message}), do: "#{path}: #{message}"
 end

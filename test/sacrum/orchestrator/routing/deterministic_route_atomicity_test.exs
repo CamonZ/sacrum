@@ -914,6 +914,7 @@ defmodule Sacrum.Orchestrator.Routing.DeterministicRouteAtomicityTest do
       workflow: workflow,
       steps: steps,
       transitions: transitions,
+      transition_sessions: %{},
       slot_id: nil,
       pending_handoff: nil,
       pending_session: nil

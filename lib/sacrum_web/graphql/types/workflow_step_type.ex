@@ -282,5 +282,11 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
     field :label, :string
     field :from_step_id, :uuid4
     field :to_step_id, :uuid4
+
+    field :session, :json do
+      description(
+        "Session directive for an llm_inference destination: {mode: new|resume|fork, step_id?}."
+      )
+    end
   end
 end

@@ -575,6 +575,74 @@ defmodule SacrumWeb.Graphql.WorkflowStepConfigTest do
     assert message =~ "Cannot query field \"sessionName\""
   end
 
+  test "step transitions carry a session directive through create, sync and reads",
+       %{conn: conn, user: user, workflow: workflow} do
+    [implement, review] =
+      for name <- ["implement", "review"] do
+        {:ok, step} =
+          Accounts.WorkflowSteps.insert(
+            user.id,
+            workflow_step_attrs(%{
+              "name" => name,
+              "workflow_id" => workflow.id,
+              "project_id" => workflow.project_id,
+              "config" => %{"prompt" => name}
+            })
+          )
+
+        step
+      end
+
+    resume = %{"mode" => "resume", "step_id" => implement.id}
+
+    created =
+      conn
+      |> authenticate(user)
+      |> graphql("""
+      mutation { createStepTransition(fromStepId: "#{implement.id}", toStepId: "#{review.id}", session: #{json_arg(resume)}) { id session } }
+      """)
+      |> json_response(200)
+
+    refute created["errors"]
+    assert created["data"]["createStepTransition"]["session"] == resume
+
+    synced =
+      conn
+      |> recycle()
+      |> authenticate(user)
+      |> graphql("""
+      mutation { syncStepTransitions(id: "#{implement.id}", transitions: [{toStepId: "#{review.id}", session: #{json_arg(%{"mode" => "fork"})}}]) { transitions { id session } } }
+      """)
+      |> json_response(200)
+
+    refute synced["errors"]
+
+    assert synced["data"]["syncStepTransitions"]["transitions"] == [
+             %{
+               "id" => created["data"]["createStepTransition"]["id"],
+               "session" => %{"mode" => "fork"}
+             }
+           ]
+
+    for {session, message} <- [
+          {%{"mode" => "continue"}, "$.session.mode: must be new, resume, or fork"},
+          {%{"mode" => "new", "step_id" => implement.id},
+           "$.session.step_id: is not allowed with mode new"}
+        ] do
+      rejected =
+        conn
+        |> recycle()
+        |> authenticate(user)
+        |> graphql("""
+        mutation { syncStepTransitions(id: "#{implement.id}", transitions: [{toStepId: "#{review.id}", session: #{json_arg(session)}}]) { id } }
+        """)
+        |> json_response(200)
+
+      assert [%{"message" => error}] = rejected["errors"]
+      assert error =~ "step transition #{implement.id} -> #{review.id} #{message}"
+    end
+  end
+
   defp review_schema do
     %{
       "type" => "object",

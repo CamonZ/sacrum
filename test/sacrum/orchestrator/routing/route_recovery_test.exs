@@ -108,6 +108,62 @@ defmodule Sacrum.Orchestrator.Routing.RouteRecoveryTest do
     assert recovered.pending_handoff == %{}
   end
 
+  describe "step transition session directives" do
+    test "restores the directive of the edge from the cursor's step to the current step" do
+      %{user: user, project: project, task: task, source: source, destination: destination} =
+        fixture()
+
+      task_run = create_task_run(user, task)
+      execution = create_completed_execution(user, task, source, task_run)
+      {:ok, task} = Repo.update(Ecto.Changeset.change(task, current_step_id: destination.id))
+      task_run = update_cursor(task_run, execution.id)
+
+      sessions = %{
+        {source.id, destination.id} => %{"mode" => "resume"},
+        {source.id, Ecto.UUID.generate()} => %{"mode" => "new"}
+      }
+
+      assert {:ok, recovered} =
+               RouteRecovery.restore(fsm_data(user, project, task, task_run, sessions))
+
+      assert recovered.pending_session == %{"mode" => "resume", "step_id" => destination.id}
+      assert recovered.pending_handoff == nil
+    end
+
+    test "leaves no directive when the traversed edge carries none" do
+      %{user: user, project: project, task: task, source: source, destination: destination} =
+        fixture()
+
+      task_run = create_task_run(user, task)
+      execution = create_completed_execution(user, task, source, task_run)
+      {:ok, task} = Repo.update(Ecto.Changeset.change(task, current_step_id: destination.id))
+      task_run = update_cursor(task_run, execution.id)
+
+      assert {:ok, recovered} = RouteRecovery.restore(fsm_data(user, project, task, task_run))
+      assert recovered.pending_session == nil
+    end
+
+    test "keeps a directive already pending in memory" do
+      %{user: user, project: project, task: task, source: source, destination: destination} =
+        fixture()
+
+      task_run = create_task_run(user, task)
+      execution = create_completed_execution(user, task, source, task_run)
+      {:ok, task} = Repo.update(Ecto.Changeset.change(task, current_step_id: destination.id))
+      task_run = update_cursor(task_run, execution.id)
+      pending = %{"mode" => "fork", "step_id" => source.id}
+
+      data = %{
+        fsm_data(user, project, task, task_run, %{
+          {source.id, destination.id} => %{"mode" => "new"}
+        })
+        | pending_session: pending
+      }
+
+      assert {:ok, %{pending_session: ^pending}} = RouteRecovery.restore(data)
+    end
+  end
+
   test "rejects a deterministic route record whose destination disagrees with the task" do
     %{user: user, project: project, task: task, route: route, destination: destination} =
       fixture()
@@ -239,15 +295,32 @@ defmodule Sacrum.Orchestrator.Routing.RouteRecoveryTest do
     execution
   end
 
-  defp fsm_data(user, project, task, task_run) do
+  defp fsm_data(user, project, task, task_run, transition_sessions \\ %{}) do
     %{
       user_id: user.id,
       project_id: project.id,
       task: task,
       task_run_id: task_run.id,
+      transition_sessions: transition_sessions,
       pending_handoff: nil,
       pending_session: nil
     }
+  end
+
+  defp create_completed_execution(user, task, step, task_run) do
+    {:ok, execution} =
+      Accounts.StepExecutions.insert(user.id, %{
+        task_id: task.id,
+        task_run_id: task_run.id,
+        project_id: task.project_id,
+        workflow_id: task.workflow_id,
+        step_id: step.id,
+        step_name: step.name,
+        step_type: step.step_type,
+        status: "completed"
+      })
+
+    execution
   end
 
   defp update_cursor(task_run, execution_id) do

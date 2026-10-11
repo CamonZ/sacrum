@@ -140,8 +140,9 @@ defmodule Sacrum.Repo.WorkflowSteps do
 
   @doc """
   Syncs outgoing transitions for a step. Accepts a list of maps with
-  `to_step_id` and optional `label`. Diffs against existing StepTransition
-  records where from_step_id matches, adding new ones and removing absent ones.
+  `to_step_id` and optional `label` and `session`. Diffs against existing
+  StepTransition records where from_step_id matches, adding new ones, updating
+  kept ones to the incoming label and session, and removing absent ones.
 
   Returns `{:ok, [%StepTransition{}]}` or `{:error, reason}`.
   """
@@ -175,25 +176,29 @@ defmodule Sacrum.Repo.WorkflowSteps do
             not Map.has_key?(existing_by_target, to_id)
           end)
         end,
-        to_update_fn: fn _incoming, _existing_by_target ->
-          # No updates for step transitions - they're created with just from/to, no other mutable fields
-          []
+        to_update_fn: fn incoming, existing_by_target ->
+          for t <- incoming, existing = Map.get(existing_by_target, to_step_id(t)) do
+            {existing, t}
+          end
         end,
         build_changeset_fn: fn t ->
-          to_id = to_step_id(t)
-
           StepTransition.create_changeset(
             %StepTransition{user_id: step.user_id, project_id: step.project_id},
             %{
               from_step_id: step.id,
-              to_step_id: to_id,
-              label: label_for(t)
+              to_step_id: to_step_id(t),
+              label: label_for(t),
+              session: session_for(t)
             }
           )
         end,
-        build_update_changeset_fn: fn _existing, _map ->
-          # No-op for step transitions
-          nil
+        # The incoming list is the whole outgoing set, so an omitted label or
+        # session clears it.
+        build_update_changeset_fn: fn existing, t ->
+          StepTransition.update_changeset(existing, %{
+            label: label_for(t),
+            session: session_for(t)
+          })
         end,
         fetch_final_fn: fn ->
           updated =
@@ -230,6 +235,10 @@ defmodule Sacrum.Repo.WorkflowSteps do
   defp label_for(%{"label" => label}), do: label
   defp label_for(%{label: label}), do: label
   defp label_for(_), do: nil
+
+  defp session_for(%{"session" => session}), do: session
+  defp session_for(%{session: session}), do: session
+  defp session_for(_), do: nil
 
   defp validate_no_duplicate_targets(transitions) do
     ids = Enum.map(transitions, &to_step_id/1)

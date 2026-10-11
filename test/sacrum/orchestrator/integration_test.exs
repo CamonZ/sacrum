@@ -1010,4 +1010,180 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
       refute Enum.any?(executions_for_task(task.id), &(&1.step_id == s3.id))
     end
   end
+
+  describe "step transition session directives" do
+    test "resume continues the source step's conversation in the destination" do
+      %{user: user, task: task} = setup_edge_session(&%{"mode" => "resume", "step_id" => &1.id})
+
+      pid = start_orchestrator(task, user)
+      first = complete_first_turn(pid, task, "native-a")
+      second = second_execution(task.id)
+
+      assert first.conversation_root_execution_id == first.id
+      assert second.resume_session_id == "native-a"
+      assert second.conversation_root_execution_id == first.id
+      assert second.forked_from_execution_id == nil
+
+      second_id = second.id
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "run_step",
+                       payload: %{
+                         id: ^second_id,
+                         session: %{mode: "resume", resume_id: "native-a"}
+                       }
+                     },
+                     1500
+    end
+
+    test "fork records the forked turn and roots a new conversation at the destination" do
+      %{user: user, task: task} = setup_edge_session(&%{"mode" => "fork", "step_id" => &1.id})
+
+      pid = start_orchestrator(task, user)
+      first = complete_first_turn(pid, task, "native-a")
+      second = second_execution(task.id)
+
+      assert second.resume_session_id == "native-a"
+      assert second.forked_from_execution_id == first.id
+      assert second.conversation_root_execution_id == second.id
+    end
+
+    test "an edge without a directive starts a new conversation" do
+      assert_new_conversation(setup_edge_session(fn _s1 -> nil end))
+    end
+
+    test "an edge with mode new starts a new conversation" do
+      assert_new_conversation(setup_edge_session(fn _s1 -> %{"mode" => "new"} end))
+    end
+
+    test "resume without a completed turn fails dispatch and starts no conversation" do
+      # The destination, which the directive names by default, has no
+      # completed turn in this run.
+      %{user: user, task: task} = setup_edge_session(fn _s1 -> %{"mode" => "resume"} end)
+
+      pid = start_orchestrator(task, user)
+      complete_first_turn(pid, task, "native-a")
+      wait_for_exit(pid)
+
+      assert [%{status: "completed"}] = executions_for_task(task.id)
+      refute_receive %Phoenix.Socket.Broadcast{event: "run_step"}, 100
+    end
+
+    test "resume of a turn on another harness fails dispatch" do
+      %{user: user, task: task} = setup_edge_session(&%{"mode" => "resume", "step_id" => &1.id})
+
+      pid = start_orchestrator(task, user)
+      wait_for_state(pid, :executing)
+
+      task.id
+      |> latest_started_execution()
+      |> Ecto.Changeset.change(harness: "claude", native_session_id: "native-a")
+      |> Repo.update!()
+
+      simulate_daemon_completion(task.id, task.project_id, "step 1 output")
+      wait_for_exit(pid)
+
+      assert [%{status: "completed"}] = executions_for_task(task.id)
+    end
+
+    test "a restart between the advance and dispatch re-enters along the edge and a retry re-enters as the failed attempt did" do
+      %{user: user, project: project, task: task, steps: [s1, s2, _s3]} =
+        setup_edge_session(&%{"mode" => "resume", "step_id" => &1.id})
+
+      {:ok, task_run} =
+        Accounts.TaskRuns.insert(user.id, project.id, task.id, %{status: :queued})
+
+      # The state a crash leaves after committing step_1 -> step_2.
+      {:ok, first} =
+        Accounts.StepExecutions.insert(user.id, %{
+          task_id: task.id,
+          task_run_id: task_run.id,
+          project_id: project.id,
+          workflow_id: task.workflow_id,
+          step_id: s1.id,
+          step_name: s1.name,
+          step_type: :llm_inference,
+          harness: s1.harness,
+          status: "completed"
+        })
+
+      first =
+        first
+        |> Ecto.Changeset.change(
+          native_session_id: "native-a",
+          conversation_root_execution_id: first.id
+        )
+        |> Repo.update!()
+
+      task_run
+      |> TaskRun.update_changeset(%{latest_step_execution_id: first.id})
+      |> Repo.update!()
+
+      task = Repo.update!(Ecto.Changeset.change(task, current_step_id: s2.id))
+
+      pid = start_orchestrator(task, user, task_run_id: task_run.id)
+      wait_for_state(pid, :executing)
+      second = second_execution(task.id)
+
+      assert second.step_id == s2.id
+      assert second.resume_session_id == "native-a"
+      assert second.conversation_root_execution_id == first.id
+
+      simulate_daemon_failure(task.id, project.id)
+      wait_for_execution_count(task.id, 3)
+      [_first, _failed, retry] = executions_for_task(task.id)
+
+      assert retry.step_id == s2.id
+      assert retry.resume_session_id == "native-a"
+      assert retry.conversation_root_execution_id == first.id
+    end
+  end
+
+  # step_1 -> step_2 -> finish, where the step_1 -> step_2 edge carries
+  # `session_for.(step_1)`.
+  defp setup_edge_session(session_for) do
+    fixture = setup_linear_workflow(step_count: 3)
+    [s1, s2, _s3] = fixture.steps
+
+    {:ok, _transitions} =
+      Accounts.WorkflowSteps.sync_transitions(s1, [
+        %{to_step_id: s2.id, session: session_for.(s1)}
+      ])
+
+    subscribe_daemon(fixture.task)
+    fixture
+  end
+
+  defp complete_first_turn(pid, task, native_session_id) do
+    wait_for_state(pid, :executing)
+    first = latest_started_execution(task.id)
+    assert_run_step_for(first.id, "step_1")
+
+    {:ok, _first} = Accounts.StepExecutions.update(first, %{native_session_id: native_session_id})
+    simulate_daemon_completion(task.id, task.project_id, "step 1 output")
+  end
+
+  defp second_execution(task_id) do
+    wait_for_execution_count(task_id, 2)
+    [_first, second] = executions_for_task(task_id)
+    second
+  end
+
+  defp assert_new_conversation(%{user: user, task: task}) do
+    pid = start_orchestrator(task, user)
+    complete_first_turn(pid, task, "native-a")
+    second = second_execution(task.id)
+
+    assert second.resume_session_id == nil
+    assert second.forked_from_execution_id == nil
+    assert second.conversation_root_execution_id == second.id
+
+    second_id = second.id
+
+    assert_receive %Phoenix.Socket.Broadcast{
+                     event: "run_step",
+                     payload: %{id: ^second_id, session: %{mode: "new"}}
+                   },
+                   1500
+  end
 end

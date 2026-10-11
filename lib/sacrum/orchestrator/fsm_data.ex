@@ -25,6 +25,7 @@ defmodule Sacrum.Orchestrator.FSMData do
     :pending_session,
     steps: %{},
     transitions: %{},
+    transition_sessions: %{},
     run_retry_attempt: 0
   ]
 
@@ -40,6 +41,7 @@ defmodule Sacrum.Orchestrator.FSMData do
           workflow: Workflow.t() | nil,
           steps: %{optional(binary()) => WorkflowStep.t()},
           transitions: %{optional(binary()) => [binary()]},
+          transition_sessions: %{optional({binary(), binary()}) => map()},
           current_execution_id: binary() | nil,
           current_execution: StepExecution.t() | nil,
           slot_id: integer() | nil,

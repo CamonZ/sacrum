@@ -240,12 +240,25 @@ defmodule Sacrum.Repo.WorkflowBundles do
             from_step_id:
               Map.fetch!(prepared.step_ids, {edge.from.workflow_ref, edge.from.step_ref}),
             to_step_id: Map.fetch!(prepared.step_ids, {edge.to.workflow_ref, edge.to.step_ref}),
-            label: edge.label
+            label: edge.label,
+            session: edge_session(edge, prepared)
           }
         )
 
       Multi.insert(multi, {:step_edge, index}, changeset)
     end)
+  end
+
+  defp edge_session(%{session: nil}, _prepared), do: nil
+
+  defp edge_session(%{session: %{mode: mode, step_ref: nil}}, _prepared),
+    do: %{"mode" => Atom.to_string(mode)}
+
+  defp edge_session(%{session: %{mode: mode, step_ref: step_ref}, from: from}, prepared) do
+    %{
+      "mode" => Atom.to_string(mode),
+      "step_id" => Map.fetch!(prepared.step_ids, {from.workflow_ref, step_ref})
+    }
   end
 
   defp add_workflow_edges(multi, prepared, user_id, project_id) do
