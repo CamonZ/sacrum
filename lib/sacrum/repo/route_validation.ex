@@ -263,7 +263,8 @@ defmodule Sacrum.Repo.RouteValidation do
   A route diagnostic lands on `:route_config`: it names the configured route
   step whose configuration is now invalid, wherever the mutation that broke it
   happened to originate. A step transition session diagnostic lands on
-  `:session` and names the transition.
+  `:session` and names the transition; a `wait_children` session diagnostic
+  lands on `:config`.
   """
   @spec error_changeset(Ecto.Changeset.t() | struct(), RouteValidator.error()) ::
           Ecto.Changeset.t()
@@ -278,6 +279,7 @@ defmodule Sacrum.Repo.RouteValidation do
   end
 
   defp error_field(%{code: :step_transition_session_invalid}), do: :session
+  defp error_field(%{code: :wait_children_session_invalid}), do: :config
   defp error_field(_reason), do: :route_config
 
   defp error_message(%{code: :step_transition_session_invalid} = reason),

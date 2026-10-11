@@ -296,6 +296,11 @@ After this mutation, refresh the task row or rely on `task_run_created` / `task_
 If the task is currently positioned on a stop step after a prior run boundary,
 `runWorkflow` creates a new TaskRun, bypasses the stop step, and continues from
 its single outgoing transition. The historical stopped run remains unchanged.
+When that transition carries a `resume` or `fork` session directive, the new
+run's first `llm_inference` execution continues the stopped run's conversation
+(see "Run entry session directives" in the domain model); if the stopped run
+has no completed turn for the named step, the new run fails with
+`outcome_kind: "dispatch_failed"` instead of starting a new conversation.
 
 ### Stop Run
 

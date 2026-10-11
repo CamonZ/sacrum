@@ -71,6 +71,27 @@ defmodule Sacrum.Routing.SessionDirective do
     end
   end
 
+  @doc """
+  Checks a directive whose destination is not known when it is authored: a
+  resume or fork must name an `llm_inference` step of `workflow_id`, and its
+  harness is checked when the destination is dispatched.
+  """
+  @spec validate_workflow_source(t(), String.t(), String.t(), map()) :: :ok | {:error, error()}
+  def validate_workflow_source(%{mode: :new}, _workflow_id, _path, _steps), do: :ok
+
+  def validate_workflow_source(%{step_id: nil}, _workflow_id, path, _steps),
+    do: {:error, error("#{path}.step_id", "is required with mode resume or fork")}
+
+  def validate_workflow_source(%{step_id: step_id}, workflow_id, path, steps) do
+    case Map.get(steps, step_id) do
+      %{step_type: :llm_inference, workflow_id: ^workflow_id} ->
+        :ok
+
+      _step ->
+        {:error, error("#{path}.step_id", "must be an llm_inference step in this workflow")}
+    end
+  end
+
   defp validate_keys(session, path) do
     keys = Map.keys(session)
 

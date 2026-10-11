@@ -20,7 +20,7 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
 
   import Ecto.Query
 
-  alias Sacrum.Orchestrator.{ExecutionPool, FSMData, Scheduler}
+  alias Sacrum.Orchestrator.{EntrySession, ExecutionPool, FSMData, Scheduler}
   alias Sacrum.Orchestrator.Routing.WaitChildren.ChildRuns
   alias Sacrum.Orchestrator.TaskRuns.{Lookup, StateTransitions}
   alias Sacrum.Repo
@@ -177,8 +177,14 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
            |> Repo.update(),
          {:ok, updated_task} <- Repo.update(Status.changeset(data.task)),
          incomplete_children = incomplete_children(children),
+         entry_session = EntrySession.child(wait_children_session(data), updated_task_run),
          {:ok, child_runs} <-
-           get_or_create_child_runs(incomplete_children, updated_task_run, execution.id) do
+           get_or_create_child_runs(
+             incomplete_children,
+             updated_task_run,
+             execution.id,
+             entry_session
+           ) do
       %{
         execution: execution,
         task_run: updated_task_run,
@@ -197,15 +203,29 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildren do
     |> StepExecution.put_config(wait_children_step(data).config)
   end
 
-  @spec get_or_create_child_runs([Task.t()], TaskRun.t(), binary()) ::
+  @spec wait_children_session(FSMData.t()) :: map() | nil
+  defp wait_children_session(data) do
+    case wait_children_step(data) do
+      %{config: %{session: session}} -> session
+      _step -> nil
+    end
+  end
+
+  @spec get_or_create_child_runs([Task.t()], TaskRun.t(), binary(), map() | nil) ::
           {:ok, [{Task.t(), TaskRun.t()}]} | {:error, term()}
-  defp get_or_create_child_runs(children, parent_task_run, triggered_by_step_execution_id) do
+  defp get_or_create_child_runs(
+         children,
+         parent_task_run,
+         triggered_by_step_execution_id,
+         entry_session
+       ) do
     child_runs =
       Enum.reduce_while(children, {:ok, []}, fn child, {:ok, acc} ->
         case ChildRuns.get_or_create(
                child,
                parent_task_run,
-               triggered_by_step_execution_id
+               triggered_by_step_execution_id,
+               entry_session
              ) do
           {:ok, task_run} -> {:cont, {:ok, [{child, task_run} | acc]}}
           {:error, reason} -> {:halt, {:error, reason}}

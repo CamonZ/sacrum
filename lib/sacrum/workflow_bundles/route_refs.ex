@@ -3,8 +3,8 @@ defmodule Sacrum.WorkflowBundles.RouteRefs do
   Resolves portable route references after the importer has allocated IDs.
 
   Only `transition` values and `session.step_ref` in route rules and the
-  default decision are touched; the rest of the route configuration remains
-  opaque JSON.
+  default decision, and a `wait_children` step's `session.step_ref`, are
+  touched; the rest of each configuration remains opaque JSON.
   """
 
   alias Sacrum.Routing.{RouteConfig, Traverse}
@@ -61,6 +61,29 @@ defmodule Sacrum.WorkflowBundles.RouteRefs do
            reason,
            "workflows[#{workflow_index}].steps[#{step_index}].config.route_config"
          )}
+    end
+  end
+
+  # A wait_children session forks a step of the parent's own workflow.
+  defp remap_step(
+         %{step_type: "wait_children", config: %{"session" => %{} = session} = config} = step,
+         workflow,
+         workflow_index,
+         step_index,
+         context
+       ) do
+    path = "workflows[#{workflow_index}].steps[#{step_index}].config.session"
+
+    with {:ok, ref} <- required_ref(session, "step_ref", path),
+         {:ok, id} <-
+           fetch_id(
+             context.step_ids,
+             {workflow.workflow_ref, ref},
+             "#{path}.step_ref",
+             "is not a known step ref"
+           ) do
+      session = session |> Map.delete("step_ref") |> Map.put("step_id", id)
+      {:ok, %{step | config: Map.put(config, "session", session)}}
     end
   end
 

@@ -13,7 +13,7 @@ defmodule Sacrum.Repo.Schemas.TaskRun do
   @create_fields ~w(
     task_id project_id user_id status max_concurrency started_at ended_at stop_requested_at
     latest_step_execution_id outcome_kind outcome_context parent_task_run_id root_task_run_id
-    triggered_by_step_execution_id
+    triggered_by_step_execution_id entry_session
   )a
 
   @update_fields ~w(
@@ -32,6 +32,9 @@ defmodule Sacrum.Repo.Schemas.TaskRun do
     field :stop_requested_at, :utc_datetime_usec
     field :outcome_kind, :string
     field :outcome_context, :map, default: %{}
+    # Set only by the engine: the session directive the run's first dispatch
+    # enters with, naming the linked run that holds the conversation.
+    field :entry_session, :map
 
     belongs_to :task, Sacrum.Repo.Schemas.Task
     belongs_to :project, Sacrum.Repo.Schemas.Project
@@ -73,6 +76,10 @@ defmodule Sacrum.Repo.Schemas.TaskRun do
     |> validate_required([:status])
     |> foreign_key_constraint(:latest_step_execution_id)
   end
+
+  @spec entry_session_changeset(t(), map() | nil) :: Ecto.Changeset.t()
+  def entry_session_changeset(task_run, entry_session),
+    do: change(task_run, entry_session: entry_session)
 
   @spec lineage_changeset(t(), map()) :: Ecto.Changeset.t()
   def lineage_changeset(task_run, attrs) do

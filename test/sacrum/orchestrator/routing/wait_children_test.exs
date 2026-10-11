@@ -203,6 +203,155 @@ defmodule Sacrum.Orchestrator.Routing.WaitChildrenTest do
 
   # ===== Helpers =====
 
+  describe "handle_wait_children_entry/1 with a fork directive" do
+    test "every new child run forks the parent conversation independently" do
+      ctx = setup_workflows()
+      parent = create_parent(ctx)
+      %{plan: plan, turn: turn} = fork_from_plan(ctx, parent)
+      first = create_child(ctx, parent, "First Child")
+      second = create_child(ctx, parent, "Second Child")
+      track_orchestrator_cleanup([parent.id, first.id, second.id])
+
+      data = build_parent_fsm_data(ctx, parent)
+      assert {:stop_parent, _} = WaitChildren.handle_wait_children_entry(data)
+
+      for child <- [first, second] do
+        assert [%TaskRun{entry_session: entry}] = active_task_runs(child.id)
+
+        assert entry == %{
+                 "mode" => "fork",
+                 "step_id" => plan.id,
+                 "task_run_id" => data.task_run_id
+               }
+
+        execution = await_execution(child.id)
+        assert execution.resume_session_id == "native-plan"
+        assert execution.forked_from_execution_id == turn.id
+        assert execution.conversation_root_execution_id == execution.id
+        assert execution.task_run_id != data.task_run_id
+      end
+
+      # The children add no turns to the parent run's conversation.
+      assert [%StepExecution{id: turn_id}] =
+               Repo.all(
+                 from(e in StepExecution,
+                   where: e.task_run_id == ^data.task_run_id and e.status == "completed"
+                 )
+               )
+
+      assert turn_id == turn.id
+    end
+
+    test "a child whose entry step is not llm_inference fails instead of dropping the fork" do
+      ctx = setup_workflows()
+      parent = create_parent(ctx)
+      fork_from_plan(ctx, parent)
+
+      human_workflow = create_workflow(ctx.user, ctx.project, "Human Child Workflow")
+
+      {:ok, human_step} =
+        Accounts.WorkflowSteps.insert(
+          ctx.user.id,
+          workflow_step_attrs(%{
+            "name" => "Review",
+            "step_order" => 1,
+            "step_type" => "human_input",
+            "workflow_id" => human_workflow.id,
+            "project_id" => human_workflow.project_id
+          })
+        )
+
+      {:ok, human_workflow} =
+        Accounts.Workflows.update(human_workflow, %{initial_step_id: human_step.id})
+
+      child = create_child(%{ctx | child_workflow: human_workflow}, parent, "Human Child")
+      track_orchestrator_cleanup([parent.id, child.id])
+
+      assert {:stop_parent, _} =
+               WaitChildren.handle_wait_children_entry(build_parent_fsm_data(ctx, parent))
+
+      run = await_run_status(child.id, :failed)
+      assert run.outcome_kind == "dispatch_failed"
+      assert run.outcome_context["reason"] == human_step.id
+      assert Repo.all(from(e in StepExecution, where: e.task_id == ^child.id)) == []
+    end
+  end
+
+  # Adds a completed plan turn to the parent run and has the parent's
+  # wait_children step fork it.
+  defp fork_from_plan(ctx, parent) do
+    {:ok, plan} =
+      Accounts.WorkflowSteps.insert(
+        ctx.user.id,
+        workflow_step_attrs(%{
+          "name" => "Plan",
+          "step_order" => 2,
+          "step_type" => "llm_inference",
+          "workflow_id" => ctx.parent_workflow.id,
+          "project_id" => ctx.project.id,
+          "config" => %{"prompt" => "Plan the children"}
+        })
+      )
+
+    {:ok, _wait} =
+      Accounts.WorkflowSteps.update(ctx.parent_step, %{
+        "config" => %{"session" => %{"mode" => "fork", "step_id" => plan.id}}
+      })
+
+    {:ok, parent_run} = Accounts.TaskRuns.get_active_for_task(ctx.user.id, parent.id)
+
+    {:ok, turn} =
+      Accounts.StepExecutions.insert(ctx.user.id, %{
+        task_id: parent.id,
+        task_run_id: parent_run.id,
+        project_id: ctx.project.id,
+        workflow_id: ctx.parent_workflow.id,
+        step_id: plan.id,
+        step_name: plan.name,
+        step_type: :llm_inference,
+        harness: plan.harness,
+        status: "completed"
+      })
+
+    turn =
+      turn
+      |> Ecto.Changeset.change(
+        native_session_id: "native-plan",
+        conversation_root_execution_id: turn.id
+      )
+      |> Repo.update!()
+
+    %{plan: plan, turn: turn}
+  end
+
+  defp await_execution(task_id, attempts \\ 50) do
+    case Repo.one(from(e in StepExecution, where: e.task_id == ^task_id, limit: 1)) do
+      %StepExecution{} = execution ->
+        execution
+
+      nil when attempts > 0 ->
+        Process.sleep(20)
+        await_execution(task_id, attempts - 1)
+
+      nil ->
+        flunk("no execution dispatched for task #{task_id}")
+    end
+  end
+
+  defp await_run_status(task_id, status, attempts \\ 50) do
+    case Repo.one(from(r in TaskRun, where: r.task_id == ^task_id, limit: 1)) do
+      %TaskRun{status: ^status} = run ->
+        run
+
+      _run when attempts > 0 ->
+        Process.sleep(20)
+        await_run_status(task_id, status, attempts - 1)
+
+      run ->
+        flunk("task run for #{task_id} did not reach #{status}: #{inspect(run)}")
+    end
+  end
+
   defp setup_workflows do
     user = create_user()
     project = create_project(user)

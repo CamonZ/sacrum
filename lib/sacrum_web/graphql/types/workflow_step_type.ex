@@ -167,6 +167,12 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
   object :wait_children_step_config do
     field :version, non_null(:integer)
     field :output_schema, :json
+
+    field :session, :json do
+      description(
+        "Fork directive applied to every child run: {mode: fork, step_id} naming an llm_inference step of this workflow."
+      )
+    end
   end
 
   object :workflow_step_queries do

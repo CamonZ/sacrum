@@ -1139,6 +1139,119 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
     end
   end
 
+  describe "stop step session directives" do
+    test "resume continues the boundary run's conversation in the new run" do
+      %{user: user, task: task, work_step: work, loop_step: loop} =
+        fixture = setup_stop_session(&%{"mode" => "resume", "step_id" => &1.id})
+
+      first = run_to_boundary(fixture, "native-a")
+      second_pid = start_orchestrator(Repo.get!(Sacrum.Repo.Schemas.Task, task.id), user)
+      wait_for_state(second_pid, :executing)
+      second = latest_started_execution(task.id)
+      second_run = Repo.get!(TaskRun, second.task_run_id)
+
+      assert second.step_id == loop.id
+      assert second_run.id != first.task_run_id
+
+      assert second_run.entry_session == %{
+               "mode" => "resume",
+               "step_id" => work.id,
+               "task_run_id" => first.task_run_id
+             }
+
+      assert second.resume_session_id == "native-a"
+      assert second.conversation_root_execution_id == first.id
+      assert second.forked_from_execution_id == nil
+
+      second_id = second.id
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "run_step",
+                       payload: %{
+                         id: ^second_id,
+                         session: %{mode: "resume", resume_id: "native-a"}
+                       }
+                     },
+                     1500
+    end
+
+    test "fork roots a new conversation forked from the boundary run's turn" do
+      %{user: user, task: task} =
+        fixture = setup_stop_session(&%{"mode" => "fork", "step_id" => &1.id})
+
+      first = run_to_boundary(fixture, "native-a")
+      second_pid = start_orchestrator(Repo.get!(Sacrum.Repo.Schemas.Task, task.id), user)
+      wait_for_state(second_pid, :executing)
+      second = latest_started_execution(task.id)
+
+      assert second.resume_session_id == "native-a"
+      assert second.forked_from_execution_id == first.id
+      assert second.conversation_root_execution_id == second.id
+    end
+
+    test "a restart between the bypass and dispatch still enters the boundary run's conversation" do
+      %{user: user, project: project, task: task, work_step: work, loop_step: loop} =
+        fixture = setup_stop_session(&%{"mode" => "resume", "step_id" => &1.id})
+
+      first = run_to_boundary(fixture, "native-a")
+
+      # The state a crash leaves after committing the bypass.
+      {:ok, task_run} =
+        Accounts.TaskRuns.insert(user.id, project.id, task.id, %{status: :queued})
+
+      task_run
+      |> TaskRun.entry_session_changeset(%{
+        "mode" => "resume",
+        "step_id" => work.id,
+        "task_run_id" => first.task_run_id
+      })
+      |> Repo.update!()
+
+      task =
+        Repo.update!(
+          Ecto.Changeset.change(Repo.get!(Sacrum.Repo.Schemas.Task, task.id),
+            current_step_id: loop.id
+          )
+        )
+
+      pid = start_orchestrator(task, user, task_run_id: task_run.id)
+      wait_for_state(pid, :executing)
+      second = latest_started_execution(task.id)
+
+      assert second.task_run_id == task_run.id
+      assert second.step_id == loop.id
+      assert second.resume_session_id == "native-a"
+      assert second.conversation_root_execution_id == first.id
+    end
+
+    test "a boundary run without a completed turn for the step fails instead of starting anew" do
+      # The directive names loop_start, which the boundary run never ran.
+      %{user: user, task: task, loop_step: loop} =
+        fixture =
+        setup_stop_session(fn _work -> nil end, &%{"mode" => "resume", "step_id" => &1.id})
+
+      _first = run_to_boundary(fixture, "native-a")
+      second_pid = start_orchestrator(Repo.get!(Sacrum.Repo.Schemas.Task, task.id), user)
+      wait_for_exit(second_pid)
+
+      assert [%{status: "completed"}] = executions_for_task(task.id)
+
+      run =
+        Repo.one!(
+          from(r in TaskRun,
+            where: r.task_id == ^task.id,
+            order_by: [desc: r.inserted_at],
+            limit: 1
+          )
+        )
+
+      assert run.status == :failed
+      assert run.entry_session["step_id"] == loop.id
+      assert run.outcome_kind == "dispatch_failed"
+      assert run.outcome_context["reason"] == loop.id
+    end
+  end
+
   # step_1 -> step_2 -> finish, where the step_1 -> step_2 edge carries
   # `session_for.(step_1)`.
   defp setup_edge_session(session_for) do
@@ -1152,6 +1265,37 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
 
     subscribe_daemon(fixture.task)
     fixture
+  end
+
+  # work -> stop -> loop_start -> stop, where the stop -> loop_start edge
+  # carries `session_for.(source)`; `source` is work unless `source_for` picks
+  # loop_start.
+  defp setup_stop_session(session_for, source_for \\ nil) do
+    fixture = setup_stop_boundary_workflow()
+    source = if source_for, do: fixture.loop_step, else: fixture.work_step
+    session = if source_for, do: source_for.(source), else: session_for.(source)
+
+    {:ok, _transitions} =
+      Accounts.WorkflowSteps.sync_transitions(fixture.stop_step, [
+        %{to_step_id: fixture.loop_step.id, session: session}
+      ])
+
+    subscribe_daemon(fixture.task)
+    fixture
+  end
+
+  # Runs the first TaskRun up to the stop step, completing the work turn with
+  # `native_session_id`.
+  defp run_to_boundary(%{user: user, task: task}, native_session_id) do
+    pid = start_orchestrator(task, user)
+    wait_for_state(pid, :executing)
+    first = latest_started_execution(task.id)
+    {:ok, _first} = Accounts.StepExecutions.update(first, %{native_session_id: native_session_id})
+    simulate_daemon_completion(task.id, task.project_id, "iteration complete")
+    wait_for_exit(pid)
+    wait_for_registry_clear(task.id)
+    drain_run_step_broadcasts()
+    Repo.get!(StepExecution, first.id)
   end
 
   defp complete_first_turn(pid, task, native_session_id) do
