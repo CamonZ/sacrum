@@ -17,8 +17,10 @@ defmodule Sacrum.Accounts.Tasks do
   alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.Schemas.TaskSection
   alias Sacrum.Repo.TaskDependencies
+  alias Sacrum.Repo.TaskRuns, as: TaskRunsRepo
   alias Sacrum.Repo.Tasks, as: TasksRepo
   alias Sacrum.Repo.TaskSections
+  alias Sacrum.TaskRuns.Status, as: TaskRunStatus
   alias Sacrum.Tasks.Placement
 
   @dependency_scope_constraints [
@@ -146,11 +148,42 @@ defmodule Sacrum.Accounts.Tasks do
   end
 
   @doc """
-  Delete a task.
+  Delete a task and its owned history atomically. Active owned or linked runs
+  must be stopped through orchestration before deletion.
   """
-  @spec delete(Task.t(), keyword()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
+  @spec delete(Task.t(), keyword()) ::
+          {:ok, Task.t()} | {:error, Ecto.Changeset.t() | String.t() | :not_found}
   def delete(%Task{} = task, opts \\ []) do
-    TasksRepo.delete(task, opts)
+    result =
+      Repo.transaction(fn ->
+        with {:ok, tasks} <- TasksRepo.lock_delete_scope(task, Keyword.get(opts, :cascade, true)),
+             :ok <- validate_deletion_runs(tasks),
+             {:ok, deleted_task} <- TasksRepo.delete(hd(tasks), opts) do
+          deleted_task
+        else
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+
+    case result do
+      {:error, :active_runs} ->
+        {:error, "cannot delete tasks with active or linked active runs; stop the runs first"}
+
+      {:error, :delete_conflict} ->
+        {:error, "cannot delete task because its history is still referenced"}
+
+      other ->
+        other
+    end
+  end
+
+  @spec validate_deletion_runs([Task.t()]) :: :ok | {:error, :active_runs}
+  defp validate_deletion_runs(tasks) do
+    runs = tasks |> Enum.map(& &1.id) |> TaskRunsRepo.lock_for_task_deletion()
+
+    if Enum.any?(runs, &TaskRunStatus.active?(&1.status)),
+      do: {:error, :active_runs},
+      else: :ok
   end
 
   defp run_task_update_transaction(task, attrs) do

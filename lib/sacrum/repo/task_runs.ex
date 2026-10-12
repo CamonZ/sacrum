@@ -100,6 +100,36 @@ defmodule Sacrum.Repo.TaskRuns do
     end
   end
 
+  @doc "Locks owned runs and runs whose lineage references them before task deletion."
+  @spec lock_for_task_deletion([String.t()]) :: [TaskRun.t()]
+  def lock_for_task_deletion(task_ids) do
+    owned_runs =
+      Repo.all(
+        from(tr in TaskRun,
+          where: tr.task_id in ^task_ids,
+          order_by: tr.id,
+          lock: "FOR UPDATE"
+        )
+      )
+
+    owned_ids = Enum.map(owned_runs, & &1.id)
+
+    # Read links only after locking their targets, so new linked runs cannot
+    # commit between the active-run check and lineage nullification.
+    linked_runs =
+      Repo.all(
+        from(tr in TaskRun,
+          where:
+            tr.id not in ^owned_ids and
+              (tr.parent_task_run_id in ^owned_ids or tr.root_task_run_id in ^owned_ids),
+          order_by: tr.id,
+          lock: "FOR UPDATE"
+        )
+      )
+
+    owned_runs ++ linked_runs
+  end
+
   @spec fetch_in_scope(String.t(), String.t(), String.t(), String.t()) ::
           {:ok, TaskRun.t()} | {:error, :not_found}
   def fetch_in_scope(user_id, project_id, task_id, task_run_id)
