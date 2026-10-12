@@ -212,6 +212,37 @@ general JSON Schema validation.
 | `completeStep` | `task_id!` | `:task` |
 | `rejectStep` | `task_id!`, `target_step_id!`, `feedback` | `:task` |
 
+### Task deletion and history ownership
+
+`deleteTask` defaults to `cascade: true`: the task subtree and each deleted
+task's runs, executions, logs, sections, code references and dependency edges
+are removed. Owned executions and runs are deleted first, while their task
+owners still exist, so lineage nullification does not conflict with nested
+task cascades. With `cascade: false`, only the requested
+task and its owned records are deleted; immediate children become roots and
+the rest of their hierarchy and history is preserved. Child detachment and
+deletion commit together or roll back together. Foreign-key deletion conflicts
+return a GraphQL error at HTTP 200 instead of an unhandled constraint exception.
+
+TaskRun parent and root links record provenance, not ownership. Both foreign
+keys use `ON DELETE SET NULL`; a surviving run loses only links to deleted
+ancestors, including when its task is outside the deleted subtree. Links to
+surviving ancestors stay unchanged. Existing execution references (triggering,
+conversation-root and fork-source executions) follow the same nullification
+policy. History is not re-rooted and no runs are deleted solely because they
+share a parent or root run. Surviving history remains accessible by its own
+task/run IDs; a deleted root no longer groups that history in a root trace.
+Shared artifact files remain project-owned and are not deleted with a task.
+
+The Accounts/GraphQL delete path locks the task scope and affected run lineage,
+then refuses deletion if an owned run or a surviving run whose parent/root
+reference would be cleared is `queued`, `executing`, `waiting` or `stopping`.
+Stop those runs through orchestration and wait for terminal status before
+retrying deletion. Deletion does not itself stop providers or advance workflows.
+An independent active descendant can be preserved by `cascade: false`.
+Lower-level repository/database deletes implement atomic storage deletion only;
+they are not orchestrator shutdown APIs.
+
 **`section_types.ex`** — 5 mutations (all via `Accounts.Sections` / `Accounts.CodeRefs`)
 | Mutation | Arguments | Returns |
 |----------|-----------|---------|

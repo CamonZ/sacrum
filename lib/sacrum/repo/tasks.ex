@@ -6,7 +6,7 @@ defmodule Sacrum.Repo.Tasks do
 
   - `insert/2` returns `{:ok, task}` or `{:error, changeset}`
   - `update/1` returns `{:ok, task}` or `{:error, changeset}`
-  - `delete/1` returns `{:ok, task}` or `{:error, changeset}`
+  - `delete/1` returns `{:ok, task}` or `{:error, changeset | :not_found | :delete_conflict}`
   """
 
   use Sacrum.GenericRepo, schema: Sacrum.Repo.Schemas.Task
@@ -14,8 +14,10 @@ defmodule Sacrum.Repo.Tasks do
   import Ecto.Query
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.Project
+  alias Sacrum.Repo.Schemas.StepExecution
   alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.Schemas.TaskDependency
+  alias Sacrum.Repo.Schemas.TaskRun
   alias Sacrum.Repo.UuidPrefixResolver
   alias Sacrum.Tasks.Placement
 
@@ -445,17 +447,103 @@ defmodule Sacrum.Repo.Tasks do
     )
   end
 
-  @spec delete(Task.t(), keyword()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
+  @dialyzer {:no_opaque, delete: 2}
+  @spec delete(Task.t(), keyword()) ::
+          {:ok, Task.t()} | {:error, Ecto.Changeset.t() | :not_found | :delete_conflict}
   def delete(%Task{} = task, opts \\ []) do
     cascade = Keyword.get(opts, :cascade, true)
 
-    unless cascade do
-      Repo.update_all(
-        from(t in Task, where: t.parent_id == ^task.id),
-        set: [parent_id: nil]
-      )
-    end
+    multi =
+      Ecto.Multi.run(Ecto.Multi.new(), :tasks, fn _repo, _changes ->
+        lock_delete_scope(task, cascade)
+      end)
 
-    Repo.delete(task)
+    multi =
+      if cascade do
+        multi
+      else
+        Ecto.Multi.update_all(
+          multi,
+          :detach_children,
+          from(t in Task, where: t.parent_id == ^task.id),
+          set: [parent_id: nil]
+        )
+      end
+
+    # Remove owned history while all task owners still exist. Nested task
+    # cascades plus lineage SET NULL updates can otherwise recheck a history
+    # row's task FK after its owner has already been deleted.
+    multi =
+      multi
+      |> Ecto.Multi.delete_all(:executions, fn %{tasks: tasks} ->
+        task_ids = Enum.map(tasks, & &1.id)
+        from(e in StepExecution, where: e.task_id in ^task_ids)
+      end)
+      |> Ecto.Multi.delete_all(:runs, fn %{tasks: tasks} ->
+        task_ids = Enum.map(tasks, & &1.id)
+        from(r in TaskRun, where: r.task_id in ^task_ids)
+      end)
+      |> Ecto.Multi.delete(:task, task)
+
+    case Repo.transaction(multi) do
+      {:ok, %{task: deleted_task}} -> {:ok, deleted_task}
+      {:error, _operation, reason, _changes} -> {:error, reason}
+    end
+  rescue
+    error in Ecto.ConstraintError ->
+      if error.type == :foreign_key,
+        do: {:error, :delete_conflict},
+        else: reraise(error, __STACKTRACE__)
+
+    error in Postgrex.Error ->
+      case error.postgres do
+        %{code: code} when code in [:foreign_key_violation, :restrict_violation] ->
+          {:error, :delete_conflict}
+
+        _other ->
+          reraise(error, __STACKTRACE__)
+      end
+  end
+
+  @doc "Locks the task deletion scope. The caller must hold a transaction."
+  @spec lock_delete_scope(Task.t(), boolean()) :: {:ok, [Task.t()]} | {:error, :not_found}
+  def lock_delete_scope(%Task{} = task, cascade) do
+    query =
+      from(t in Task,
+        where:
+          t.id == ^task.id and t.project_id == ^task.project_id and t.user_id == ^task.user_id,
+        lock: "FOR UPDATE"
+      )
+
+    case Repo.one(query) do
+      nil ->
+        {:error, :not_found}
+
+      locked_task ->
+        tasks =
+          if cascade, do: lock_descendants([locked_task], [locked_task]), else: [locked_task]
+
+        {:ok, tasks}
+    end
+  end
+
+  @spec lock_descendants([Task.t()], [Task.t()]) :: [Task.t()]
+  defp lock_descendants([], tasks), do: tasks
+
+  defp lock_descendants(parents, tasks) do
+    parent_ids = Enum.map(parents, & &1.id)
+
+    # Lock each level before reading the next: parent locks prevent new child
+    # references while the deletion scope and active-run check are established.
+    children =
+      Repo.all(
+        from(t in Task,
+          where: t.parent_id in ^parent_ids,
+          order_by: t.id,
+          lock: "FOR UPDATE"
+        )
+      )
+
+    lock_descendants(children, tasks ++ children)
   end
 end
