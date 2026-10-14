@@ -17,6 +17,7 @@ defmodule SacrumWeb.Graphql.Schema do
   import_types(SacrumWeb.Graphql.Types.TransitionTypes)
   import_types(SacrumWeb.Graphql.Types.ExecutionTypes)
   import_types(SacrumWeb.Graphql.Types.DaemonTypes)
+  import_types(SacrumWeb.Graphql.Types.NotificationTypes)
 
   query do
     import_fields(:project_queries)
@@ -26,6 +27,7 @@ defmodule SacrumWeb.Graphql.Schema do
     import_fields(:artifact_queries)
     import_fields(:execution_queries)
     import_fields(:daemon_queries)
+    import_fields(:notification_queries)
   end
 
   mutation do
@@ -39,6 +41,7 @@ defmodule SacrumWeb.Graphql.Schema do
     import_fields(:transition_mutations)
     import_fields(:execution_mutations)
     import_fields(:daemon_mutations)
+    import_fields(:notification_mutations)
   end
 
   @spec context(map()) :: map()

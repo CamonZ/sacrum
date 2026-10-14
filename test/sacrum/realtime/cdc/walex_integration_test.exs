@@ -217,6 +217,65 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
     end)
   end
 
+  test "committed notifications project Markdown intact and cascade tombstones with their project" do
+    with_project(fn user, project ->
+      {other_user, other_project} = create_project()
+      :ok = subscribe_project(project.id)
+      :ok = subscribe_project(other_project.id)
+
+      task_id = Ecto.UUID.generate()
+
+      message =
+        "Artifact [report](vtb://artifact/#{Ecto.UUID.generate()}) has been added to " <>
+          "task [Notifying task](vtb://task/#{task_id})."
+
+      {:ok, notification} =
+        Accounts.Notifications.publish(user.id, project.id, %{
+          message: message,
+          severity: "info"
+        })
+
+      created =
+        assert_project_broadcast(
+          "notification_created",
+          %{
+            id: notification.id,
+            project_id: project.id,
+            message: message,
+            severity: "info",
+            read_at: nil
+          },
+          1_000
+        )
+
+      assert DateTime.compare(created.inserted_at, notification.inserted_at) == :eq
+
+      other_topic = "project:#{other_project.id}"
+      refute_receive %Phoenix.Socket.Broadcast{topic: ^other_topic}
+
+      {:ok, [%{read_at: read_at}]} = Accounts.Notifications.mark_read(user.id, [notification.id])
+
+      updated =
+        assert_project_broadcast(
+          "notification_updated",
+          %{id: notification.id, message: message},
+          1_000
+        )
+
+      assert DateTime.compare(updated.read_at, read_at) == :eq
+
+      {:ok, _deleted_project} = Accounts.Projects.delete(project)
+
+      assert_project_broadcast(
+        "notification_deleted",
+        %{id: notification.id, project_id: project.id, message: message},
+        1_000
+      )
+
+      cleanup_user(other_user.id)
+    end)
+  end
+
   test "committed artifact and attachment changes project complete payloads and cascade tombstones" do
     with_project(fn user, project ->
       :ok = subscribe_project(project.id)

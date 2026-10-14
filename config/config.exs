@@ -32,7 +32,8 @@ config :sacrum, :cdc,
     "code_refs",
     "artifacts",
     "artifact_links",
-    "daemons"
+    "daemons",
+    "notifications"
   ],
   modules: [Sacrum.Realtime.Cdc.WalExConsumer]
 
