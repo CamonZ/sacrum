@@ -199,6 +199,12 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
 
   @artifact_link_event_payload_keys [:schema_version | @artifact_link_payload_keys]
 
+  @notification_payload_keys ~w(
+    id project_id message severity inserted_at read_at
+  )a
+
+  @notification_event_payload_keys [:schema_version | @notification_payload_keys]
+
   @contracts [
     %{
       event: "task_created",
@@ -788,6 +794,52 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
       schema_version: @schema_version,
       completeness:
         "Complete attachment tombstone from the before image, including cascade deletes, so clients can remove stale attachments."
+    },
+    %{
+      event: "notification_created",
+      classification: @entity_projection,
+      source_changes: [
+        %{
+          table: "notifications",
+          operation: :insert,
+          after_image_fields: @notification_payload_keys
+        }
+      ],
+      payload_keys: @notification_event_payload_keys,
+      schema_version: @schema_version,
+      completeness:
+        "Complete notification with the daemon-authored Markdown message stored intact; clients deduplicate by id against projectNotifications history."
+    },
+    %{
+      event: "notification_updated",
+      classification: @entity_projection,
+      source_changes: [
+        %{
+          table: "notifications",
+          operation: :update,
+          before_image_fields: [:id, :project_id],
+          after_image_fields: @notification_payload_keys
+        }
+      ],
+      payload_keys: @notification_event_payload_keys,
+      schema_version: @schema_version,
+      completeness:
+        "Complete notification replacement when it is marked read; clients replace by id and apply read_at."
+    },
+    %{
+      event: "notification_deleted",
+      classification: @entity_projection,
+      source_changes: [
+        %{
+          table: "notifications",
+          operation: :delete,
+          before_image_fields: @notification_payload_keys
+        }
+      ],
+      payload_keys: @notification_event_payload_keys,
+      schema_version: @schema_version,
+      completeness:
+        "Complete notification tombstone from the before image, including cascades from project and account deletion."
     }
   ]
 
@@ -800,6 +852,7 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
     source_tables: ~w(
       projects workflows workflow_steps step_transitions workflow_transitions tasks task_runs
       step_executions session_logs task_sections task_dependencies code_refs artifacts artifact_links
+      notifications
     ),
     gui_projection:
       "Equivalent to the GraphQL task list/detail, pipeline summary, run trace, and section queries for the project. Include archived tasks when building a full local store."

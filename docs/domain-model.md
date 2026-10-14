@@ -139,6 +139,11 @@ Queries and mutations are grouped by resource in `lib/sacrum_web/graphql/types/`
 | `stepExecution` | `id!` | Single execution by ID |
 | `sessionLogs` | `step_execution_id!` | List logs for an execution |
 
+**`notification_types.ex`** — Notification queries
+| Query | Arguments | Description |
+|-------|-----------|-------------|
+| `projectNotifications` | `project_id!`, `after_inserted_at`, `after_id`, `limit`, `unread_only` | Project notifications ordered by `inserted_at`, then `id`, after an optional cursor; returns `notifications` and `hasMore` |
+
 ### Mutations
 
 **`project_type.ex`** — 3 mutations (all via `Accounts.Projects`)
@@ -160,6 +165,14 @@ Queries and mutations are grouped by resource in `lib/sacrum_web/graphql/types/`
 `updateArtifact` changes `filename`, `body`, or both. Supplying `subject_type` and `subject_id` together replaces the artifact's sole link while preserving its metadata and logical name unless replacement values are supplied. Supplying only `logicalName` or `metadata` updates the sole link. The target must belong to the artifact's existing user and project; ownership and project scope never move. Invalid targets, metadata, or duplicate names roll back file edits and leave the original link intact. Artifacts with multiple links can still update file fields, but attachment replacement or link-field updates are rejected as ambiguous.
 
 `deleteArtifact` deletes an artifact owned by the authenticated user and returns the deleted file. Its `ArtifactLink` rows are removed by the database cascade. Update and delete requests for another user's artifact return not found.
+
+**`notification_types.ex`** — 2 mutations (via `Accounts.Notifications`)
+| Mutation | Arguments | Returns |
+|----------|-----------|---------|
+| `publishNotification` | `project_id!`, `message!`, `severity!` | `:notification` |
+| `markNotificationsRead` | `ids!` | `[:notification]` |
+
+`publishNotification` stores daemon-authored Markdown in one of the caller's projects; the `(project_id, user_id)` foreign key enforces ownership. `markNotificationsRead` idempotently sets `read_at` on the caller's notifications. See [Notifications](notifications.md).
 
 `createProject` requires the GUI's `codexInstalled` and `claudeInstalled`
 capability booleans. The generated Backlog step uses Codex when it is

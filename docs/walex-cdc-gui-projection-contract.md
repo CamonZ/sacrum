@@ -84,6 +84,9 @@ instead of silently applying a payload with an unsupported shape.
 | `artifact_link_created` | Relation change | `artifact_links` insert after image. | Full attachment row: `id`, `artifact_id`, `project_id`, `subject_type`, `subject_id`, nullable `logical_name`, nullable JSON metadata envelope, timestamps. |
 | `artifact_link_updated` | Relation change | `artifact_links` update after image. | Same full attachment row for logical-name or metadata replacement. |
 | `artifact_link_deleted` | Relation change | `artifact_links` delete before image, including cascades from artifact deletion. | Full attachment tombstone with subject identity, logical name, and JSON metadata envelope so clients can remove it without refetching. |
+| `notification_created` | Entity projection | `notifications` insert after image. | Full notification: `id`, `project_id`, intact Markdown `message`, `severity`, `inserted_at`, `read_at`. See [Notifications](notifications.md). |
+| `notification_updated` | Entity projection | `notifications` update after image. | Same full notification when it is marked read; clients replace by `id`. |
+| `notification_deleted` | Entity projection | `notifications` delete before image, including cascades from project and account deletion. | Same full notification as a tombstone so clients can remove it by `id`. |
 
 ## Derived Step Movement Events
 
@@ -186,6 +189,7 @@ Snapshot source tables are:
 - `code_refs`
 - `artifacts`
 - `artifact_links`
+- `notifications`
 
 ## Reconnect And Gap Recovery
 

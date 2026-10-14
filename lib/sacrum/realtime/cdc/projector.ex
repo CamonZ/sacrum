@@ -18,6 +18,7 @@ defmodule Sacrum.Realtime.Cdc.Projector do
     ArtifactLink,
     CodeRef,
     Daemon,
+    Notification,
     SessionLog,
     StepExecution,
     StepTransition,
@@ -55,7 +56,8 @@ defmodule Sacrum.Realtime.Cdc.Projector do
     "code_refs" => CodeRef,
     "artifacts" => Artifact,
     "artifact_links" => ArtifactLink,
-    "daemons" => Daemon
+    "daemons" => Daemon,
+    "notifications" => Notification
   }
 
   @channel_broadcasts %{
@@ -97,7 +99,10 @@ defmodule Sacrum.Realtime.Cdc.Projector do
     "artifact_link_deleted" => :broadcast_artifact_link_deleted,
     "daemon_created" => :broadcast_daemon_created,
     "daemon_updated" => :broadcast_daemon_updated,
-    "daemon_deleted" => :broadcast_daemon_deleted
+    "daemon_deleted" => :broadcast_daemon_deleted,
+    "notification_created" => :broadcast_notification_created,
+    "notification_updated" => :broadcast_notification_updated,
+    "notification_deleted" => :broadcast_notification_deleted
   }
 
   @type dispatch_result :: %{
@@ -415,6 +420,33 @@ defmodule Sacrum.Realtime.Cdc.Projector do
        }) do
     artifact_link = record_to_struct!("artifact_links", record)
     [projection("artifact_link_deleted", artifact_link.project_id, artifact_link)]
+  end
+
+  defp projections(%WalEx.Event{
+         source: %{table: "notifications"},
+         type: :insert,
+         new_record: record
+       }) do
+    notification = record_to_struct!("notifications", record)
+    [projection("notification_created", notification.project_id, notification)]
+  end
+
+  defp projections(%WalEx.Event{
+         source: %{table: "notifications"},
+         type: :update,
+         new_record: record
+       }) do
+    notification = record_to_struct!("notifications", record)
+    [projection("notification_updated", notification.project_id, notification)]
+  end
+
+  defp projections(%WalEx.Event{
+         source: %{table: "notifications"},
+         type: :delete,
+         old_record: record
+       }) do
+    notification = record_to_struct!("notifications", record)
+    [projection("notification_deleted", notification.project_id, notification)]
   end
 
   defp projections(%WalEx.Event{source: %{table: "daemons"}, type: :insert, new_record: record}) do

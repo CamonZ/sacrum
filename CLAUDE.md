@@ -19,6 +19,7 @@ Prefix every commit message with a ticket reference:
 | [Domain Model](docs/domain-model.md) | Workflow engine, task management, API surface |
 | [Daemon Lifecycle](docs/daemon-lifecycle.md) | Client handoff: enrollment, owner-scoped deletion and rotation |
 | [GUI/CLI TaskRun Contract](docs/client-taskrun-contract.md) | Client-facing TaskRun state, GraphQL, WebSocket, and migration guidance |
+| [Notifications](docs/notifications.md) | Durable Markdown notifications: publish and mark-read mutations, link URIs, realtime, history, retention |
 | [Repository Pattern](docs/patterns.md) | Three-layer architecture, GenericRepo, GenericResource, Accounts |
 | [Error Handling](docs/error-handling.md) | Error types, propagation, conventions |
 | [Testing Guide](docs/testing.md) | Test infrastructure, GraphQL, channels, patterns |

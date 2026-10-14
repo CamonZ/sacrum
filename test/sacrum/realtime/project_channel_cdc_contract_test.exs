@@ -422,6 +422,26 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContractTest do
              Enum.drop(artifact_link_payload_keys, 1)
   end
 
+  test "notification events carry the complete Markdown notification" do
+    notification_payload_keys = [
+      :schema_version,
+      :id,
+      :project_id,
+      :message,
+      :severity,
+      :inserted_at,
+      :read_at
+    ]
+
+    for event <- ["notification_created", "notification_updated", "notification_deleted"] do
+      assert {:ok, contract} = ProjectChannelCdcContract.contract_for(event)
+      assert contract.payload_keys == notification_payload_keys
+      assert source_tables(contract) == MapSet.new(["notifications"])
+    end
+
+    assert "notifications" in ProjectChannelCdcContract.initial_snapshot_contract().source_tables
+  end
+
   test "snapshot and gap recovery are separate from healthy live CDC" do
     snapshot = ProjectChannelCdcContract.initial_snapshot_contract()
     recovery = ProjectChannelCdcContract.reconnect_gap_recovery_contract()

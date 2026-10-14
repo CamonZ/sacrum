@@ -423,6 +423,35 @@ defmodule SacrumWeb.ProjectChannel do
     )
   end
 
+  # Notification broadcasts
+
+  @spec broadcast_notification_created(String.t(), map()) :: :ok | {:error, term()}
+  def broadcast_notification_created(project_id, notification) do
+    SacrumWeb.Endpoint.broadcast(
+      "project:#{project_id}",
+      "notification_created",
+      notification_payload(notification)
+    )
+  end
+
+  @spec broadcast_notification_updated(String.t(), map()) :: :ok | {:error, term()}
+  def broadcast_notification_updated(project_id, notification) do
+    SacrumWeb.Endpoint.broadcast(
+      "project:#{project_id}",
+      "notification_updated",
+      notification_payload(notification)
+    )
+  end
+
+  @spec broadcast_notification_deleted(String.t(), map()) :: :ok | {:error, term()}
+  def broadcast_notification_deleted(project_id, notification) do
+    SacrumWeb.Endpoint.broadcast(
+      "project:#{project_id}",
+      "notification_deleted",
+      notification_payload(notification)
+    )
+  end
+
   # Payload helpers
 
   defp version_payload(payload), do: Map.put(payload, :schema_version, @schema_version)
@@ -756,6 +785,17 @@ defmodule SacrumWeb.ProjectChannel do
       body: artifact.body,
       inserted_at: artifact.inserted_at,
       updated_at: artifact.updated_at
+    })
+  end
+
+  defp notification_payload(notification) do
+    version_payload(%{
+      id: notification.id,
+      project_id: notification.project_id,
+      message: notification.message,
+      severity: notification.severity,
+      inserted_at: notification.inserted_at,
+      read_at: notification.read_at
     })
   end
 
