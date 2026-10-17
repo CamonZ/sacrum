@@ -2,8 +2,8 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep.Config do
   @moduledoc """
   The closed, versioned `workflow_steps.config` variants.
 
-  `step_type` selects the variant embedded schema; `human_input`, `stop`, and
-  `finish` steps carry a null config. This module also holds the validations
+  `step_type` selects the variant embedded schema; `stop` and `finish` steps
+  carry a null config. This module also holds the validations
   the variants share.
   """
 
@@ -11,7 +11,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep.Config do
 
   require Logger
 
-  alias __MODULE__.{Execute, LlmInference, Route, StructuredInference, WaitChildren}
+  alias __MODULE__.{Execute, HumanInput, LlmInference, Route, StructuredInference, WaitChildren}
 
   @version 1
 
@@ -20,7 +20,8 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep.Config do
     structured_inference: StructuredInference,
     execute: Execute,
     route: Route,
-    wait_children: WaitChildren
+    wait_children: WaitChildren,
+    human_input: HumanInput
   ]
 
   @type t ::
@@ -29,6 +30,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep.Config do
           | Execute.t()
           | Route.t()
           | WaitChildren.t()
+          | HumanInput.t()
           | nil
 
   @doc "The variant embedded schemas keyed by `step_type`."

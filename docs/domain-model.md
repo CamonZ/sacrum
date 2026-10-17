@@ -302,10 +302,17 @@ polymorphic embedded schema whose variant is selected by `stepType`:
 | `execute` | `ExecuteStepConfig` | `script`, `output_schema` (required); server-written `context` on dispatched executions |
 | `route` | `RouteStepConfig` | `route_config` |
 | `wait_children` | `WaitChildrenStepConfig` | `output_schema` (for artifact persistence), `session` (fork directive for child runs) |
-| `human_input`, `stop`, `finish` | — | `config` is `null` |
+| `human_input` | `HumanInputStepConfig` | `instructions` (Liquid template), `artifact` (logical name of the resolving artifact), `output_schema` (all optional) |
+| `stop`, `finish` | — | `config` is `null` |
 
-`human_input` has no defined prompt or response contract yet: its waiting
-execution has a null `config` and its response is not schema-validated.
+When a run parks on a `human_input` step, its waiting execution records the
+config with `instructions` rendered from the same context as an
+`llm_inference` prompt (including `execution.handoff`) plus
+`execution.step_visit_count`: the step's completed executions for the task,
+plus one. `HumanInput.resume/3` validates the response against the waiting
+execution's `output_schema` and rejects a non-conforming one with
+`{:invalid_human_input, reason}`, leaving the execution waiting. A step
+without a config, or without `output_schema`, accepts any response.
 
 ### Execution config
 
@@ -313,9 +320,10 @@ Every `StepExecution` records the step config it ran with in
 `StepExecution.config`, in the same `step_type`-discriminated shape and
 `WorkflowStepConfig` GraphQL union as `WorkflowStep.config`, with templates
 rendered: `llm_inference` stores its rendered `prompt`, `structured_inference`
-its resolved `state`, and `execute` its rendered `script` and complete typed
-`PromptContext` snapshot in `config.context`; other fields are copied as configured, and
-`human_input`, `stop`, and `finish` executions have a null `config`. It is
+its resolved `state`, `human_input` its rendered `instructions`, and `execute`
+its rendered `script` and complete typed `PromptContext` snapshot in
+`config.context`; other fields are copied as configured, and `stop` and
+`finish` executions have a null `config`. It is
 written by the server when the execution is created and cannot be set or
 changed through `createStepExecution`/`updateStepExecution`; an execution
 created through `createStepExecution` with a `stepId` records that step's
@@ -333,7 +341,7 @@ means sending it as `null`. Fields the variant does not declare are rejected
 (`config: $.temperature: is not supported for llm_inference steps`), only
 `version: 1` is accepted, and field errors are reported per embedded field, for
 example `config.route_config: $.rules[0].when.op: ...`. `config` must be null
-for `human_input`, `stop`, and `finish`. The stored JSON also records the
+for `stop` and `finish`. The stored JSON also records the
 variant as `__type__`, which the embed needs to load it.
 
 `route_config` is versioned JSON validated by the workflow-step changeset and
@@ -865,7 +873,7 @@ A step has `step_ref`, `name`, `goal`, `step_type` (default `llm_inference`),
 config object, exactly as `WorkflowStep.config` returns it (see "Step types
 and step configuration"):
 
-- it must be absent or `null` for `human_input`, `stop`, and `finish` steps;
+- it must be absent or `null` for `stop` and `finish` steps;
 - fields the variant does not declare are rejected with
   `is not supported for <step_type> steps`;
 - it is validated against its variant changeset, so a missing
