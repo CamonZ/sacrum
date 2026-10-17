@@ -6,6 +6,9 @@ defmodule Sacrum.Accounts.Artifacts do
   without depending on API resolver modules.
   """
 
+  require Logger
+
+  alias Sacrum.Orchestrator.Routing.HumanInput
   alias Sacrum.Repo
   alias Sacrum.Repo.ArtifactLinks
   alias Sacrum.Repo.Artifacts, as: ArtifactsRepo
@@ -21,22 +24,60 @@ defmodule Sacrum.Accounts.Artifacts do
 
   @doc """
   Create an artifact and attach it to a supported subject.
+
+  Attaching a waiting human_input StepExecution's configured `artifact`
+  resolves that gate in the same transaction: the body must be JSON that
+  satisfies the gate's `output_schema`, otherwise nothing is stored. The
+  resumed TaskRun is scheduled after commit.
   """
   @spec create_and_link(String.t(), String.t(), map(), map()) ::
           {:ok, %{artifact: Artifact.t(), link: ArtifactLink.t()}}
           | {:error, Ecto.Changeset.t()}
-          | {:error, :not_found | :artifact_scope_mismatch | :subject_scope_mismatch}
+          | {:error,
+             :not_found
+             | :artifact_scope_mismatch
+             | :subject_scope_mismatch
+             | :human_input_execution_not_waiting}
+          | {:error, {:invalid_human_input_json | :invalid_human_input, term()}}
   def create_and_link(user_id, project_id, artifact_attrs, link_attrs)
       when is_binary(user_id) and is_binary(project_id) and is_map(artifact_attrs) and
              is_map(link_attrs) do
-    Repo.transaction(fn ->
-      with {:ok, artifact} <- ArtifactsRepo.insert(user_id, project_id, artifact_attrs),
-           {:ok, link} <- ArtifactLinks.insert(user_id, project_id, artifact.id, link_attrs) do
-        %{artifact: artifact_with_link(artifact, link), link: link}
-      else
-        {:error, reason} -> Repo.rollback(reason)
-      end
-    end)
+    case Repo.transaction(fn ->
+           insert_and_link(user_id, project_id, artifact_attrs, link_attrs)
+         end) do
+      {:ok, {result, resumed}} ->
+        schedule_resumed_run(resumed)
+        {:ok, result}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp insert_and_link(user_id, project_id, artifact_attrs, link_attrs) do
+    with {:ok, artifact} <- ArtifactsRepo.insert(user_id, project_id, artifact_attrs),
+         {:ok, link} <- ArtifactLinks.insert(user_id, project_id, artifact.id, link_attrs),
+         {:ok, resumed} <- HumanInput.complete_from_artifact(user_id, link, artifact.body) do
+      {%{artifact: artifact_with_link(artifact, link), link: link}, resumed}
+    else
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
+  # The gate is resolved and its TaskRun durably queued, so a scheduling
+  # failure does not fail the attach.
+  defp schedule_resumed_run(nil), do: :ok
+
+  defp schedule_resumed_run(%{execution: execution, task_run: task_run}) do
+    case HumanInput.schedule_resumed_run(execution.task_id, task_run.id) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error(
+          "[Artifacts] Resolved human_input execution=#{execution.id} but scheduling failed: #{inspect(reason)}"
+        )
+    end
   end
 
   @doc """

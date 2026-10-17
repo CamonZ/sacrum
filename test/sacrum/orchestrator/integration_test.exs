@@ -216,6 +216,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
         config: %{
           "instructions" =>
             "Visit {{ execution.step_visit_count }}: {{ execution.handoff.notes }}",
+          "artifact" => "resolution",
           "output_schema" => @review_schema
         }
       })
@@ -747,6 +748,250 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
       assert [task_run] = Repo.all(from(run in TaskRun, where: run.task_id == ^task.id))
       assert task_run.status == :completed
       assert task_run.outcome_kind == "completed"
+    end
+  end
+
+  describe "human_input resolution by artifact attach" do
+    defp setup_artifact_gate(opts \\ []) do
+      setup_human_input_workflow(
+        Keyword.merge(
+          [
+            human_config: %{"artifact" => "resolution", "output_schema" => @approval_schema}
+          ],
+          opts
+        )
+      )
+    end
+
+    defp park_at_gate(%{user: user, task: task}) do
+      pid = start_orchestrator(task, user)
+      wait_for_exit(pid)
+      [waiting_execution] = executions_for_task(task.id)
+      waiting_execution
+    end
+
+    defp attach_artifact(user, project, subject_type, subject_id, logical_name, body) do
+      Accounts.Artifacts.create_and_link(
+        user.id,
+        project.id,
+        %{filename: "#{logical_name}.json", body: body},
+        %{subject_type: subject_type, subject_id: subject_id, logical_name: logical_name}
+      )
+    end
+
+    defp artifact_count do
+      Repo.aggregate(Sacrum.Repo.Schemas.Artifact, :count)
+    end
+
+    defp assert_still_waiting(task, waiting_execution) do
+      reloaded_execution = Repo.get!(StepExecution, waiting_execution.id)
+      assert reloaded_execution.status == "waiting"
+      assert reloaded_execution.output == nil
+
+      task_run = Repo.one!(from(run in TaskRun, where: run.task_id == ^task.id))
+      assert task_run.status == :waiting
+      assert task_run.latest_step_execution_id == waiting_execution.id
+    end
+
+    test "a conforming artifact completes the execution and advances the TaskRun" do
+      %{user: user, project: project, task: task, next_step: next_step} =
+        context = setup_artifact_gate()
+
+      subscribe_daemon(task)
+      waiting_execution = park_at_gate(context)
+      task_run = Repo.one!(from(run in TaskRun, where: run.task_id == ^task.id))
+
+      assert {:ok, %{artifact: artifact, link: link}} =
+               attach_artifact(
+                 user,
+                 project,
+                 "step_execution",
+                 waiting_execution.id,
+                 "resolution",
+                 ~s({"approved": true})
+               )
+
+      assert artifact.logical_name == "resolution"
+      assert link.subject_id == waiting_execution.id
+
+      wait_for_execution_count(task.id, 2)
+      [completed_gate, next_execution] = executions_for_task(task.id)
+      assert completed_gate.id == waiting_execution.id
+      assert completed_gate.status == "completed"
+      assert completed_gate.output == ~s({"approved":true})
+
+      assert next_execution.step_id == next_step.id
+      assert next_execution.task_run_id == task_run.id
+
+      assert_run_step_for(next_execution.id, "after_human_input")
+
+      assert {:ok, :stopped} = Orchestrator.stop(task.id)
+      wait_for_registry_clear(task.id)
+    end
+
+    test "a non-conforming artifact is rejected with schema errors and not stored" do
+      %{user: user, project: project, task: task} = context = setup_artifact_gate()
+      waiting_execution = park_at_gate(context)
+      count_before = artifact_count()
+
+      assert {:error, {:invalid_human_input, {:validation_failed, [violation]}}} =
+               attach_artifact(
+                 user,
+                 project,
+                 "step_execution",
+                 waiting_execution.id,
+                 "resolution",
+                 ~s({"approved": "yes"})
+               )
+
+      assert violation =~ "#/approved"
+      assert artifact_count() == count_before
+      assert_still_waiting(task, waiting_execution)
+    end
+
+    test "a body that is not JSON is rejected and not stored" do
+      %{user: user, project: project, task: task} = context = setup_artifact_gate()
+      waiting_execution = park_at_gate(context)
+      count_before = artifact_count()
+
+      assert {:error, {:invalid_human_input_json, %Jason.DecodeError{}}} =
+               attach_artifact(
+                 user,
+                 project,
+                 "step_execution",
+                 waiting_execution.id,
+                 "resolution",
+                 "approved"
+               )
+
+      assert artifact_count() == count_before
+      assert_still_waiting(task, waiting_execution)
+    end
+
+    test "attaching to a gate that already completed is a not-waiting conflict" do
+      %{user: user, project: project, task: task} =
+        context = setup_artifact_gate(next_final?: true)
+
+      waiting_execution = park_at_gate(context)
+
+      assert {:ok, _completed} =
+               HumanInput.resume(user.id, waiting_execution.id, %{"approved" => true})
+
+      wait_until(
+        fn -> Repo.get!(Sacrum.Repo.Schemas.Task, task.id).completed_at != nil end,
+        "task completion after human_input resume"
+      )
+
+      count_before = artifact_count()
+
+      assert {:error, :human_input_execution_not_waiting} =
+               attach_artifact(
+                 user,
+                 project,
+                 "step_execution",
+                 waiting_execution.id,
+                 "resolution",
+                 ~s({"approved": false})
+               )
+
+      assert artifact_count() == count_before
+      assert Repo.get!(StepExecution, waiting_execution.id).output == ~s({"approved":true})
+    end
+
+    test "attaching to a gate whose run was stopped is a not-waiting conflict" do
+      %{user: user, project: project, task: task} = context = setup_artifact_gate()
+      waiting_execution = park_at_gate(context)
+
+      assert {:ok, _} = Orchestrator.stop(task.id)
+      assert Repo.get!(StepExecution, waiting_execution.id).status == "cancelled"
+
+      assert {:error, :human_input_execution_not_waiting} =
+               attach_artifact(
+                 user,
+                 project,
+                 "step_execution",
+                 waiting_execution.id,
+                 "resolution",
+                 ~s({"approved": true})
+               )
+    end
+
+    test "a loop-back gate is resolved by an artifact attached to the new execution only" do
+      %{user: user, task: task, human_step: human_step} = setup_human_input_review_loop()
+
+      project = Repo.get!(Sacrum.Repo.Schemas.Project, task.project_id)
+      pid = start_orchestrator(task, user)
+      wait_for_exit(pid)
+      [first_gate] = executions_for_task(task.id)
+
+      assert {:ok, _} =
+               attach_artifact(
+                 user,
+                 project,
+                 "step_execution",
+                 first_gate.id,
+                 "resolution",
+                 ~s({"decision": "revise", "notes": "tighten the scope"})
+               )
+
+      wait_for_execution_count(task.id, 3)
+      wait_for_registry_clear(task.id)
+      [_first_gate, _route, second_gate] = executions_for_task(task.id)
+      assert second_gate.status == "waiting"
+      assert second_gate.handoff == %{"notes" => "tighten the scope"}
+
+      assert {:ok, _} =
+               attach_artifact(
+                 user,
+                 project,
+                 "step_execution",
+                 second_gate.id,
+                 "resolution",
+                 ~s({"decision": "done", "notes": "looks good"})
+               )
+
+      wait_until(
+        fn -> Repo.get!(Sacrum.Repo.Schemas.Task, task.id).completed_at != nil end,
+        "task completion after the second gate"
+      )
+
+      gates =
+        task.id
+        |> executions_for_task()
+        |> Enum.filter(&(&1.step_id == human_step.id))
+
+      assert Enum.map(gates, &{&1.id, &1.status, Jason.decode!(&1.output)["decision"]}) == [
+               {first_gate.id, "completed", "revise"},
+               {second_gate.id, "completed", "done"}
+             ]
+    end
+
+    test "artifacts with another logical name or subject do not resolve the gate" do
+      %{user: user, project: project, task: task} = context = setup_artifact_gate()
+      waiting_execution = park_at_gate(context)
+
+      assert {:ok, _} =
+               attach_artifact(
+                 user,
+                 project,
+                 "step_execution",
+                 waiting_execution.id,
+                 "notes",
+                 "not json"
+               )
+
+      assert {:ok, _} =
+               attach_artifact(
+                 user,
+                 project,
+                 "task",
+                 task.id,
+                 "resolution",
+                 ~s({"approved": true})
+               )
+
+      assert_still_waiting(task, waiting_execution)
+      assert Registry.lookup(TaskRegistry, task.id) == []
     end
   end
 

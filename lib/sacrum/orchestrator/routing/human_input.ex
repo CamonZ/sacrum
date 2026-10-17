@@ -4,9 +4,11 @@ defmodule Sacrum.Orchestrator.Routing.HumanInput do
 
   A `human_input` step parks the active TaskRun with a waiting StepExecution
   whose config holds the step config with its `instructions` rendered. The
-  response is supplied later through `resume/3`, validated against that
-  config's `output_schema`, stored on that StepExecution, and then the same
-  TaskRun is scheduled to continue through the normal workflow transition path.
+  response is supplied later through `resume/3`, or by attaching the config's
+  `artifact` to that StepExecution (`complete_from_artifact/3`), validated
+  against that config's `output_schema`, stored on that StepExecution, and then
+  the same TaskRun is scheduled to continue through the normal workflow
+  transition path.
   """
 
   import Ecto.Query
@@ -28,7 +30,7 @@ defmodule Sacrum.Orchestrator.Routing.HumanInput do
 
   alias Sacrum.Orchestrator.TaskRuns.{Lookup, StateTransitions}
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.{StepExecution, Task, TaskRun, WorkflowStep}
+  alias Sacrum.Repo.Schemas.{ArtifactLink, StepExecution, Task, TaskRun, WorkflowStep}
   alias Sacrum.Repo.Schemas.WorkflowStep.Config
   alias Sacrum.Tasks.Status
 
@@ -72,18 +74,108 @@ defmodule Sacrum.Orchestrator.Routing.HumanInput do
   @spec resume(binary(), binary(), term()) :: resume_result()
   def resume(user_id, execution_id, output)
       when is_binary(user_id) and is_binary(execution_id) do
-    with {:ok, execution} <- fetch_resume_execution(user_id, execution_id),
-         {:ok, output_schema} <- human_input_output_schema(execution),
-         {:ok, encoded_output} <-
-           validate_and_encode_output(output, output_schema),
-         {:ok, %{execution: completed, task_run: task_run}} <-
-           Accounts.StepExecutions.complete_waiting_human_input(
-             user_id,
-             execution_id,
-             encoded_output
-           ),
+    with {:ok, %{execution: completed, task_run: task_run}} <-
+           complete(user_id, execution_id, output),
          :ok <- schedule_resumed_run(completed.task_id, task_run.id) do
       {:ok, completed}
+    end
+  end
+
+  @doc """
+  Resolves a gate from an artifact link inserted in the caller's transaction.
+
+  A link resolves a gate when it targets a human_input StepExecution under the
+  logical name that execution's config names as its `artifact`. The body is
+  decoded as JSON and completes the execution as `resume/3` would, without
+  scheduling: the caller schedules with `schedule_resumed_run/2` after commit.
+  Returns `{:ok, nil}` for links that do not target a gate.
+  """
+  @spec complete_from_artifact(binary(), ArtifactLink.t(), String.t()) ::
+          {:ok, %{execution: StepExecution.t(), task_run: TaskRun.t()} | nil}
+          | {:error, term()}
+  def complete_from_artifact(
+        user_id,
+        %ArtifactLink{subject_type: "step_execution", logical_name: logical_name} = link,
+        body
+      )
+      when is_binary(user_id) and is_binary(logical_name) and is_binary(body) do
+    case fetch_locked_gate_execution(user_id, link) do
+      nil ->
+        {:ok, nil}
+
+      execution ->
+        with :ok <- ensure_awaiting_response(execution),
+             {:ok, output} <- decode_artifact_body(body) do
+          complete(user_id, execution.id, output)
+        end
+    end
+  end
+
+  def complete_from_artifact(_user_id, %ArtifactLink{}, _body), do: {:ok, nil}
+
+  @doc """
+  Starts the TaskRun a completed human_input execution queued.
+  """
+  @spec schedule_resumed_run(binary(), binary()) :: :ok | {:error, term()}
+  def schedule_resumed_run(task_id, task_run_id) do
+    case Scheduler.schedule_task_run(task_id, task_run_id) do
+      :ok -> :ok
+      {:error, :orchestrator_already_running} -> :ok
+      {:error, reason} -> {:error, {:resume_schedule_failed, reason, task_run_id}}
+    end
+  end
+
+  # Validates the response and completes the waiting execution, queueing its
+  # TaskRun. Joins the caller's transaction when there is one.
+  @spec complete(binary(), binary(), term()) ::
+          {:ok, %{execution: StepExecution.t(), task_run: TaskRun.t()}} | {:error, term()}
+  defp complete(user_id, execution_id, output) do
+    with {:ok, execution} <- fetch_resume_execution(user_id, execution_id),
+         {:ok, output_schema} <- human_input_output_schema(execution),
+         {:ok, encoded_output} <- validate_and_encode_output(output, output_schema) do
+      Accounts.StepExecutions.complete_waiting_human_input(user_id, execution_id, encoded_output)
+    end
+  end
+
+  # The gate's config is read from the execution, so a step edited after the
+  # run parked does not change which artifact resolves it.
+  @spec fetch_locked_gate_execution(binary(), ArtifactLink.t()) :: StepExecution.t() | nil
+  defp fetch_locked_gate_execution(user_id, %ArtifactLink{} = link) do
+    query =
+      from(e in StepExecution,
+        where:
+          e.user_id == ^user_id and e.project_id == ^link.project_id and
+            e.id == ^link.subject_id and e.step_type == ^:human_input,
+        lock: "FOR UPDATE"
+      )
+
+    with %StepExecution{} = execution <- Repo.one(query),
+         true <- WorkflowStep.config_value(execution, :artifact) == link.logical_name do
+      Repo.preload(execution, :task_run)
+    else
+      _not_a_gate -> nil
+    end
+  end
+
+  # The run must still be parked on this execution: a stopped run cancels it,
+  # and a completed one has already consumed a response.
+  @spec ensure_awaiting_response(StepExecution.t()) ::
+          :ok | {:error, :human_input_execution_not_waiting}
+  defp ensure_awaiting_response(%StepExecution{
+         id: id,
+         status: "waiting",
+         task_run: %TaskRun{status: :waiting, latest_step_execution_id: id}
+       }),
+       do: :ok
+
+  defp ensure_awaiting_response(%StepExecution{}),
+    do: {:error, :human_input_execution_not_waiting}
+
+  @spec decode_artifact_body(String.t()) :: {:ok, term()} | {:error, term()}
+  defp decode_artifact_body(body) do
+    case Jason.decode(body) do
+      {:ok, decoded} -> {:ok, decoded}
+      {:error, reason} -> {:error, {:invalid_human_input_json, reason}}
     end
   end
 
@@ -136,15 +228,6 @@ defmodule Sacrum.Orchestrator.Routing.HumanInput do
     case OutputValidator.validate_output(output, output_schema) do
       :ok -> :ok
       {:error, reason} -> {:error, {:invalid_human_input, reason}}
-    end
-  end
-
-  @spec schedule_resumed_run(binary(), binary()) :: :ok | {:error, term()}
-  defp schedule_resumed_run(task_id, task_run_id) do
-    case Scheduler.schedule_task_run(task_id, task_run_id) do
-      :ok -> :ok
-      {:error, :orchestrator_already_running} -> :ok
-      {:error, reason} -> {:error, {:resume_schedule_failed, reason, task_run_id}}
     end
   end
 

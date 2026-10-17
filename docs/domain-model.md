@@ -160,7 +160,7 @@ Queries and mutations are grouped by resource in `lib/sacrum_web/graphql/types/`
 | `updateArtifact` | `id!`, `filename`, `body`, `subject_type`, `subject_id`, `logical_name`, `metadata` | `:artifact` |
 | `deleteArtifact` | `id!` | `:artifact` |
 
-`createArtifact` creates the file in the authenticated user's project and atomically attaches it to a subject. `logicalName` and `metadata` belong to that link, not the artifact file. When `subject_type` and `subject_id` are omitted, the link targets the project for backward compatibility; when supplied together, the destination may be a project, task, task section, workflow, task run, or step execution in the same user and project scope. Requests for a project or destination outside the caller's scope fail without persisting either row.
+`createArtifact` creates the file in the authenticated user's project and atomically attaches it to a subject. `logicalName` and `metadata` belong to that link, not the artifact file. When `subject_type` and `subject_id` are omitted, the link targets the project for backward compatibility; when supplied together, the destination may be a project, task, task section, workflow, task run, or step execution in the same user and project scope. Requests for a project or destination outside the caller's scope fail without persisting either row. Attaching a waiting `human_input` execution's configured artifact resolves that gate (see Step types and step configuration); errors carry a `code` of `invalid_human_input_json`, `invalid_human_input` (one per schema violation), or `human_input_execution_not_waiting`.
 
 `updateArtifact` changes `filename`, `body`, or both. Supplying `subject_type` and `subject_id` together replaces the artifact's sole link while preserving its metadata and logical name unless replacement values are supplied. Supplying only `logicalName` or `metadata` updates the sole link. The target must belong to the artifact's existing user and project; ownership and project scope never move. Invalid targets, metadata, or duplicate names roll back file edits and leave the original link intact. Artifacts with multiple links can still update file fields, but attachment replacement or link-field updates are rejected as ambiguous.
 
@@ -313,6 +313,15 @@ plus one. `HumanInput.resume/3` validates the response against the waiting
 execution's `output_schema` and rejects a non-conforming one with
 `{:invalid_human_input, reason}`, leaving the execution waiting. A step
 without a config, or without `output_schema`, accepts any response.
+
+Attaching an artifact to the waiting execution under the config's `artifact`
+logical name is the client-facing way to respond: `create_and_link/4` decodes
+the body as JSON and completes the execution through the same validation in
+the artifact's transaction, then schedules the TaskRun after commit. A body
+that is not JSON (`{:invalid_human_input_json, reason}`) or violates the schema
+rolls back the artifact. Attaching to an execution that is no longer the one
+its run is parked on fails with `:human_input_execution_not_waiting`. Other
+logical names and subjects are stored without touching the gate.
 
 ### Execution config
 
