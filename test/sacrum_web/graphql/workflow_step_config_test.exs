@@ -9,6 +9,7 @@ defmodule SacrumWeb.Graphql.WorkflowStepConfigTest do
     __typename
     ... on LlmInferenceStepConfig { version prompt agents skills agentConfig outputSchema }
     ... on WaitChildrenStepConfig { version outputSchema session }
+    ... on HumanInputStepConfig { version instructions artifact outputSchema }
   }
   """
 
@@ -326,6 +327,50 @@ defmodule SacrumWeb.Graphql.WorkflowStepConfigTest do
              retyped["errors"]
   end
 
+  test "human_input create/update round-trips instructions, artifact, and output schema",
+       %{conn: conn, user: user, workflow: workflow} do
+    schema = %{"type" => "object", "properties" => %{"approved" => %{"type" => "boolean"}}}
+
+    config = %{
+      "instructions" => "Approve {{ task.title }}",
+      "artifact" => "approval",
+      "output_schema" => schema
+    }
+
+    created =
+      conn
+      |> authenticate(user)
+      |> graphql("""
+      mutation { createWorkflowStep(workflowId: "#{workflow.id}", name: "gate", stepType: "human_input", harness: "codex", config: #{json_arg(config)}) { id #{@config_fields} } }
+      """)
+      |> json_response(200)
+
+    refute created["errors"]
+    step = created["data"]["createWorkflowStep"]
+
+    assert step["config"] == %{
+             "__typename" => "HumanInputStepConfig",
+             "version" => 1,
+             "instructions" => "Approve {{ task.title }}",
+             "artifact" => "approval",
+             "outputSchema" => schema
+           }
+
+    updated =
+      conn
+      |> recycle()
+      |> authenticate(user)
+      |> graphql("""
+      mutation { updateWorkflowStep(id: "#{step["id"]}", config: #{json_arg(%{"artifact" => "sign_off"})}) { #{@config_fields} } }
+      """)
+      |> json_response(200)
+
+    refute updated["errors"]
+
+    assert %{"artifact" => "sign_off", "instructions" => "Approve {{ task.title }}"} =
+             updated["data"]["updateWorkflowStep"]["config"]
+  end
+
   test "config errors are path-aware and null-config steps expose null",
        %{conn: conn, user: user, workflow: workflow} do
     rejected =
@@ -352,14 +397,14 @@ defmodule SacrumWeb.Graphql.WorkflowStepConfigTest do
       |> authenticate(user)
       |> graphql("""
         mutation {
-          createWorkflowStep(workflowId: "#{workflow.id}", name: "Gate", stepType: "human_input", harness: "codex") {
+          createWorkflowStep(workflowId: "#{workflow.id}", name: "Gate", stepType: "finish", harness: "codex") {
             stepType config { __typename }
           }
         }
       """)
       |> json_response(200)
 
-    assert gate["data"]["createWorkflowStep"] == %{"stepType" => "human_input", "config" => nil}
+    assert gate["data"]["createWorkflowStep"] == %{"stepType" => "finish", "config" => nil}
   end
 
   defp graphql(conn, query), do: post(conn, "/graphql", %{"query" => query})

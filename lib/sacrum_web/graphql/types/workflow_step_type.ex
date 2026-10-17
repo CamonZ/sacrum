@@ -18,7 +18,8 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
     Config.StructuredInference => :structured_inference_step_config,
     Config.Execute => :execute_step_config,
     Config.Route => :route_step_config,
-    Config.WaitChildren => :wait_children_step_config
+    Config.WaitChildren => :wait_children_step_config,
+    Config.HumanInput => :human_input_step_config
   }
   @empty_pipeline_counts Map.put(@empty_task_counts, :active, 0)
 
@@ -39,9 +40,7 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
     end
 
     field :config, :workflow_step_config do
-      description(
-        "stepType-specific configuration; null for human_input, stop, and finish steps."
-      )
+      description("stepType-specific configuration; null for stop and finish steps.")
     end
 
     field :persistence_options, :json
@@ -126,7 +125,8 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
       :structured_inference_step_config,
       :execute_step_config,
       :route_step_config,
-      :wait_children_step_config
+      :wait_children_step_config,
+      :human_input_step_config
     ])
 
     resolve_type(fn %module{}, _resolution -> Map.fetch!(@config_types, module) end)
@@ -172,6 +172,22 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
       description(
         "Fork directive applied to every child run: {mode: fork, step_id} naming an llm_inference step of this workflow."
       )
+    end
+  end
+
+  object :human_input_step_config do
+    field :version, non_null(:integer)
+
+    field :instructions, :string do
+      description("Liquid template shown to the human; rendered on a waiting execution's config.")
+    end
+
+    field :artifact, :string do
+      description("Logical name of the artifact that resolves the gate.")
+    end
+
+    field :output_schema, :json do
+      description("JSON Schema the human response must satisfy; null accepts any response.")
     end
   end
 

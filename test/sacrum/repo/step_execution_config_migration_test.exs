@@ -68,7 +68,7 @@ defmodule Sacrum.Repo.StepExecutionConfigMigrationTest do
 
     assert %Config.LlmInference{prompt: "Do Legacy", agents: ["dev"]} = config(llm)
     assert config(wait) == ctx.wait.config
-    assert config(human) == nil
+    assert config(human) == ctx.human.config
     assert %Config.LlmInference{prompt: "Old", agents: [], agent_config: %{}} = config(orphan)
 
     migrate(:down, @version)
@@ -79,7 +79,7 @@ defmodule Sacrum.Repo.StepExecutionConfigMigrationTest do
                [Enum.map([llm, wait, human, orphan], &Ecto.UUID.dump!/1)]
              )
 
-    # human_input rendered an empty prompt; with no config it rolls back as null.
+    # human_input rendered an empty prompt; its config has no prompt, so it rolls back as null.
     assert rows == [[nil], ["Old"], ["Do Legacy"], [nil]]
 
     migrate(:up)

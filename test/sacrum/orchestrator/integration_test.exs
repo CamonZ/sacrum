@@ -22,8 +22,24 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
   alias Sacrum.Orchestrator.TaskRegistry
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{StepExecution, TaskRun}
+  alias Sacrum.Repo.Schemas.WorkflowStep.Config.HumanInput, as: HumanInputConfig
 
   # ===== Setup helpers =====
+
+  @approval_schema %{
+    "type" => "object",
+    "properties" => %{"approved" => %{"type" => "boolean"}},
+    "required" => ["approved"]
+  }
+
+  @review_schema %{
+    "type" => "object",
+    "properties" => %{
+      "decision" => %{"type" => "string", "enum" => ["revise", "done"]},
+      "notes" => %{"type" => "string"}
+    },
+    "required" => ["decision", "notes"]
+  }
 
   @default_config %{
     "agents" => ["test"],
@@ -142,6 +158,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
   defp setup_human_input_workflow(opts) do
     next_final? = Keyword.get(opts, :next_final?, false)
     next_prompt = Keyword.get(opts, :next_prompt, "After human input")
+    human_config = Keyword.get(opts, :human_config, %{})
 
     user = create_user()
     project = create_project(user)
@@ -151,7 +168,8 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
       create_step(user, workflow, %{
         name: "human_input",
         step_order: 1,
-        step_type: "human_input"
+        step_type: "human_input",
+        config: human_config
       })
 
     next_step =
@@ -183,6 +201,65 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
       next_step: next_step,
       task: task
     }
+  end
+
+  defp setup_human_input_review_loop do
+    user = create_user()
+    project = create_project(user)
+    workflow = create_workflow(user, project)
+
+    human_step =
+      create_step(user, workflow, %{
+        name: "review",
+        step_order: 1,
+        step_type: "human_input",
+        config: %{
+          "instructions" =>
+            "Visit {{ execution.step_visit_count }}: {{ execution.handoff.notes }}",
+          "output_schema" => @review_schema
+        }
+      })
+
+    finish_step =
+      create_step(user, workflow, %{name: "done", step_order: 3, step_type: "finish"})
+
+    route_step =
+      create_step(user, workflow, %{
+        name: "triage",
+        step_order: 2,
+        step_type: "route",
+        config: %{
+          "route_config" => %{
+            "version" => 1,
+            "match_policy" => "exactly_one",
+            "rules" => [
+              %{
+                "id" => "revise",
+                "when" => %{
+                  "ref" => "previous_output.decision",
+                  "op" => "eq",
+                  "value" => "revise"
+                },
+                "transition" => %{"type" => "intra_workflow", "step_id" => human_step.id},
+                "handoff" => %{"notes" => "{{ previous_output.notes }}"}
+              }
+            ],
+            "default" => %{
+              "transition" => %{"type" => "intra_workflow", "step_id" => finish_step.id}
+            }
+          }
+        }
+      })
+
+    create_transition(user, human_step, route_step)
+    create_transition(user, route_step, human_step)
+    create_transition(user, route_step, finish_step)
+    {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: human_step.id})
+
+    task = create_task(user, project)
+    {:ok, task} = Sacrum.Repo.TaskWorkflows.assign_workflow(task, workflow)
+
+    %{user: user, task: task, human_step: human_step}
   end
 
   defp setup_stop_boundary_workflow do
@@ -486,7 +563,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
                  step_type: :human_input,
                  status: "waiting",
                  output: nil,
-                 config: nil
+                 config: %HumanInputConfig{instructions: nil, output_schema: nil}
                } = execution
              ] = executions_for_task(task.id)
 
@@ -547,6 +624,77 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
 
       assert {:ok, :stopped} = Orchestrator.stop(task.id)
       wait_for_registry_clear(task.id)
+    end
+
+    test "the waiting execution holds the rendered instructions, artifact, and output schema" do
+      %{user: user, task: task} =
+        setup_human_input_workflow(
+          next_final?: true,
+          human_config: %{
+            "instructions" => "Approve {{ task.title }} (visit {{ execution.step_visit_count }})",
+            "artifact" => "approval",
+            "output_schema" => @approval_schema
+          }
+        )
+
+      pid = start_orchestrator(task, user)
+      wait_for_exit(pid)
+
+      assert [%StepExecution{status: "waiting", config: config}] = executions_for_task(task.id)
+
+      assert config == %HumanInputConfig{
+               version: 1,
+               instructions: "Approve #{task.title} (visit 1)",
+               artifact: "approval",
+               output_schema: @approval_schema
+             }
+    end
+
+    test "a non-conforming response is rejected and the execution stays waiting" do
+      %{user: user, task: task} =
+        setup_human_input_workflow(
+          next_final?: true,
+          human_config: %{"output_schema" => @approval_schema}
+        )
+
+      pid = start_orchestrator(task, user)
+      wait_for_exit(pid)
+      [waiting_execution] = executions_for_task(task.id)
+
+      assert {:error, {:invalid_human_input, _reason}} =
+               HumanInput.resume(user.id, waiting_execution.id, %{"approved" => "yes"})
+
+      reloaded_execution = Repo.get!(StepExecution, waiting_execution.id)
+      assert reloaded_execution.status == "waiting"
+      assert reloaded_execution.output == nil
+
+      task_run = Repo.one!(from(run in TaskRun, where: run.task_id == ^task.id))
+      assert task_run.status == :waiting
+      assert task_run.latest_step_execution_id == waiting_execution.id
+    end
+
+    test "a route looping back to the gate renders its handoff and visit count" do
+      %{user: user, task: task, human_step: human_step} = setup_human_input_review_loop()
+
+      pid = start_orchestrator(task, user)
+      wait_for_exit(pid)
+      [first_gate] = executions_for_task(task.id)
+      assert first_gate.config.instructions == "Visit 1: "
+
+      assert {:ok, _completed} =
+               HumanInput.resume(user.id, first_gate.id, %{
+                 "decision" => "revise",
+                 "notes" => "tighten the scope"
+               })
+
+      wait_for_execution_count(task.id, 3)
+      wait_for_registry_clear(task.id)
+
+      assert [_first_gate, _route, second_gate] = executions_for_task(task.id)
+      assert second_gate.step_id == human_step.id
+      assert second_gate.status == "waiting"
+      assert second_gate.handoff == %{"notes" => "tighten the scope"}
+      assert second_gate.config.instructions == "Visit 2: tighten the scope"
     end
 
     test "resume from another user is rejected and leaves the run waiting" do

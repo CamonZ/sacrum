@@ -111,7 +111,7 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
 
     field :config, :workflow_step_config do
       description(
-        "The step config as this execution used it, with templates rendered; null for human_input, stop, and finish executions."
+        "The step config as this execution used it, with templates rendered; null for stop and finish executions."
       )
     end
 

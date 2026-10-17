@@ -453,11 +453,12 @@ currentStep {
     ... on ExecuteStepConfig { version script context outputSchema }
     ... on RouteStepConfig { version routeConfig }
     ... on WaitChildrenStepConfig { version outputSchema }
+    ... on HumanInputStepConfig { version instructions artifact outputSchema }
   }
 }
 ```
 
-`config` is `null` for `human_input`, `stop`, and `finish`. The former flat
+`config` is `null` for `stop` and `finish`. The former flat
 `prompt`, `outputSchema`, `agents`, `skills`, `agentConfig`, and `routeConfig`
 fields and mutation arguments (and `clearOutputSchema`) are gone. Writes send
 `config` (snake_case JSON keys); updates change only the fields sent, and
@@ -673,7 +674,7 @@ Clients may display a waiting human gate when:
 
 Recommended v1 behavior:
 
-- Show the task, current step, execution ID, and run ID. `human_input` steps have a null `config`, so there is no prompt or output schema to display until their semantics are defined.
+- Show the task, current step, execution ID, and run ID, plus the waiting execution's `config` (`HumanInputStepConfig`): the rendered `instructions`, the `artifact` that resolves the gate, and the `outputSchema` the response must satisfy. Any of them may be null.
 - Do not render an Approve/Reject/Submit action yet.
 - Allow Stop if `runControls.stoppable == true`.
 - Link the future work to the platform discovery ticket `ca564fec` and GUI research ticket `8f2b4c7c`.

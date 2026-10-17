@@ -45,6 +45,9 @@ defmodule Sacrum.Repo.Schemas.WorkflowStepConfigTest do
 
       assert get_field(create(%{step_type: "route", config: %{}}), :config) ==
                %Config.Route{version: 1, route_config: nil}
+
+      assert get_field(create(%{step_type: "human_input"}), :config) ==
+               %Config.HumanInput{version: 1}
     end
 
     test "requires an explicit harness" do
@@ -94,7 +97,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStepConfigTest do
     end
 
     test "rejects any config on null-config steps" do
-      for step_type <- ["human_input", "stop", "finish"], config <- [%{}, %{"version" => 1}] do
+      for step_type <- ["stop", "finish"], config <- [%{}, %{"version" => 1}] do
         changeset = create(%{step_type: step_type, config: config})
         assert %{config: ["must be null for #{step_type} steps"]} == errors_on(changeset)
       end
@@ -119,6 +122,49 @@ defmodule Sacrum.Repo.Schemas.WorkflowStepConfigTest do
                    config: %{"route_config" => Map.put(@route_config, "version", 2)}
                  })
                )
+    end
+  end
+
+  describe "human_input" do
+    test "casts instructions, artifact, and output schema" do
+      schema = %{"type" => "object", "properties" => %{"approved" => %{"type" => "boolean"}}}
+
+      config = %{
+        "instructions" => "Review {{ task.title }}",
+        "artifact" => "review",
+        "output_schema" => schema
+      }
+
+      changeset = create(%{step_type: "human_input", config: config})
+
+      assert changeset.valid?
+
+      assert get_field(changeset, :config) == %Config.HumanInput{
+               version: 1,
+               instructions: "Review {{ task.title }}",
+               artifact: "review",
+               output_schema: schema
+             }
+
+      assert WorkflowStep.output_schema(apply_changes(changeset)) == schema
+    end
+
+    test "rejects invalid schemas, long artifact names, and undeclared keys" do
+      assert %{config: %{output_schema: ["must be a valid JSON Schema"]}} =
+               errors_on(
+                 create(%{step_type: "human_input", config: %{"output_schema" => %{"type" => 1}}})
+               )
+
+      assert %{config: %{artifact: [_message]}} =
+               errors_on(
+                 create(%{
+                   step_type: "human_input",
+                   config: %{"artifact" => String.duplicate("a", 256)}
+                 })
+               )
+
+      assert %{config: ["$.prompt: is not supported for human_input steps"]} =
+               errors_on(create(%{step_type: "human_input", config: %{"prompt" => "Go"}}))
     end
   end
 

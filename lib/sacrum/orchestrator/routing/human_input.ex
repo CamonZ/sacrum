@@ -2,26 +2,34 @@ defmodule Sacrum.Orchestrator.Routing.HumanInput do
   @moduledoc """
   Handles generic human-response workflow steps.
 
-  A `human_input` step parks the active TaskRun with a waiting StepExecution.
-  The response is supplied later through `resume/3`, validated against the
-  step output schema, stored on that StepExecution, and then the same TaskRun is
-  scheduled to continue through the normal workflow transition path.
+  A `human_input` step parks the active TaskRun with a waiting StepExecution
+  whose config holds the step config with its `instructions` rendered. The
+  response is supplied later through `resume/3`, validated against that
+  config's `output_schema`, stored on that StepExecution, and then the same
+  TaskRun is scheduled to continue through the normal workflow transition path.
   """
+
+  import Ecto.Query
 
   require Logger
 
   alias Sacrum.Accounts
 
   alias Sacrum.Orchestrator.{
+    ExecutionConfig,
+    ExecutionHistory,
     ExecutionPool,
     FSMData,
     OutputValidator,
+    PromptContext,
+    PromptRenderer,
     Scheduler
   }
 
   alias Sacrum.Orchestrator.TaskRuns.{Lookup, StateTransitions}
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{StepExecution, Task, TaskRun, WorkflowStep}
+  alias Sacrum.Repo.Schemas.WorkflowStep.Config
   alias Sacrum.Tasks.Status
 
   @type resume_result :: {:ok, StepExecution.t()} | {:error, term()}
@@ -34,7 +42,8 @@ defmodule Sacrum.Orchestrator.Routing.HumanInput do
 
     with {:ok, task_run} <-
            Lookup.fetch_for_task(data.user_id, data.project_id, task.id, data.task_run_id),
-         {:ok, %{execution: execution}} <- enter_waiting_state(data, task, step, task_run) do
+         {:ok, config} <- render_config(data, task, step, task_run),
+         {:ok, %{execution: execution}} <- enter_waiting_state(data, task, step, task_run, config) do
       Logger.info(
         "[TaskOrchestrator:#{task_id}] Entered human_input step=#{step.id} execution=#{execution.id}"
       )
@@ -103,10 +112,13 @@ defmodule Sacrum.Orchestrator.Routing.HumanInput do
     )
   end
 
+  # The execution's own config is read, so editing the step does not change
+  # what a parked gate accepts. A missing config means no schema.
   @spec human_input_output_schema(StepExecution.t()) :: {:ok, map() | nil} | {:error, term()}
-  # human_input steps have no config yet, so responses are not schema-validated.
-  defp human_input_output_schema(%StepExecution{step: %WorkflowStep{step_type: :human_input}}),
-    do: {:ok, nil}
+  defp human_input_output_schema(
+         %StepExecution{step: %WorkflowStep{step_type: :human_input}} = execution
+       ),
+       do: {:ok, WorkflowStep.output_schema(execution)}
 
   defp human_input_output_schema(%StepExecution{}), do: {:error, :not_human_input_execution}
 
@@ -136,20 +148,75 @@ defmodule Sacrum.Orchestrator.Routing.HumanInput do
     end
   end
 
+  # Renders the step config with the same context as an llm_inference prompt,
+  # plus the current-inclusive visit count of this step.
+  @spec render_config(FSMData.t(), Task.t(), WorkflowStep.t(), TaskRun.t()) ::
+          {:ok, Config.t()} | {:error, term()}
+  defp render_config(data, task, step, task_run) do
+    task = PromptRenderer.preload_for_rendering(task)
+
+    execution = %StepExecution{
+      task_id: task.id,
+      task_run_id: task_run.id,
+      step_id: step.id,
+      step_name: step.name,
+      step_type: step.step_type,
+      handoff: data.pending_handoff
+    }
+
+    execution_data = ExecutionHistory.build_execution_data(task, execution, task_run)
+
+    context =
+      task
+      |> PromptContext.build_context(execution_data, step, task_run)
+      |> put_in(["execution", "step_visit_count"], visit_count(task, step))
+
+    with {:error, reason} <- ExecutionConfig.render(step, context) do
+      {:error, {:config_render_failed, reason}}
+    end
+  end
+
+  # Completed visits of this step by the task, plus the one being entered.
+  @spec visit_count(Task.t(), WorkflowStep.t()) :: pos_integer()
+  defp visit_count(task, step) do
+    completed =
+      Repo.one(
+        from(e in StepExecution,
+          where:
+            e.user_id == ^task.user_id and e.project_id == ^task.project_id and
+              e.task_id == ^task.id and e.step_id == ^step.id and e.status == "completed",
+          select: count(e.id)
+        )
+      )
+
+    completed + 1
+  end
+
   @spec enter_waiting_state(
           FSMData.t(),
           Task.t(),
           WorkflowStep.t(),
-          TaskRun.t()
+          TaskRun.t(),
+          Config.t()
         ) ::
           {:ok, map()} | {:error, term()}
-  defp enter_waiting_state(data, task, step, task_run) do
-    Repo.transaction(fn -> commit_waiting_state(data, task, step, task_run) end)
+  defp enter_waiting_state(data, task, step, task_run, config) do
+    Repo.transaction(fn -> commit_waiting_state(data, task, step, task_run, config) end)
   end
 
-  @spec commit_waiting_state(FSMData.t(), Task.t(), WorkflowStep.t(), TaskRun.t()) :: map()
-  defp commit_waiting_state(data, task, step, task_run) do
-    with {:ok, execution} <- Repo.insert(waiting_execution_changeset(data, task, step, task_run)),
+  @spec commit_waiting_state(
+          FSMData.t(),
+          Task.t(),
+          WorkflowStep.t(),
+          TaskRun.t(),
+          Config.t()
+        ) :: map()
+  defp commit_waiting_state(data, task, step, task_run, config) do
+    with {:ok, execution} <-
+           data
+           |> waiting_execution_changeset(task, step, task_run)
+           |> StepExecution.put_config(config)
+           |> Repo.insert(),
          {:ok, updated_task_run} <-
            task_run
            |> StateTransitions.waiting_changeset(execution.id)
