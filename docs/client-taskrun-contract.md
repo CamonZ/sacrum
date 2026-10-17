@@ -664,8 +664,6 @@ type TaskStepChangedPayload = {
 
 ## Human Input
 
-`human_input` is currently a workflow-step primitive, not a completed product surface.
-
 Clients may display a waiting human gate when:
 
 - `TaskRun.status == "waiting"`
@@ -675,11 +673,18 @@ Clients may display a waiting human gate when:
 Recommended v1 behavior:
 
 - Show the task, current step, execution ID, and run ID, plus the waiting execution's `config` (`HumanInputStepConfig`): the rendered `instructions`, the `artifact` that resolves the gate, and the `outputSchema` the response must satisfy. Any of them may be null.
-- Do not render an Approve/Reject/Submit action yet.
+- Resolve the gate by attaching its `artifact` (see below).
 - Allow Stop if `runControls.stoppable == true`.
-- Link the future work to the platform discovery ticket `ca564fec` and GUI research ticket `8f2b4c7c`.
 
-There is an internal backend resume path, but no GraphQL mutation for client submission yet. Do not attempt to complete a waiting `human_input` execution with `updateStepExecution`; that bypass path is intentionally blocked.
+To resolve the gate, call `createArtifact` with `subjectType: "step_execution"`, `subjectId` set to the waiting execution's ID, and `logicalName` set to the config's `artifact`. The artifact body must be JSON satisfying `outputSchema`; it becomes the execution's output and the same TaskRun resumes. The attach is rejected, and nothing is stored, with one GraphQL error per problem carrying a `code`:
+
+| `code` | Meaning |
+|--------|---------|
+| `invalid_human_input_json` | The body is not JSON. |
+| `invalid_human_input` | The body violates `outputSchema`; one error per violation, its message prefixed with the JSON path (for example `#/approved`). |
+| `human_input_execution_not_waiting` | The execution already completed, was cancelled, or its run is no longer parked on it. Look up the run's current waiting execution instead. |
+
+Artifacts with any other logical name, or attached to another subject such as the task, do not resolve the gate. Do not attempt to complete a waiting `human_input` execution with `updateStepExecution`; that bypass path is intentionally blocked.
 
 ## CLI Guidance
 
@@ -737,5 +742,5 @@ Clients should pass these behavioral checks:
 - A latest failed StepExecution does not make the task failed if the TaskRun is still active.
 - A stopped run with `outcomeKind == "run_boundary"` remains visible in run
   history while Run stays enabled when the task is otherwise runnable.
-- A waiting `human_input` run renders as a blocking gate with no submit action yet.
+- A waiting `human_input` run renders as a blocking gate resolved by attaching its configured artifact.
 - WebSocket `task_run_updated` updates the row without requiring a full task refetch.

@@ -1027,6 +1027,85 @@ defmodule SacrumWeb.Graphql.SchemaTest do
       assert ArtifactLinks.count() == 0
     end
 
+    test "reports why a human_input gate's artifact was not accepted", %{conn: conn} do
+      %{user: user, project: project} = setup_user_and_project(%{})
+      {:ok, workflow} = Accounts.Workflows.insert(user.id, project.id, %{name: "Gate"})
+
+      {:ok, step} =
+        Accounts.WorkflowSteps.insert(
+          user.id,
+          workflow_step_attrs(%{
+            "name" => "gate",
+            "step_order" => 1,
+            "step_type" => "human_input",
+            "workflow_id" => workflow.id,
+            "project_id" => project.id,
+            "config" => %{
+              "artifact" => "resolution",
+              "output_schema" => %{
+                "type" => "object",
+                "properties" => %{"approved" => %{"type" => "boolean"}},
+                "required" => ["approved"]
+              }
+            }
+          })
+        )
+
+      {:ok, task} = Accounts.Tasks.insert(user.id, project.id, %{title: "Gated task"})
+      {:ok, task_run} = Accounts.TaskRuns.insert(user.id, project.id, task.id, %{})
+
+      {:ok, execution} =
+        Accounts.StepExecutions.insert(user.id, %{
+          task_id: task.id,
+          task_run_id: task_run.id,
+          project_id: project.id,
+          workflow_id: workflow.id,
+          step_id: step.id,
+          step_name: step.name,
+          status: "waiting"
+        })
+
+      {:ok, _} =
+        Accounts.TaskRuns.update(task_run, %{
+          status: :waiting,
+          latest_step_execution_id: execution.id
+        })
+
+      attach = fn body ->
+        conn
+        |> authenticate(user)
+        |> graphql("""
+          mutation {
+            createArtifact(
+              projectId: "#{project.id}"
+              filename: "resolution.json"
+              body: #{Jason.encode!(body)}
+              subjectType: "step_execution"
+              subjectId: "#{execution.id}"
+              logicalName: "resolution"
+            ) { id }
+          }
+        """)
+        |> json_response(200)
+      end
+
+      assert %{"data" => %{"createArtifact" => nil}, "errors" => [error]} =
+               attach.(~s({"approved": "yes"}))
+
+      assert %{"code" => "invalid_human_input", "message" => message} = error
+      assert message =~ "#/approved"
+
+      assert %{"errors" => [%{"code" => "invalid_human_input_json"}]} = attach.("yes")
+      assert ArtifactsRepo.count() == 0
+
+      {:ok, _} = Accounts.TaskRuns.update(task_run, %{status: :stopped})
+
+      assert %{"errors" => [%{"code" => "human_input_execution_not_waiting"}]} =
+               attach.(~s({"approved": true}))
+
+      assert ArtifactsRepo.count() == 0
+    end
+
     test "updates an artifact and replaces its attachment within the owning project", %{
       conn: conn
     } do
