@@ -46,12 +46,20 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep.Config do
   def definition_fields(Execute), do: Execute.definition_fields()
   def definition_fields(module), do: module.__schema__(:fields)
 
-  @spec validate_version(Ecto.Changeset.t()) :: Ecto.Changeset.t()
-  def validate_version(changeset) do
-    validate_inclusion(changeset, :version, [@version],
-      message: "only version #{@version} is supported"
+  @spec validate_version(Ecto.Changeset.t(), pos_integer()) :: Ecto.Changeset.t()
+  def validate_version(changeset, version \\ @version) do
+    validate_inclusion(changeset, :version, [version],
+      message: "only version #{version} is supported"
     )
   end
+
+  @doc "The error for a config key `module` does not declare."
+  @spec unsupported_key_error(module(), String.t(), atom()) :: String.t()
+  def unsupported_key_error(HumanInput, "instructions", _step_type),
+    do: "$.instructions: is no longer supported; use role and question"
+
+  def unsupported_key_error(_module, key, step_type),
+    do: "$.#{key}: is not supported for #{step_type} steps"
 
   @doc """
   Checks that the output schema in `field` is a resolvable JSON Schema.

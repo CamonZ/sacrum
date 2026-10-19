@@ -175,14 +175,14 @@ defmodule Sacrum.Repo.Schemas.WorkflowStep do
     case config |> Map.keys() |> Enum.map(&to_string/1) |> Enum.reject(&(&1 in allowed)) do
       [] ->
         # An empty map would leave a new step without a config.
-        params = if config == %{}, do: %{"version" => 1}, else: config
+        params = if config == %{}, do: %{"version" => struct(module).version}, else: config
 
         changeset = %{changeset | params: Map.put(changeset.params || %{}, "config", params)}
         cast_polymorphic_embed(changeset, :config, required: true)
 
       unknown ->
         key = unknown |> Enum.sort() |> hd()
-        add_error(changeset, :config, "$.#{key}: is not supported for #{step_type} steps")
+        add_error(changeset, :config, Config.unsupported_key_error(module, key, step_type))
     end
   end
 

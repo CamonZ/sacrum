@@ -453,7 +453,7 @@ currentStep {
     ... on ExecuteStepConfig { version script context outputSchema }
     ... on RouteStepConfig { version routeConfig }
     ... on WaitChildrenStepConfig { version outputSchema }
-    ... on HumanInputStepConfig { version instructions artifact outputSchema }
+    ... on HumanInputStepConfig { version role question artifact outputSchema }
   }
 }
 ```
@@ -672,7 +672,10 @@ Clients may display a waiting human gate when:
 
 Recommended v1 behavior:
 
-- Show the task, current step, execution ID, and run ID, plus the waiting execution's `config` (`HumanInputStepConfig`): the rendered `instructions`, the `artifact` that resolves the gate, and the `outputSchema` the response must satisfy. Any of them may be null.
+- Show the task, current step, execution ID, and run ID, plus the waiting execution's `config` (`HumanInputStepConfig`, version 2): the verbatim `role`, the rendered `question`, the `artifact` that resolves the gate, and the `outputSchema` the response must satisfy. Any of them may be null.
+- Use `role` as the resolving agent's role (how to behave and what kind of decision this is); when it is null, fall back to the client's generic resolve-this-gate role. `role` is never rendered, so Liquid-looking text in it is literal.
+- Present `question` as what must be answered and why. Each top-level `outputSchema` property's `description` is that field's question; ask them field by field. A rendered `question` can change between visits, but the schema shape does not.
+- `instructions` was removed with config version 2; read `question` instead.
 - Resolve the gate by attaching its `artifact` (see below).
 - Allow Stop if `runControls.stoppable == true`.
 

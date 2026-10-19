@@ -178,8 +178,16 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
   object :human_input_step_config do
     field :version, non_null(:integer)
 
-    field :instructions, :string do
-      description("Liquid template shown to the human; rendered on a waiting execution's config.")
+    field :role, :string do
+      description(
+        "How the resolving agent should behave and what kind of decision this is; never rendered. Null means the client's generic role."
+      )
+    end
+
+    field :question, :string do
+      description(
+        "Liquid template framing what must be answered and why; rendered on a waiting execution's config."
+      )
     end
 
     field :artifact, :string do
@@ -187,7 +195,9 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
     end
 
     field :output_schema, :json do
-      description("JSON Schema the human response must satisfy; null accepts any response.")
+      description(
+        "JSON Schema the human response must satisfy; each top-level property's description is its question. Null accepts any response."
+      )
     end
   end
 

@@ -9,7 +9,7 @@ defmodule SacrumWeb.Graphql.WorkflowStepConfigTest do
     __typename
     ... on LlmInferenceStepConfig { version prompt agents skills agentConfig outputSchema }
     ... on WaitChildrenStepConfig { version outputSchema session }
-    ... on HumanInputStepConfig { version instructions artifact outputSchema }
+    ... on HumanInputStepConfig { version role question artifact outputSchema }
   }
   """
 
@@ -327,12 +327,13 @@ defmodule SacrumWeb.Graphql.WorkflowStepConfigTest do
              retyped["errors"]
   end
 
-  test "human_input create/update round-trips instructions, artifact, and output schema",
+  test "human_input create/update round-trips role, question, artifact, and output schema",
        %{conn: conn, user: user, workflow: workflow} do
     schema = %{"type" => "object", "properties" => %{"approved" => %{"type" => "boolean"}}}
 
     config = %{
-      "instructions" => "Approve {{ task.title }}",
+      "role" => "You help a release manager decide.",
+      "question" => "Approve {{ task.title }}",
       "artifact" => "approval",
       "output_schema" => schema
     }
@@ -350,8 +351,9 @@ defmodule SacrumWeb.Graphql.WorkflowStepConfigTest do
 
     assert step["config"] == %{
              "__typename" => "HumanInputStepConfig",
-             "version" => 1,
-             "instructions" => "Approve {{ task.title }}",
+             "version" => 2,
+             "role" => "You help a release manager decide.",
+             "question" => "Approve {{ task.title }}",
              "artifact" => "approval",
              "outputSchema" => schema
            }
@@ -367,8 +369,25 @@ defmodule SacrumWeb.Graphql.WorkflowStepConfigTest do
 
     refute updated["errors"]
 
-    assert %{"artifact" => "sign_off", "instructions" => "Approve {{ task.title }}"} =
+    assert %{"artifact" => "sign_off", "question" => "Approve {{ task.title }}"} =
              updated["data"]["updateWorkflowStep"]["config"]
+
+    rejected =
+      conn
+      |> recycle()
+      |> authenticate(user)
+      |> graphql("""
+      mutation { createWorkflowStep(workflowId: "#{workflow.id}", name: "old", stepType: "human_input", harness: "codex", config: #{json_arg(%{"instructions" => "Approve?"})}) { id } }
+      """)
+      |> json_response(200)
+
+    assert [
+             %{
+               "message" =>
+                 "config: $.instructions: is no longer supported; use role and question"
+             }
+           ] =
+             rejected["errors"]
   end
 
   test "config errors are path-aware and null-config steps expose null",
