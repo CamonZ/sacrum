@@ -47,7 +47,7 @@ defmodule Sacrum.Repo.Schemas.WorkflowStepConfigTest do
                %Config.Route{version: 1, route_config: nil}
 
       assert get_field(create(%{step_type: "human_input"}), :config) ==
-               %Config.HumanInput{version: 1}
+               %Config.HumanInput{version: 2}
     end
 
     test "requires an explicit harness" do
@@ -126,11 +126,12 @@ defmodule Sacrum.Repo.Schemas.WorkflowStepConfigTest do
   end
 
   describe "human_input" do
-    test "casts instructions, artifact, and output schema" do
+    test "casts role, question, artifact, and output schema" do
       schema = %{"type" => "object", "properties" => %{"approved" => %{"type" => "boolean"}}}
 
       config = %{
-        "instructions" => "Review {{ task.title }}",
+        "role" => "You help a reviewer decide.",
+        "question" => "Review {{ task.title }}",
         "artifact" => "review",
         "output_schema" => schema
       }
@@ -140,8 +141,9 @@ defmodule Sacrum.Repo.Schemas.WorkflowStepConfigTest do
       assert changeset.valid?
 
       assert get_field(changeset, :config) == %Config.HumanInput{
-               version: 1,
-               instructions: "Review {{ task.title }}",
+               version: 2,
+               role: "You help a reviewer decide.",
+               question: "Review {{ task.title }}",
                artifact: "review",
                output_schema: schema
              }
@@ -165,6 +167,16 @@ defmodule Sacrum.Repo.Schemas.WorkflowStepConfigTest do
 
       assert %{config: ["$.prompt: is not supported for human_input steps"]} =
                errors_on(create(%{step_type: "human_input", config: %{"prompt" => "Go"}}))
+
+      assert %{config: %{version: ["only version 2 is supported"]}} =
+               errors_on(create(%{step_type: "human_input", config: %{"version" => 1}}))
+    end
+
+    test "rejects instructions, naming role and question" do
+      assert %{config: ["$.instructions: is no longer supported; use role and question"]} =
+               errors_on(
+                 create(%{step_type: "human_input", config: %{"instructions" => "Approve?"}})
+               )
     end
   end
 

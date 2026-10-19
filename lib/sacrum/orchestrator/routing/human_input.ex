@@ -3,7 +3,7 @@ defmodule Sacrum.Orchestrator.Routing.HumanInput do
   Handles generic human-response workflow steps.
 
   A `human_input` step parks the active TaskRun with a waiting StepExecution
-  whose config holds the step config with its `instructions` rendered. The
+  whose config holds the step config with its `question` rendered. The
   response is supplied later through `resume/3`, or by attaching the config's
   `artifact` to that StepExecution (`complete_from_artifact/3`), validated
   against that config's `output_schema`, stored on that StepExecution, and then

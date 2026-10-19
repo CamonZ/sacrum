@@ -214,8 +214,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
         step_order: 1,
         step_type: "human_input",
         config: %{
-          "instructions" =>
-            "Visit {{ execution.step_visit_count }}: {{ execution.handoff.notes }}",
+          "question" => "Visit {{ execution.step_visit_count }}: {{ execution.handoff.notes }}",
           "artifact" => "resolution",
           "output_schema" => @review_schema
         }
@@ -564,7 +563,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
                  step_type: :human_input,
                  status: "waiting",
                  output: nil,
-                 config: %HumanInputConfig{instructions: nil, output_schema: nil}
+                 config: %HumanInputConfig{role: nil, question: nil, output_schema: nil}
                } = execution
              ] = executions_for_task(task.id)
 
@@ -627,12 +626,13 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
       wait_for_registry_clear(task.id)
     end
 
-    test "the waiting execution holds the rendered instructions, artifact, and output schema" do
+    test "the waiting execution holds the rendered question, verbatim role, artifact, and output schema" do
       %{user: user, task: task} =
         setup_human_input_workflow(
           next_final?: true,
           human_config: %{
-            "instructions" => "Approve {{ task.title }} (visit {{ execution.step_visit_count }})",
+            "role" => "You help decide whether {{ task.title }} can ship.",
+            "question" => "Approve {{ task.title }} (visit {{ execution.step_visit_count }})",
             "artifact" => "approval",
             "output_schema" => @approval_schema
           }
@@ -644,11 +644,60 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
       assert [%StepExecution{status: "waiting", config: config}] = executions_for_task(task.id)
 
       assert config == %HumanInputConfig{
-               version: 1,
-               instructions: "Approve #{task.title} (visit 1)",
+               version: 2,
+               role: "You help decide whether {{ task.title }} can ship.",
+               question: "Approve #{task.title} (visit 1)",
                artifact: "approval",
                output_schema: @approval_schema
              }
+    end
+
+    test "the question renders an earlier step's output when the run parks" do
+      user = create_user()
+      project = create_project(user)
+      workflow = create_workflow(user, project)
+
+      plan_schema = %{
+        "type" => "object",
+        "properties" => %{"open_question" => %{"type" => "string"}},
+        "required" => ["open_question"],
+        "additionalProperties" => false
+      }
+
+      plan =
+        create_step(user, workflow, %{
+          name: "plan",
+          step_order: 1,
+          config: %{"output_schema" => plan_schema}
+        })
+
+      gate =
+        create_step(user, workflow, %{
+          name: "gate",
+          step_order: 2,
+          step_type: "human_input",
+          config: %{
+            "role" => "You help a release manager decide.",
+            "question" => "{{ steps.plan.output.open_question }}"
+          }
+        })
+
+      create_transition(user, plan, gate)
+      {:ok, _} = Accounts.Workflows.update(workflow, %{initial_step_id: plan.id})
+      task = create_task(user, project)
+      {:ok, task} = Sacrum.Repo.TaskWorkflows.assign_workflow(task, workflow)
+
+      pid = start_orchestrator(task, user)
+      wait_for_state(pid, :executing)
+      simulate_daemon_completion(task.id, project.id, ~s({"open_question": "Ship v2?"}))
+      wait_for_exit(pid)
+
+      assert [_plan, %StepExecution{step_id: step_id, status: "waiting", config: config}] =
+               executions_for_task(task.id)
+
+      assert step_id == gate.id
+      assert config.question == "Ship v2?"
+      assert config.role == "You help a release manager decide."
     end
 
     test "a non-conforming response is rejected and the execution stays waiting" do
@@ -680,7 +729,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
       pid = start_orchestrator(task, user)
       wait_for_exit(pid)
       [first_gate] = executions_for_task(task.id)
-      assert first_gate.config.instructions == "Visit 1: "
+      assert first_gate.config.question == "Visit 1: "
 
       assert {:ok, _completed} =
                HumanInput.resume(user.id, first_gate.id, %{
@@ -695,7 +744,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
       assert second_gate.step_id == human_step.id
       assert second_gate.status == "waiting"
       assert second_gate.handoff == %{"notes" => "tighten the scope"}
-      assert second_gate.config.instructions == "Visit 2: tighten the scope"
+      assert second_gate.config.question == "Visit 2: tighten the scope"
     end
 
     test "resume from another user is rejected and leaves the run waiting" do
@@ -799,6 +848,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
 
       subscribe_daemon(task)
       waiting_execution = park_at_gate(context)
+      assert %HumanInputConfig{role: nil, question: nil} = waiting_execution.config
       task_run = Repo.one!(from(run in TaskRun, where: run.task_id == ^task.id))
 
       assert {:ok, %{artifact: artifact, link: link}} =

@@ -302,14 +302,26 @@ polymorphic embedded schema whose variant is selected by `stepType`:
 | `execute` | `ExecuteStepConfig` | `script`, `output_schema` (required); server-written `context` on dispatched executions |
 | `route` | `RouteStepConfig` | `route_config` |
 | `wait_children` | `WaitChildrenStepConfig` | `output_schema` (for artifact persistence), `session` (fork directive for child runs) |
-| `human_input` | `HumanInputStepConfig` | `instructions` (Liquid template), `artifact` (logical name of the resolving artifact), `output_schema` (all optional) |
+| `human_input` | `HumanInputStepConfig` | `role` (verbatim), `question` (Liquid template), `artifact` (logical name of the resolving artifact), `output_schema` (all optional; config version 2) |
 | `stop`, `finish` | — | `config` is `null` |
 
+A `human_input` config separates how the resolving agent should act from
+what must be answered. `role` describes the kind of conversation (for example
+"You are helping a release manager decide whether v2 can ship."); it is never
+rendered, and null means the client's generic resolve-this-gate role.
+`question` frames what must be answered and why. The individual questions live
+in `output_schema`: each top-level property's `description` is that field's
+question, so a dynamic `question` changes wording but never the schema shape
+downstream routes depend on. The config is version 2; `instructions` (version
+1) is rejected with `$.instructions: is no longer supported; use role and
+question`.
+
 When a run parks on a `human_input` step, its waiting execution records the
-config with `instructions` rendered from the same context as an
-`llm_inference` prompt (including `execution.handoff`) plus
-`execution.step_visit_count`: the step's completed executions for the task,
-plus one. `HumanInput.resume/3` validates the response against the waiting
+config with `question` rendered from the same context as an
+`llm_inference` prompt (including `steps.<name>.output`, `artifacts` and
+`execution.handoff`) plus `execution.step_visit_count`: the step's completed
+executions for the task, plus one; `role` is copied verbatim. A route looping
+back to the gate re-renders the question with its new handoff. `HumanInput.resume/3` validates the response against the waiting
 execution's `output_schema` and rejects a non-conforming one with
 `{:invalid_human_input, reason}`, leaving the execution waiting. A step
 without a config, or without `output_schema`, accepts any response.
@@ -329,7 +341,7 @@ Every `StepExecution` records the step config it ran with in
 `StepExecution.config`, in the same `step_type`-discriminated shape and
 `WorkflowStepConfig` GraphQL union as `WorkflowStep.config`, with templates
 rendered: `llm_inference` stores its rendered `prompt`, `structured_inference`
-its resolved `state`, `human_input` its rendered `instructions`, and `execute`
+its resolved `state`, `human_input` its rendered `question` (with `role` verbatim), and `execute`
 its rendered `script` and complete typed `PromptContext` snapshot in
 `config.context`; other fields are copied as configured, and `stop` and
 `finish` executions have a null `config`. It is
