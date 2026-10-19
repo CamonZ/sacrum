@@ -172,6 +172,26 @@ defmodule Sacrum.Repo.Schemas.WorkflowStepConfigTest do
                errors_on(create(%{step_type: "human_input", config: %{"version" => 1}}))
     end
 
+    test "draftable? accepts only flat elicitation-style properties" do
+      draftable = fn properties ->
+        Config.HumanInput.draftable?(%{"type" => "object", "properties" => properties})
+      end
+
+      assert draftable.(%{
+               "a" => %{"type" => "string", "format" => "date"},
+               "b" => %{"type" => "integer"},
+               "c" => %{"type" => "boolean"},
+               "d" => %{"type" => "string", "enum" => ["x"]},
+               "e" => %{"type" => "array", "items" => %{"type" => "string", "enum" => ["x"]}}
+             })
+
+      refute draftable.(%{"a" => %{"type" => "object"}})
+      refute draftable.(%{"a" => %{"type" => "array", "items" => %{"type" => "string"}}})
+      refute draftable.(%{"a" => %{"type" => "integer", "enum" => [1]}})
+      refute draftable.(%{})
+      refute Config.HumanInput.draftable?(%Config.HumanInput{output_schema: nil})
+    end
+
     test "rejects instructions, naming role and question" do
       assert %{config: ["$.instructions: is no longer supported; use role and question"]} =
                errors_on(

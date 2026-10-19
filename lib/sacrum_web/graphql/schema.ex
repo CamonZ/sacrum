@@ -16,6 +16,7 @@ defmodule SacrumWeb.Graphql.Schema do
   import_types(SacrumWeb.Graphql.Types.SectionTypes)
   import_types(SacrumWeb.Graphql.Types.TransitionTypes)
   import_types(SacrumWeb.Graphql.Types.ExecutionTypes)
+  import_types(SacrumWeb.Graphql.Types.HumanInputDraftTypes)
   import_types(SacrumWeb.Graphql.Types.DaemonTypes)
   import_types(SacrumWeb.Graphql.Types.NotificationTypes)
 
@@ -26,6 +27,7 @@ defmodule SacrumWeb.Graphql.Schema do
     import_fields(:task_queries)
     import_fields(:artifact_queries)
     import_fields(:execution_queries)
+    import_fields(:human_input_draft_queries)
     import_fields(:daemon_queries)
     import_fields(:notification_queries)
   end
@@ -40,6 +42,7 @@ defmodule SacrumWeb.Graphql.Schema do
     import_fields(:section_mutations)
     import_fields(:transition_mutations)
     import_fields(:execution_mutations)
+    import_fields(:human_input_draft_mutations)
     import_fields(:daemon_mutations)
     import_fields(:notification_mutations)
   end

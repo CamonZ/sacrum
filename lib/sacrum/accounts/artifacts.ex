@@ -54,6 +54,19 @@ defmodule Sacrum.Accounts.Artifacts do
     end
   end
 
+  @doc """
+  `create_and_link/4` for a caller that already holds a transaction.
+
+  Returns the resolved gate for `schedule_resumed_run/1`, to be called after
+  the caller's transaction commits. Failures roll back the caller's
+  transaction.
+  """
+  @spec create_and_link_in_transaction(String.t(), String.t(), map(), map()) ::
+          {:ok, {%{artifact: Artifact.t(), link: ArtifactLink.t()}, map() | nil}}
+          | {:error, term()}
+  def create_and_link_in_transaction(user_id, project_id, artifact_attrs, link_attrs),
+    do: {:ok, insert_and_link(user_id, project_id, artifact_attrs, link_attrs)}
+
   defp insert_and_link(user_id, project_id, artifact_attrs, link_attrs) do
     with {:ok, artifact} <- ArtifactsRepo.insert(user_id, project_id, artifact_attrs),
          {:ok, link} <- ArtifactLinks.insert(user_id, project_id, artifact.id, link_attrs),
@@ -66,9 +79,11 @@ defmodule Sacrum.Accounts.Artifacts do
 
   # The gate is resolved and its TaskRun durably queued, so a scheduling
   # failure does not fail the attach.
-  defp schedule_resumed_run(nil), do: :ok
+  @doc "Starts the TaskRun a gate resolution queued, after its transaction commits."
+  @spec schedule_resumed_run(map() | nil) :: :ok
+  def schedule_resumed_run(nil), do: :ok
 
-  defp schedule_resumed_run(%{execution: execution, task_run: task_run}) do
+  def schedule_resumed_run(%{execution: execution, task_run: task_run}) do
     case HumanInput.schedule_resumed_run(execution.task_id, task_run.id) do
       :ok ->
         :ok

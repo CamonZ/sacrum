@@ -9,7 +9,7 @@ defmodule SacrumWeb.Graphql.WorkflowStepConfigTest do
     __typename
     ... on LlmInferenceStepConfig { version prompt agents skills agentConfig outputSchema }
     ... on WaitChildrenStepConfig { version outputSchema session }
-    ... on HumanInputStepConfig { version role question artifact outputSchema }
+    ... on HumanInputStepConfig { version role question artifact outputSchema draftable }
   }
   """
 
@@ -355,7 +355,8 @@ defmodule SacrumWeb.Graphql.WorkflowStepConfigTest do
              "role" => "You help a release manager decide.",
              "question" => "Approve {{ task.title }}",
              "artifact" => "approval",
-             "outputSchema" => schema
+             "outputSchema" => schema,
+             "draftable" => true
            }
 
     updated =

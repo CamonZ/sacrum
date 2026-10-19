@@ -90,7 +90,7 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
   @step_execution_payload_keys ~w(
     id task_id task_run_id workflow_id step_id project_id step_name step_type status context config output
     transition_result model model_provider harness input_tokens output_tokens cost duration_ms handoff
-    session_input_tokens session_cache_read_input_tokens session_output_tokens session_total_tokens
+    draft draft_updated_at session_input_tokens session_cache_read_input_tokens session_output_tokens session_total_tokens
     context_window_input_tokens context_window_cache_read_input_tokens context_window_total_tokens
     resume_session_id native_session_id conversation_root_execution_id forked_from_execution_id
     inserted_at updated_at
@@ -491,14 +491,14 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
         %{
           table: "step_executions",
           operation: :update,
-          before_image_fields: [:id, :status],
+          before_image_fields: [:id, :status, :draft],
           after_image_fields: @step_execution_payload_keys
         }
       ],
       payload_keys: @step_execution_event_payload_keys,
       schema_version: @schema_version,
       completeness:
-        "Complete attempt status projection, including canonical route audit fields in context, transition_result, and handoff; clients update execution history without inferring TaskRun terminal state."
+        "Complete attempt status projection, including canonical route audit fields in context, transition_result, and handoff, and the human_input draft (also emitted when only the draft changes); clients update execution history without inferring TaskRun terminal state."
     },
     %{
       event: "task_run_created",

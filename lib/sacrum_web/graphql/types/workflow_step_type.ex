@@ -194,6 +194,16 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
       description("Logical name of the artifact that resolves the gate.")
     end
 
+    field :draftable, non_null(:boolean) do
+      description(
+        "Whether the response can be built field by field as a draft: output_schema is an object of string, number, integer, boolean, string enum, or string-enum array properties."
+      )
+
+      resolve(fn config, _args, _resolution ->
+        {:ok, Config.HumanInput.draftable?(config)}
+      end)
+    end
+
     field :output_schema, :json do
       description(
         "JSON Schema the human response must satisfy; each top-level property's description is its question. Null accepts any response."
