@@ -28,6 +28,7 @@ defmodule Sacrum.Orchestrator.Routing.HumanInput do
     Scheduler
   }
 
+  alias Sacrum.Orchestrator.Routing.HumanInput.Draft
   alias Sacrum.Orchestrator.TaskRuns.{Lookup, StateTransitions}
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{ArtifactLink, StepExecution, Task, TaskRun, WorkflowStep}
@@ -151,24 +152,40 @@ defmodule Sacrum.Orchestrator.Routing.HumanInput do
 
     with %StepExecution{} = execution <- Repo.one(query),
          true <- WorkflowStep.config_value(execution, :artifact) == link.logical_name do
-      Repo.preload(execution, :task_run)
+      lock_task_run(execution)
     else
       _not_a_gate -> nil
     end
   end
 
-  # The run must still be parked on this execution: a stopped run cancels it,
-  # and a completed one has already consumed a response.
+  @doc """
+  Loads `execution`'s TaskRun with a row lock, so a stop or other transition
+  cannot interleave with a resolution. Callers must already hold the
+  execution lock: locks are always taken execution first, then run.
+  """
+  @spec lock_task_run(StepExecution.t()) :: StepExecution.t()
+  def lock_task_run(%StepExecution{task_run_id: task_run_id} = execution) do
+    task_run =
+      Repo.one(from(r in TaskRun, where: r.id == ^task_run_id, lock: "FOR UPDATE"))
+
+    %{execution | task_run: task_run}
+  end
+
+  @doc """
+  Checks that the run is still parked on `execution` (its `task_run` loaded):
+  a stopped run cancels it, and a completed one has already consumed a
+  response.
+  """
   @spec ensure_awaiting_response(StepExecution.t()) ::
           :ok | {:error, :human_input_execution_not_waiting}
-  defp ensure_awaiting_response(%StepExecution{
-         id: id,
-         status: "waiting",
-         task_run: %TaskRun{status: :waiting, latest_step_execution_id: id}
-       }),
-       do: :ok
+  def ensure_awaiting_response(%StepExecution{
+        id: id,
+        status: "waiting",
+        task_run: %TaskRun{status: :waiting, latest_step_execution_id: id}
+      }),
+      do: :ok
 
-  defp ensure_awaiting_response(%StepExecution{}),
+  def ensure_awaiting_response(%StepExecution{}),
     do: {:error, :human_input_execution_not_waiting}
 
   @spec decode_artifact_body(String.t()) :: {:ok, term()} | {:error, term()}
@@ -299,6 +316,7 @@ defmodule Sacrum.Orchestrator.Routing.HumanInput do
            data
            |> waiting_execution_changeset(task, step, task_run)
            |> StepExecution.put_config(config)
+           |> put_seeded_draft(config, task_run, step)
            |> Repo.insert(),
          {:ok, updated_task_run} <-
            task_run
@@ -308,6 +326,28 @@ defmodule Sacrum.Orchestrator.Routing.HumanInput do
       %{execution: execution, task_run: updated_task_run, task: updated_task}
     else
       {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
+  # A loop-back starts from the previous attempt's response, so the user
+  # revises it instead of starting over.
+  @spec put_seeded_draft(Ecto.Changeset.t(), Config.t(), TaskRun.t(), WorkflowStep.t()) ::
+          Ecto.Changeset.t()
+  defp put_seeded_draft(changeset, config, task_run, step) do
+    previous_output =
+      Repo.one(
+        from(e in StepExecution,
+          where:
+            e.task_run_id == ^task_run.id and e.step_id == ^step.id and e.status == "completed",
+          order_by: [desc: e.inserted_at, desc: e.id],
+          limit: 1,
+          select: e.output
+        )
+      )
+
+    case Draft.seed(config, previous_output) do
+      draft when map_size(draft) == 0 -> changeset
+      draft -> StepExecution.put_draft(changeset, draft)
     end
   end
 

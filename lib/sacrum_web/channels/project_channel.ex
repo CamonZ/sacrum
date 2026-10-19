@@ -649,6 +649,8 @@ defmodule SacrumWeb.ProjectChannel do
       cost: decimal_string(field_value(execution, :cost)),
       duration_ms: field_value(execution, :duration_ms),
       handoff: field_value(execution, :handoff),
+      draft: field_value(execution, :draft),
+      draft_updated_at: field_value(execution, :draft_updated_at),
       resume_session_id: field_value(execution, :resume_session_id),
       native_session_id: field_value(execution, :native_session_id),
       conversation_root_execution_id: field_value(execution, :conversation_root_execution_id),

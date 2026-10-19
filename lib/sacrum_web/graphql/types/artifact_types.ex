@@ -6,6 +6,7 @@ defmodule SacrumWeb.Graphql.Types.ArtifactTypes do
   use Absinthe.Schema.Notation
 
   alias Sacrum.Accounts
+  alias SacrumWeb.Graphql.HumanInputErrors
 
   object :artifact do
     field :id, :id
@@ -61,7 +62,7 @@ defmodule SacrumWeb.Graphql.Types.ArtifactTypes do
              {:ok, %{artifact: artifact}} <-
                user.id
                |> Accounts.Artifacts.create_and_link(project_id, artifact_attrs, link_attrs)
-               |> translate_human_input_error() do
+               |> HumanInputErrors.translate() do
           {:ok, artifact}
         end
       end)
@@ -93,46 +94,6 @@ defmodule SacrumWeb.Graphql.Types.ArtifactTypes do
       end)
     end
   end
-
-  # Attaching a human_input gate's artifact reports why the response was not
-  # accepted, so the caller can correct the artifact and attach it again.
-  defp translate_human_input_error({:error, :human_input_execution_not_waiting}) do
-    {:error,
-     %{
-       message: "step execution is not waiting for human input",
-       code: "human_input_execution_not_waiting"
-     }}
-  end
-
-  defp translate_human_input_error({:error, {:invalid_human_input_json, reason}}) do
-    {:error,
-     %{
-       message: "artifact body is not valid JSON: #{Exception.message(reason)}",
-       code: "invalid_human_input_json"
-     }}
-  end
-
-  defp translate_human_input_error(
-         {:error, {:invalid_human_input, {:validation_failed, violations}}}
-       ) do
-    {:error,
-     Enum.map(violations, fn violation ->
-       %{
-         message: "artifact does not satisfy the output_schema: #{violation}",
-         code: "invalid_human_input"
-       }
-     end)}
-  end
-
-  defp translate_human_input_error({:error, {:invalid_human_input, reason}}) do
-    {:error,
-     %{
-       message: "artifact does not satisfy the output_schema: #{inspect(reason)}",
-       code: "invalid_human_input"
-     }}
-  end
-
-  defp translate_human_input_error(result), do: result
 
   defp attachment_attrs(args) do
     attachment_keys = [:logical_name, :metadata]

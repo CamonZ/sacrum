@@ -689,6 +689,33 @@ To resolve the gate, call `createArtifact` with `subjectType: "step_execution"`,
 
 Artifacts with any other logical name, or attached to another subject such as the task, do not resolve the gate. Do not attempt to complete a waiting `human_input` execution with `updateStepExecution`; that bypass path is intentionally blocked.
 
+### Drafts
+
+A waiting gate whose `outputSchema` is *draftable* can be answered field by field. `HumanInputStepConfig.draftable` is true when `outputSchema` is an object whose top-level properties are each a string, number, integer or boolean (formats allowed), a string `enum`, or an array of string `enum` (multi-select). A gate without `outputSchema`, or with any nested object or free-form array property, is not draftable and keeps whole-artifact attach only.
+
+The draft is durable: it lives on the waiting `StepExecution` (`draft`, `draftUpdatedAt`; also on `StepExecution.draft` and in the `step_execution_status_changed` WebSocket payload, which is also sent when only the draft changes). Sacrum decides what is missing and whether the draft is complete, so clients and the resolving agent never guess.
+
+| Operation | Behavior |
+|-----------|----------|
+| `setHumanInputDraft(executionId, values)` | Merge-patch. Each key must be an `outputSchema` property and each value must satisfy that property's subschema; `null` removes the key. All or nothing: if any key fails, nothing is stored. |
+| `humanInputDraft(executionId)` | Reads the draft. |
+| `submitHumanInputDraft(executionId)` | Validates the whole draft (including cross-field rules), then resolves the gate exactly as attaching the artifact does: the draft is the body of the configured `artifact`, attached to the execution, and the same TaskRun resumes. |
+
+Every operation returns `HumanInputDraft { executionId values missing invalid { path message } complete updatedAt }`. `missing` lists required properties not yet set. `invalid` lists values that violate the schema (JSON-pointer `path`). `complete` is true when nothing required is missing and the whole draft validates; optional properties never block completeness.
+
+| `code` | Meaning |
+|--------|---------|
+| `human_input_execution_not_waiting` | The execution already completed, was cancelled, or its run is no longer parked on it. |
+| `human_input_not_draftable` | The gate's `outputSchema` is not draftable. |
+| `human_input_artifact_not_configured` | `submitHumanInputDraft` on a gate that names no `artifact`. |
+| `unknown_draft_field` | A key is not an `outputSchema` property (error carries `fields`). |
+| `invalid_human_input` | A value violates its property's schema; one error per violation, message prefixed with the JSON path (for example `/approved`). |
+| `draft_incomplete` | `submitHumanInputDraft` with required properties unset (error carries `missing`). |
+
+`set` and `submit` lock the execution row, so they cannot interleave with each other or with an artifact attach; a set after the gate resolved fails with `human_input_execution_not_waiting`. Whole-artifact attach keeps working for every gate and ignores the draft.
+
+When a run loops back to a gate, the new execution's draft is seeded from the previous completed execution of the same step in the same TaskRun, keeping only the keys that still validate; the evaluator's reasons arrive in the handoff and the user revises instead of starting over. Executions already waiting before the draft columns existed start with an empty draft.
+
 ## CLI Guidance
 
 Update CLI commands as follows:

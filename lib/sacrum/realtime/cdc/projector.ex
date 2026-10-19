@@ -300,7 +300,7 @@ defmodule Sacrum.Realtime.Cdc.Projector do
   end
 
   defp projections(%WalEx.Event{source: %{table: "step_executions"}, type: :update} = event) do
-    if changed?(event, :status) do
+    if changed?(event, :status) or changed?(event, :draft) do
       execution = record_to_struct!("step_executions", event.new_record)
       [projection("step_execution_status_changed", execution.project_id, execution)]
     else

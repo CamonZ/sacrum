@@ -10,11 +10,13 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
   import Absinthe.Resolution.Helpers
 
   alias Sacrum.Accounts
+  alias Sacrum.Orchestrator.Routing.HumanInput.Draft
   alias Sacrum.Orchestrator.{Scheduler, TaskRunPlacement}
   alias Sacrum.Realtime.CommandBroadcaster
   alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.Schemas.TaskRun
   alias Sacrum.Repo.Schemas.WorkflowStep
+  alias Sacrum.Repo.Schemas.WorkflowStep.Config.HumanInput, as: HumanInputConfig
   alias Sacrum.TaskRuns.Status, as: TaskRunStatus
   alias SacrumWeb.Graphql.ChangesetErrors
 
@@ -132,6 +134,20 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
     field :cost, :decimal
     field :duration_ms, :integer
     field :handoff, :json
+
+    field :draft, :human_input_draft do
+      description(
+        "The response being built on a draftable human_input execution; null for other executions."
+      )
+
+      resolve(fn execution, _args, _resolution ->
+        if HumanInputConfig.draftable?(execution.config) do
+          {:ok, Draft.view(execution)}
+        else
+          {:ok, nil}
+        end
+      end)
+    end
 
     field :resume_session_id, :string do
       description("Native conversation id this execution was dispatched to resume or fork.")

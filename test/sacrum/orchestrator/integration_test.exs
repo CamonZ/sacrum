@@ -22,6 +22,7 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
   alias Sacrum.Orchestrator.TaskRegistry
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{StepExecution, TaskRun}
+  alias Sacrum.Orchestrator.Routing.HumanInput.Draft
   alias Sacrum.Repo.Schemas.WorkflowStep.Config.HumanInput, as: HumanInputConfig
 
   # ===== Setup helpers =====
@@ -1748,6 +1749,171 @@ defmodule Sacrum.Orchestrator.IntegrationTest do
 
     {:ok, _first} = Accounts.StepExecutions.update(first, %{native_session_id: native_session_id})
     simulate_daemon_completion(task.id, task.project_id, "step 1 output")
+  end
+
+  describe "human_input resolution drafts" do
+    @draft_schema %{
+      "type" => "object",
+      "properties" => %{
+        "approved" => %{"type" => "boolean"},
+        "reason" => %{"type" => "string"},
+        "labels" => %{"type" => "array", "items" => %{"type" => "string", "enum" => ["a", "b"]}}
+      },
+      "required" => ["approved", "reason"]
+    }
+
+    defp park_draft_gate(opts \\ []) do
+      schema = Keyword.get(opts, :schema, @draft_schema)
+
+      context =
+        setup_human_input_workflow(
+          next_final?: true,
+          human_config: %{"artifact" => "resolution", "output_schema" => schema}
+        )
+
+      Map.put(context, :execution, park_at_gate(context))
+    end
+
+    test "set stores a field and reports what is still missing" do
+      %{user: user, execution: execution} = park_draft_gate()
+
+      assert {:ok, view} = Draft.set(user.id, execution.id, %{"approved" => true})
+      assert view.values == %{"approved" => true}
+      assert view.missing == ["reason"]
+      assert view.invalid == []
+      refute view.complete
+      assert view.updated_at
+
+      stored = Repo.get!(StepExecution, execution.id)
+      assert stored.draft == %{"approved" => true}
+      assert stored.draft_updated_at
+    end
+
+    test "null removes a key and the draft is readable" do
+      %{user: user, execution: execution} = park_draft_gate()
+      {:ok, _} = Draft.set(user.id, execution.id, %{"approved" => true, "reason" => "ok"})
+
+      assert {:ok, %{values: %{"reason" => "ok"}, missing: ["approved"]}} =
+               Draft.set(user.id, execution.id, %{"approved" => nil})
+
+      assert {:ok, %{values: %{"reason" => "ok"}}} = Draft.get(user.id, execution.id)
+    end
+
+    test "an invalid value fails the whole patch with a path-prefixed violation" do
+      %{user: user, execution: execution} = park_draft_gate()
+
+      assert {:error, {:invalid_human_input, {:validation_failed, [violation]}}} =
+               Draft.set(user.id, execution.id, %{"approved" => "yes", "reason" => "ok"})
+
+      assert violation =~ "/approved"
+      assert Repo.get!(StepExecution, execution.id).draft == %{}
+    end
+
+    test "a key that is not a schema property is rejected" do
+      %{user: user, execution: execution} = park_draft_gate()
+
+      assert {:error, {:unknown_draft_field, ["nope"]}} =
+               Draft.set(user.id, execution.id, %{"nope" => 1, "approved" => true})
+
+      assert Repo.get!(StepExecution, execution.id).draft == %{}
+    end
+
+    test "submit on an incomplete draft reports the missing fields and keeps waiting" do
+      %{user: user, task: task, execution: execution} = park_draft_gate()
+      {:ok, _} = Draft.set(user.id, execution.id, %{"approved" => true})
+
+      assert {:error, {:draft_incomplete, ["reason"]}} = Draft.submit(user.id, execution.id)
+      assert_still_waiting(task, execution)
+    end
+
+    test "submit resolves the gate with the draft as the artifact body" do
+      %{user: user, task: task, execution: execution} = park_draft_gate()
+      values = %{"approved" => true, "reason" => "fine", "labels" => ["a"]}
+      {:ok, _} = Draft.set(user.id, execution.id, values)
+
+      assert {:ok, %{complete: true}} = Draft.submit(user.id, execution.id)
+
+      wait_for_registry_clear(task.id)
+      gate = Repo.get!(StepExecution, execution.id)
+      assert gate.status == "completed"
+      assert Jason.decode!(gate.output) == values
+
+      artifact = Repo.one!(Sacrum.Repo.Schemas.Artifact)
+      assert artifact.filename == "resolution.json"
+      assert Jason.decode!(artifact.body) == values
+    end
+
+    test "set and submit fail once the gate is resolved" do
+      %{user: user, project: project, task: task, execution: execution} = park_draft_gate()
+
+      assert {:ok, _} =
+               attach_artifact(
+                 user,
+                 project,
+                 "step_execution",
+                 execution.id,
+                 "resolution",
+                 ~s({"approved": true, "reason": "r"})
+               )
+
+      wait_for_registry_clear(task.id)
+
+      assert {:error, :human_input_execution_not_waiting} =
+               Draft.set(user.id, execution.id, %{"approved" => false})
+
+      assert {:error, :human_input_execution_not_waiting} = Draft.submit(user.id, execution.id)
+    end
+
+    test "a gate with a nested property is not draftable but still resolves by attach" do
+      nested = %{
+        "type" => "object",
+        "properties" => %{"detail" => %{"type" => "object"}},
+        "required" => ["detail"]
+      }
+
+      %{user: user, project: project, task: task, execution: execution} =
+        park_draft_gate(schema: nested)
+
+      refute HumanInputConfig.draftable?(execution.config)
+
+      assert {:error, :human_input_not_draftable} =
+               Draft.set(user.id, execution.id, %{"detail" => %{}})
+
+      assert {:ok, _} =
+               attach_artifact(
+                 user,
+                 project,
+                 "step_execution",
+                 execution.id,
+                 "resolution",
+                 ~s({"detail": {}})
+               )
+
+      wait_for_registry_clear(task.id)
+    end
+
+    test "a loop-back seeds the draft from the previous attempt, keeping valid keys" do
+      %{user: user, task: task} = setup_human_input_review_loop()
+      pid = start_orchestrator(task, user)
+      wait_for_exit(pid)
+      [first_gate] = executions_for_task(task.id)
+      assert first_gate.draft == %{}
+
+      assert {:ok, _} =
+               HumanInput.resume(user.id, first_gate.id, %{
+                 "decision" => "revise",
+                 "notes" => "tighten the scope",
+                 "extra" => 1
+               })
+
+      wait_for_execution_count(task.id, 3)
+      wait_for_registry_clear(task.id)
+
+      assert [_first, _route, second_gate] = executions_for_task(task.id)
+
+      assert second_gate.draft == %{"decision" => "revise", "notes" => "tighten the scope"}
+      assert second_gate.draft_updated_at
+    end
   end
 
   defp second_execution(task_id) do

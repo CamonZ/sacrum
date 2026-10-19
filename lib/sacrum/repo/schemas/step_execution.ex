@@ -42,6 +42,11 @@ defmodule Sacrum.Repo.Schemas.StepExecution do
     field :duration_ms, :integer
     field :handoff, :map
 
+    # Work-in-progress response of a waiting human_input execution. Written
+    # only by the draft operations; never cast from client attrs.
+    field :draft, :map, default: %{}
+    field :draft_updated_at, :utc_datetime_usec
+
     # Provider conversation of an llm_inference execution. The server pins
     # `resume_session_id` (the native id resumed or forked),
     # `conversation_root_execution_id` (itself for new and fork, the source's
@@ -85,6 +90,12 @@ defmodule Sacrum.Repo.Schemas.StepExecution do
   @doc "Records the rendered config an execution runs with."
   @spec put_config(Ecto.Changeset.t(), Config.t()) :: Ecto.Changeset.t()
   def put_config(changeset, config), do: put_change(changeset, :config, config)
+
+  @doc "Replaces the human_input draft, stamping when it changed."
+  @spec put_draft(Ecto.Changeset.t() | t(), map()) :: Ecto.Changeset.t()
+  def put_draft(changeset_or_execution, draft) do
+    change(changeset_or_execution, draft: draft, draft_updated_at: DateTime.utc_now())
+  end
 
   @doc """
   Records a new execution's preallocated id and the conversation it was
