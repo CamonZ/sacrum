@@ -264,7 +264,7 @@ defmodule Sacrum.Repo.Daemons do
   def exchange_bootstrap(_, _, _), do: {:error, :invalid_credentials}
 
   @spec verify_token(term(), term(), keyword()) ::
-          {:ok, Daemon.t()} | {:error, :invalid_credentials}
+          {:ok, Daemon.t()} | {:error, :invalid_credentials | :unavailable}
   def verify_token(daemon_id, token, opts \\ []) do
     case authenticate_reconnect(daemon_id, token, opts) do
       {:ok, daemon, _credential} -> {:ok, daemon}
@@ -273,7 +273,7 @@ defmodule Sacrum.Repo.Daemons do
   end
 
   @spec authenticate_reconnect(term(), term(), keyword()) ::
-          {:ok, Daemon.t(), DaemonCredential.t()} | {:error, :invalid_credentials}
+          {:ok, Daemon.t(), DaemonCredential.t()} | {:error, :invalid_credentials | :unavailable}
   def authenticate_reconnect(daemon_id, token, opts \\ [])
 
   def authenticate_reconnect(daemon_id, token, opts)
@@ -281,13 +281,113 @@ defmodule Sacrum.Repo.Daemons do
     with {:ok, daemon_id} <- Ecto.UUID.cast(daemon_id),
          %DaemonCredential{} = credential <-
            matching_credential(daemon_id, token, "reconnect", now(opts)) do
-      revalidate_reconnect(daemon_id, credential.id, opts)
+      activate_reconnect(daemon_id, credential.id, opts)
+    else
+      _ -> {:error, :invalid_credentials}
+    end
+  rescue
+    _ in [DBConnection.ConnectionError, Postgrex.Error] -> {:error, :unavailable}
+  end
+
+  def authenticate_reconnect(_, _, _), do: {:error, :invalid_credentials}
+
+  @doc "Issues a replacement while retaining the caller until its successor authenticates."
+  @spec renew_reconnect(term(), term(), keyword()) ::
+          {:ok, %{reconnect_token: String.t(), expires_at: DateTime.t()}}
+          | {:error, :invalid_credentials | :unavailable | Ecto.Changeset.t()}
+  def renew_reconnect(daemon_id, credential_id, opts \\ []) do
+    with {:ok, daemon_id} <- Ecto.UUID.cast(daemon_id),
+         {:ok, credential_id} <- Ecto.UUID.cast(credential_id) do
+      do_renew_reconnect(daemon_id, credential_id, opts)
     else
       _ -> {:error, :invalid_credentials}
     end
   end
 
-  def authenticate_reconnect(_, _, _), do: {:error, :invalid_credentials}
+  defp do_renew_reconnect(daemon_id, credential_id, opts) do
+    token = new_token()
+    hash = Argon2.hash_pwd_salt(token)
+
+    Repo.transaction(fn ->
+      daemon = lock_daemon!(daemon_id)
+      credential = valid_reconnect!(daemon.id, credential_id, now(opts))
+      now = now(opts)
+
+      Repo.update_all(
+        from(c in DaemonCredential,
+          where:
+            c.daemon_id == ^daemon.id and c.predecessor_id == ^credential.id and
+              c.status == "active"
+        ),
+        set: [status: "revoked", revoked_at: now, updated_at: now]
+      )
+
+      successor =
+        insert_credential!(
+          daemon.id,
+          "reconnect",
+          hash,
+          DateTime.add(now, @reconnect_ttl_seconds),
+          credential.id
+        )
+
+      %{reconnect_token: token, expires_at: successor.expires_at}
+    end)
+  rescue
+    _ in [DBConnection.ConnectionError, Postgrex.Error] -> {:error, :unavailable}
+  end
+
+  defp activate_reconnect(daemon_id, credential_id, opts) do
+    result =
+      Repo.transaction(fn ->
+        daemon = lock_daemon!(daemon_id)
+        credential = valid_reconnect!(daemon_id, credential_id, now(opts))
+
+        {revoked, _} =
+          if credential.predecessor_id do
+            now = now(opts)
+
+            Repo.update_all(
+              from(c in DaemonCredential,
+                where:
+                  c.daemon_id == ^daemon_id and c.id == ^credential.predecessor_id and
+                    c.status == "active"
+              ),
+              set: [status: "revoked", revoked_at: now, updated_at: now]
+            )
+          else
+            {0, nil}
+          end
+
+        {daemon, credential, revoked}
+      end)
+
+    case result do
+      {:ok, {daemon, credential, revoked}} ->
+        if revoked > 0,
+          do: Sacrum.DaemonConnectionRegistry.invalidate_sessions(daemon.id)
+
+        {:ok, daemon, credential}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp valid_reconnect!(daemon_id, credential_id, now) do
+    credential =
+      Repo.one(
+        from c in DaemonCredential,
+          where:
+            c.daemon_id == ^daemon_id and c.id == ^credential_id and
+              c.credential_kind == "reconnect"
+      )
+
+    unless credential && DaemonCredential.valid_for_authentication?(credential, now),
+      do: Repo.rollback(:invalid_credentials)
+
+    credential
+  end
 
   @doc "Rechecks an already authenticated credential by persisted identity without retaining plaintext."
   @spec revalidate_reconnect(term(), term(), keyword()) ::
@@ -406,14 +506,18 @@ defmodule Sacrum.Repo.Daemons do
   defp lifecycle_result(daemon),
     do: %{daemon: daemon, credential: nil, token: nil}
 
-  defp insert_credential!(daemon_id, kind, token_hash, expires_at) do
+  defp insert_credential!(daemon_id, kind, token_hash, expires_at, predecessor_id \\ nil) do
     changeset =
       DaemonCredential.create_changeset(
-        %DaemonCredential{daemon_id: daemon_id, credential_kind: kind},
+        %DaemonCredential{
+          daemon_id: daemon_id,
+          credential_kind: kind,
+          predecessor_id: predecessor_id
+        },
         %{token_hash: token_hash, expires_at: expires_at}
       )
 
-    case Repo.insert(changeset) do
+    case Repo.insert(changeset, log: false) do
       {:ok, credential} -> credential
       {:error, changeset} -> Repo.rollback(changeset)
     end

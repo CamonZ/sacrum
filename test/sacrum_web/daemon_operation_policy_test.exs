@@ -125,7 +125,10 @@ defmodule SacrumWeb.DaemonTokenGraphqlTest do
       |> daemon_auth(ctx.daemon, ctx.bootstrap)
       |> post("/graphql", %{query: "{ projects { id } }"})
 
-    assert json_response(bootstrap_response, 401) == %{"error" => "Invalid daemon credentials"}
+    assert json_response(bootstrap_response, 401) == %{
+             "error" => "Invalid daemon credentials",
+             "code" => "invalid_credentials"
+           }
 
     projects_response =
       build_conn()

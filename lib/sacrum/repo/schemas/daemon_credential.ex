@@ -3,8 +3,8 @@ defmodule Sacrum.Repo.Schemas.DaemonCredential do
   Persisted daemon credential metadata.
 
   Only a password hash is stored. Bootstrap credentials are short-lived and
-  may be consumed once; reconnect credentials remain valid independently until
-  expiry or revocation. Existing credentials migrated from the original schema
+  may be consumed once; reconnect credentials remain valid until expiry or revocation, including
+  revocation when their renewal successor first authenticates. Existing credentials migrated from the original schema
   are reconnect credentials, preserving their reusable behavior. The migration
   is intentionally non-lossy on upgrade: it does not silently grant legacy
   rows bootstrap privileges. Its rollback removes classification and
@@ -50,6 +50,7 @@ defmodule Sacrum.Repo.Schemas.DaemonCredential do
     field :consumed_at, :utc_datetime_usec
     field :revoked_at, :utc_datetime_usec
     field :status, :string, default: "active"
+    belongs_to :predecessor, __MODULE__
     belongs_to :daemon, Sacrum.Repo.Schemas.Daemon
     timestamps(type: :utc_datetime_usec)
   end

@@ -1,5 +1,5 @@
 defmodule SacrumWeb.Graphql.Types.DaemonTypes do
-  @moduledoc "Owner-authenticated daemon management surface. No token material is serialized."
+  @moduledoc "Daemon management and self-renewal. Secrets appear only in issuance responses."
 
   use Absinthe.Schema.Notation
   alias Sacrum.Accounts.Daemons
@@ -86,7 +86,27 @@ defmodule SacrumWeb.Graphql.Types.DaemonTypes do
     end
   end
 
+  object :daemon_credential_renewal do
+    field :reconnect_token, non_null(:string)
+    field :expires_at, non_null(:datetime)
+  end
+
   object :daemon_mutations do
+    field :renew_daemon_credential, non_null(:daemon_credential_renewal) do
+      resolve(fn _, %{context: context} ->
+        case Daemons.renew_credential(Map.get(context, :daemon_principal)) do
+          {:ok, renewal} ->
+            {:ok, renewal}
+
+          {:error, :invalid_credentials} ->
+            {:error, %{message: "Invalid daemon credentials", code: "invalid_credentials"}}
+
+          {:error, _} ->
+            {:error, %{message: "Credential renewal unavailable", code: "unavailable"}}
+        end
+      end)
+    end
+
     field :create_daemon, non_null(:daemon_bootstrap) do
       arg(:name, :string)
 
