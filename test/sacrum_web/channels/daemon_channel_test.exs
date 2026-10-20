@@ -60,6 +60,32 @@ defmodule SacrumWeb.DaemonChannelTest do
     assert Sacrum.DaemonConnectionRegistry.lookup(daemon.id) == []
   end
 
+  test "successor first socket use terminates predecessor and delayed invalidation preserves successor" do
+    {_user, daemon, token, _} = setup_daemon("renew_live")
+    {:ok, socket} = connect(UserSocket, %{"daemon_id" => daemon.id, "reconnect_token" => token})
+    {:ok, _, channel} = subscribe_and_join(socket, "daemon:#{daemon.id}")
+    monitor = Process.monitor(channel.channel_pid)
+    {:ok, renewal} = Sacrum.Repo.Daemons.renew_reconnect(daemon.id, channel.assigns.credential_id)
+
+    {:ok, successor_socket} =
+      connect(UserSocket, %{
+        "daemon_id" => daemon.id,
+        "reconnect_token" => renewal.reconnect_token
+      })
+
+    assert_receive {:DOWN, ^monitor, :process, _, _}
+    {:ok, _, successor} = subscribe_and_join(successor_socket, "daemon:#{daemon.id}")
+    send(successor.channel_pid, :daemon_credentials_invalidated)
+    _ = :sys.get_state(successor.channel_pid)
+
+    assert [{pid, %{credential_id: credential_id}}] =
+             Sacrum.DaemonConnectionRegistry.lookup(daemon.id)
+
+    assert pid == successor.channel_pid
+    assert credential_id == successor.assigns.credential_id
+    assert :error = connect(UserSocket, %{"daemon_id" => daemon.id, "reconnect_token" => token})
+  end
+
   test "committed unregister terminates the connected standalone session" do
     {user, daemon, token, _} = setup_daemon("unregister_live")
 

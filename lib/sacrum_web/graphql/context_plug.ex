@@ -15,9 +15,12 @@ defmodule SacrumWeb.Graphql.ContextPlug do
   def call(conn, _opts) do
     context = %{
       current_user: conn.assigns[:current_user],
+      daemon_principal: conn.assigns[:daemon_principal],
       api_token: conn.assigns[:api_token]
     }
 
-    put_private(conn, :absinthe, %{context: context})
+    conn
+    |> put_resp_header("cache-control", "no-store")
+    |> put_private(:absinthe, %{context: context})
   end
 end

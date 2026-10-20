@@ -47,7 +47,14 @@ defmodule SacrumWeb.Plugs.ApiAuthPlug do
         unauthorized(conn, "API token has expired")
 
       {:error, :invalid_daemon_credentials} ->
-        unauthorized(conn, "Invalid daemon credentials")
+        unauthorized(conn, "Invalid daemon credentials", "invalid_credentials")
+
+      {:error, :unavailable} ->
+        conn
+        |> put_resp_header("cache-control", "no-store")
+        |> put_resp_content_type("application/json")
+        |> send_resp(503, Jason.encode!(%{error: "unavailable"}))
+        |> halt()
     end
   end
 
@@ -68,6 +75,8 @@ defmodule SacrumWeb.Plugs.ApiAuthPlug do
           {:error, reason}
         end
     end
+  rescue
+    _ in [DBConnection.ConnectionError, Postgrex.Error] -> {:error, :unavailable}
   end
 
   defp authenticate_daemon(conn, token) do
@@ -82,8 +91,17 @@ defmodule SacrumWeb.Plugs.ApiAuthPlug do
 
   defp authenticate_daemon_credential(conn, token, daemon_id) do
     case Daemons.authenticate_reconnect(daemon_id, token) do
-      {:ok, daemon, _credential} -> authenticate_daemon_user(conn, token, daemon.user_id)
-      {:error, :invalid_credentials} -> {:error, :invalid_daemon_credentials}
+      {:ok, daemon, credential} ->
+        conn =
+          assign(conn, :daemon_principal, %{daemon_id: daemon.id, credential_id: credential.id})
+
+        authenticate_daemon_user(conn, token, daemon.user_id)
+
+      {:error, :invalid_credentials} ->
+        {:error, :invalid_daemon_credentials}
+
+      {:error, :unavailable} ->
+        {:error, :unavailable}
     end
   end
 
@@ -118,10 +136,13 @@ defmodule SacrumWeb.Plugs.ApiAuthPlug do
     end
   end
 
-  defp unauthorized(conn, message) do
+  defp unauthorized(conn, message, code \\ nil) do
     conn
     |> put_resp_content_type("application/json")
-    |> send_resp(401, Jason.encode!(%{error: message}))
+    |> send_resp(
+      401,
+      Jason.encode!(if(code, do: %{error: message, code: code}, else: %{error: message}))
+    )
     |> halt()
   end
 end

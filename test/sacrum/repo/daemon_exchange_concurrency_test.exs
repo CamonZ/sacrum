@@ -217,8 +217,107 @@ defmodule Sacrum.Repo.DaemonExchangeConcurrencyTest do
     end
   end
 
+  test "temporary database failure is retryable and does not revoke predecessor", ctx do
+    {token, credential} =
+      committed(fn ->
+        {:ok, _, token, credential} = Daemons.exchange_bootstrap(ctx.daemon.id, ctx.bootstrap)
+        {token, credential}
+      end)
+
+    suffix = System.unique_integer([:positive])
+    function = "fail_renewal_#{suffix}"
+    trigger = "fail_renewal_trigger_#{suffix}"
+
+    committed(fn ->
+      Repo.query!(
+        "CREATE FUNCTION #{function}() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'temporary renewal failure'; END; $$ LANGUAGE plpgsql"
+      )
+
+      Repo.query!(
+        "CREATE TRIGGER #{trigger} BEFORE INSERT ON daemon_credentials FOR EACH ROW WHEN (NEW.predecessor_id = '#{credential.id}') EXECUTE FUNCTION #{function}()"
+      )
+    end)
+
+    try do
+      committed(fn ->
+        assert {:error, :unavailable} = Daemons.renew_reconnect(ctx.daemon.id, credential.id)
+        assert {:ok, _, _} = Daemons.authenticate_reconnect(ctx.daemon.id, token)
+
+        assert Repo.aggregate(
+                 from(c in DaemonCredential, where: c.predecessor_id == ^credential.id),
+                 :count
+               ) == 0
+      end)
+    after
+      committed(fn ->
+        Repo.query!("DROP TRIGGER #{trigger} ON daemon_credentials")
+        Repo.query!("DROP FUNCTION #{function}()")
+      end)
+    end
+
+    committed(fn ->
+      assert {:ok, %{reconnect_token: _}} = Daemons.renew_reconnect(ctx.daemon.id, credential.id)
+    end)
+  end
+
+  test "renewals serialize and leave exactly one active successor", ctx do
+    {_token, credential} =
+      committed(fn ->
+        {:ok, _, token, credential} = Daemons.exchange_bootstrap(ctx.daemon.id, ctx.bootstrap)
+        {token, credential}
+      end)
+
+    results =
+      race_on_daemon_lock(ctx.daemon.id, [
+        fn -> Daemons.renew_reconnect(ctx.daemon.id, credential.id) end,
+        fn -> Daemons.renew_reconnect(ctx.daemon.id, credential.id) end
+      ])
+
+    assert Enum.all?(results, &match?({:ok, %{reconnect_token: _}}, &1))
+
+    committed(fn ->
+      successors = Repo.all(from c in DaemonCredential, where: c.predecessor_id == ^credential.id)
+      assert length(successors) == 2
+      assert Enum.count(successors, &(&1.status == "active")) == 1
+      assert Enum.count(successors, &(&1.status == "revoked")) == 1
+    end)
+  end
+
+  test "renewal racing rotation or deletion cannot leave a usable losing credential", ctx do
+    for operation <- [:rotate, :unregister] do
+      {daemon, credential} =
+        committed(fn ->
+          {:ok, daemon, bootstrap} = Daemons.create(ctx.daemon.user_id)
+          {:ok, _, _, credential} = Daemons.exchange_bootstrap(daemon.id, bootstrap)
+          {daemon, credential}
+        end)
+
+      [renewal, lifecycle] =
+        race_on_daemon_lock(daemon.id, [
+          fn -> Daemons.renew_reconnect(daemon.id, credential.id) end,
+          fn -> apply(Daemons, operation, [daemon]) end
+        ])
+
+      assert {:ok, _} = lifecycle
+
+      committed(fn ->
+        case renewal do
+          {:ok, %{reconnect_token: token}} ->
+            assert {:error, :invalid_credentials} =
+                     Daemons.authenticate_reconnect(daemon.id, token)
+
+          {:error, :invalid_credentials} ->
+            :ok
+        end
+
+        assert {:error, :invalid_credentials} =
+                 Daemons.revalidate_reconnect(daemon.id, credential.id)
+      end)
+    end
+  end
+
   defp race_on_daemon_lock(daemon_id, contenders) do
-    supervisor = start_supervised!({Task.Supervisor, []})
+    supervisor = start_supervised!({Task.Supervisor, []}, id: make_ref())
     parent = self()
 
     tasks =

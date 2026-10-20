@@ -11,6 +11,15 @@ defmodule Sacrum.Accounts.Daemons do
   alias Sacrum.Repo.Daemons, as: DaemonsRepo
   alias Sacrum.Repo.Schemas.Daemon
 
+  @spec renew_credential(map() | nil) ::
+          {:ok, %{reconnect_token: String.t(), expires_at: DateTime.t()}}
+          | {:error, :invalid_credentials | :unavailable | Ecto.Changeset.t()}
+  def renew_credential(%{daemon_id: daemon_id, credential_id: credential_id}) do
+    DaemonsRepo.renew_reconnect(daemon_id, credential_id)
+  end
+
+  def renew_credential(_), do: {:error, :invalid_credentials}
+
   @spec create(String.t()) :: {:ok, Daemon.t(), String.t()} | {:error, Ecto.Changeset.t()}
   @spec create(String.t(), map()) :: {:ok, Daemon.t(), String.t()} | {:error, Ecto.Changeset.t()}
   def create(user_id, attrs \\ %{}), do: DaemonsRepo.create(%Daemon{user_id: user_id}, attrs)

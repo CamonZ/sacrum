@@ -33,10 +33,9 @@ unknown identity.
 - Bootstrap exchange (`POST /api/daemon/exchange`) is unauthenticated and
   one-time: `daemon_id` + `bootstrap_token` yield a reconnect token and its
   expiry. Replaying a consumed bootstrap fails with `invalid_credentials`.
-- The reconnect token is shown exactly once, at exchange time. It is never
-  present in any query, mutation, metadata projection or log; metadata
-  exposes only credential kind, status, expiry and revocation/consumption
-  timestamps.
+- The reconnect token is shown exactly once, in an exchange or renewal response. It is never
+  returned by metadata reads or included in logs; metadata exposes only
+  credential kind, status, expiry and revocation/consumption timestamps.
 - Exactly one live bootstrap exists per daemon at any time. If an exchange
   response is lost, the only recovery is owner-initiated rotation, which
   invalidates prior credentials and issues a fresh bootstrap on the same
@@ -157,11 +156,42 @@ never projected.
   daemon. A standalone daemon sends its reconnect credential as
   `Authorization: Bearer <reconnect_token>` together with
   `X-Daemon-ID: <daemon_id>` on `/graphql` requests. Sacrum resolves the
-  credential to its owning account and uses the normal account GraphQL context,
-  so the same token can be used by the daemon's CLI while it works.
+  credential to its owning account and includes the authenticated daemon and
+  credential IDs in the GraphQL context, so the same token can be used by the
+  daemon's CLI while it works.
 - The existing task API still locks workspace changes during an active run.
   Updating a worktree path from an executing daemon is also separate follow-up work.
 - The server advertises no endpoints. Daemon base URLs and socket endpoints
   come from client configuration and remain authoritative.
 - A reconnect credential has the same GraphQL account access as its owning
   account. Bootstrap credentials remain exchange-only.
+
+## Reconnect self-renewal
+
+An enrolled daemon calls `renewDaemonCredential` (no arguments) with
+`Authorization: Bearer <reconnect_token>` and `X-Daemon-ID: <daemon_id>`.
+The non-null `DaemonCredentialRenewal` response contains `reconnectToken` and
+`expiresAt`, with a fresh 30-day expiry and `Cache-Control: no-store`.
+Account API tokens and bootstrap credentials cannot authorize renewal.
+
+Renewal inserts a successor and records its predecessor; it never extends the
+old expiry. The predecessor remains valid until its original expiry or the
+successor's first socket connection or GraphQL authentication. That first use
+revokes the predecessor and invalidates its connected sessions after commit.
+Periodic channel revalidation alone does not activate a successor. Delayed
+invalidation rechecks database authorization and preserves a valid successor.
+Renewing again with a predecessor revokes its unused successor and issues a
+replacement, allowing recovery when a response was lost. Renewing with the
+successor starts the next replacement cycle.
+
+Authentication, renewal, owner rotation and deletion serialize on the daemon
+row lock. Rotation revokes pending successors as well; deletion cascades all
+credentials and renewal never recreates a deleted identity. Only the response
+contains plaintext; metadata and lifecycle/CDC projections contain neither
+plaintext nor token hashes.
+
+Invalid, expired, revoked, foreign or deleted credentials return the stable
+`invalid_credentials` code (HTTP 401 at authentication, GraphQL error for an
+account-token caller). Temporary database failures return `unavailable` (HTTP
+503 during daemon authentication or a GraphQL error during renewal); callers
+may retry with the same predecessor. Expired credentials cannot be renewed.
