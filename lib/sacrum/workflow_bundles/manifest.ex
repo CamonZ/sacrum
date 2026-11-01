@@ -67,7 +67,11 @@ defmodule Sacrum.WorkflowBundles.Manifest do
           step_edges: [map()],
           workflow_edges: [map()]
         }
-  @type error :: %{path: String.t(), message: String.t()}
+  @type error :: %{
+          required(:path) => String.t(),
+          required(:message) => String.t(),
+          optional(:code) => atom()
+        }
 
   @doc "Validates and normalizes a decoded JSON manifest."
   @spec validate(term()) :: {:ok, t()} | {:error, error()}
@@ -319,11 +323,15 @@ defmodule Sacrum.WorkflowBundles.Manifest do
   defp config_error(field, {_message, [validation: :required]}, path),
     do: error("#{path}.#{field}", "is required")
 
-  defp config_error(field, {message, _opts}, path) do
-    case String.split(message, ": ", parts: 2) do
-      ["$." <> subpath, detail] -> error("#{path}.#{subpath}", detail)
-      _message -> error("#{path}.#{field}", message)
-    end
+  # A config error's `:code` metadata survives into the bundle error.
+  defp config_error(field, {message, opts}, path) do
+    error =
+      case String.split(message, ": ", parts: 2) do
+        ["$." <> subpath, detail] -> error("#{path}.#{subpath}", detail)
+        _message -> error("#{path}.#{field}", message)
+      end
+
+    if code = opts[:code], do: Map.put(error, :code, code), else: error
   end
 
   defp atom_fields(map, fields, defaults) do

@@ -271,7 +271,7 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
         with {:ok, workflow} <- Accounts.Workflows.get_by(user.id, conditions: [id: workflow_id]) do
           case Accounts.WorkflowSteps.insert(workflow, args) do
             {:ok, step} -> {:ok, step}
-            {:error, changeset} -> {:error, ChangesetErrors.format(changeset)}
+            {:error, changeset} -> {:error, ChangesetErrors.to_error(changeset)}
           end
         end
       end)
@@ -291,7 +291,7 @@ defmodule SacrumWeb.Graphql.Types.WorkflowStepType do
         with {:ok, step} <- Accounts.WorkflowSteps.get_by(user.id, conditions: [id: id]) do
           case Accounts.WorkflowSteps.update(step, Map.delete(args, :id)) do
             {:ok, step} -> {:ok, step}
-            {:error, changeset} -> {:error, ChangesetErrors.format(changeset)}
+            {:error, changeset} -> {:error, ChangesetErrors.to_error(changeset)}
           end
         end
       end)

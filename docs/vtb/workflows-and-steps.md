@@ -265,4 +265,11 @@ When `agent_config.provider` is `anthropic` or `claude` and `harness` is
 `claude`, schemas must not use `format: uuid`, which prevents Claude
 StructuredOutput from registering its tool.
 
+To give an `llm_inference` step specific MCP servers, list them in
+`agent_config.mcp_config`, either as inline MCP JSON objects or as absolute
+daemon-local paths. Set `strict_mcp_config: true` to ignore ambient MCP config,
+and restrict tools with `allowed_tools` (`mcp__<server>__<tool>`). Credentials
+in inline MCP JSON must be `${ENV_VAR}` references. See
+[LLM MCP Config](../llm-mcp-config.md).
+
 Without this, the model will return prose — and downstream steps will get `execution.previous_output` as unparseable text.
