@@ -4,7 +4,9 @@ defmodule SacrumWeb.Graphql.Middleware.ChangesetErrors do
   GraphQL error maps so resolvers that leak a changeset don't crash Absinthe
   with a `Protocol.UndefinedError` for `String.Chars`.
 
-  Non-changeset errors pass through unchanged.
+  An error added with a `:code` option (`add_error(..., code: :some_code)`)
+  keeps it as the GraphQL error's `code`. Non-changeset errors pass through
+  unchanged.
   """
 
   @behaviour Absinthe.Middleware
@@ -20,7 +22,9 @@ defmodule SacrumWeb.Graphql.Middleware.ChangesetErrors do
 
   defp transform(%Ecto.Changeset{} = changeset) do
     changeset
-    |> Ecto.Changeset.traverse_errors(&ChangesetErrors.format_message/1)
+    |> Ecto.Changeset.traverse_errors(fn {_msg, opts} = error ->
+      {ChangesetErrors.format_message(error), opts[:code]}
+    end)
     |> flatten_errors()
   end
 
@@ -35,9 +39,10 @@ defmodule SacrumWeb.Graphql.Middleware.ChangesetErrors do
   defp flatten_messages(messages, path) when is_map(messages), do: flatten_errors(messages, path)
 
   defp flatten_messages(messages, path) do
-    Enum.map(messages, fn message ->
+    Enum.map(messages, fn {message, code} ->
       field = path |> Enum.reverse() |> Enum.map_join(".", &to_string/1)
-      %{message: "#{field}: #{message}", field: field}
+      error = %{message: "#{field}: #{message}", field: field}
+      if code, do: Map.put(error, :code, to_string(code)), else: error
     end)
   end
 end

@@ -210,6 +210,12 @@ Codex strict schemas, and Claude rejects `format: uuid` because it prevents
 Claude StructuredOutput from registering its tool. All schemas also receive
 general JSON Schema validation.
 
+`llm_inference` `agent_config.mcp_config` lists the MCP configs the daemon
+gives the agent. Each entry is inline MCP JSON or a daemon-local path.
+`strict_mcp_config: true` asks the daemon to ignore ambient MCP config. Sacrum
+validates both on create/update and again before dispatch, then forwards them
+verbatim. The daemon owns enforcement. See [LLM MCP Config](llm-mcp-config.md).
+
 **`task_type.ex`** — 11 mutations (CRUD via `Accounts.Tasks`, workflow ops via `Repo.TaskWorkflows`, deps via `Repo.TaskDependencies`)
 | Mutation | Arguments | Returns |
 |----------|-----------|---------|

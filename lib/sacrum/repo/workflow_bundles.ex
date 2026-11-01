@@ -347,7 +347,14 @@ defmodule Sacrum.Repo.WorkflowBundles do
     }
   end
 
-  defp bundle_error(%{path: path, message: message}) do
-    Ecto.Changeset.add_error(Ecto.Changeset.change(%Workflow{}), :bundle, "#{path}: #{message}")
+  defp bundle_error(%{path: path, message: message} = error) do
+    opts = if code = error[:code], do: [code: code], else: []
+
+    Ecto.Changeset.add_error(
+      Ecto.Changeset.change(%Workflow{}),
+      :bundle,
+      "#{path}: #{message}",
+      opts
+    )
   end
 end

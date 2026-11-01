@@ -2,7 +2,9 @@ defmodule Sacrum.Orchestrator.ExecutionConfig do
   @moduledoc """
   Renders a workflow step's config into the config a `StepExecution` runs
   with: the same variant and fields, with templates filled in from the
-  execution context. `llm_inference` renders its prompt; `human_input` its
+  execution context. `llm_inference` renders its prompt and re-validates its
+  verbatim `agent_config` MCP settings, so a stored config that predates the
+  write-time check cannot reach a daemon malformed; `human_input` its
   question, keeping its role verbatim; `structured_inference` resolves its state. `execute` strictly
   renders its script and snapshots the complete canonical context for
   daemon-owned variable binding. Other variants are used as configured, and
@@ -16,7 +18,8 @@ defmodule Sacrum.Orchestrator.ExecutionConfig do
 
   @spec render(WorkflowStep.t(), map()) :: {:ok, Config.t()} | {:error, term()}
   def render(%WorkflowStep{config: %Config.LlmInference{} = config}, context) do
-    with {:ok, prompt} <- PromptRenderer.render(config.prompt, context) do
+    with :ok <- Config.McpConfig.validate(config.agent_config),
+         {:ok, prompt} <- PromptRenderer.render(config.prompt, context) do
       {:ok, %{config | prompt: prompt}}
     end
   end
