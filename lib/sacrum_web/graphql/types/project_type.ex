@@ -12,6 +12,13 @@ defmodule SacrumWeb.Graphql.Types.ProjectType do
     field :id, :id
     field :name, :string
     field :slug, :string
+
+    @desc """
+    Prefix of task keys such as `VTB-1`. Null until set; setting it numbers the
+    project's existing tasks and enables numbering. Immutable once tasks are numbered.
+    """
+    field :key_prefix, :string
+
     field :description, :string
     field :inserted_at, :datetime
     field :updated_at, :datetime
@@ -56,6 +63,7 @@ defmodule SacrumWeb.Graphql.Types.ProjectType do
       arg(:name, non_null(:string))
       arg(:description, :string)
       arg(:slug, :string)
+      arg(:key_prefix, :string)
 
       arg(:codex_installed, non_null(:boolean),
         description: "Whether the GUI has Codex installed."
@@ -75,6 +83,7 @@ defmodule SacrumWeb.Graphql.Types.ProjectType do
       arg(:name, :string)
       arg(:description, :string)
       arg(:slug, :string)
+      arg(:key_prefix, :string)
 
       resolve(fn %{id: id} = args, %{context: %{current_user: user}} ->
         with {:ok, project} <- Accounts.Projects.get_by(user.id, conditions: [id: id]) do

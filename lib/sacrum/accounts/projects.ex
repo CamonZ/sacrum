@@ -10,6 +10,7 @@ defmodule Sacrum.Accounts.Projects do
     preloads: [],
     default_order: [asc: :inserted_at]
 
+  alias Sacrum.Repo
   alias Sacrum.Repo.Projects, as: ProjectsRepo
   alias Sacrum.Repo.Schemas.Project
 
@@ -25,12 +26,24 @@ defmodule Sacrum.Accounts.Projects do
 
   @doc """
   Update a project.
+
+  Setting the key prefix for the first time numbers the project's existing
+  tasks in the database, so the returned project is reloaded to carry the
+  advanced task counter.
   """
   @spec update(Project.t(), map()) :: {:ok, Project.t()} | {:error, Ecto.Changeset.t()}
   def update(%Project{} = project, attrs) do
-    project
-    |> Project.update_changeset(attrs)
-    |> ProjectsRepo.update()
+    changeset = Project.update_changeset(project, attrs)
+
+    case ProjectsRepo.update(changeset) do
+      {:ok, updated} ->
+        if Map.has_key?(changeset.changes, :key_prefix),
+          do: {:ok, Repo.reload!(updated)},
+          else: {:ok, updated}
+
+      error ->
+        error
+    end
   end
 
   @doc """

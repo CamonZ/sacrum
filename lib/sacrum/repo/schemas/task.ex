@@ -39,6 +39,9 @@ defmodule Sacrum.Repo.Schemas.Task do
   ]
 
   schema "tasks" do
+    # Project-scoped task number composing the readable key (`VTB-1`). Allocated
+    # by the database from one sequence per user/project; never cast.
+    field :number, :integer, read_after_writes: true
     field :title, :string
     field :description, :string
     field :level, :string, default: "task"

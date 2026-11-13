@@ -1,10 +1,12 @@
 defmodule SacrumWeb.ProjectChannel do
   use Phoenix.Channel
 
+  import Ecto.Query, only: [from: 2]
+
   alias Sacrum.Accounts.Projects
   alias Sacrum.Realtime.ProjectChannelCdcContract
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.{ArtifactLinkMetadata, Task, WorkflowStep}
+  alias Sacrum.Repo.Schemas.{ArtifactLinkMetadata, Project, Task, WorkflowStep}
   alias Sacrum.TaskRuns.RunControls
   alias Sacrum.TaskRuns.Status, as: TaskRunStatus
 
@@ -510,6 +512,8 @@ defmodule SacrumWeb.ProjectChannel do
   defp task_payload(task) do
     version_payload(%{
       id: task.id,
+      number: Map.get(task, :number),
+      key: task_key(task),
       title: task.title,
       description: task.description,
       level: task.level,
@@ -531,6 +535,14 @@ defmodule SacrumWeb.ProjectChannel do
       updated_at: task.updated_at
     })
   end
+
+  defp task_key(%{project_id: project_id, number: number}) when is_integer(number) do
+    query = from(p in Project, where: p.id == ^project_id, select: p.key_prefix)
+
+    Project.task_key(Repo.one(query), number)
+  end
+
+  defp task_key(_task), do: nil
 
   defp task_updated_payload(task) do
     task
