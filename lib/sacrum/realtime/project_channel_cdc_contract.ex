@@ -35,11 +35,11 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
   @schema_version 1
 
   @task_payload_keys ~w(
-    id title description level priority tags rejection_reason started_at completed_at project_id workflow_id
+    id number key title description level priority tags rejection_reason started_at completed_at project_id workflow_id
     current_step_id parent_id status archived workspace worktree inserted_at updated_at run_controls
   )a
 
-  @task_source_image_fields [:user_id | @task_payload_keys -- [:run_controls]]
+  @task_source_image_fields [:user_id | @task_payload_keys -- [:key, :run_controls]]
 
   @task_event_payload_keys [:schema_version | @task_payload_keys]
 

@@ -51,6 +51,15 @@ defmodule Sacrum.Accounts.Tasks do
   end
 
   @doc """
+  Find a task by its readable key (`VTB-12`) within a user's project.
+  """
+  @spec find_by_key(String.t(), String.t(), String.t()) ::
+          {:ok, Task.t()} | {:error, :not_found | :invalid_key}
+  def find_by_key(user_id, project_id, key) when is_binary(user_id) do
+    TasksRepo.find_by_key(key, project_id, user_id)
+  end
+
+  @doc """
   List tasks with optional filters for a user.
 
   Options:

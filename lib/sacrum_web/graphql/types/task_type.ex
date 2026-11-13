@@ -10,6 +10,7 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
 
   alias Sacrum.Accounts
   alias Sacrum.Orchestrator.TaskRegistry
+  alias Sacrum.Repo.Schemas.Project
   alias Sacrum.Repo.Schemas.Task
   alias Sacrum.Repo.TaskDependencies
   alias Sacrum.Repo.TaskWorkflows
@@ -31,6 +32,25 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
 
   object :task do
     field :id, :id
+
+    @desc """
+    Project-scoped task number; shared by all task levels and never reused. Null
+    until the project has a key prefix.
+    """
+    field :number, :integer
+
+    @desc """
+    Human-readable key such as `VTB-1`, unique within the task's project. Null
+    until the project has a key prefix.
+    """
+    field :key, :string do
+      resolve(
+        dataloader(Accounts.Projects, :project,
+          callback: fn project, task, _args -> {:ok, task_key(project, task)} end
+        )
+      )
+    end
+
     field :title, :string
     field :description, :string
     field :level, :string
@@ -198,6 +218,25 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
         user.id
         |> Accounts.Tasks.resolve_short_id(project_id, prefix)
         |> ShortIdErrors.format("task", prefix)
+      end)
+    end
+
+    @desc "Resolves a task by its readable key (`VTB-12`) within a project."
+    field :task_by_key, :task do
+      arg(:project_id, non_null(:uuid4))
+      arg(:key, non_null(:string))
+
+      resolve(fn %{project_id: project_id, key: key}, %{context: %{current_user: user}} ->
+        case Accounts.Tasks.find_by_key(user.id, project_id, key) do
+          {:ok, task} ->
+            {:ok, task}
+
+          {:error, :not_found} ->
+            {:error, "task with key '#{key}' not found"}
+
+          {:error, :invalid_key} ->
+            {:error, "invalid task key '#{key}': expected PREFIX-NUMBER such as VTB-1"}
+        end
       end)
     end
 
@@ -379,6 +418,9 @@ defmodule SacrumWeb.Graphql.Types.TaskType do
     field :done, :boolean
     field :done_at, :datetime
   end
+
+  defp task_key(%Project{} = project, %{number: number}), do: Project.task_key(project, number)
+  defp task_key(_project, _task), do: nil
 
   defp resolve_task_artifacts(task, _args, %{
          context: %{current_user: user}

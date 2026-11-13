@@ -58,6 +58,40 @@ User
 
 All entities use UUID primary keys and `utc_datetime_usec` timestamps.
 
+### Task identifiers
+
+Every task keeps its UUID primary key and can also carry a readable key such as
+`VTB-12`: the project's `keyPrefix` joined to the task's `number`. Numbering is
+opt-in per project and starts when the user sets the prefix.
+
+- **Prefix.** `keyPrefix` is 1-10 uppercase letters or digits starting with a
+  letter; input is uppercased. It is never generated: existing and new projects
+  start with `null`, and their tasks have `null` `number` and `key`. It can be
+  set, changed or cleared until the project issues its first number, then it is
+  immutable (changeset error, backed by a database trigger).
+- **Enabling.** Setting the prefix for the first time numbers the project's
+  existing tasks by `inserted_at`, then UUID, in the same transaction; new tasks
+  continue after them. Task inserts lock the project row, so tasks created
+  while numbering is being enabled are numbered too.
+- **Allocation.** Once enabled, a database trigger allocates `number` on insert
+  from the project's `last_task_number` counter, one sequence per user/project
+  shared by epics, tickets and tasks. The counter row lock serializes concurrent
+  inserts; `(user_id, project_id, number)` is unique. Client-supplied numbers
+  are ignored.
+- **Stability.** Edits, level changes and parent changes keep the number. Numbers
+  are never reused: deleting tasks leaves gaps and the counter never decreases.
+- **Project moves.** There is no move API, but the trigger defines the
+  behavior: changing a task's `project_id` (or `user_id`) allocates a fresh
+  number from the destination project, or clears it if the destination has no
+  prefix.
+- **Lookup.** Prefixes are not unique across projects, so readable keys always
+  resolve inside a project: `taskByKey(projectId:, key:)` matches the prefix
+  case-insensitively and is scoped to the caller. UUID and UUID-prefix
+  (`resolveShortId`) lookups are unchanged.
+
+`Task.number` and `Task.key` are exposed on the GraphQL `Task` type and in
+`task_created`/`task_updated` ProjectChannel payloads.
+
 ### Artifacts
 
 An artifact is a project-scoped text file with two content fields:
@@ -124,6 +158,8 @@ Queries and mutations are grouped by resource in `lib/sacrum_web/graphql/types/`
 |-------|-----------|-------------|
 | `tasks` | `project_id!`, `level`, `parent_id`, `status`, `tags`, `search`, `workflow_id`, `root_only`, `blocked` | List tasks with filters |
 | `task` | `id!` | Single task by canonical UUID |
+| `taskByKey` | `project_id!`, `key!` | Single task by readable key (`VTB-12`) within a project |
+| `resolveShortId` | `project_id!`, `prefix!` | Single task by 1-8 character UUID prefix within a project |
 | `listReady` | `project_id!` | Tasks with no incomplete blockers |
 | `findPath` | `from_id!`, `to_id!` | Shortest dependency path between tasks |
 
@@ -155,8 +191,8 @@ Queries and mutations are grouped by resource in `lib/sacrum_web/graphql/types/`
 **`project_type.ex`** — 3 mutations (all via `Accounts.Projects`)
 | Mutation | Arguments | Returns |
 |----------|-----------|---------|
-| `createProject` | `name!`, `description`, `slug`, `codex_installed!`, `claude_installed!` | `:project` |
-| `updateProject` | `id!`, `name`, `description`, `slug` | `:project` |
+| `createProject` | `name!`, `description`, `slug`, `key_prefix`, `codex_installed!`, `claude_installed!` | `:project` |
+| `updateProject` | `id!`, `name`, `description`, `slug`, `key_prefix` | `:project` |
 | `deleteProject` | `id!` | `:project` |
 
 **`artifact_types.ex`** — 3 mutations (via `Accounts.Artifacts`)

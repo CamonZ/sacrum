@@ -249,6 +249,39 @@ defmodule Sacrum.Repo.Tasks do
     end
   end
 
+  @doc """
+  Finds a task by its readable key (`VTB-12`) within a user's project.
+
+  The prefix is matched case-insensitively against the project's
+  `key_prefix`; prefixes are not unique across projects, so the project is
+  always part of the lookup.
+  """
+  @spec find_by_key(String.t(), String.t(), String.t()) ::
+          {:ok, Task.t()} | {:error, :not_found | :invalid_key}
+  def find_by_key(key, project_id, user_id) when is_binary(key) do
+    case Regex.run(~r/\A([A-Za-z][A-Za-z0-9]{0,9})-([1-9][0-9]{0,8})\z/, String.trim(key)) do
+      [_key, prefix, number] ->
+        query =
+          from(t in Task,
+            join: p in Project,
+            on: p.id == t.project_id and p.user_id == t.user_id,
+            where:
+              t.project_id == ^project_id and t.user_id == ^user_id and
+                t.number == ^String.to_integer(number) and
+                p.key_prefix == ^String.upcase(prefix),
+            preload: [:sections, :parent]
+          )
+
+        case Repo.one(query) do
+          %Task{} = task -> {:ok, Task.with_legacy_worktree(task)}
+          nil -> {:error, :not_found}
+        end
+
+      nil ->
+        {:error, :invalid_key}
+    end
+  end
+
   @spec insert(Project.t(), map()) :: {:ok, Task.t()} | {:error, Ecto.Changeset.t()}
   def insert(%Project{id: project_id, user_id: user_id}, attrs) when is_binary(user_id) do
     insert(project_id, user_id, attrs)
