@@ -5,7 +5,8 @@ defmodule SacrumWeb.AccountChannel do
   Clients join the public `accounts:me` topic. The channel derives the
   account from the authenticated user socket and subscribes internally to
   that user's `account:<user_id>` topic, which is reserved for server-side
-  broadcasts.
+  broadcasts. Project events are forwarded with their project scope alongside
+  the existing daemon lifecycle and metrics events.
   """
 
   use Phoenix.Channel
@@ -15,15 +16,19 @@ defmodule SacrumWeb.AccountChannel do
   alias Sacrum.Repo.Schemas.Daemon
 
   @events AccountChannelCdcContract.event_names()
+  @project_events Sacrum.Realtime.ProjectChannelCdcContract.regular_event_names()
   @metrics_event AccountChannelCdcContract.metrics_event_name()
   @schema_version 1
   @public_topic "accounts:me"
 
-  intercept([@metrics_event | @events])
+  intercept([@metrics_event | @events ++ @project_events])
 
   @spec join(String.t(), map(), Phoenix.Socket.t()) ::
           {:ok, Phoenix.Socket.t()} | {:error, map()}
   @impl true
+  def join(_topic, _params, %{assigns: %{principal: %{type: :daemon}}}),
+    do: {:error, %{reason: "forbidden"}}
+
   def join(
         @public_topic,
         _params,
@@ -42,6 +47,18 @@ defmodule SacrumWeb.AccountChannel do
 
   @spec event_names() :: [String.t()]
   def event_names, do: @events
+
+  @doc "Publish an already serialized project event using trusted row ownership."
+  @spec broadcast_project_event(String.t(), String.t(), String.t(), map()) ::
+          :ok | {:error, term()}
+  def broadcast_project_event(account_id, project_id, event, payload)
+      when is_binary(account_id) and is_binary(project_id) and event in @project_events do
+    SacrumWeb.Endpoint.broadcast(
+      AccountChannelCdcContract.topic(account_id),
+      event,
+      Map.put(payload, :project_id, project_id)
+    )
+  end
 
   @spec broadcast_daemon_created(String.t(), Daemon.t() | map()) :: :ok | {:error, term()}
   def broadcast_daemon_created(account_id, daemon) when is_map(daemon) do
@@ -71,6 +88,11 @@ defmodule SacrumWeb.AccountChannel do
   def metrics_event_name, do: @metrics_event
 
   @impl true
+  def handle_out(event, payload, socket) when event in @project_events do
+    push(socket, event, payload)
+    {:noreply, socket}
+  end
+
   def handle_out(event, payload, socket) when event in @events do
     push(socket, event, daemon_payload(payload))
     {:noreply, socket}
@@ -87,7 +109,7 @@ defmodule SacrumWeb.AccountChannel do
         %Broadcast{topic: topic, event: event, payload: payload},
         %{assigns: %{account_topic: topic}} = socket
       )
-      when event in @events do
+      when event in @events or event in @project_events do
     handle_out(event, payload, socket)
   end
 

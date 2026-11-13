@@ -1,7 +1,7 @@
 # WalEx CDC GUI Projection Contract
 
 This document defines the default-client realtime contract that a WalEx CDC
-projector must preserve for `SacrumWeb.ProjectChannel`.
+projector preserves for `SacrumWeb.ProjectChannel`, with parallel owner-account delivery through `SacrumWeb.AccountChannel`.
 
 The canonical machine-readable contract is
 `Sacrum.Realtime.ProjectChannelCdcContract`. `ProjectChannel.intercept/1` is
@@ -17,7 +17,42 @@ outside this contract:
 | `run_step` | Daemon command dispatched to workers, not a GUI state projection. |
 | `cancel_step` | Daemon command dispatched to workers, not a GUI state projection. |
 
-The CDC projector must not emit daemon commands.
+The CDC projector must not emit daemon commands. `run_step` and `cancel_step`
+are sent only by `Sacrum.Realtime.CommandBroadcaster` to the assigned
+`daemon:<daemon_id>` channel. The legacy project `client_type=daemon` filter
+remains unchanged; it does not move commands onto project or account topics.
+
+## Parallel Account Delivery
+
+All 39 project event types below are also delivered on `accounts:me` to every
+connected client of the project's owning account, independently of project
+subscriptions. Existing `project:<project_id>` topics, event names, payloads,
+recipients and `client_type` filtering remain available and unchanged. There is
+no project-channel deprecation or required subscription migration.
+
+Each account copy has the same event name and serialized payload as the project
+copy, plus `project_id` where the project payload omitted it (for example,
+`task_deleted`, `workflow_deleted`, `step_deleted`, `section_deleted`, and
+semantic step-movement events). `schema_version: 1` is preserved. Ownership is
+server-derived from the row's `user_id`, including the full before image for
+deletes and cascades; routing does not query a project that may already have
+been deleted. Semantic projections carry the trusted source owner internally,
+without adding it to either public payload. Direct streaming deltas use the
+execution-authorized session log's owner. Account IDs in join parameters are
+ignored, and daemon-authenticated sockets cannot join `accounts:me`.
+
+A client subscribed to both destinations receives both copies of each emission.
+It may deduplicate using event identity and row timestamps as appropriate; for
+transient text deltas, both copies share the same generated log ID and timestamps.
+Delivery is live, with no new replay or exactly-once guarantee across reconnects.
+Notification history and read state retain their existing behavior.
+
+An account subscription receives traffic for **all** owned projects, including
+artifact bodies and streaming logs. Consumers should budget bandwidth, memory,
+and processing accordingly, and can continue using individual project channels
+when they only need selected projects. Existing `daemon_created`,
+`daemon_updated`, `daemon_deleted`, and `daemon_metrics` account events are
+unchanged.
 
 ## Healthy Live CDC Path
 
@@ -30,11 +65,10 @@ after each event.
 Repo, Accounts, and routing paths must not emit these default-client events
 directly. They commit rows; `Sacrum.Realtime.Cdc.Projector`
 owns the ProjectChannel payload construction for regular clients. The
-imperative ProjectChannel broadcasts are daemon commands such as `run_step` and
-`cancel_step`, and streaming text deltas: harness `text` events with `delta`
+exception is streaming text deltas: harness `text` events with `delta`
 semantics are never stored. The execution's session-log ingestion process
-publishes each one directly as `session_log_created`, with the same payload a
-persisted log projects. The item's final `snapshot` text is persisted and
+publishes each one directly as `session_log_created` to both project and owner
+account destinations, with the same payload a persisted log projects. The item's final `snapshot` text is persisted and
 arrives through CDC like any other log. A retried delta may be published
 again, and a client that reconnects mid-stream only recovers persisted logs.
 
@@ -243,5 +277,5 @@ the persisted database schema. Daemon status is limited to `pending` and
 Account events are projections of committed rows and are delivered to every
 active `accounts:me` subscriber for the owning authenticated user. They do not
 alter the existing
-`daemon:<daemon_id>` registration/revalidation channel or project-scoped
-`run_step`/`cancel_step` command behavior.
+`daemon:<daemon_id>` registration/revalidation or its assigned
+`run_step`/`cancel_step` command delivery.

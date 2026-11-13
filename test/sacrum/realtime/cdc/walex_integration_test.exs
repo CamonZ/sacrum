@@ -2,6 +2,9 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
   use ExUnit.Case, async: false
 
   import Sacrum.CdcAssertions
+  import Phoenix.ChannelTest, only: [socket: 3]
+
+  @endpoint SacrumWeb.Endpoint
   import Sacrum.DataCase, only: [workflow_step_attrs: 1]
   import Sacrum.TestWorkspace
 
@@ -1350,6 +1353,217 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
       assert found["content"] == attrs.content
       assert found["logicalKey"] == attrs.logical_key
     end)
+  end
+
+  test "parallel account delivery keeps ownership through committed deletes, cascades and rollback" do
+    with_project(fn user, project ->
+      {other_user, other_project} = create_project()
+      clients = parallel_clients([{user, project}, {other_user, other_project}])
+
+      try do
+        {:ok, task} = Tasks.insert(project, %{title: "Owner A"})
+        assert_parallel_delivery(clients, [{project.id, "task_created", task.id}])
+        {:ok, other_task} = Tasks.insert(other_project, %{title: "Owner B"})
+        assert_parallel_delivery(clients, [{other_project.id, "task_created", other_task.id}])
+
+        {:ok, section} =
+          TaskSections.insert(task, %{section_type: "context", content: "**通知** 🌍"})
+
+        assert_parallel_delivery(clients, [{project.id, "section_created", section.id}])
+
+        {:ok, other_section} =
+          TaskSections.insert(other_task, %{section_type: "context", content: "Other owner"})
+
+        assert_parallel_delivery(clients, [
+          {other_project.id, "section_created", other_section.id}
+        ])
+
+        {:ok, workflow} = Workflows.insert(project, %{name: "Deleted workflow"})
+        assert_parallel_delivery(clients, [{project.id, "workflow_created", workflow.id}])
+
+        {:ok, artifact} =
+          Artifacts.insert(user.id, project.id, %{filename: "report.md", body: "# Résumé 🌍"})
+
+        assert_parallel_delivery(clients, [{project.id, "artifact_created", artifact.id}])
+
+        {:ok, attachment} =
+          ArtifactLinks.insert(user.id, project.id, artifact.id, %{
+            subject_type: "project",
+            subject_id: project.id
+          })
+
+        assert_parallel_delivery(clients, [{project.id, "artifact_link_created", attachment.id}])
+
+        {:ok, notification} =
+          Accounts.Notifications.publish(user.id, project.id, %{
+            message: "**通知** 🌍",
+            severity: "info"
+          })
+
+        assert_parallel_delivery(clients, [{project.id, "notification_created", notification.id}])
+
+        assert {:error, :deliberate_rollback} =
+                 Repo.transaction(fn ->
+                   {:ok, _} = Tasks.insert(project, %{title: "Must never be delivered"})
+                   {:ok, _} = TaskSections.delete(section)
+                   Repo.rollback(:deliberate_rollback)
+                 end)
+
+        # A later committed change is the WAL processing barrier. Inbox equality
+        # below rejects any event from the rolled-back insert or delete.
+        {:ok, task} =
+          Tasks.update(Task.update_changeset(task, %{title: "Committed after rollback"}))
+
+        assert_parallel_delivery(clients, [{project.id, "task_updated", task.id}])
+        assert Repo.get!(Sacrum.Repo.Schemas.TaskSection, section.id)
+
+        {:ok, _} = Tasks.delete(other_task)
+
+        assert_parallel_delivery(clients, [
+          {other_project.id, "section_deleted", other_section.id},
+          {other_project.id, "task_deleted", other_task.id}
+        ])
+
+        {:ok, _} = Accounts.Projects.delete(project)
+        assert Repo.get(Sacrum.Repo.Schemas.Project, project.id) == nil
+
+        assert_parallel_delivery(clients, [
+          {project.id, "task_deleted", task.id},
+          {project.id, "section_deleted", section.id},
+          {project.id, "workflow_deleted", workflow.id},
+          {project.id, "workflow_deleted", task.workflow_id},
+          {project.id, "step_deleted", task.current_step_id},
+          {project.id, "artifact_deleted", artifact.id},
+          {project.id, "artifact_link_deleted", attachment.id},
+          {project.id, "notification_deleted", notification.id}
+        ])
+
+        # Owner B remains connected and independent after A's project disappears.
+        {:ok, survivor} = Tasks.insert(other_project, %{title: "B survives A's cascade"})
+        assert_parallel_delivery(clients, [{other_project.id, "task_created", survivor.id}])
+      after
+        cleanup_user(other_user.id)
+      end
+    end)
+  end
+
+  test "transient deltas and committed snapshots share identical parallel client payloads" do
+    with_project(fn user, project ->
+      {other_user, other_project} = create_project()
+
+      try do
+        {:ok, task} = Tasks.insert(project, %{title: "Parallel stream"})
+
+        {:ok, execution} =
+          Sacrum.Repo.StepExecutions.insert(user.id, %{
+            project_id: project.id,
+            task_id: task.id,
+            step_name: "Streaming"
+          })
+
+        :ok = subscribe_project(project.id)
+        # Flush committed fixture changes before opening the client inboxes.
+        assert_project_broadcast("step_execution_created", %{id: execution.id}, 1_000)
+        clients = parallel_clients([{user, project}, {other_user, other_project}])
+
+        ingest = fn event ->
+          # Untrusted owner/project fields cannot change execution-derived scope.
+          attrs =
+            Map.merge(event, %{
+              step_execution_id: execution.id,
+              project_id: other_project.id,
+              user_id: other_user.id
+            })
+
+          Accounts.SessionLogs.insert(user.id, attrs)
+        end
+
+        for {event_id, text} <- [{"parallel-delta-1", "Hé"}, {"parallel-delta-2", "llo 🌍"}] do
+          delta = Sacrum.HarnessFixture.text(event_id, "delta", text)
+          assert {:ok, log} = ingest.(delta)
+          assert_parallel_delivery(clients, [{project.id, "session_log_created", log.id}])
+          assert Repo.get(Sacrum.Repo.Schemas.SessionLog, log.id) == nil
+        end
+
+        snapshot =
+          Sacrum.HarnessFixture.text("parallel-final", "snapshot", "Héllo 🌍", sequence: 3)
+
+        assert {:ok, final} = ingest.(snapshot)
+        assert_parallel_delivery(clients, [{project.id, "session_log_created", final.id}])
+        assert Repo.get!(Sacrum.Repo.Schemas.SessionLog, final.id).content == snapshot.content
+
+        assert {:ok, repeated} = ingest.(snapshot)
+        assert repeated.id == final.id
+        assert {:ok, _} = ingest.(Sacrum.HarnessFixture.text("parallel-late", "delta", "!"))
+        # A committed notification after the retries is a deterministic WAL barrier.
+        {:ok, barrier} =
+          Accounts.Notifications.publish(user.id, project.id, %{
+            message: "Stream barrier",
+            severity: "info"
+          })
+
+        assert_parallel_delivery(clients, [{project.id, "notification_created", barrier.id}])
+        assert [%{id: final_id}] = SessionLogs.all(conditions: [step_execution_id: execution.id])
+        assert final_id == final.id
+      after
+        cleanup_user(other_user.id)
+      end
+    end)
+  end
+
+  defp parallel_clients(owners) do
+    for {user, project} <- owners,
+        topic <- ["accounts:me", "accounts:me", "project:#{project.id}"] do
+      :ok = subscribe_project(project.id)
+
+      collector =
+        start_supervised!(%{id: make_ref(), start: {Sacrum.ChannelCollector, :start_link, [[]]}})
+
+      socket = socket(SacrumWeb.UserSocket, "parallel-cdc:#{user.id}", %{current_user: user})
+
+      {:ok, _, joined} =
+        Phoenix.ChannelTest.join(%{socket | transport_pid: collector}, topic, %{
+          "user_id" => Ecto.UUID.generate()
+        })
+
+      %{project_id: project.id, topic: topic, socket: joined, collector: collector}
+    end
+  end
+
+  defp assert_parallel_delivery(clients, emissions) do
+    projects =
+      for {project_id, event, id} <- emissions do
+        topic = "project:#{project_id}"
+
+        assert_receive %Phoenix.Socket.Broadcast{
+                         topic: ^topic,
+                         event: ^event,
+                         payload: %{id: ^id} = payload
+                       },
+                       2_000
+
+        {project_id, event, payload}
+      end
+
+    # Wait for the current WalEx projection batch and then each client channel.
+    # This makes empty/duplicate inbox assertions deterministic without sleeps.
+    :sys.get_state(Sacrum.Realtime.Cdc.Projector)
+    Enum.each(clients, &:sys.get_state(&1.socket.channel_pid))
+
+    for client <- clients do
+      expected =
+        for {project_id, event, payload} <- projects, project_id == client.project_id do
+          payload =
+            if client.topic == "accounts:me",
+              do: Map.put(payload, :project_id, project_id),
+              else: payload
+
+          {event, payload}
+        end
+
+      actual = Enum.map(Sacrum.ChannelCollector.take(client.collector), &{&1.event, &1.payload})
+      assert Enum.sort(actual) == Enum.sort(expected)
+    end
   end
 
   defp committed_db(fun) do
