@@ -23,9 +23,15 @@ Sacrum is an API-only workflow engine and task management system built with Phoe
 **Artifact files** — Projects contain named text files whose contents are stored in `Artifact.body`. `ArtifactLink` records attach those files to projects, tasks, task sections, workflows, task runs, and step executions.
 
 **Real-time updates** — Project state changes broadcast to `ProjectChannel`,
-keyed by project ID (`project:<project_id>`), while daemon fleet lifecycle
-changes are projected after commit to the owner's internal
-`account:<user_id>` topic and exposed to clients through `accounts:me`.
+keyed by project ID (`project:<project_id>`), and in parallel through the owner's
+`accounts:me` channel with the same payload plus `project_id` wherever absent.
+Account subscriptions receive all 39 event types across owned projects, including
+transient streaming text deltas; project subscriptions and filtering are unchanged.
+Clients using both destinations receive both copies and may deduplicate. Full
+artifact bodies and streaming logs can increase account-wide bandwidth. Daemon
+fleet lifecycle changes also reach `accounts:me` through the owner's internal
+`account:<user_id>` topic. Execution commands stay on `daemon:<daemon_id>`.
+See [the realtime contract](walex-cdc-gui-projection-contract.md#parallel-account-delivery).
 Connected clients receive live task, workflow, step, and daemon-management
 updates without receiving credential secrets.
 

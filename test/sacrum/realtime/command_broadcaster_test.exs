@@ -16,6 +16,7 @@ defmodule Sacrum.Realtime.CommandBroadcasterTest do
     end
 
     :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "project:#{project_id}")
+    :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "account:#{user_id}")
 
     data = %{
       execution: %{

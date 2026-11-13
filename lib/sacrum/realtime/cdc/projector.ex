@@ -1,6 +1,6 @@
 defmodule Sacrum.Realtime.Cdc.Projector do
   @moduledoc """
-  Projects committed WalEx row events into default-client ProjectChannel payloads.
+  Projects committed WalEx rows to project channels and their owning accounts.
 
   The projector is intentionally regular-client only. Daemon commands such as
   `run_step` and `cancel_step` stay on the explicit orchestration path.
@@ -142,7 +142,13 @@ defmodule Sacrum.Realtime.Cdc.Projector do
   defp project_event(%WalEx.Event{} = event, context) do
     event
     |> projections(context)
-    |> Enum.map(&dispatch_projection/1)
+    |> Enum.map(fn projection ->
+      # Semantic projections have no row-shaped payload. Carry their trusted
+      # source owner through serialization too; never query a deleted project.
+      record = if event.type == :delete, do: event.old_record, else: event.new_record
+      payload = Map.put(projection.payload, :user_id, value(record, :user_id))
+      dispatch_projection(%{projection | payload: payload})
+    end)
   end
 
   defp projections(%WalEx.Event{source: %{table: "tasks"}, type: :update} = event, context) do
