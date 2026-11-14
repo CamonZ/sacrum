@@ -16,6 +16,7 @@ defmodule Sacrum.Realtime.Cdc.Projector do
   alias Sacrum.Repo.Schemas.{
     Artifact,
     ArtifactLink,
+    ChatCatalogEntry,
     CodeRef,
     Daemon,
     Notification,
@@ -43,6 +44,7 @@ defmodule Sacrum.Realtime.Cdc.Projector do
   @daemon_row_meaningful_fields [:status, :name, :max_concurrency, :enrolled_at]
 
   @schema_by_table %{
+    "chat_catalog_entries" => ChatCatalogEntry,
     "tasks" => Task,
     "workflows" => Workflow,
     "workflow_steps" => WorkflowStep,
@@ -61,6 +63,9 @@ defmodule Sacrum.Realtime.Cdc.Projector do
   }
 
   @channel_broadcasts %{
+    "chat_catalog_created" => :broadcast_chat_catalog_created,
+    "chat_catalog_updated" => :broadcast_chat_catalog_updated,
+    "chat_catalog_deleted" => :broadcast_chat_catalog_deleted,
     "task_created" => :broadcast_task_created,
     "task_updated" => :broadcast_task_updated,
     "task_deleted" => :broadcast_task_deleted,
@@ -473,6 +478,14 @@ defmodule Sacrum.Realtime.Cdc.Projector do
   defp projections(%WalEx.Event{source: %{table: "daemons"}, type: :delete, old_record: record}) do
     daemon = record_to_struct!("daemons", record)
     [projection("daemon_deleted", daemon.user_id, daemon_snapshot(daemon))]
+  end
+
+  defp projections(%WalEx.Event{source: %{table: "chat_catalog_entries"}, type: type} = event)
+       when type in [:insert, :update, :delete] do
+    record = if type == :delete, do: event.old_record, else: event.new_record
+    entry = record_to_struct!("chat_catalog_entries", record)
+    suffix = %{insert: "created", update: "updated", delete: "deleted"}[type]
+    [projection("chat_catalog_" <> suffix, entry.project_id, entry)]
   end
 
   defp projections(%WalEx.Event{}), do: []

@@ -484,7 +484,7 @@ Completion and failure still use the existing execution and TaskRun lifecycle.
 
 For the complete WalEx CDC mapping, payload completeness rules, daemon-event
 exclusions, and snapshot/reconnect recovery contract, see
-[WalEx CDC GUI Projection Contract](walex-cdc-gui-projection-contract.md).
+[WalEx CDC GUI Projection Contract](vtb://artifact/67649d4c-8f2f-43b4-a03a-8a7bc7f9afe6).
 
 Connect with the API token, then join:
 

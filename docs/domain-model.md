@@ -31,7 +31,7 @@ Clients using both destinations receive both copies and may deduplicate. Full
 artifact bodies and streaming logs can increase account-wide bandwidth. Daemon
 fleet lifecycle changes also reach `accounts:me` through the owner's internal
 `account:<user_id>` topic. Execution commands stay on `daemon:<daemon_id>`.
-See [the realtime contract](walex-cdc-gui-projection-contract.md#parallel-account-delivery).
+See [the realtime contract](vtb://artifact/67649d4c-8f2f-43b4-a03a-8a7bc7f9afe6).
 Connected clients receive live task, workflow, step, and daemon-management
 updates without receiving credential secrets.
 
@@ -993,7 +993,7 @@ Connect to `project:<project_id>` via WebSocket to receive real-time updates. Th
 The complete default-client WalEx CDC mapping, source-row requirements, payload
 completeness guarantees, daemon command exclusions, and snapshot/gap recovery
 rules are defined in
-[WalEx CDC GUI Projection Contract](walex-cdc-gui-projection-contract.md).
+[WalEx CDC GUI Projection Contract](vtb://artifact/67649d4c-8f2f-43b4-a03a-8a7bc7f9afe6).
 
 Daemon management clients use the authenticated `accounts:me` channel for
 `daemon_created`, `daemon_updated`, and `daemon_deleted` projections. Sacrum

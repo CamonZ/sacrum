@@ -463,7 +463,7 @@ end
 
 After commit, `Sacrum.Realtime.Cdc.Projector` receives the row image and emits
 the complete default-client payload described in
-[WalEx CDC GUI Projection Contract](walex-cdc-gui-projection-contract.md).
+[WalEx CDC GUI Projection Contract](vtb://artifact/67649d4c-8f2f-43b4-a03a-8a7bc7f9afe6).
 Imperative daemon commands such as `run_step` and `cancel_step` are the
 exception and go through `Sacrum.Realtime.CommandBroadcaster`.
 
