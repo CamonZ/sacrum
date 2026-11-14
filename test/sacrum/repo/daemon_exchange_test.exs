@@ -17,19 +17,35 @@ defmodule Sacrum.Repo.DaemonExchangeTest do
     %{owner: owner, daemon: daemon, bootstrap: bootstrap}
   end
 
-  test "exchange preserves owner and identity, issues only hashes and refuses replay", ctx do
+  defp access(daemon_id, token, opts \\ []) do
+    case Daemons.authenticate_access(daemon_id, token, opts) do
+      {:ok, %{daemon: daemon}} -> {:ok, daemon}
+      error -> error
+    end
+  end
+
+  test "exchange preserves owner and identity, issues only SHA-256 hashes and refuses replay",
+       ctx do
     now = DateTime.utc_now()
 
-    assert {:ok, daemon, reconnect, credential} =
+    assert {:ok, daemon, pair} =
              Accounts.Daemons.exchange_bootstrap(ctx.daemon.id, ctx.bootstrap, now: now)
 
     assert daemon.id == ctx.daemon.id
     assert daemon.user_id == ctx.owner.id
-    assert credential.daemon_id == daemon.id
-    assert credential.credential_kind == "reconnect"
-    assert credential.expires_at == DateTime.add(now, 2_592_000)
-    refute credential.token_hash == reconnect
-    assert Argon2.verify_pass(reconnect, credential.token_hash)
+    assert pair.access_expires_at == DateTime.add(now, 3_600)
+    assert pair.refresh_expires_at == DateTime.add(now, 2_592_000)
+
+    for {kind, token} <- [access: pair.access_token, refresh: pair.refresh_token] do
+      credential =
+        Repo.one!(
+          from c in DaemonCredential,
+            where: c.daemon_id == ^daemon.id and c.credential_kind == ^to_string(kind)
+        )
+
+      assert credential.token_hash == DaemonCredential.hash_token(token)
+      refute String.starts_with?(credential.token_hash, "$argon2")
+    end
 
     bootstrap =
       Repo.one!(
@@ -38,16 +54,21 @@ defmodule Sacrum.Repo.DaemonExchangeTest do
       )
 
     assert bootstrap.consumed_at == now
-    assert {:ok, ^daemon} = Daemons.verify_token(daemon.id, reconnect, now: now)
-    assert {:error, :invalid_credentials} = Daemons.verify_token(daemon.id, ctx.bootstrap)
+    assert bootstrap.token_hash == DaemonCredential.hash_token(ctx.bootstrap)
+    assert {:ok, %{id: id}} = access(daemon.id, pair.access_token, now: now)
+    assert id == daemon.id
+    assert {:error, :invalid_credentials} = access(daemon.id, ctx.bootstrap)
+    assert {:error, :invalid_credentials} = access(daemon.id, pair.refresh_token)
     assert {:error, :invalid_credentials} = Daemons.exchange_bootstrap(daemon.id, ctx.bootstrap)
 
     assert Repo.aggregate(from(c in DaemonCredential, where: c.daemon_id == ^daemon.id), :count) ==
-             2
+             3
   end
 
-  test "bootstrap expiry boundary is exclusive and reconnect has independent expiry", ctx do
+  test "bootstrap expiry boundary is exclusive and access has independent expiry", ctx do
     bootstrap = Repo.one!(from c in DaemonCredential, where: c.daemon_id == ^ctx.daemon.id)
+
+    assert abs(DateTime.diff(bootstrap.expires_at, bootstrap.inserted_at)) in 86_399..86_401
 
     assert {:error, :invalid_credentials} =
              Daemons.exchange_bootstrap(ctx.daemon.id, ctx.bootstrap, now: bootstrap.expires_at)
@@ -57,15 +78,15 @@ defmodule Sacrum.Repo.DaemonExchangeTest do
                now: DateTime.add(bootstrap.expires_at, 1)
              )
 
-    assert {:ok, daemon, reconnect, credential} =
-             Daemons.exchange_bootstrap(ctx.daemon.id, ctx.bootstrap,
-               now: DateTime.add(bootstrap.expires_at, -1, :microsecond)
-             )
+    now = DateTime.add(bootstrap.expires_at, -1, :microsecond)
 
-    assert {:ok, _} = Daemons.verify_token(daemon.id, reconnect, now: bootstrap.expires_at)
+    assert {:ok, daemon, pair} =
+             Daemons.exchange_bootstrap(ctx.daemon.id, ctx.bootstrap, now: now)
+
+    assert {:ok, _} = access(daemon.id, pair.access_token, now: bootstrap.expires_at)
 
     assert {:error, :invalid_credentials} =
-             Daemons.verify_token(daemon.id, reconnect, now: credential.expires_at)
+             access(daemon.id, pair.access_token, now: pair.access_expires_at)
   end
 
   test "malformed input, wrong daemon pairing and revoked credentials fail closed", ctx do
@@ -79,7 +100,8 @@ defmodule Sacrum.Repo.DaemonExchangeTest do
           {other.id, ctx.bootstrap}
         ] do
       assert {:error, :invalid_credentials} = Daemons.exchange_bootstrap(id, token)
-      assert {:error, :invalid_credentials} = Daemons.verify_token(id, token)
+      assert {:error, :invalid_credentials} = Daemons.authenticate_access(id, token)
+      assert {:error, :invalid_credentials} = Daemons.refresh(id, token)
     end
 
     bootstrap = Repo.one!(from c in DaemonCredential, where: c.daemon_id == ^ctx.daemon.id)
@@ -89,10 +111,11 @@ defmodule Sacrum.Repo.DaemonExchangeTest do
              Daemons.exchange_bootstrap(ctx.daemon.id, ctx.bootstrap)
   end
 
-  test "deleted daemon refuses exchange and reconnect authentication", ctx do
-    assert {:ok, _, reconnect, _} = Daemons.exchange_bootstrap(ctx.daemon.id, ctx.bootstrap)
+  test "deleted daemon refuses exchange, access and refresh", ctx do
+    assert {:ok, _, pair} = Daemons.exchange_bootstrap(ctx.daemon.id, ctx.bootstrap)
     assert {:ok, deleted} = Accounts.Daemons.unregister(ctx.owner.id, ctx.daemon.id)
-    assert {:error, :invalid_credentials} = Daemons.verify_token(deleted.id, reconnect)
+    assert {:error, :invalid_credentials} = access(deleted.id, pair.access_token)
+    assert {:error, :invalid_credentials} = Daemons.refresh(deleted.id, pair.refresh_token)
     assert {:error, :invalid_credentials} = Daemons.rotate(deleted)
     assert {:error, :not_found} = Accounts.Daemons.rotate(ctx.owner.id, ctx.daemon.id)
 
@@ -101,8 +124,8 @@ defmodule Sacrum.Repo.DaemonExchangeTest do
     assert {:error, :invalid_credentials} = Daemons.exchange_bootstrap(another.id, bootstrap)
   end
 
-  test "lost response recovery requires owner reissue and invalidates the lost reconnect", ctx do
-    assert {:ok, _, lost_reconnect, _} = Daemons.exchange_bootstrap(ctx.daemon.id, ctx.bootstrap)
+  test "lost response recovery requires owner reissue and invalidates the lost pair", ctx do
+    assert {:ok, _, lost} = Daemons.exchange_bootstrap(ctx.daemon.id, ctx.bootstrap)
 
     assert {:error, :invalid_credentials} =
              Daemons.exchange_bootstrap(ctx.daemon.id, ctx.bootstrap)
@@ -110,18 +133,79 @@ defmodule Sacrum.Repo.DaemonExchangeTest do
     assert {:error, :not_found} = Accounts.Daemons.rotate(Ecto.UUID.generate(), ctx.daemon.id)
     assert {:ok, daemon, new_bootstrap} = Accounts.Daemons.rotate(ctx.owner.id, ctx.daemon.id)
     assert daemon.id == ctx.daemon.id
-    assert {:error, :invalid_credentials} = Daemons.verify_token(daemon.id, lost_reconnect)
-    assert {:error, :invalid_credentials} = Daemons.verify_token(daemon.id, new_bootstrap)
-    assert {:ok, _, recovered, _} = Daemons.exchange_bootstrap(daemon.id, new_bootstrap)
-    assert {:ok, _} = Daemons.verify_token(daemon.id, recovered)
+    assert {:error, :invalid_credentials} = access(daemon.id, lost.access_token)
+    assert {:error, :invalid_credentials} = Daemons.refresh(daemon.id, lost.refresh_token)
+    assert {:error, :invalid_credentials} = access(daemon.id, new_bootstrap)
+    assert {:ok, _, recovered} = Daemons.exchange_bootstrap(daemon.id, new_bootstrap)
+    assert {:ok, _} = access(daemon.id, recovered.access_token)
 
     assert Repo.aggregate(
              from(c in DaemonCredential,
                where:
                  c.daemon_id == ^daemon.id and c.status == "active" and
-                   c.credential_kind == "reconnect"
+                   c.credential_kind in ["access", "refresh"]
              ),
              :count
-           ) == 1
+           ) == 2
+  end
+
+  describe "refresh" do
+    setup ctx do
+      {:ok, _, pair} = Daemons.exchange_bootstrap(ctx.daemon.id, ctx.bootstrap)
+      %{pair: pair}
+    end
+
+    test "rotates the pair, revokes earlier access tokens and rejects wrong-kind tokens", ctx do
+      id = ctx.daemon.id
+
+      assert {:error, :invalid_credentials} = Daemons.refresh(id, ctx.pair.access_token)
+      assert {:error, :invalid_credentials} = Daemons.refresh(id, ctx.bootstrap)
+
+      assert {:ok, _, next} = Daemons.refresh(id, ctx.pair.refresh_token)
+      assert next.refresh_token != ctx.pair.refresh_token
+      assert {:error, :invalid_credentials} = access(id, ctx.pair.access_token)
+      assert {:ok, _} = access(id, next.access_token)
+      assert {:error, :invalid_credentials} = access(id, next.refresh_token)
+    end
+
+    test "an expired refresh token cannot refresh", ctx do
+      assert {:error, :invalid_credentials} =
+               Daemons.refresh(ctx.daemon.id, ctx.pair.refresh_token,
+                 now: ctx.pair.refresh_expires_at
+               )
+    end
+
+    test "a refresh token is rotated once its successor is first used", ctx do
+      id = ctx.daemon.id
+      {:ok, _, next} = Daemons.refresh(id, ctx.pair.refresh_token)
+
+      # Before the successor is used the predecessor is still valid (lost response).
+      assert {:ok, _} = Daemons.authenticate_access(id, next.access_token)
+      assert {:error, :invalid_credentials} = Daemons.refresh(id, ctx.pair.refresh_token)
+      assert {:ok, _, _} = Daemons.refresh(id, next.refresh_token)
+    end
+
+    test "re-presenting the predecessor before use recovers and revokes the unused successor",
+         ctx do
+      id = ctx.daemon.id
+      {:ok, _, lost} = Daemons.refresh(id, ctx.pair.refresh_token)
+      assert {:ok, _, recovered} = Daemons.refresh(id, ctx.pair.refresh_token)
+
+      assert {:error, :invalid_credentials} = access(id, lost.access_token)
+      assert {:error, :invalid_credentials} = Daemons.refresh(id, lost.refresh_token)
+      assert {:ok, _} = access(id, recovered.access_token)
+
+      # Using the recovered successor retires the original predecessor.
+      assert {:error, :invalid_credentials} = Daemons.refresh(id, ctx.pair.refresh_token)
+      assert {:ok, _, _} = Daemons.refresh(id, recovered.refresh_token)
+    end
+
+    test "owner rotation and deletion invalidate access and refresh tokens", ctx do
+      {:ok, _, _new_bootstrap} = Accounts.Daemons.rotate(ctx.owner.id, ctx.daemon.id)
+      assert {:error, :invalid_credentials} = access(ctx.daemon.id, ctx.pair.access_token)
+
+      assert {:error, :invalid_credentials} =
+               Daemons.refresh(ctx.daemon.id, ctx.pair.refresh_token)
+    end
   end
 end

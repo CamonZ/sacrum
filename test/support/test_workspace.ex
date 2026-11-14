@@ -6,7 +6,7 @@ defmodule Sacrum.TestWorkspace do
   def assign_workspace(%Task{} = task, user_id, path \\ nil) do
     {:ok, daemon, bootstrap} = Sacrum.Repo.Daemons.create(user_id)
 
-    {:ok, _daemon, _reconnect, _credential} =
+    {:ok, _daemon, _reconnect} =
       Accounts.Daemons.exchange_bootstrap(daemon.id, bootstrap)
 
     path = path || "/tmp/test-workspace-#{task.id}"

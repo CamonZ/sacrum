@@ -10,8 +10,8 @@ A daemon is an owner-scoped identity. Its lifecycle status is one of:
 
 | Status | Meaning |
 |--------|---------|
-| `pending` | Provisioned but never enrolled. A live bootstrap credential exists. |
-| `active` | Enrolled at least once (a reconnect credential was issued). |
+| `pending` | Provisioned but never enrolled. A live registration (bootstrap) token exists. |
+| `active` | Enrolled at least once (an access/refresh token pair was issued). |
 
 `status` describes credential-enrollment lifecycle, not connection health.
 There is no daemon-level `revoked` or `removed` status. Identity invalidation
@@ -21,8 +21,10 @@ Timestamps:
 
 - `enrolledAt` — first successful bootstrap exchange; `null` for identities
   that have never enrolled (never fabricated).
-- `expiresAt` (bootstrap responses) — the one-time enrollment token's expiry.
-  Reconnect credentials issued by exchange last 30 days.
+- `expiresAt` (bootstrap responses) — the one-time registration token's expiry.
+  The registration token is valid for **24 hours** from creation or owner
+  rotation. Access tokens issued by exchange/refresh last 1 hour and refresh
+  tokens 30 days.
 
 Deletion removes the daemon identity and its credentials. The daemon ID is not
 recreated, and a later request with the old ID is treated like any other
@@ -30,22 +32,38 @@ unknown identity.
 
 ## Credentials and secret handling
 
-- Bootstrap exchange (`POST /api/daemon/exchange`) is unauthenticated and
-  one-time: `daemon_id` + `bootstrap_token` yield a reconnect token and its
-  expiry. Replaying a consumed bootstrap fails with `invalid_credentials`.
-- The reconnect token is shown exactly once, in an exchange or renewal response. It is never
-  returned by metadata reads or included in logs; metadata exposes only
-  credential kind, status, expiry and revocation/consumption timestamps.
-- Exactly one live bootstrap exists per daemon at any time. If an exchange
-  response is lost, the only recovery is owner-initiated rotation, which
-  invalidates prior credentials and issues a fresh bootstrap on the same
-  identity.
-- Credential-level `revoked` rows remain supported for rotation history. They
-  do not represent a daemon lifecycle state and are all deleted with their
-  daemon.
-- Socket connect uses `daemon_id` + `reconnect_token`. Joining
-  `daemon:{daemon_id}` revalidates the credential against the database, so a
-  session established before deletion is terminated on the post-commit
+A daemon uses three token kinds. All are high-entropy random values stored only
+as SHA-256 hashes (never Argon2) and authenticated by an indexed hash lookup.
+
+| Token | Lifetime | Issued by | Authorizes |
+|-------|----------|-----------|------------|
+| Registration (bootstrap) | 24 hours, one-time | `createDaemon`, `rotateDaemonCredentials` | Only `POST /api/daemon/exchange` |
+| Access | 1 hour | exchange, refresh | GraphQL requests and daemon socket connect/join |
+| Refresh | 30 days | exchange, refresh | Only `POST /api/daemon/refresh` |
+
+Creating or rotating a daemon issues **only** the registration token; no access
+or refresh token exists until it is exchanged. An access token never authorizes
+a refresh, a refresh token never authorizes a request or socket connect, and a
+registration token authorizes neither.
+
+- Exchange (`POST /api/daemon/exchange`, unauthenticated) takes `daemon_id` and
+  `bootstrap_token`, consumes the registration token and returns `daemon_id`,
+  `access_token`, `access_token_expires_at`, `refresh_token` and
+  `refresh_token_expires_at`. Replaying a consumed token fails with
+  `invalid_credentials`.
+- Plaintext tokens are shown exactly once, in an exchange or refresh response
+  (`Cache-Control: no-store`). They are never returned by metadata reads or
+  included in logs; metadata exposes only credential kind, status, expiry and
+  revocation/consumption timestamps.
+- Exactly one live registration token exists per daemon at any time. If an
+  exchange response is lost, the only recovery is owner-initiated rotation,
+  which invalidates prior credentials and issues a fresh registration token on
+  the same identity.
+- Credential-level `revoked` rows remain for rotation history. They do not
+  represent a daemon lifecycle state and are all deleted with their daemon.
+- Socket connect uses `daemon_id` + `access_token`. Joining `daemon:{daemon_id}`
+  revalidates the credential against the database, so a session established
+  before deletion, rotation or refresh is terminated on the post-commit
   invalidation message or on the next periodic revalidation.
 
 ## Names
@@ -84,7 +102,7 @@ request and release slots; it is not a durable step-attempt ledger.
 ## Owner management surface (GraphQL)
 
 All management operations require an authenticated account token or a valid
-daemon reconnect credential. Bootstrap credentials authorize nothing on this
+daemon access token. Registration and refresh tokens authorize nothing on this
 surface.
 
 | Operation | Contract |
@@ -94,7 +112,7 @@ surface.
 | `setDaemonMaxConcurrency(id, maxConcurrency)` | Sets a positive per-daemon execution limit and returns the updated daemon. |
 | `clearDaemonMaxConcurrency(id)` | Clears the per-daemon execution limit and returns the updated daemon. |
 | `unregisterDaemon(id)` | Owner-scoped hard delete. Deletes the identity and cascaded credentials in a locked transaction, then invalidates any connected daemon session after commit. |
-| `rotateDaemonCredentials(id)` | New bootstrap on the same identity; prior credentials (and the live session) are invalidated. Unknown/foreign/deleted IDs are `daemon not found`. |
+| `rotateDaemonCredentials(id)` | New registration token on the same identity; every outstanding access and refresh token (and the live session) is invalidated. Unknown/foreign/deleted IDs are `daemon not found`. |
 | `daemons` | Active fleet. Deleted identities are absent. |
 | `daemon(id)` / `daemonEnrollmentMetadata(id)` | Owner-scoped reads. Deleted identities are not readable; foreign IDs are indistinguishable from unknown IDs. |
 
@@ -111,7 +129,8 @@ persisted daemon and credential identity before shutting down.
 - Delete and rotation are owner-scoped; unknown, foreign and already-deleted
   identities are intentionally indistinguishable.
 - Rotation preserves the daemon identity and `enrolledAt`, revokes its prior
-  active credentials, and issues a new bootstrap. Rotation never recreates a
+  active credentials (registration, access and refresh), and issues a new
+  registration token. Rotation never recreates a
   deleted daemon and cannot issue credentials after deletion wins a race.
 - A failed delete leaves the daemon and every credential unchanged because
   the row delete and database cascade are transactional.
@@ -153,45 +172,78 @@ never projected.
 - Commands are not replayed on reconnect. `StepExecution` remains the durable
   execution and reporting record, but it is not a command queue.
 - Execution reports use the existing GraphQL mutations already consumed by the
-  daemon. A standalone daemon sends its reconnect credential as
-  `Authorization: Bearer <reconnect_token>` together with
+  daemon. A standalone daemon sends its access token as
+  `Authorization: Bearer <access_token>` together with
   `X-Daemon-ID: <daemon_id>` on `/graphql` requests. Sacrum resolves the
-  credential to its owning account and includes the authenticated daemon and
+  token to its owning account with a single SHA-256 indexed lookup (no Argon2,
+  no transaction, no row lock) and includes the authenticated daemon and
   credential IDs in the GraphQL context, so the same token can be used by the
   daemon's CLI while it works.
 - The existing task API still locks workspace changes during an active run.
   Updating a worktree path from an executing daemon is also separate follow-up work.
 - The server advertises no endpoints. Daemon base URLs and socket endpoints
   come from client configuration and remain authoritative.
-- A reconnect credential has the same GraphQL account access as its owning
-  account. Bootstrap credentials remain exchange-only.
+- An access token has the same GraphQL account access as its owning account.
+  Registration and refresh tokens never authorize GraphQL.
 
-## Reconnect self-renewal
+## Access and refresh tokens
 
-An enrolled daemon calls `renewDaemonCredential` (no arguments) with
-`Authorization: Bearer <reconnect_token>` and `X-Daemon-ID: <daemon_id>`.
-The non-null `DaemonCredentialRenewal` response contains `reconnectToken` and
-`expiresAt`, with a fresh 30-day expiry and `Cache-Control: no-store`.
-Account API tokens and bootstrap credentials cannot authorize renewal.
+The daemon authenticates every request with its short-lived access token and
+calls `POST /api/daemon/refresh` before it expires. Refresh is a separate,
+unauthenticated endpoint that takes the **refresh token** (not the possibly
+expired access token), so a leaked access token cannot be renewed:
 
-Renewal inserts a successor and records its predecessor; it never extends the
-old expiry. The predecessor remains valid until its original expiry or the
-successor's first socket connection or GraphQL authentication. That first use
-revokes the predecessor and invalidates its connected sessions after commit.
-Periodic channel revalidation alone does not activate a successor. Delayed
-invalidation rechecks database authorization and preserves a valid successor.
-Renewing again with a predecessor revokes its unused successor and issues a
-replacement, allowing recovery when a response was lost. Renewing with the
-successor starts the next replacement cycle.
+```json
+{"daemon_id": "<uuid>", "refresh_token": "<token>"}
+```
 
-Authentication, renewal, owner rotation and deletion serialize on the daemon
-row lock. Rotation revokes pending successors as well; deletion cascades all
-credentials and renewal never recreates a deleted identity. Only the response
-contains plaintext; metadata and lifecycle/CDC projections contain neither
-plaintext nor token hashes.
+The response has the same shape as exchange: a new access token plus a rotated
+refresh token with their expiries, `Cache-Control: no-store`.
 
-Invalid, expired, revoked, foreign or deleted credentials return the stable
-`invalid_credentials` code (HTTP 401 at authentication, GraphQL error for an
-account-token caller). Temporary database failures return `unavailable` (HTTP
-503 during daemon authentication or a GraphQL error during renewal); callers
-may retry with the same predecessor. Expired credentials cannot be renewed.
+Sockets are tied to their access token, so every refresh (at least hourly)
+closes the daemon's live socket(s); the daemon reconnects with the new access
+token. Dispatched work is not lost: commands are not replayed, and the durable
+`StepExecution` plus snapshot recovery on reconnect remain authoritative (see
+Execution delivery).
+
+Rotation rules:
+
+- A refresh issues a new access+refresh pair and immediately revokes **all** of
+  the daemon's previous access tokens (live sockets on them are terminated and
+  must reconnect with the new access token).
+- The presented refresh token is rotated once its successor pair is first used
+  (a GraphQL request, a socket connect, or a refresh). From then on it simply
+  fails with `invalid_credentials`; there is no revoke-everything reuse
+  detection.
+- Until then it can be presented again to recover a lost refresh response: that
+  issues a new pair and revokes the unused successor pair. Presenting the
+  successor starts the next rotation cycle.
+- Because of that recovery window a daemon can briefly hold two valid refresh
+  tokens (the predecessor and its unused successor); never more.
+
+Rotation, revocation and the daemon row lock run **only** on refresh (and exchange,
+owner rotation and deletion). A regular request performs one indexed SELECT.
+The only write on the request path is a single idempotent UPDATE the first time
+a freshly refreshed access token is used, retiring the predecessor refresh token.
+
+Exchange, refresh, owner rotation and deletion serialize on the daemon row
+lock; deletion cascades all credentials and refresh never recreates a deleted
+identity. Only the response contains plaintext; metadata and lifecycle/CDC
+projections contain neither plaintext nor token hashes.
+
+Invalid, expired, revoked, foreign or deleted tokens return the stable
+`invalid_credentials` code (HTTP 401). A token presented with another daemon's
+`X-Daemon-ID` is rejected. Temporary database failures return `unavailable`
+(HTTP 503 from the token endpoints and during request authentication); callers
+may retry with the same refresh token. Expired refresh tokens cannot be used;
+the owner must rotate credentials and the daemon re-exchange.
+
+**Deployment is a hard cutover.** The migration deletes all `reconnect` rows
+and revokes unconsumed registration tokens, so every enrolled daemon must have
+its owner run `rotateDaemonCredentials` and be upgraded to the new daemon build
+(release the companion daemon change together with this one). Old and new app
+versions must not run side by side. Rolling the migration back is lossy; use a
+forward migration instead.
+
+The `renewDaemonCredential` mutation and the `reconnect_token` socket parameter
+no longer exist; sockets connect with `access_token`.

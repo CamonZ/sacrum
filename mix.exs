@@ -79,6 +79,7 @@ defmodule Sacrum.MixProject do
       {:dns_cluster, "~> 0.2.0"},
       {:bandit, "~> 1.5"},
       {:argon2_elixir, "~> 4.1"},
+      {:stream_data, "~> 1.1", only: :test},
       {:absinthe, "~> 1.7"},
       {:absinthe_plug, "~> 1.5"},
       {:absinthe_phoenix, "~> 2.0"},

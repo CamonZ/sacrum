@@ -15,7 +15,7 @@ defmodule Sacrum.Repo.Schemas.DaemonCredentialTest do
   test "rejects invalid status and short hashes" do
     changeset =
       DaemonCredential.create_changeset(
-        %DaemonCredential{daemon_id: Ecto.UUID.generate()},
+        %DaemonCredential{daemon_id: Ecto.UUID.generate(), credential_kind: "access"},
         %{token_hash: "short", expires_at: DateTime.utc_now(), status: "unknown"}
       )
 
@@ -23,8 +23,8 @@ defmodule Sacrum.Repo.Schemas.DaemonCredentialTest do
     assert %{token_hash: [_], status: [_]} = errors
   end
 
-  test "accepts bootstrap and reconnect kinds while rejecting unknown kinds" do
-    for kind <- ["bootstrap", "reconnect"] do
+  test "accepts bootstrap and refresh kinds while rejecting unknown kinds" do
+    for kind <- ["bootstrap", "refresh"] do
       changeset =
         DaemonCredential.create_changeset(
           %DaemonCredential{daemon_id: Ecto.UUID.generate(), credential_kind: kind},
@@ -40,7 +40,7 @@ defmodule Sacrum.Repo.Schemas.DaemonCredentialTest do
            ).valid?
   end
 
-  test "bootstrap consumability is independent from reconnect validity" do
+  test "bootstrap consumability is independent from refresh validity" do
     now = DateTime.utc_now()
 
     bootstrap = %DaemonCredential{
@@ -49,15 +49,15 @@ defmodule Sacrum.Repo.Schemas.DaemonCredentialTest do
       expires_at: DateTime.add(now, 60, :second)
     }
 
-    reconnect = %DaemonCredential{
-      credential_kind: "reconnect",
+    refresh = %DaemonCredential{
+      credential_kind: "refresh",
       status: "active",
       expires_at: DateTime.add(now, -1, :second)
     }
 
     assert DaemonCredential.consumable?(bootstrap, now)
     refute DaemonCredential.consumable?(%{bootstrap | consumed_at: now}, now)
-    refute DaemonCredential.consumable?(reconnect, now)
+    refute DaemonCredential.consumable?(refresh, now)
   end
 
   test "consumption is bootstrap-only and one-time" do
@@ -74,13 +74,13 @@ defmodule Sacrum.Repo.Schemas.DaemonCredentialTest do
     consumed = %{bootstrap | consumed_at: now}
     refute DaemonCredential.consume_changeset(consumed).valid?
 
-    reconnect = %DaemonCredential{
-      credential_kind: "reconnect",
+    refresh = %DaemonCredential{
+      credential_kind: "refresh",
       status: "active",
       expires_at: DateTime.add(now, 60, :second)
     }
 
-    refute DaemonCredential.consume_changeset(reconnect).valid?
+    refute DaemonCredential.consume_changeset(refresh).valid?
     refute DaemonCredential.consume_changeset(%{bootstrap | expires_at: now}).valid?
     refute DaemonCredential.consume_changeset(%{bootstrap | status: "revoked"}).valid?
     refute DaemonCredential.consume_changeset(%{bootstrap | revoked_at: now}).valid?
@@ -96,7 +96,7 @@ defmodule Sacrum.Repo.Schemas.DaemonCredentialTest do
     base = %DaemonCredential{status: "active", expires_at: DateTime.add(now, 60, :second)}
 
     assert DaemonCredential.valid_for_authentication?(%{base | credential_kind: "bootstrap"}, now)
-    assert DaemonCredential.valid_for_authentication?(%{base | credential_kind: "reconnect"}, now)
+    assert DaemonCredential.valid_for_authentication?(%{base | credential_kind: "refresh"}, now)
     refute DaemonCredential.valid_for_authentication?(%{base | consumed_at: now}, now)
     refute DaemonCredential.valid_for_authentication?(%{base | status: "revoked"}, now)
     refute DaemonCredential.valid_for_authentication?(%{base | expires_at: now}, now)
@@ -107,7 +107,7 @@ defmodule Sacrum.Repo.Schemas.DaemonCredentialTest do
       id: Ecto.UUID.generate(),
       daemon_id: Ecto.UUID.generate(),
       token_hash: "stored-hash",
-      credential_kind: "reconnect",
+      credential_kind: "refresh",
       status: "active",
       expires_at: DateTime.utc_now()
     }
@@ -127,7 +127,7 @@ defmodule Sacrum.Repo.Schemas.DaemonCredentialTest do
         %DaemonCredential{daemon_id: daemon_id, credential_kind: "bootstrap"},
         %{
           daemon_id: Ecto.UUID.generate(),
-          credential_kind: "reconnect",
+          credential_kind: "refresh",
           consumed_at: DateTime.utc_now(),
           revoked_at: DateTime.utc_now(),
           token_hash: String.duplicate("a", 32),
@@ -145,57 +145,12 @@ defmodule Sacrum.Repo.Schemas.DaemonCredentialTest do
   test "returns a changeset error for an invalid daemon reference" do
     changeset =
       DaemonCredential.create_changeset(
-        %DaemonCredential{daemon_id: Ecto.UUID.generate()},
+        %DaemonCredential{daemon_id: Ecto.UUID.generate(), credential_kind: "access"},
         %{token_hash: String.duplicate("a", 32), expires_at: DateTime.utc_now()}
       )
 
     assert {:error, invalid} = Sacrum.Repo.insert(changeset)
     assert errors_on(invalid).daemon_id == ["does not exist"]
-  end
-
-  test "database defaults preserve legacy expiry and revocation without granting bootstrap privileges" do
-    {:ok, user} =
-      Sacrum.Repo.Users.insert(%{
-        email: "legacy@example.com",
-        username: "legacy",
-        password: "password123"
-      })
-
-    {:ok, daemon} = Sacrum.Repo.insert(%Sacrum.Repo.Schemas.Daemon{user_id: user.id})
-    now = DateTime.utc_now()
-
-    for {status, expires_at, revoked_at} <- [
-          {"active", DateTime.add(now, 60), nil},
-          {"active", DateTime.add(now, -60), nil},
-          {"revoked", DateTime.add(now, 60), now}
-        ] do
-      id = Ecto.UUID.generate()
-      # Omit the newly introduced columns just as the legacy application does.
-      {1, _} =
-        Sacrum.Repo.insert_all("daemon_credentials", [
-          %{
-            id: Ecto.UUID.dump!(id),
-            daemon_id: Ecto.UUID.dump!(daemon.id),
-            token_hash: Ecto.UUID.generate(),
-            status: status,
-            expires_at: expires_at,
-            revoked_at: revoked_at,
-            inserted_at: now,
-            updated_at: now
-          }
-        ])
-
-      row = Sacrum.Repo.get!(DaemonCredential, id)
-      assert row.credential_kind == "reconnect"
-      assert row.consumed_at == nil
-      assert row.expires_at == expires_at
-      assert row.revoked_at == revoked_at
-      assert row.status == status
-      refute DaemonCredential.consumable?(row, now)
-
-      assert DaemonCredential.valid_for_authentication?(row, now) ==
-               (status == "active" and DateTime.compare(expires_at, now) == :gt)
-    end
   end
 
   test "database rejects inconsistent credential states" do
@@ -217,6 +172,7 @@ defmodule Sacrum.Repo.Schemas.DaemonCredentialTest do
       changeset =
         %DaemonCredential{
           daemon_id: daemon.id,
+          credential_kind: "access",
           token_hash: Ecto.UUID.generate(),
           expires_at: DateTime.utc_now()
         }

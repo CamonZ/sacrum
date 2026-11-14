@@ -102,11 +102,11 @@ defmodule SacrumWeb.AccountChannelTest do
     user = create_user("daemon")
     {:ok, daemon, bootstrap} = Daemons.create(user.id)
 
-    {:ok, _daemon, reconnect_token, _credential} =
+    {:ok, _daemon, %{access_token: reconnect_token}} =
       Daemons.exchange_bootstrap(daemon.id, bootstrap)
 
     {:ok, socket} =
-      connect(UserSocket, %{"daemon_id" => daemon.id, "reconnect_token" => reconnect_token})
+      connect(UserSocket, %{"daemon_id" => daemon.id, "access_token" => reconnect_token})
 
     assert {:error, %{reason: "forbidden"}} =
              subscribe_and_join(socket, "accounts:me")

@@ -43,14 +43,22 @@ defmodule SacrumWeb.UserSocketTest do
     end
   end
 
-  test "standalone principal derives owner and credential from verified reconnect" do
+  test "standalone principal derives owner and credential from a verified access token" do
     {user, _} = create_user_and_token()
     {:ok, daemon, bootstrap} = Sacrum.Accounts.Daemons.create(user.id)
-    {:ok, _, token, credential} = Sacrum.Accounts.Daemons.exchange_bootstrap(daemon.id, bootstrap)
+
+    {:ok, _, %{access_token: token}} =
+      Sacrum.Accounts.Daemons.exchange_bootstrap(daemon.id, bootstrap)
+
+    credential =
+      Sacrum.Repo.get_by!(Sacrum.Repo.Schemas.DaemonCredential,
+        daemon_id: daemon.id,
+        credential_kind: "access"
+      )
 
     params = %{
       "daemon_id" => daemon.id,
-      "reconnect_token" => token,
+      "access_token" => token,
       "user_id" => Ecto.UUID.generate(),
       "credential_id" => Ecto.UUID.generate()
     }
@@ -69,25 +77,27 @@ defmodule SacrumWeb.UserSocketTest do
     assert UserSocket.id(socket) == "daemon_socket:#{daemon.id}:#{credential.id}"
   end
 
-  test "bootstrap, wrong identity, revoked reconnect and mixed principals fail closed" do
+  test "bootstrap, wrong identity, revoked access and mixed principals fail closed" do
     {user, account_token} = create_user_and_token()
     {:ok, daemon, bootstrap} = Sacrum.Accounts.Daemons.create(user.id)
 
     assert :error =
              UserSocket.connect(
-               %{"daemon_id" => daemon.id, "reconnect_token" => bootstrap},
+               %{"daemon_id" => daemon.id, "access_token" => bootstrap},
                %Phoenix.Socket{},
                %{}
              )
 
-    {:ok, _, token, _} = Sacrum.Accounts.Daemons.exchange_bootstrap(daemon.id, bootstrap)
+    {:ok, _, %{access_token: token, refresh_token: refresh}} =
+      Sacrum.Accounts.Daemons.exchange_bootstrap(daemon.id, bootstrap)
 
     for params <- [
-          %{"daemon_id" => Ecto.UUID.generate(), "reconnect_token" => token},
-          %{"daemon_id" => "malformed", "reconnect_token" => token},
-          %{"daemon_id" => daemon.id, "reconnect_token" => bootstrap},
-          %{"daemon_id" => daemon.id, "reconnect_token" => token, "token" => account_token},
-          %{"daemon_id" => daemon.id, "reconnect_token" => %{}}
+          %{"daemon_id" => Ecto.UUID.generate(), "access_token" => token},
+          %{"daemon_id" => "malformed", "access_token" => token},
+          %{"daemon_id" => daemon.id, "access_token" => bootstrap},
+          %{"daemon_id" => daemon.id, "access_token" => token, "token" => account_token},
+          %{"daemon_id" => daemon.id, "access_token" => %{}},
+          %{"daemon_id" => daemon.id, "access_token" => refresh}
         ] do
       assert :error = UserSocket.connect(params, %Phoenix.Socket{}, %{})
     end
@@ -96,7 +106,7 @@ defmodule SacrumWeb.UserSocketTest do
 
     assert :error =
              UserSocket.connect(
-               %{"daemon_id" => daemon.id, "reconnect_token" => token},
+               %{"daemon_id" => daemon.id, "access_token" => token},
                %Phoenix.Socket{},
                %{}
              )

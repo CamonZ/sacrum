@@ -544,9 +544,9 @@ is a separate optimization. Provider-format and no-key ingestion are rejected.
 
 Standalone daemon reporting uses the same GraphQL mutations and response
 shapes as account-authenticated clients. The request must include the daemon's
-reconnect credential as `Authorization: Bearer <reconnect_token>` and its
+access token as `Authorization: Bearer <access_token>` and its
 stable identity as `X-Daemon-ID: <daemon_id>`. The server resolves that
-credential to the owning account and uses the normal account GraphQL context,
+token to the owning account and uses the normal account GraphQL context,
 so the same token can be used by the daemon's CLI during execution. Bootstrap
 credentials remain exchange-only.
 

@@ -302,7 +302,7 @@ defmodule Sacrum.Orchestrator.SessionBindingTest do
     {:ok, workflow} = Accounts.Workflows.insert(user.id, project.id, %{name: "Sessions"})
     {:ok, daemon, bootstrap} = Sacrum.Repo.Daemons.create(user.id)
 
-    {:ok, _daemon, _reconnect, _credential} =
+    {:ok, _daemon, _reconnect} =
       Accounts.Daemons.exchange_bootstrap(daemon.id, bootstrap)
 
     {:ok, task} =

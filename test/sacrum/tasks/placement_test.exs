@@ -42,7 +42,7 @@ defmodule Sacrum.Tasks.PlacementTest do
   test "rejects daemon reassignment during an active task run and rolls back the update", ctx do
     {:ok, other_daemon, other_bootstrap} = Sacrum.Repo.Daemons.create(ctx.user.id)
 
-    {:ok, _daemon, _reconnect, _credential} =
+    {:ok, _daemon, _reconnect} =
       Accounts.Daemons.exchange_bootstrap(other_daemon.id, other_bootstrap)
 
     assert {:error, :workspace_locked} =
@@ -92,7 +92,7 @@ defmodule Sacrum.Tasks.PlacementTest do
 
     {:ok, other_daemon, other_bootstrap} = Sacrum.Repo.Daemons.create(other_user.id)
 
-    {:ok, _daemon, _reconnect, _credential} =
+    {:ok, _daemon, _reconnect} =
       Accounts.Daemons.exchange_bootstrap(other_daemon.id, other_bootstrap)
 
     assert {:error, :daemon_not_found} =

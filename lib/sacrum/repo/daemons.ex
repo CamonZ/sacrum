@@ -5,12 +5,29 @@ defmodule Sacrum.Repo.Daemons do
 
   import Ecto.Query
   alias Sacrum.Repo
-  alias Sacrum.Repo.DaemonCredentials
   alias Sacrum.Repo.Schemas.{Daemon, DaemonCredential, User}
 
   @token_bytes 32
+  # Registration (bootstrap) token: 24h, one-time.
   @default_ttl 86_400
-  @reconnect_ttl_seconds 2_592_000
+  # Access token: 1h. Refresh token: 30 days.
+  @access_ttl_seconds 3_600
+  @refresh_ttl_seconds 2_592_000
+
+  @typedoc "A freshly issued access/refresh pair; plaintext is only available here."
+  @type token_pair :: %{
+          access_token: String.t(),
+          access_expires_at: DateTime.t(),
+          refresh_token: String.t(),
+          refresh_expires_at: DateTime.t()
+        }
+
+  @typedoc "An authenticated access credential with its daemon and owning user."
+  @type access_principal :: %{
+          daemon: Daemon.t(),
+          credential: DaemonCredential.t(),
+          user: User.t()
+        }
 
   @typedoc """
   Committed lifecycle mutation result. Token/credential are present only for
@@ -34,17 +51,18 @@ defmodule Sacrum.Repo.Daemons do
     end
   end
 
-  @spec create_bootstrap(User.t() | String.t() | Daemon.t(), map()) ::
+  @spec create_bootstrap(User.t() | String.t() | Daemon.t(), map(), keyword()) ::
           {:ok, Daemon.t(), String.t(), DaemonCredential.t()} | {:error, Ecto.Changeset.t()}
-  def create_bootstrap(user_or_daemon, attrs \\ %{})
+  def create_bootstrap(user_or_daemon, attrs \\ %{}, opts \\ [])
 
-  def create_bootstrap(%User{id: user_id}, attrs),
-    do: create_bootstrap(%Daemon{user_id: user_id}, attrs)
+  def create_bootstrap(%User{id: user_id}, attrs, opts),
+    do: create_bootstrap(%Daemon{user_id: user_id}, attrs, opts)
 
-  def create_bootstrap(%Daemon{} = daemon, attrs) do
+  def create_bootstrap(%Daemon{} = daemon, attrs, opts) do
     token = new_token()
-    token_hash = Argon2.hash_pwd_salt(token)
-    expires_at = DateTime.add(DateTime.utc_now(), Map.get(attrs, :ttl, @default_ttl), :second)
+    token_hash = DaemonCredential.hash_token(token)
+    now = now(opts)
+    expires_at = DateTime.add(now, Map.get(attrs, :ttl, @default_ttl), :second)
 
     multi =
       Ecto.Multi.new()
@@ -65,8 +83,8 @@ defmodule Sacrum.Repo.Daemons do
     end
   end
 
-  def create_bootstrap(user_id, attrs) when is_binary(user_id),
-    do: create_bootstrap(%Daemon{user_id: user_id}, attrs)
+  def create_bootstrap(user_id, attrs, opts) when is_binary(user_id),
+    do: create_bootstrap(%Daemon{user_id: user_id}, attrs, opts)
 
   @doc """
   Unregisters a daemon by deleting it under its row lock and transaction.
@@ -211,7 +229,7 @@ defmodule Sacrum.Repo.Daemons do
   def rotate_bootstrap(%Daemon{} = daemon, opts \\ []) do
     now = now(opts)
     token = new_token()
-    token_hash = Argon2.hash_pwd_salt(token)
+    token_hash = DaemonCredential.hash_token(token)
 
     Repo.transaction(fn ->
       daemon = lock_daemon_row!(daemon.id)
@@ -230,169 +248,199 @@ defmodule Sacrum.Repo.Daemons do
   end
 
   @doc """
-  Exchanges a bootstrap exactly once, returning the existing daemon and a new
-  reconnect token plus its metadata. Only the successful response contains the
+  Exchanges a registration (bootstrap) token exactly once, returning the daemon
+  and a fresh access/refresh pair. Only the successful response contains the
   plaintext. A lost response requires owner-authorized rotation and a new exchange.
 
-  The optional `:now` DateTime is a deterministic deadline seam for trusted callers.
-  Production callers omit it so validity is checked again after acquiring locks.
+  The optional `:now` DateTime is a deterministic clock seam for trusted callers.
   """
   @spec exchange_bootstrap(term(), term(), keyword()) ::
-          {:ok, Daemon.t(), String.t(), DaemonCredential.t()}
-          | {:error, :invalid_credentials | Ecto.Changeset.t()}
+          {:ok, Daemon.t(), token_pair()}
+          | {:error, :invalid_credentials | :unavailable | Ecto.Changeset.t()}
   def exchange_bootstrap(daemon_id, token, opts \\ [])
 
   def exchange_bootstrap(daemon_id, token, opts) when is_binary(daemon_id) and is_binary(token) do
-    with {:ok, daemon_id} <- Ecto.UUID.cast(daemon_id),
-         %DaemonCredential{} = bootstrap <-
-           matching_credential(daemon_id, token, "bootstrap", now(opts)) do
-      # Expensive hashing happens before locks; mutable validity is rechecked below.
-      reconnect_token = new_token()
-      reconnect_hash = Argon2.hash_pwd_salt(reconnect_token)
-
-      result = exchange_credential(daemon_id, bootstrap.id, reconnect_hash, opts)
-
-      case result do
-        {:ok, {daemon, reconnect}} -> {:ok, daemon, reconnect_token, reconnect}
-        {:error, reason} -> {:error, reason}
+    transact_credential(daemon_id, "bootstrap", token, opts, fn daemon, bootstrap, now ->
+      if DaemonCredential.consumable?(bootstrap, now) do
+        Repo.update!(DaemonCredential.consume_changeset(bootstrap, now))
+        {pair, _refresh} = issue_pair!(daemon.id, now, nil)
+        {record_enrollment!(daemon, now), pair}
+      else
+        Repo.rollback(:invalid_credentials)
       end
-    else
-      _ -> {:error, :invalid_credentials}
-    end
+    end)
   end
 
   def exchange_bootstrap(_, _, _), do: {:error, :invalid_credentials}
 
-  @spec verify_token(term(), term(), keyword()) ::
-          {:ok, Daemon.t()} | {:error, :invalid_credentials | :unavailable}
-  def verify_token(daemon_id, token, opts \\ []) do
-    case authenticate_reconnect(daemon_id, token, opts) do
-      {:ok, daemon, _credential} -> {:ok, daemon}
+  @doc """
+  Authenticates an access token with a single SHA-256 indexed SELECT.
+
+  No transaction, row lock or Argon2 runs here. The daemon and owning user are
+  loaded by the same statement. The first use of an access token issued by a
+  refresh additionally retires the predecessor refresh token with one
+  idempotent UPDATE, outside any transaction.
+  """
+  @spec authenticate_access(term(), term(), keyword()) ::
+          {:ok, access_principal()} | {:error, :invalid_credentials | :unavailable}
+  def authenticate_access(daemon_id, token, opts \\ [])
+
+  def authenticate_access(daemon_id, token, opts)
+      when is_binary(daemon_id) and is_binary(token) do
+    with {:ok, daemon_id} <- Ecto.UUID.cast(daemon_id),
+         {daemon, credential, user, stale_predecessor_id} <-
+           fetch_access(daemon_id, DaemonCredential.hash_token(token)),
+         true <- Daemon.credential_eligible?(daemon),
+         true <- DaemonCredential.valid_for_authentication?(credential, now(opts)) do
+      retire_predecessor(stale_predecessor_id, now(opts))
+      {:ok, %{daemon: daemon, credential: credential, user: user}}
+    else
+      _ -> {:error, :invalid_credentials}
+    end
+  rescue
+    _ in [DBConnection.ConnectionError, Postgrex.Error] -> {:error, :unavailable}
+  end
+
+  def authenticate_access(_, _, _), do: {:error, :invalid_credentials}
+
+  # One SELECT: access credential, daemon, owner, and the still-active
+  # predecessor refresh token (if the pair's refresh has not yet retired it).
+  defp fetch_access(daemon_id, hash) do
+    Repo.one(
+      from c in DaemonCredential,
+        join: d in Daemon,
+        on: d.id == c.daemon_id,
+        join: u in User,
+        on: u.id == d.user_id,
+        left_join: r in DaemonCredential,
+        on: r.id == c.predecessor_id,
+        left_join: p in DaemonCredential,
+        on: p.id == r.predecessor_id and p.status == "active",
+        where:
+          c.daemon_id == ^daemon_id and c.token_hash == ^hash and c.credential_kind == "access",
+        select: {d, c, u, p.id}
+    )
+  end
+
+  defp retire_predecessor(nil, _now), do: :ok
+
+  defp retire_predecessor(predecessor_id, now) do
+    # Sockets never authenticate with refresh tokens, so no session is affected.
+    Repo.update_all(
+      from(c in DaemonCredential,
+        where: c.id == ^predecessor_id and c.status == "active"
+      ),
+      set: [status: "revoked", revoked_at: now, updated_at: now]
+    )
+
+    :ok
+  end
+
+  @doc """
+  Exchanges a refresh token for a new access token and a rotated refresh token.
+
+  This is the only place rotation, revocation and the daemon row lock run:
+
+    * all of the daemon's previous access tokens are revoked immediately;
+    * the presented refresh token stays valid until its successor is first used
+      (request, socket connect or refresh), so a lost response can be recovered
+      by presenting it again, which revokes the unused successor;
+    * once the successor is used the presented token simply fails.
+  """
+  @spec refresh(term(), term(), keyword()) ::
+          {:ok, Daemon.t(), token_pair()}
+          | {:error, :invalid_credentials | :unavailable | Ecto.Changeset.t()}
+  def refresh(daemon_id, token, opts \\ [])
+
+  def refresh(daemon_id, token, opts) when is_binary(daemon_id) and is_binary(token) do
+    result =
+      transact_credential(daemon_id, "refresh", token, opts, fn daemon, presented, now ->
+        if DaemonCredential.valid_for_authentication?(presented, now) do
+          rotate_refresh!(daemon, presented, now)
+        else
+          Repo.rollback(:invalid_credentials)
+        end
+      end)
+
+    invalidate_sessions_on_success(result)
+  end
+
+  def refresh(_, _, _), do: {:error, :invalid_credentials}
+
+  defp invalidate_sessions_on_success({:ok, daemon, _pair} = result) do
+    Sacrum.DaemonConnectionRegistry.invalidate_sessions(daemon.id)
+    result
+  end
+
+  defp invalidate_sessions_on_success(result), do: result
+
+  defp rotate_refresh!(daemon, presented, now) do
+    # Every earlier access token dies on refresh, and presenting a
+    # predecessor revokes its unused successor refresh token.
+    revoke_credentials!(
+      from(c in DaemonCredential,
+        where:
+          c.daemon_id == ^daemon.id and c.status == "active" and
+            (c.credential_kind == "access" or
+               (c.credential_kind == "refresh" and c.predecessor_id == ^presented.id))
+      ),
+      now
+    )
+
+    # Presenting a successor activates it: its predecessor is retired.
+    if presented.predecessor_id do
+      revoke_credentials!(
+        from(c in DaemonCredential,
+          where: c.id == ^presented.predecessor_id and c.status == "active"
+        ),
+        now
+      )
+    end
+
+    {pair, _} = issue_pair!(daemon.id, now, presented.id)
+    {daemon, pair}
+  end
+
+  # Runs `fun` under the daemon row lock with the matching credential row locked.
+  # A missing credential rolls back as invalid; `fun` returns `{daemon, pair}`.
+  defp transact_credential(daemon_id, kind, token, opts, fun) do
+    case Ecto.UUID.cast(daemon_id) do
+      {:ok, daemon_id} -> locked_credential_tx(daemon_id, kind, token, opts, fun)
+      _ -> {:error, :invalid_credentials}
+    end
+  rescue
+    _ in [DBConnection.ConnectionError, Postgrex.Error] -> {:error, :unavailable}
+  end
+
+  defp locked_credential_tx(daemon_id, kind, token, opts, fun) do
+    hash = DaemonCredential.hash_token(token)
+
+    result =
+      Repo.transaction(fn ->
+        daemon = lock_daemon!(daemon_id)
+
+        credential =
+          Repo.one(
+            from c in DaemonCredential,
+              where:
+                c.daemon_id == ^daemon_id and c.token_hash == ^hash and
+                  c.credential_kind == ^kind,
+              lock: "FOR UPDATE"
+          ) || Repo.rollback(:invalid_credentials)
+
+        fun.(daemon, credential, now(opts))
+      end)
+
+    case result do
+      {:ok, {daemon, pair}} -> {:ok, daemon, pair}
       {:error, reason} -> {:error, reason}
     end
   end
 
-  @spec authenticate_reconnect(term(), term(), keyword()) ::
-          {:ok, Daemon.t(), DaemonCredential.t()} | {:error, :invalid_credentials | :unavailable}
-  def authenticate_reconnect(daemon_id, token, opts \\ [])
-
-  def authenticate_reconnect(daemon_id, token, opts)
-      when is_binary(daemon_id) and is_binary(token) do
-    with {:ok, daemon_id} <- Ecto.UUID.cast(daemon_id),
-         %DaemonCredential{} = credential <-
-           matching_credential(daemon_id, token, "reconnect", now(opts)) do
-      activate_reconnect(daemon_id, credential.id, opts)
-    else
-      _ -> {:error, :invalid_credentials}
-    end
-  rescue
-    _ in [DBConnection.ConnectionError, Postgrex.Error] -> {:error, :unavailable}
-  end
-
-  def authenticate_reconnect(_, _, _), do: {:error, :invalid_credentials}
-
-  @doc "Issues a replacement while retaining the caller until its successor authenticates."
-  @spec renew_reconnect(term(), term(), keyword()) ::
-          {:ok, %{reconnect_token: String.t(), expires_at: DateTime.t()}}
-          | {:error, :invalid_credentials | :unavailable | Ecto.Changeset.t()}
-  def renew_reconnect(daemon_id, credential_id, opts \\ []) do
-    with {:ok, daemon_id} <- Ecto.UUID.cast(daemon_id),
-         {:ok, credential_id} <- Ecto.UUID.cast(credential_id) do
-      do_renew_reconnect(daemon_id, credential_id, opts)
-    else
-      _ -> {:error, :invalid_credentials}
-    end
-  end
-
-  defp do_renew_reconnect(daemon_id, credential_id, opts) do
-    token = new_token()
-    hash = Argon2.hash_pwd_salt(token)
-
-    Repo.transaction(fn ->
-      daemon = lock_daemon!(daemon_id)
-      credential = valid_reconnect!(daemon.id, credential_id, now(opts))
-      now = now(opts)
-
-      Repo.update_all(
-        from(c in DaemonCredential,
-          where:
-            c.daemon_id == ^daemon.id and c.predecessor_id == ^credential.id and
-              c.status == "active"
-        ),
-        set: [status: "revoked", revoked_at: now, updated_at: now]
-      )
-
-      successor =
-        insert_credential!(
-          daemon.id,
-          "reconnect",
-          hash,
-          DateTime.add(now, @reconnect_ttl_seconds),
-          credential.id
-        )
-
-      %{reconnect_token: token, expires_at: successor.expires_at}
-    end)
-  rescue
-    _ in [DBConnection.ConnectionError, Postgrex.Error] -> {:error, :unavailable}
-  end
-
-  defp activate_reconnect(daemon_id, credential_id, opts) do
-    result =
-      Repo.transaction(fn ->
-        daemon = lock_daemon!(daemon_id)
-        credential = valid_reconnect!(daemon_id, credential_id, now(opts))
-
-        {revoked, _} =
-          if credential.predecessor_id do
-            now = now(opts)
-
-            Repo.update_all(
-              from(c in DaemonCredential,
-                where:
-                  c.daemon_id == ^daemon_id and c.id == ^credential.predecessor_id and
-                    c.status == "active"
-              ),
-              set: [status: "revoked", revoked_at: now, updated_at: now]
-            )
-          else
-            {0, nil}
-          end
-
-        {daemon, credential, revoked}
-      end)
-
-    case result do
-      {:ok, {daemon, credential, revoked}} ->
-        if revoked > 0,
-          do: Sacrum.DaemonConnectionRegistry.invalidate_sessions(daemon.id)
-
-        {:ok, daemon, credential}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp valid_reconnect!(daemon_id, credential_id, now) do
-    credential =
-      Repo.one(
-        from c in DaemonCredential,
-          where:
-            c.daemon_id == ^daemon_id and c.id == ^credential_id and
-              c.credential_kind == "reconnect"
-      )
-
-    unless credential && DaemonCredential.valid_for_authentication?(credential, now),
-      do: Repo.rollback(:invalid_credentials)
-
-    credential
-  end
-
-  @doc "Rechecks an already authenticated credential by persisted identity without retaining plaintext."
-  @spec revalidate_reconnect(term(), term(), keyword()) ::
+  @doc "Rechecks an already authenticated access credential by persisted identity."
+  @spec revalidate_access(term(), term(), keyword()) ::
           {:ok, Daemon.t(), DaemonCredential.t()} | {:error, :invalid_credentials}
-  def revalidate_reconnect(daemon_id, credential_id, opts \\ []) do
+  def revalidate_access(daemon_id, credential_id, opts \\ []) do
     with {:ok, daemon_id} <- Ecto.UUID.cast(daemon_id),
          {:ok, credential_id} <- Ecto.UUID.cast(credential_id),
          {daemon, credential} <-
@@ -401,8 +449,7 @@ defmodule Sacrum.Repo.Daemons do
                join: c in DaemonCredential,
                on: c.daemon_id == d.id,
                where:
-                 d.id == ^daemon_id and c.id == ^credential_id and
-                   c.credential_kind == "reconnect",
+                 d.id == ^daemon_id and c.id == ^credential_id and c.credential_kind == "access",
                select: {d, c}
            ),
          true <- Daemon.credential_eligible?(daemon),
@@ -413,34 +460,38 @@ defmodule Sacrum.Repo.Daemons do
     end
   end
 
-  defp exchange_credential(daemon_id, bootstrap_id, reconnect_hash, opts) do
-    Repo.transaction(fn ->
-      daemon = lock_daemon!(daemon_id)
+  defp issue_pair!(daemon_id, now, predecessor_refresh_id) do
+    access_token = new_token()
+    refresh_token = new_token()
 
-      bootstrap =
-        Repo.one(from c in DaemonCredential, where: c.id == ^bootstrap_id, lock: "FOR UPDATE")
+    refresh =
+      insert_credential!(
+        daemon_id,
+        "refresh",
+        DaemonCredential.hash_token(refresh_token),
+        DateTime.add(now, @refresh_ttl_seconds),
+        predecessor_refresh_id
+      )
 
-      now = now(opts)
+    access =
+      insert_credential!(
+        daemon_id,
+        "access",
+        DaemonCredential.hash_token(access_token),
+        DateTime.add(now, @access_ttl_seconds),
+        refresh.id
+      )
 
-      changeset = bootstrap && DaemonCredential.consume_changeset(bootstrap, now)
+    {%{
+       access_token: access_token,
+       access_expires_at: access.expires_at,
+       refresh_token: refresh_token,
+       refresh_expires_at: refresh.expires_at
+     }, refresh}
+  end
 
-      unless changeset && changeset.valid?,
-        do: Repo.rollback(:invalid_credentials)
-
-      Repo.update!(changeset)
-
-      reconnect =
-        insert_credential!(
-          daemon.id,
-          "reconnect",
-          reconnect_hash,
-          DateTime.add(now, @reconnect_ttl_seconds)
-        )
-
-      daemon = record_enrollment!(daemon, now)
-
-      {daemon, reconnect}
-    end)
+  defp revoke_credentials!(query, now) do
+    Repo.update_all(query, set: [status: "revoked", revoked_at: now, updated_at: now])
   end
 
   defp record_enrollment!(%Daemon{enrolled_at: %DateTime{}} = daemon, _now), do: daemon
@@ -449,26 +500,6 @@ defmodule Sacrum.Repo.Daemons do
     case Repo.update(Daemon.enroll_changeset(daemon, now)) do
       {:ok, daemon} -> daemon
       {:error, changeset} -> Repo.rollback(changeset)
-    end
-  end
-
-  defp matching_credential(daemon_id, token, kind, now) do
-    candidates =
-      daemon_id
-      |> DaemonCredentials.list_active_for_daemon()
-      |> Enum.filter(fn credential ->
-        credential.credential_kind == kind and
-          DaemonCredential.valid_for_authentication?(credential, now)
-      end)
-
-    case candidates do
-      [] ->
-        # Same Argon2 work as a mismatch so missing credentials are not a timing oracle.
-        Argon2.no_user_verify()
-        nil
-
-      _ ->
-        Enum.find(candidates, &Argon2.verify_pass(token, &1.token_hash))
     end
   end
 

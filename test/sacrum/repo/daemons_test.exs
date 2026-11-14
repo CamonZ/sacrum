@@ -16,7 +16,7 @@ defmodule Sacrum.Repo.DaemonsTest do
     assert {:ok, daemon, token} = Daemons.create(user.id)
     assert {:ok, found} = Daemons.get(daemon.id)
     assert found.id == daemon.id
-    assert {:error, :invalid_credentials} = Daemons.verify_token(daemon.id, token)
+    assert {:error, :invalid_credentials} = Daemons.authenticate_access(daemon.id, token)
 
     assert [%{credential_kind: "bootstrap", consumed_at: nil}] =
              DaemonCredentials.list_active_for_daemon(daemon.id)
@@ -36,19 +36,19 @@ defmodule Sacrum.Repo.DaemonsTest do
     assert {:ok, %{daemon: rotated, token: new_token}} = Daemons.rotate_bootstrap(daemon)
 
     assert rotated.id == daemon.id
-    assert {:error, :invalid_credentials} = Daemons.verify_token(daemon.id, old_token)
+    assert {:error, :invalid_credentials} = Daemons.exchange_bootstrap(daemon.id, old_token)
 
     previous = Repo.get!(DaemonCredential, previous.id)
     assert previous.status == "revoked"
     assert previous.revoked_at
 
-    assert {:ok, _, reconnect, _} = Daemons.exchange_bootstrap(daemon.id, new_token)
-    assert {:ok, _} = Daemons.verify_token(daemon.id, reconnect)
+    assert {:ok, _, pair} = Daemons.exchange_bootstrap(daemon.id, new_token)
+    assert {:ok, _} = Daemons.authenticate_access(daemon.id, pair.access_token)
 
-    assert Enum.any?(
-             DaemonCredentials.list_active_for_daemon(daemon.id),
-             &(&1.credential_kind == "reconnect")
-           )
+    kinds =
+      daemon.id |> DaemonCredentials.list_active_for_daemon() |> Enum.map(& &1.credential_kind)
+
+    assert "access" in kinds and "refresh" in kinds
   end
 
   test "exchange records first enrollment and rotation preserves it" do
@@ -65,7 +65,7 @@ defmodule Sacrum.Repo.DaemonsTest do
 
     first_exchange = DateTime.add(DateTime.utc_now(), -60)
 
-    assert {:ok, enrolled, _, _} =
+    assert {:ok, enrolled, _} =
              Daemons.exchange_bootstrap(daemon.id, bootstrap, now: first_exchange)
 
     assert enrolled.id == daemon.id
@@ -76,7 +76,7 @@ defmodule Sacrum.Repo.DaemonsTest do
     assert rotated.id == daemon.id
     assert rotated.enrolled_at == first_exchange
 
-    assert {:ok, reenrolled, _, _} = Daemons.exchange_bootstrap(daemon.id, new_bootstrap)
+    assert {:ok, reenrolled, _} = Daemons.exchange_bootstrap(daemon.id, new_bootstrap)
     assert reenrolled.enrolled_at == first_exchange
     assert reenrolled.status == "active"
   end
@@ -90,20 +90,23 @@ defmodule Sacrum.Repo.DaemonsTest do
       })
 
     {:ok, daemon, bootstrap} = Daemons.create(user.id, %{name: "target"})
-    assert {:ok, _, reconnect, _} = Daemons.exchange_bootstrap(daemon.id, bootstrap)
+    assert {:ok, _, pair} = Daemons.exchange_bootstrap(daemon.id, bootstrap)
 
     assert {:ok, %{daemon: deleted} = result} = Daemons.unregister(daemon)
 
     assert deleted.id == daemon.id
     assert deleted.status == "active"
     assert deleted.name == "target"
-    assert refute_token_material(result, [bootstrap, reconnect])
+    assert refute_token_material(result, [bootstrap, pair.access_token, pair.refresh_token])
     assert Repo.get(Daemon, daemon.id) == nil
 
     assert Repo.aggregate(from(c in DaemonCredential, where: c.daemon_id == ^daemon.id), :count) ==
              0
 
-    assert {:error, :invalid_credentials} = Daemons.verify_token(daemon.id, reconnect)
+    assert {:error, :invalid_credentials} =
+             Daemons.authenticate_access(daemon.id, pair.access_token)
+
+    assert {:error, :invalid_credentials} = Daemons.refresh(daemon.id, pair.refresh_token)
     assert {:error, :invalid_credentials} = Daemons.exchange_bootstrap(daemon.id, bootstrap)
     assert {:error, :invalid_credentials} = Daemons.rotate_bootstrap(daemon)
   end
@@ -145,7 +148,7 @@ defmodule Sacrum.Repo.DaemonsTest do
     assert Repo.aggregate(from(c in DaemonCredential, where: c.daemon_id == ^daemon.id), :count) ==
              1
 
-    assert {:ok, _daemon, _token, _credential} =
+    assert {:ok, _daemon, _pair} =
              Daemons.exchange_bootstrap(daemon.id, bootstrap)
   end
 

@@ -11,15 +11,6 @@ defmodule Sacrum.Accounts.Daemons do
   alias Sacrum.Repo.Daemons, as: DaemonsRepo
   alias Sacrum.Repo.Schemas.Daemon
 
-  @spec renew_credential(map() | nil) ::
-          {:ok, %{reconnect_token: String.t(), expires_at: DateTime.t()}}
-          | {:error, :invalid_credentials | :unavailable | Ecto.Changeset.t()}
-  def renew_credential(%{daemon_id: daemon_id, credential_id: credential_id}) do
-    DaemonsRepo.renew_reconnect(daemon_id, credential_id)
-  end
-
-  def renew_credential(_), do: {:error, :invalid_credentials}
-
   @spec create(String.t()) :: {:ok, Daemon.t(), String.t()} | {:error, Ecto.Changeset.t()}
   @spec create(String.t(), map()) :: {:ok, Daemon.t(), String.t()} | {:error, Ecto.Changeset.t()}
   def create(user_id, attrs \\ %{}), do: DaemonsRepo.create(%Daemon{user_id: user_id}, attrs)
@@ -126,12 +117,19 @@ defmodule Sacrum.Accounts.Daemons do
     end
   end
 
-  @doc "Authenticates the bootstrap itself; ownership is derived from its persisted daemon."
+  @doc "Authenticates the registration token itself; ownership is derived from its persisted daemon."
   @spec exchange_bootstrap(term(), term(), keyword()) ::
-          {:ok, Daemon.t(), String.t(), Sacrum.Repo.Schemas.DaemonCredential.t()}
-          | {:error, :invalid_credentials | Ecto.Changeset.t()}
+          {:ok, Daemon.t(), DaemonsRepo.token_pair()}
+          | {:error, :invalid_credentials | :unavailable | Ecto.Changeset.t()}
   def exchange_bootstrap(daemon_id, token, opts \\ []),
     do: DaemonsRepo.exchange_bootstrap(daemon_id, token, opts)
+
+  @doc "Exchanges a refresh token for a new access token and a rotated refresh token."
+  @spec refresh(term(), term(), keyword()) ::
+          {:ok, Daemon.t(), DaemonsRepo.token_pair()}
+          | {:error, :invalid_credentials | :unavailable | Ecto.Changeset.t()}
+  def refresh(daemon_id, token, opts \\ []),
+    do: DaemonsRepo.refresh(daemon_id, token, opts)
 
   @spec create_bootstrap(String.t(), map()) ::
           {:ok, Daemon.t(), String.t(), Sacrum.Repo.Schemas.DaemonCredential.t()}

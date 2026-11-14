@@ -35,7 +35,7 @@ defmodule SacrumWeb.DaemonChannel do
       ) do
     with true <- daemon_id == principal.daemon_id,
          {:ok, daemon, credential} <-
-           DaemonsRepo.revalidate_reconnect(daemon_id, principal.credential_id) do
+           DaemonsRepo.revalidate_access(daemon_id, principal.credential_id) do
       register(socket, daemon, credential.id)
     else
       false -> {:error, %{reason: "identity_mismatch"}}
@@ -45,10 +45,11 @@ defmodule SacrumWeb.DaemonChannel do
 
   def join(
         "daemon:" <> daemon_id,
-        %{"enrollment_token" => token},
+        %{"access_token" => token},
         %{assigns: %{current_user: user}} = socket
       ) do
-    with {:ok, daemon, credential} <- DaemonsRepo.authenticate_reconnect(daemon_id, token),
+    with {:ok, %{daemon: daemon, credential: credential}} <-
+           DaemonsRepo.authenticate_access(daemon_id, token),
          true <- daemon.user_id == user.id do
       register(socket, daemon, credential.id)
     else
@@ -145,7 +146,7 @@ defmodule SacrumWeb.DaemonChannel do
   end
 
   defp revalidate(%{assigns: %{daemon_id: daemon_id, credential_id: credential_id}}) do
-    case DaemonsRepo.revalidate_reconnect(daemon_id, credential_id) do
+    case DaemonsRepo.revalidate_access(daemon_id, credential_id) do
       {:ok, _daemon, _credential} -> :ok
       {:error, _} -> :invalid
     end

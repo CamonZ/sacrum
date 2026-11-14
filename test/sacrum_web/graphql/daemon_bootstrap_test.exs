@@ -43,6 +43,8 @@ defmodule SacrumWeb.Graphql.DaemonBootstrapTest do
 
     assert payload["expiresAt"] == DateTime.to_iso8601(credential.expires_at)
     assert credential.credential_kind == "bootstrap"
-    assert Argon2.verify_pass(payload["enrollmentToken"], credential.token_hash)
+
+    assert credential.token_hash ==
+             Sacrum.Repo.Schemas.DaemonCredential.hash_token(payload["enrollmentToken"])
   end
 end

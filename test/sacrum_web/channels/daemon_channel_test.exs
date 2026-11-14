@@ -26,8 +26,10 @@ defmodule SacrumWeb.DaemonChannelTest do
 
     {:ok, daemon, bootstrap} = Sacrum.Accounts.Daemons.create(user.id)
 
-    {:ok, daemon, token, _credential} =
+    {:ok, daemon, %{access_token: token} = pair} =
       Sacrum.Accounts.Daemons.exchange_bootstrap(daemon.id, bootstrap)
+
+    Process.put(:daemon_pair, pair)
 
     {:ok, socket} = connect(UserSocket, %{"token" => api_token(user)})
     {user, daemon, token, socket}
@@ -42,7 +44,7 @@ defmodule SacrumWeb.DaemonChannelTest do
     {_user, daemon, token, socket} = setup_daemon()
 
     assert {:ok, _reply, channel} =
-             subscribe_and_join(socket, "daemon:#{daemon.id}", %{"enrollment_token" => token})
+             subscribe_and_join(socket, "daemon:#{daemon.id}", %{"access_token" => token})
 
     assert channel.assigns.daemon_id == daemon.id
     assert channel.assigns.user_id == daemon.user_id
@@ -60,21 +62,22 @@ defmodule SacrumWeb.DaemonChannelTest do
     assert Sacrum.DaemonConnectionRegistry.lookup(daemon.id) == []
   end
 
-  test "successor first socket use terminates predecessor and delayed invalidation preserves successor" do
-    {_user, daemon, token, _} = setup_daemon("renew_live")
-    {:ok, socket} = connect(UserSocket, %{"daemon_id" => daemon.id, "reconnect_token" => token})
+  test "refresh terminates the live session and the new access token reconnects" do
+    {_user, daemon, token, _} = setup_daemon("refresh_live")
+    pair = Process.get(:daemon_pair)
+    {:ok, socket} = connect(UserSocket, %{"daemon_id" => daemon.id, "access_token" => token})
     {:ok, _, channel} = subscribe_and_join(socket, "daemon:#{daemon.id}")
     monitor = Process.monitor(channel.channel_pid)
-    {:ok, renewal} = Sacrum.Repo.Daemons.renew_reconnect(daemon.id, channel.assigns.credential_id)
 
-    {:ok, successor_socket} =
-      connect(UserSocket, %{
-        "daemon_id" => daemon.id,
-        "reconnect_token" => renewal.reconnect_token
-      })
+    {:ok, _, rotated} = Sacrum.Repo.Daemons.refresh(daemon.id, pair.refresh_token)
 
     assert_receive {:DOWN, ^monitor, :process, _, _}
-    {:ok, _, successor} = subscribe_and_join(successor_socket, "daemon:#{daemon.id}")
+    assert :error = connect(UserSocket, %{"daemon_id" => daemon.id, "access_token" => token})
+
+    {:ok, new_socket} =
+      connect(UserSocket, %{"daemon_id" => daemon.id, "access_token" => rotated.access_token})
+
+    {:ok, _, successor} = subscribe_and_join(new_socket, "daemon:#{daemon.id}")
     send(successor.channel_pid, :daemon_credentials_invalidated)
     _ = :sys.get_state(successor.channel_pid)
 
@@ -83,14 +86,17 @@ defmodule SacrumWeb.DaemonChannelTest do
 
     assert pid == successor.channel_pid
     assert credential_id == successor.assigns.credential_id
-    assert :error = connect(UserSocket, %{"daemon_id" => daemon.id, "reconnect_token" => token})
+
+    # a refresh token is not an access token
+    assert :error =
+             connect(UserSocket, %{"daemon_id" => daemon.id, "access_token" => pair.refresh_token})
   end
 
   test "committed unregister terminates the connected standalone session" do
     {user, daemon, token, _} = setup_daemon("unregister_live")
 
     {:ok, socket} =
-      connect(UserSocket, %{"daemon_id" => daemon.id, "reconnect_token" => token})
+      connect(UserSocket, %{"daemon_id" => daemon.id, "access_token" => token})
 
     {:ok, _, channel} = subscribe_and_join(socket, "daemon:#{daemon.id}")
     monitor = Process.monitor(channel.channel_pid)
@@ -102,7 +108,7 @@ defmodule SacrumWeb.DaemonChannelTest do
     assert Sacrum.DaemonConnectionRegistry.lookup(daemon.id) == []
 
     assert :error =
-             connect(UserSocket, %{"daemon_id" => daemon.id, "reconnect_token" => token})
+             connect(UserSocket, %{"daemon_id" => daemon.id, "access_token" => token})
   end
 
   test "rotation terminates only affected sessions; siblings survive and exchange reconnects" do
@@ -110,17 +116,17 @@ defmodule SacrumWeb.DaemonChannelTest do
 
     {:ok, sibling, sibling_bootstrap} = Sacrum.Accounts.Daemons.create(user.id)
 
-    {:ok, _, sibling_token, _} =
+    {:ok, _, %{access_token: sibling_token}} =
       Sacrum.Accounts.Daemons.exchange_bootstrap(sibling.id, sibling_bootstrap)
 
     {:ok, socket} =
-      connect(UserSocket, %{"daemon_id" => daemon.id, "reconnect_token" => token})
+      connect(UserSocket, %{"daemon_id" => daemon.id, "access_token" => token})
 
     {:ok, _, channel} = subscribe_and_join(socket, "daemon:#{daemon.id}")
     monitor = Process.monitor(channel.channel_pid)
 
     {:ok, sibling_socket} =
-      connect(UserSocket, %{"daemon_id" => sibling.id, "reconnect_token" => sibling_token})
+      connect(UserSocket, %{"daemon_id" => sibling.id, "access_token" => sibling_token})
 
     {:ok, _, sibling_channel} = subscribe_and_join(sibling_socket, "daemon:#{sibling.id}")
     sibling_monitor = Process.monitor(sibling_channel.channel_pid)
@@ -135,11 +141,11 @@ defmodule SacrumWeb.DaemonChannelTest do
     assert_reply ref, :error, %{reason: "invalid_report"}
     refute_received {:DOWN, ^sibling_monitor, :process, _, _}
 
-    {:ok, _, fresh_reconnect, _} =
+    {:ok, _, %{access_token: fresh_reconnect}} =
       Sacrum.Accounts.Daemons.exchange_bootstrap(daemon.id, new_bootstrap)
 
     {:ok, fresh_socket} =
-      connect(UserSocket, %{"daemon_id" => daemon.id, "reconnect_token" => fresh_reconnect})
+      connect(UserSocket, %{"daemon_id" => daemon.id, "access_token" => fresh_reconnect})
 
     assert {:ok, _, fresh_channel} = subscribe_and_join(fresh_socket, "daemon:#{daemon.id}")
     assert fresh_channel.assigns.daemon_id == daemon.id
@@ -150,7 +156,7 @@ defmodule SacrumWeb.DaemonChannelTest do
     {user, daemon, token, _} = setup_daemon("stale_invalidation")
 
     {:ok, socket} =
-      connect(UserSocket, %{"daemon_id" => daemon.id, "reconnect_token" => token})
+      connect(UserSocket, %{"daemon_id" => daemon.id, "access_token" => token})
 
     {:ok, _, channel} = subscribe_and_join(socket, "daemon:#{daemon.id}")
     monitor = Process.monitor(channel.channel_pid)
@@ -160,11 +166,11 @@ defmodule SacrumWeb.DaemonChannelTest do
 
     assert_receive {:DOWN, ^monitor, :process, _pid, _reason}
 
-    {:ok, _, fresh_reconnect, _} =
+    {:ok, _, %{access_token: fresh_reconnect}} =
       Sacrum.Accounts.Daemons.exchange_bootstrap(daemon.id, new_bootstrap)
 
     {:ok, fresh_socket} =
-      connect(UserSocket, %{"daemon_id" => daemon.id, "reconnect_token" => fresh_reconnect})
+      connect(UserSocket, %{"daemon_id" => daemon.id, "access_token" => fresh_reconnect})
 
     {:ok, _, fresh_channel} = subscribe_and_join(fresh_socket, "daemon:#{daemon.id}")
     fresh_monitor = Process.monitor(fresh_channel.channel_pid)
@@ -182,7 +188,7 @@ defmodule SacrumWeb.DaemonChannelTest do
 
     assert {:error, %{reason: "invalid_credentials"}} =
              subscribe_and_join(socket, "daemon:#{daemon.id}", %{
-               "enrollment_token" => other_token
+               "access_token" => other_token
              })
   end
 
@@ -190,7 +196,7 @@ defmodule SacrumWeb.DaemonChannelTest do
     {user, daemon, token, _} = setup_daemon("standalone")
 
     assert {:ok, socket} =
-             connect(UserSocket, %{"daemon_id" => daemon.id, "reconnect_token" => token})
+             connect(UserSocket, %{"daemon_id" => daemon.id, "access_token" => token})
 
     assert {:ok, _, channel} =
              subscribe_and_join(socket, "daemon:#{daemon.id}", %{
@@ -203,7 +209,7 @@ defmodule SacrumWeb.DaemonChannelTest do
     assert [{^owner, _}] = Sacrum.DaemonConnectionRegistry.lookup(daemon.id)
 
     assert {:ok, duplicate} =
-             connect(UserSocket, %{"daemon_id" => daemon.id, "reconnect_token" => token})
+             connect(UserSocket, %{"daemon_id" => daemon.id, "access_token" => token})
 
     assert {:error, %{reason: "already_connected"}} =
              subscribe_and_join(duplicate, "daemon:#{daemon.id}")
@@ -221,7 +227,7 @@ defmodule SacrumWeb.DaemonChannelTest do
 
   test "standalone topic identity is exact and project channels remain forbidden" do
     {_user, daemon, token, _} = setup_daemon("topics")
-    {:ok, socket} = connect(UserSocket, %{"daemon_id" => daemon.id, "reconnect_token" => token})
+    {:ok, socket} = connect(UserSocket, %{"daemon_id" => daemon.id, "access_token" => token})
 
     assert {:error, %{reason: "identity_mismatch"}} =
              subscribe_and_join(socket, "daemon:#{Ecto.UUID.generate()}")
@@ -235,7 +241,7 @@ defmodule SacrumWeb.DaemonChannelTest do
   test "join rechecks unregister and rotation since socket authentication" do
     for action <- [:rotate, :unregister] do
       {user, daemon, token, _} = setup_daemon("recheck#{action}")
-      {:ok, socket} = connect(UserSocket, %{"daemon_id" => daemon.id, "reconnect_token" => token})
+      {:ok, socket} = connect(UserSocket, %{"daemon_id" => daemon.id, "access_token" => token})
       apply(Sacrum.Accounts.Daemons, action, [user.id, daemon.id])
 
       assert {:error, %{reason: "invalid_credentials"}} =
@@ -255,20 +261,20 @@ defmodule SacrumWeb.DaemonChannelTest do
       set: [expires_at: DateTime.add(DateTime.utc_now(), -60)]
     )
 
-    {:ok, socket} = connect(UserSocket, %{"daemon_id" => daemon.id, "reconnect_token" => token})
+    {:ok, socket} = connect(UserSocket, %{"daemon_id" => daemon.id, "access_token" => token})
     {:ok, _, channel} = subscribe_and_join(socket, "daemon:#{daemon.id}")
     monitor = Process.monitor(channel.channel_pid)
     close(channel)
     assert_receive {:DOWN, ^monitor, :process, _, _}
     assert Sacrum.DaemonConnectionRegistry.lookup(daemon.id) == []
-    {:ok, fresh} = connect(UserSocket, %{"daemon_id" => daemon.id, "reconnect_token" => token})
+    {:ok, fresh} = connect(UserSocket, %{"daemon_id" => daemon.id, "access_token" => token})
     assert {:ok, _, restarted} = subscribe_and_join(fresh, "daemon:#{daemon.id}")
     assert restarted.assigns.daemon_id == daemon.id
   end
 
   test "join refuses reconnect that expired after socket authentication" do
     {_user, daemon, token, _} = setup_daemon("expiry")
-    {:ok, socket} = connect(UserSocket, %{"daemon_id" => daemon.id, "reconnect_token" => token})
+    {:ok, socket} = connect(UserSocket, %{"daemon_id" => daemon.id, "access_token" => token})
 
     Repo.update_all(
       from(c in Sacrum.Repo.Schemas.DaemonCredential,
@@ -288,7 +294,7 @@ defmodule SacrumWeb.DaemonChannelTest do
 
     {:ok, _, channel} =
       subscribe_and_join(socket, "daemon:#{daemon.id}", %{
-        "enrollment_token" => token
+        "access_token" => token
       })
 
     :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "account:#{user.id}")
@@ -338,7 +344,7 @@ defmodule SacrumWeb.DaemonChannelTest do
 
     {:ok, _, channel} =
       subscribe_and_join(socket, "daemon:#{daemon.id}", %{
-        "enrollment_token" => token
+        "access_token" => token
       })
 
     for payload <- [
@@ -396,7 +402,7 @@ defmodule SacrumWeb.DaemonChannelTest do
       })
 
     {:ok, _reply, _channel} =
-      subscribe_and_join(socket, "daemon:#{daemon.id}", %{"enrollment_token" => token})
+      subscribe_and_join(socket, "daemon:#{daemon.id}", %{"access_token" => token})
 
     :ok = Phoenix.PubSub.subscribe(Sacrum.PubSub, "daemon:#{daemon.id}")
 

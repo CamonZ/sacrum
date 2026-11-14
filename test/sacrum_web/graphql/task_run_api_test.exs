@@ -24,7 +24,7 @@ defmodule SacrumWeb.Graphql.TaskRunApiTest do
   defp create_task(user, project, title) do
     {:ok, daemon, bootstrap} = Accounts.Daemons.create(user.id)
 
-    {:ok, _daemon, _reconnect, _credential} =
+    {:ok, _daemon, _reconnect} =
       Accounts.Daemons.exchange_bootstrap(daemon.id, bootstrap)
 
     {:ok, task} =

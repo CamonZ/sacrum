@@ -35,7 +35,7 @@ defmodule SacrumWeb.DaemonTokenGraphqlTest do
       })
 
     {:ok, daemon, bootstrap} = Daemons.create(owner.id)
-    {:ok, _, reconnect, _} = Daemons.exchange_bootstrap(daemon.id, bootstrap)
+    {:ok, _, %{access_token: reconnect}} = Daemons.exchange_bootstrap(daemon.id, bootstrap)
     {:ok, sibling, _} = Daemons.create(owner.id)
     {:ok, other_daemon, _} = Daemons.create(other.id)
 
@@ -58,7 +58,7 @@ defmodule SacrumWeb.DaemonTokenGraphqlTest do
     {:ok, socket} =
       Phoenix.ChannelTest.connect(UserSocket, %{
         "daemon_id" => ctx.daemon.id,
-        "reconnect_token" => ctx.reconnect
+        "access_token" => ctx.reconnect
       })
 
     for daemon <- [ctx.sibling, ctx.other_daemon] do
@@ -87,7 +87,7 @@ defmodule SacrumWeb.DaemonTokenGraphqlTest do
     {:ok, socket} =
       Phoenix.ChannelTest.connect(UserSocket, %{
         "daemon_id" => ctx.daemon.id,
-        "reconnect_token" => ctx.reconnect
+        "access_token" => ctx.reconnect
       })
 
     {:ok, _, channel} = subscribe_and_join(socket, "daemon:#{ctx.daemon.id}")

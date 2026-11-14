@@ -2,7 +2,7 @@
 
 This is the Sacrum-side contract for the authenticated daemon fleet report.
 There is no separate `sacrumd` process. The existing standalone daemon joins
-`daemon:<daemon_id>` with its reconnect credential and sends telemetry on that
+`daemon:<daemon_id>` with its access token and sends telemetry on that
 authenticated channel.
 
 ## Transport
