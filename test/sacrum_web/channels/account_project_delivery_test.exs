@@ -11,6 +11,8 @@ defmodule SacrumWeb.AccountProjectDeliveryTest do
 
   @endpoint SacrumWeb.Endpoint
   @rows [
+    {"chat_catalog_entries", Schemas.ChatCatalogEntry, [:insert, :update, :delete],
+     ["chat_catalog_created", "chat_catalog_updated", "chat_catalog_deleted"]},
     {"tasks", Schemas.Task, [:insert, :update, :delete],
      ["task_created", "task_updated", "task_deleted", "task_parent_changed", "task_step_changed"]},
     {"task_dependencies", Schemas.TaskDependency, [:insert, :delete],
@@ -41,7 +43,7 @@ defmodule SacrumWeb.AccountProjectDeliveryTest do
      ["notification_created", "notification_updated", "notification_deleted"]}
   ]
 
-  test "all 39 CDC event types have exact channel parity and preserve legacy filtering" do
+  test "all 42 CDC event types have exact channel parity and preserve legacy filtering" do
     {user, project, task} = fixture()
     account = client(user, "accounts:me", %{"user_id" => Ecto.UUID.generate()})
     sibling = client(user, "accounts:me")
@@ -84,7 +86,7 @@ defmodule SacrumWeb.AccountProjectDeliveryTest do
           MapSet.union(seen, MapSet.new(expected))
       end
 
-    assert MapSet.size(seen) == 39
+    assert MapSet.size(seen) == 42
     assert seen == MapSet.new(Contract.regular_event_names())
   end
 
@@ -229,6 +231,9 @@ defmodule SacrumWeb.AccountProjectDeliveryTest do
 
     attrs = %{
       id: Ecto.UUID.generate(),
+      installation_id: Ecto.UUID.generate(),
+      chat_id: "native-chat-id",
+      revision: 1,
       user_id: user.id,
       project_id: project.id,
       task_id: task && task.id,
@@ -241,7 +246,7 @@ defmodule SacrumWeb.AccountProjectDeliveryTest do
       filename: "report.md",
       metadata: nil,
       context: %{"nested" => [%{"nullable" => nil, "unicode" => "🌍"}]},
-      status: if(table == "task_runs", do: :completed, else: "ready"),
+      status: row_status(table),
       parent_id: Ecto.UUID.generate(),
       current_step_id: Ecto.UUID.generate(),
       level: "task",
@@ -265,4 +270,8 @@ defmodule SacrumWeb.AccountProjectDeliveryTest do
       changes: changes
     }
   end
+
+  defp row_status("task_runs"), do: :completed
+  defp row_status("chat_catalog_entries"), do: "idle"
+  defp row_status(_), do: "ready"
 end

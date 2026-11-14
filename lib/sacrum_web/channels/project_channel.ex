@@ -6,7 +6,7 @@ defmodule SacrumWeb.ProjectChannel do
   alias Sacrum.Accounts.Projects
   alias Sacrum.Realtime.ProjectChannelCdcContract
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.{ArtifactLinkMetadata, Project, Task, WorkflowStep}
+  alias Sacrum.Repo.Schemas.{ArtifactLinkMetadata, ChatCatalogEntry, Project, Task, WorkflowStep}
   alias Sacrum.TaskRuns.RunControls
   alias Sacrum.TaskRuns.Status, as: TaskRunStatus
 
@@ -458,6 +458,33 @@ defmodule SacrumWeb.ProjectChannel do
       artifact_link_payload(artifact_link),
       artifact_link
     )
+  end
+
+  @spec broadcast_chat_catalog_created(String.t(), map()) :: :ok | {:error, term()}
+  def broadcast_chat_catalog_created(project_id, entry),
+    do: broadcast_chat_catalog(project_id, "chat_catalog_created", entry)
+
+  @spec broadcast_chat_catalog_updated(String.t(), map()) :: :ok | {:error, term()}
+  def broadcast_chat_catalog_updated(project_id, entry),
+    do: broadcast_chat_catalog(project_id, "chat_catalog_updated", entry)
+
+  @spec broadcast_chat_catalog_deleted(String.t(), map()) :: :ok | {:error, term()}
+  def broadcast_chat_catalog_deleted(project_id, entry),
+    do: broadcast_chat_catalog(project_id, "chat_catalog_deleted", entry)
+
+  defp broadcast_chat_catalog(project_id, event, entry) do
+    payload = %{
+      schema_version: 1,
+      project_id: project_id,
+      installation_id: entry.installation_id,
+      chat_id: entry.chat_id,
+      status: to_string(entry.status),
+      revision: entry.revision,
+      updated_at: entry.updated_at,
+      payload: ChatCatalogEntry.payload(entry)
+    }
+
+    broadcast_project(project_id, event, payload, entry)
   end
 
   # Notification broadcasts

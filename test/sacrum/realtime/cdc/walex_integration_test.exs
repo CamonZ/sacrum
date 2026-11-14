@@ -13,7 +13,7 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
   alias Sacrum.Orchestrator.{ExecutionDispatcher, FSMData, PromptRenderer}
   alias Sacrum.Orchestrator.Routing.RouteStep
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.{CodeRef, StepExecution, Task, TaskRun}
+  alias Sacrum.Repo.Schemas.{ChatCatalogEntry, CodeRef, StepExecution, Task, TaskRun}
   alias Sacrum.Routing.RouteConfig
 
   alias Sacrum.Repo.{
@@ -144,6 +144,83 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
         %{
           id: task.id
         },
+        1_000
+      )
+    end)
+  end
+
+  test "task deletion projects cleared catalog links at a newer revision" do
+    with_project(fn user, project ->
+      :ok = subscribe_project(project.id)
+      machine = Ecto.UUID.generate()
+      {:ok, _} = Accounts.ChatCatalog.register(user.id, machine)
+      {:ok, task} = Tasks.insert(project, %{title: "Catalog association"})
+
+      {:ok, %{entry: entry}} =
+        Accounts.ChatCatalog.put(
+          user.id,
+          project.id,
+          machine,
+          "task-deletion",
+          0,
+          Ecto.UUID.generate(),
+          %{"task_id" => task.id, "metadata" => %{"title" => "Keep chat"}}
+        )
+
+      assert_project_broadcast(
+        "chat_catalog_created",
+        %{chat_id: entry.chat_id, revision: entry.revision, status: "idle"},
+        1_000
+      )
+
+      {:ok, %{entry: working}} =
+        Accounts.ChatCatalog.put(
+          user.id,
+          project.id,
+          machine,
+          entry.chat_id,
+          entry.revision,
+          Ecto.UUID.generate(),
+          %{"status" => "working"}
+        )
+
+      assert_project_broadcast(
+        "chat_catalog_updated",
+        %{chat_id: entry.chat_id, revision: working.revision, status: "working"},
+        1_000
+      )
+
+      {:ok, _} = Tasks.delete(task)
+      cleared = Repo.get!(ChatCatalogEntry, entry.id)
+      assert cleared.task_id == nil
+      assert cleared.revision > entry.revision
+      assert cleared.status == :working
+
+      assert_project_broadcast(
+        "chat_catalog_updated",
+        %{
+          chat_id: entry.chat_id,
+          installation_id: machine,
+          revision: cleared.revision,
+          payload: ChatCatalogEntry.payload(cleared)
+        },
+        1_000
+      )
+
+      {:ok, %{entry: idle}} =
+        Accounts.ChatCatalog.put(
+          user.id,
+          project.id,
+          machine,
+          entry.chat_id,
+          cleared.revision,
+          Ecto.UUID.generate(),
+          %{"status" => "idle"}
+        )
+
+      assert_project_broadcast(
+        "chat_catalog_updated",
+        %{chat_id: entry.chat_id, revision: idle.revision, status: "idle"},
         1_000
       )
     end)

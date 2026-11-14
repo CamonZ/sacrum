@@ -852,7 +852,7 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
     source_tables: ~w(
       projects workflows workflow_steps step_transitions workflow_transitions tasks task_runs
       step_executions session_logs task_sections task_dependencies code_refs artifacts artifact_links
-      notifications
+      notifications chat_catalog_entries
     ),
     gui_projection:
       "Equivalent to the GraphQL task list/detail, pipeline summary, run trace, and section queries for the project. Include archived tasks when building a full local store."
@@ -867,6 +867,35 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
       "Routine live CDC events are projections, not invalidation signals. Refetch is reserved for initial load and explicit gap recovery."
   }
 
+  @chat_catalog_keys ~w(schema_version project_id installation_id chat_id status revision payload updated_at)a
+  @contracts @contracts ++
+               Enum.map(
+                 [
+                   {"chat_catalog_created", :insert},
+                   {"chat_catalog_updated", :update},
+                   {"chat_catalog_deleted", :delete}
+                 ],
+                 fn {event, operation} ->
+                   %{
+                     event: event,
+                     classification: @entity_projection,
+                     source_changes: [
+                       Map.put(
+                         %{table: "chat_catalog_entries", operation: operation},
+                         if(operation == :delete,
+                           do: :before_image_fields,
+                           else: :after_image_fields
+                         ),
+                         ~w(id user_id project_id installation_id chat_id status revision metadata classifications task_id parent_chat_id gate_execution_id gate_task_run_id deleted updated_at)a
+                       )
+                     ],
+                     payload_keys: @chat_catalog_keys,
+                     schema_version: @schema_version,
+                     completeness:
+                       "Complete machine-scoped catalog replacement; apply only to matching installation and project, monotonically by revision."
+                   }
+                 end
+               )
   @event_names Enum.map(@contracts, & &1.event)
 
   @spec daemon_event_names() :: [String.t()]
