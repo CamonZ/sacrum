@@ -31,6 +31,7 @@ defmodule SacrumWeb.Router do
   scope "/api/daemon", SacrumWeb do
     pipe_through :api
     post "/exchange", DaemonExchangeController, :create
+    post "/refresh", DaemonExchangeController, :refresh
   end
 
   scope "/graphql" do

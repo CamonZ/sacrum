@@ -44,8 +44,8 @@ mutation {
 }
 ```
 
-The caller authenticates with an account API token or a daemon reconnect
-credential; both resolve to the owning account. Sacrum inserts the
+The caller authenticates with an account API token or a daemon access
+token; both resolve to the owning account. Sacrum inserts the
 notification with the caller as `user_id` and the requested `projectId`; there
 is no separate ownership lookup. The `(project_id, user_id)` foreign key
 rejects an unknown project or one owned by another account with

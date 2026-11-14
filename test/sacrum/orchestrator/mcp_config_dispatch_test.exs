@@ -57,7 +57,7 @@ defmodule Sacrum.Orchestrator.McpConfigDispatchTest do
     step = Repo.preload(step, :workflow)
     {:ok, workflow} = Accounts.Workflows.update(workflow, %{initial_step_id: step.id})
     {:ok, daemon, bootstrap} = Repo.Daemons.create(user.id)
-    {:ok, _, _, _} = Accounts.Daemons.exchange_bootstrap(daemon.id, bootstrap)
+    {:ok, _, _} = Accounts.Daemons.exchange_bootstrap(daemon.id, bootstrap)
 
     {:ok, task} =
       Accounts.Tasks.insert(user.id, project.id, %{

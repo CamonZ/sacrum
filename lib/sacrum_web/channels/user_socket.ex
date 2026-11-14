@@ -10,13 +10,13 @@ defmodule SacrumWeb.UserSocket do
 
   @impl true
   def connect(
-        %{"daemon_id" => daemon_id, "reconnect_token" => token} = params,
+        %{"daemon_id" => daemon_id, "access_token" => token} = params,
         socket,
         _connect_info
       )
       when not is_map_key(params, "token") do
-    case Daemons.authenticate_reconnect(daemon_id, token) do
-      {:ok, daemon, credential} ->
+    case Daemons.authenticate_access(daemon_id, token) do
+      {:ok, %{daemon: daemon, credential: credential}} ->
         principal = %{
           type: :daemon,
           daemon_id: daemon.id,
@@ -32,7 +32,7 @@ defmodule SacrumWeb.UserSocket do
   end
 
   def connect(%{"token" => token} = params, socket, _connect_info)
-      when not is_map_key(params, "daemon_id") and not is_map_key(params, "reconnect_token") do
+      when not is_map_key(params, "daemon_id") and not is_map_key(params, "access_token") do
     case Auth.verify_token(token) do
       {:ok, user} ->
         {:ok, assign(socket, :current_user, user)}

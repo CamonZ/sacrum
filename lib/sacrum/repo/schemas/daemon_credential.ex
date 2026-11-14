@@ -2,14 +2,18 @@ defmodule Sacrum.Repo.Schemas.DaemonCredential do
   @moduledoc """
   Persisted daemon credential metadata.
 
-  Only a password hash is stored. Bootstrap credentials are short-lived and
-  may be consumed once; reconnect credentials remain valid until expiry or revocation, including
-  revocation when their renewal successor first authenticates. Existing credentials migrated from the original schema
-  are reconnect credentials, preserving their reusable behavior. The migration
-  is intentionally non-lossy on upgrade: it does not silently grant legacy
-  rows bootstrap privileges. Its rollback removes classification and
-  consumption history and is therefore lossy; use a forward migration before
-  production rollback.
+  Only a SHA-256 hash of the high-entropy token is stored, so every kind is
+  authenticated by an indexed hash lookup.
+
+  Kinds:
+
+    * `bootstrap` - one-time registration token, consumed by exchange.
+    * `access` - short-lived bearer token for requests and socket connects.
+      Its `predecessor_id` points at the refresh credential issued in the same
+      pair.
+    * `refresh` - long-lived token usable only at the refresh endpoint. Its
+      `predecessor_id` is the refresh credential it rotated; the predecessor
+      stays valid until this one is first used.
   """
 
   use Ecto.Schema
@@ -17,7 +21,7 @@ defmodule Sacrum.Repo.Schemas.DaemonCredential do
 
   @type t :: %__MODULE__{}
   @statuses ~w(active revoked)
-  @credential_kinds ~w(bootstrap reconnect)
+  @credential_kinds ~w(bootstrap access refresh)
   @json_fields [
     :id,
     :daemon_id,
@@ -45,7 +49,7 @@ defmodule Sacrum.Repo.Schemas.DaemonCredential do
 
   schema "daemon_credentials" do
     field :token_hash, :string, redact: true
-    field :credential_kind, :string, default: "reconnect"
+    field :credential_kind, :string
     field :expires_at, :utc_datetime_usec
     field :consumed_at, :utc_datetime_usec
     field :revoked_at, :utc_datetime_usec
@@ -55,11 +59,16 @@ defmodule Sacrum.Repo.Schemas.DaemonCredential do
     timestamps(type: :utc_datetime_usec)
   end
 
+  @doc "SHA-256 digest used to store and look up every daemon token."
+  @spec hash_token(String.t()) :: String.t()
+  def hash_token(token) when is_binary(token),
+    do: Base.encode64(:crypto.hash(:sha256, token))
+
   @spec create_changeset(t(), map()) :: Ecto.Changeset.t()
   def create_changeset(credential, attrs) do
     credential
     |> cast(attrs, [:token_hash, :expires_at, :status])
-    |> force_change(:credential_kind, credential.credential_kind || "reconnect")
+    |> force_change(:credential_kind, credential.credential_kind)
     |> validate_required([:daemon_id, :token_hash, :expires_at])
     |> validate_length(:token_hash, min: 20)
     |> validate_inclusion(:status, @statuses)

@@ -1,10 +1,10 @@
 defmodule SacrumWeb.Plugs.ApiAuthPlug do
   @moduledoc """
-  Plug for account API token or daemon reconnect credential authentication.
+  Plug for account API token or daemon access token authentication.
 
   Extracts Bearer token from Authorization header, verifies it,
-  and assigns the owning account to the connection. A valid daemon reconnect
-  credential resolves to the daemon's owning account.
+  and assigns the owning account to the connection. A valid daemon access
+  token resolves to the daemon's owning account.
 
   ## Usage
 
@@ -21,7 +21,7 @@ defmodule SacrumWeb.Plugs.ApiAuthPlug do
 
   import Plug.Conn
   alias Sacrum.Auth
-  alias Sacrum.Repo.{Daemons, Users}
+  alias Sacrum.Repo.Daemons
 
   @behaviour Plug
 
@@ -58,7 +58,21 @@ defmodule SacrumWeb.Plugs.ApiAuthPlug do
     end
   end
 
+  @daemon_token_prefix "sacd_"
+
+  # Daemon access tokens are routed straight to the daemon lookup so a daemon
+  # request costs one indexed SELECT. Everything else is an account API token.
   defp authenticate(conn, token) do
+    if daemon_request?(conn, token) do
+      authenticate_daemon(conn, token)
+    else
+      authenticate_account(conn, token)
+    end
+  rescue
+    _ in [DBConnection.ConnectionError, Postgrex.Error] -> {:error, :unavailable}
+  end
+
+  defp authenticate_account(conn, token) do
     case Auth.verify_token(token) do
       {:ok, user} ->
         Auth.update_token_last_used(token)
@@ -69,54 +83,27 @@ defmodule SacrumWeb.Plugs.ApiAuthPlug do
          |> assign(:api_token, token)}
 
       {:error, reason} ->
-        if daemon_identity_header?(conn) do
-          authenticate_daemon(conn, token)
-        else
-          {:error, reason}
-        end
+        {:error, reason}
     end
-  rescue
-    _ in [DBConnection.ConnectionError, Postgrex.Error] -> {:error, :unavailable}
   end
 
   defp authenticate_daemon(conn, token) do
-    case get_req_header(conn, "x-daemon-id") do
-      [daemon_id | _] when byte_size(daemon_id) > 0 ->
-        authenticate_daemon_credential(conn, token, String.trim(daemon_id))
-
-      _ ->
-        {:error, :invalid}
+    with [daemon_id | _] <- get_req_header(conn, "x-daemon-id"),
+         {:ok, %{daemon: daemon, credential: credential, user: user}} <-
+           Daemons.authenticate_access(String.trim(daemon_id), token) do
+      {:ok,
+       conn
+       |> assign(:daemon_principal, %{daemon_id: daemon.id, credential_id: credential.id})
+       |> assign(:current_user, user)
+       |> assign(:api_token, token)}
+    else
+      {:error, :unavailable} -> {:error, :unavailable}
+      _ -> {:error, :invalid_daemon_credentials}
     end
   end
 
-  defp authenticate_daemon_credential(conn, token, daemon_id) do
-    case Daemons.authenticate_reconnect(daemon_id, token) do
-      {:ok, daemon, credential} ->
-        conn =
-          assign(conn, :daemon_principal, %{daemon_id: daemon.id, credential_id: credential.id})
-
-        authenticate_daemon_user(conn, token, daemon.user_id)
-
-      {:error, :invalid_credentials} ->
-        {:error, :invalid_daemon_credentials}
-
-      {:error, :unavailable} ->
-        {:error, :unavailable}
-    end
-  end
-
-  defp authenticate_daemon_user(conn, token, user_id) do
-    case Users.get(user_id) do
-      {:ok, user} ->
-        {:ok,
-         conn
-         |> assign(:current_user, user)
-         |> assign(:api_token, token)}
-
-      _ ->
-        {:error, :invalid_daemon_credentials}
-    end
-  end
+  defp daemon_request?(conn, token),
+    do: String.starts_with?(token, @daemon_token_prefix) and daemon_identity_header?(conn)
 
   defp daemon_identity_header?(conn), do: get_req_header(conn, "x-daemon-id") != []
 

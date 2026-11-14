@@ -21,8 +21,15 @@ defmodule SacrumWeb.DaemonEnrollmentIntegrationTest do
     issued = exchange(daemon_id, bootstrap["enrollmentToken"])
     assert issued["daemon_id"] == daemon_id
 
-    assert DateTime.compare(parse_time(issued["expires_at"]), parse_time(bootstrap["expiresAt"])) ==
-             :gt
+    assert DateTime.compare(
+             parse_time(issued["access_token_expires_at"]),
+             parse_time(bootstrap["expiresAt"])
+           ) == :lt
+
+    assert DateTime.compare(
+             parse_time(issued["refresh_token_expires_at"]),
+             parse_time(bootstrap["expiresAt"])
+           ) == :gt
 
     channel = join_machine(issued)
     assert channel.assigns.user_id == owner.id
@@ -71,9 +78,9 @@ defmodule SacrumWeb.DaemonEnrollmentIntegrationTest do
     assert channel.assigns.daemon_id == daemon_id
     assert Repo.aggregate(from(d in Daemon, where: d.user_id == ^owner.id), :count) == 1
     credentials = Repo.all(from c in DaemonCredential, where: c.daemon_id == ^daemon_id)
-    assert length(credentials) == 4
+    assert length(credentials) == 6
 
-    assert Enum.count(credentials, &(&1.credential_kind == "reconnect" and &1.status == "active")) ==
+    assert Enum.count(credentials, &(&1.credential_kind == "refresh" and &1.status == "active")) ==
              1
 
     disconnect(channel)
@@ -111,7 +118,7 @@ defmodule SacrumWeb.DaemonEnrollmentIntegrationTest do
   end
 
   defp machine_params(issued),
-    do: %{"daemon_id" => issued["daemon_id"], "reconnect_token" => issued["reconnect_token"]}
+    do: %{"daemon_id" => issued["daemon_id"], "access_token" => issued["access_token"]}
 
   defp disconnect(channel) do
     pid = channel.channel_pid

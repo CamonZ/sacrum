@@ -258,7 +258,7 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
         1_000
       )
 
-      {:ok, enrolled, _reconnect, _credential} =
+      {:ok, enrolled, _reconnect} =
         Accounts.Daemons.exchange_bootstrap(renamed.id, bootstrap)
 
       assert_account_broadcast(

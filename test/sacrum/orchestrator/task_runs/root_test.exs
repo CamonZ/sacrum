@@ -14,13 +14,13 @@ defmodule Sacrum.Orchestrator.TaskRuns.RootTest do
     {:ok, project} = Projects.insert(user.id, %{name: "Root Project"})
     {:ok, daemon, bootstrap} = Daemons.create(user.id)
 
-    {:ok, daemon, _reconnect, credential} =
+    {:ok, daemon, _reconnect} =
       Sacrum.Accounts.Daemons.exchange_bootstrap(daemon.id, bootstrap)
 
     assert :ok =
              Sacrum.DaemonConnectionRegistry.register(daemon.id, %{
                user_id: user.id,
-               credential_id: credential.id,
+               credential_id: Ecto.UUID.generate(),
                metrics: nil
              })
 
@@ -130,7 +130,7 @@ defmodule Sacrum.Orchestrator.TaskRuns.RootTest do
     {:ok, project} = Projects.insert(user.id, %{name: "Root Project"})
     {:ok, daemon, bootstrap} = Sacrum.Repo.Daemons.create(user.id)
 
-    {:ok, _daemon, _reconnect, _credential} =
+    {:ok, _daemon, _reconnect} =
       Sacrum.Accounts.Daemons.exchange_bootstrap(daemon.id, bootstrap)
 
     {:ok, task} =

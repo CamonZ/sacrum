@@ -72,17 +72,19 @@ defmodule Sacrum.Repo.DaemonExchangeConcurrencyTest do
       end)
 
     results = Enum.map(tasks, &Task.await(&1, 10_000))
-    assert Enum.count(results, &match?({:ok, _, _, _}, &1)) == 1
+    assert Enum.count(results, &match?({:ok, _, _}, &1)) == 1
     assert Enum.count(results, &match?({:error, :invalid_credentials}, &1)) == 1
 
     committed(fn ->
       rows = Repo.all(from c in DaemonCredential, where: c.daemon_id == ^ctx.daemon.id)
-      assert length(rows) == 2
+      assert length(rows) == 3
 
       assert Enum.count(rows, &(&1.credential_kind == "bootstrap" and not is_nil(&1.consumed_at))) ==
                1
 
-      assert Enum.count(rows, &(&1.credential_kind == "reconnect" and &1.status == "active")) == 1
+      for kind <- ["access", "refresh"] do
+        assert Enum.count(rows, &(&1.credential_kind == kind and &1.status == "active")) == 1
+      end
     end)
   end
 
@@ -104,7 +106,7 @@ defmodule Sacrum.Repo.DaemonExchangeConcurrencyTest do
 
       Repo.query!("""
       CREATE TRIGGER #{trigger} BEFORE INSERT ON daemon_credentials
-      FOR EACH ROW WHEN (NEW.credential_kind = 'reconnect' AND NEW.daemon_id = '#{ctx.daemon.id}')
+      FOR EACH ROW WHEN (NEW.credential_kind = 'refresh' AND NEW.daemon_id = '#{ctx.daemon.id}')
       EXECUTE FUNCTION #{function}();
       """)
     end)
@@ -128,7 +130,7 @@ defmodule Sacrum.Repo.DaemonExchangeConcurrencyTest do
     end
 
     committed(fn ->
-      assert {:ok, _, _, _} = Daemons.exchange_bootstrap(ctx.daemon.id, ctx.bootstrap)
+      assert {:ok, _, _} = Daemons.exchange_bootstrap(ctx.daemon.id, ctx.bootstrap)
     end)
   end
 
@@ -153,11 +155,16 @@ defmodule Sacrum.Repo.DaemonExchangeConcurrencyTest do
                  :count
                ) == 0
 
-        exchange = Enum.find(results, &match?({:ok, _, _, _}, &1))
+        exchange = Enum.find(results, &match?({:ok, _, _}, &1))
 
         if exchange do
-          reconnect = elem(exchange, 2)
-          assert {:error, :invalid_credentials} = Daemons.verify_token(ctx.daemon.id, reconnect)
+          {:ok, _, pair} = exchange
+
+          assert {:error, :invalid_credentials} =
+                   Daemons.authenticate_access(ctx.daemon.id, pair.access_token)
+
+          assert {:error, :invalid_credentials} =
+                   Daemons.refresh(ctx.daemon.id, pair.refresh_token)
         end
       end)
     end
@@ -217,36 +224,32 @@ defmodule Sacrum.Repo.DaemonExchangeConcurrencyTest do
     end
   end
 
-  test "temporary database failure is retryable and does not revoke predecessor", ctx do
-    {token, credential} =
+  test "temporary database failure on refresh is retryable and does not revoke the presented token",
+       ctx do
+    pair =
       committed(fn ->
-        {:ok, _, token, credential} = Daemons.exchange_bootstrap(ctx.daemon.id, ctx.bootstrap)
-        {token, credential}
+        {:ok, _, pair} = Daemons.exchange_bootstrap(ctx.daemon.id, ctx.bootstrap)
+        pair
       end)
 
     suffix = System.unique_integer([:positive])
-    function = "fail_renewal_#{suffix}"
-    trigger = "fail_renewal_trigger_#{suffix}"
+    function = "fail_refresh_#{suffix}"
+    trigger = "fail_refresh_trigger_#{suffix}"
 
     committed(fn ->
       Repo.query!(
-        "CREATE FUNCTION #{function}() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'temporary renewal failure'; END; $$ LANGUAGE plpgsql"
+        "CREATE FUNCTION #{function}() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'temporary refresh failure'; END; $$ LANGUAGE plpgsql"
       )
 
       Repo.query!(
-        "CREATE TRIGGER #{trigger} BEFORE INSERT ON daemon_credentials FOR EACH ROW WHEN (NEW.predecessor_id = '#{credential.id}') EXECUTE FUNCTION #{function}()"
+        "CREATE TRIGGER #{trigger} BEFORE INSERT ON daemon_credentials FOR EACH ROW WHEN (NEW.credential_kind = 'refresh' AND NEW.predecessor_id IS NOT NULL) EXECUTE FUNCTION #{function}()"
       )
     end)
 
     try do
       committed(fn ->
-        assert {:error, :unavailable} = Daemons.renew_reconnect(ctx.daemon.id, credential.id)
-        assert {:ok, _, _} = Daemons.authenticate_reconnect(ctx.daemon.id, token)
-
-        assert Repo.aggregate(
-                 from(c in DaemonCredential, where: c.predecessor_id == ^credential.id),
-                 :count
-               ) == 0
+        assert {:error, :unavailable} = Daemons.refresh(ctx.daemon.id, pair.refresh_token)
+        assert {:ok, _} = Daemons.authenticate_access(ctx.daemon.id, pair.access_token)
       end)
     after
       committed(fn ->
@@ -256,62 +259,84 @@ defmodule Sacrum.Repo.DaemonExchangeConcurrencyTest do
     end
 
     committed(fn ->
-      assert {:ok, %{reconnect_token: _}} = Daemons.renew_reconnect(ctx.daemon.id, credential.id)
+      assert {:ok, _, _} = Daemons.refresh(ctx.daemon.id, pair.refresh_token)
     end)
   end
 
-  test "renewals serialize and leave exactly one active successor", ctx do
-    {_token, credential} =
+  test "two concurrent refreshes with the same refresh token leave exactly one usable pair",
+       ctx do
+    pair =
       committed(fn ->
-        {:ok, _, token, credential} = Daemons.exchange_bootstrap(ctx.daemon.id, ctx.bootstrap)
-        {token, credential}
+        {:ok, _, pair} = Daemons.exchange_bootstrap(ctx.daemon.id, ctx.bootstrap)
+        pair
       end)
 
     results =
       race_on_daemon_lock(ctx.daemon.id, [
-        fn -> Daemons.renew_reconnect(ctx.daemon.id, credential.id) end,
-        fn -> Daemons.renew_reconnect(ctx.daemon.id, credential.id) end
+        fn -> Daemons.refresh(ctx.daemon.id, pair.refresh_token) end,
+        fn -> Daemons.refresh(ctx.daemon.id, pair.refresh_token) end
       ])
 
-    assert Enum.all?(results, &match?({:ok, %{reconnect_token: _}}, &1))
+    # Serialized on the daemon row: the second presentation is lost-response
+    # recovery, which revokes the unused successor issued to the first.
+    assert [{:ok, _, first}, {:ok, _, second}] = results
 
     committed(fn ->
-      successors = Repo.all(from c in DaemonCredential, where: c.predecessor_id == ^credential.id)
+      usable =
+        for p <- [first, second],
+            match?({:ok, _}, Daemons.authenticate_access(ctx.daemon.id, p.access_token)),
+            do: p
+
+      assert length(usable) == 1
+
+      successors =
+        Repo.all(
+          from c in DaemonCredential,
+            where:
+              c.daemon_id == ^ctx.daemon.id and c.credential_kind == "refresh" and
+                not is_nil(c.predecessor_id)
+        )
+
       assert length(successors) == 2
       assert Enum.count(successors, &(&1.status == "active")) == 1
       assert Enum.count(successors, &(&1.status == "revoked")) == 1
     end)
   end
 
-  test "renewal racing rotation or deletion cannot leave a usable losing credential", ctx do
+  test "refresh racing rotation or deletion cannot leave a usable losing credential", ctx do
     for operation <- [:rotate, :unregister] do
-      {daemon, credential} =
+      {daemon, pair} =
         committed(fn ->
           {:ok, daemon, bootstrap} = Daemons.create(ctx.daemon.user_id)
-          {:ok, _, _, credential} = Daemons.exchange_bootstrap(daemon.id, bootstrap)
-          {daemon, credential}
+          {:ok, _, pair} = Daemons.exchange_bootstrap(daemon.id, bootstrap)
+          {daemon, pair}
         end)
 
-      [renewal, lifecycle] =
+      [refresh, lifecycle] =
         race_on_daemon_lock(daemon.id, [
-          fn -> Daemons.renew_reconnect(daemon.id, credential.id) end,
+          fn -> Daemons.refresh(daemon.id, pair.refresh_token) end,
           fn -> apply(Daemons, operation, [daemon]) end
         ])
 
       assert {:ok, _} = lifecycle
 
       committed(fn ->
-        case renewal do
-          {:ok, %{reconnect_token: token}} ->
+        case refresh do
+          {:ok, _, new_pair} ->
             assert {:error, :invalid_credentials} =
-                     Daemons.authenticate_reconnect(daemon.id, token)
+                     Daemons.authenticate_access(daemon.id, new_pair.access_token)
+
+            assert {:error, :invalid_credentials} =
+                     Daemons.refresh(daemon.id, new_pair.refresh_token)
 
           {:error, :invalid_credentials} ->
             :ok
         end
 
         assert {:error, :invalid_credentials} =
-                 Daemons.revalidate_reconnect(daemon.id, credential.id)
+                 Daemons.authenticate_access(daemon.id, pair.access_token)
+
+        assert {:error, :invalid_credentials} = Daemons.refresh(daemon.id, pair.refresh_token)
       end)
     end
   end

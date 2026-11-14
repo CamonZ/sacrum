@@ -64,7 +64,7 @@ defmodule Sacrum.Orchestrator.ExecutionDispatcherTest do
   defp create_task(user, project, attrs \\ %{}) do
     {:ok, daemon, bootstrap} = Sacrum.Repo.Daemons.create(user.id)
 
-    {:ok, _daemon, _reconnect, _credential} =
+    {:ok, _daemon, _reconnect} =
       Sacrum.Accounts.Daemons.exchange_bootstrap(daemon.id, bootstrap)
 
     default_attrs = %{

@@ -21,7 +21,7 @@ defmodule Sacrum.DaemonProvisioningSecurityTest do
     assert {:ok, daemon, token} = Accounts.Daemons.create(owner.id)
     assert [credential] = DaemonCredentials.list_active_for_daemon(daemon.id)
     refute credential.token_hash == token
-    assert Argon2.verify_pass(token, credential.token_hash)
+    assert credential.token_hash == Sacrum.Repo.Schemas.DaemonCredential.hash_token(token)
     assert {:ok, found} = Accounts.Daemons.get_by(owner.id, conditions: [id: daemon.id])
     assert found.id == daemon.id
     assert Accounts.Daemons.get_by(other.id, conditions: [id: daemon.id]) == {:error, :not_found}
@@ -31,14 +31,17 @@ defmodule Sacrum.DaemonProvisioningSecurityTest do
   test "expired credentials fail closed and rotation invalidates the previous token" do
     owner = user("lifecycle")
     assert {:ok, daemon, token} = Accounts.Daemons.create(owner.id, %{ttl: -1})
-    assert {:error, :invalid_credentials} = Daemons.verify_token(daemon.id, token)
+    assert {:error, :invalid_credentials} = Daemons.exchange_bootstrap(daemon.id, token)
     assert {:ok, daemon, current_token} = Accounts.Daemons.rotate(owner.id, daemon.id)
-    assert {:error, :invalid_credentials} = Daemons.verify_token(daemon.id, token)
-    assert {:ok, enrolled, reconnect, _} = Daemons.exchange_bootstrap(daemon.id, current_token)
+    assert {:error, :invalid_credentials} = Daemons.exchange_bootstrap(daemon.id, token)
+
+    assert {:ok, enrolled, %{access_token: access}} =
+             Daemons.exchange_bootstrap(daemon.id, current_token)
+
     assert enrolled.id == daemon.id
     assert enrolled.status == "active"
     assert enrolled.enrolled_at
-    assert {:ok, verified} = Daemons.verify_token(daemon.id, reconnect)
+    assert {:ok, %{daemon: verified}} = Daemons.authenticate_access(daemon.id, access)
     assert verified.id == daemon.id
   end
 

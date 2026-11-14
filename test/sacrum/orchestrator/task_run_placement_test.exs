@@ -17,10 +17,10 @@ defmodule Sacrum.Orchestrator.TaskRunPlacementTest do
     {:ok, root_daemon, root_bootstrap} = Sacrum.Repo.Daemons.create(user.id)
     {:ok, other_daemon, other_bootstrap} = Sacrum.Repo.Daemons.create(user.id)
 
-    {:ok, _root_daemon, _root_reconnect, _root_credential} =
+    {:ok, _root_daemon, _root_reconnect} =
       Accounts.Daemons.exchange_bootstrap(root_daemon.id, root_bootstrap)
 
-    {:ok, _other_daemon, _other_reconnect, _other_credential} =
+    {:ok, _other_daemon, _other_reconnect} =
       Accounts.Daemons.exchange_bootstrap(other_daemon.id, other_bootstrap)
 
     {:ok, root_task} =

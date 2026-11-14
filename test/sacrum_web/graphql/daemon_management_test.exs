@@ -262,7 +262,7 @@ defmodule SacrumWeb.Graphql.DaemonManagementTest do
         )
         |> get_in(["data", "createDaemon"])
 
-      {:ok, _, reconnect, _} =
+      {:ok, _, %{access_token: reconnect, refresh_token: refresh}} =
         Daemons.exchange_bootstrap(created["daemon"]["id"], created["enrollmentToken"])
 
       result =
@@ -276,12 +276,13 @@ defmodule SacrumWeb.Graphql.DaemonManagementTest do
       assert is_binary(metadata["enrolledAt"])
 
       kinds = metadata["credentials"] |> Enum.map(& &1["credentialKind"]) |> Enum.sort()
-      assert kinds == ["bootstrap", "reconnect"]
+      assert kinds == ["access", "bootstrap", "refresh"]
 
       body = inspect(result)
       refute body =~ "tokenHash"
       refute body =~ "token_hash"
       refute body =~ reconnect
+      refute body =~ refresh
       refute body =~ created["enrollmentToken"]
     end
 
@@ -318,7 +319,7 @@ defmodule SacrumWeb.Graphql.DaemonManagementTest do
         )
         |> get_in(["data", "createDaemon"])
 
-      assert {:ok, _, reconnect, _} =
+      assert {:ok, _, %{access_token: reconnect}} =
                Daemons.exchange_bootstrap(created["daemon"]["id"], created["enrollmentToken"])
 
       deleted =
@@ -332,7 +333,9 @@ defmodule SacrumWeb.Graphql.DaemonManagementTest do
       assert deleted["status"] == "active"
       assert deleted["name"] == "delete-me"
       assert Repo.get(Daemon, deleted["id"]) == nil
-      assert {:error, :invalid_credentials} = Daemons.verify_token(deleted["id"], reconnect)
+
+      assert {:error, :invalid_credentials} =
+               Daemons.authenticate_access(deleted["id"], reconnect)
 
       daemon_read = run(ctx.conn, "query { daemon(id: \"#{deleted["id"]}\") { id } }")
 
@@ -422,7 +425,7 @@ defmodule SacrumWeb.Graphql.DaemonManagementTest do
       {:ok, daemon, bootstrap} = Daemons.create(ctx.owner.id, %{name: "Telemetry bot"})
       enrolled_at = ~U[2026-09-17 10:00:00.000000Z]
 
-      {:ok, _enrolled, _reconnect, _credential} =
+      {:ok, _enrolled, _reconnect} =
         Daemons.exchange_bootstrap(daemon.id, bootstrap, now: enrolled_at)
 
       assert {:ok, report} =
