@@ -12,6 +12,7 @@ defmodule Sacrum.Accounts.StepExecutions do
     preloads: [],
     default_order: [asc: :inserted_at]
 
+  alias Sacrum.Accounts.SessionLogs.Ingestion
   alias Sacrum.Accounts.WorkflowSteps
   alias Sacrum.Orchestrator.{ExecutionEvents, StructuredInference}
   alias Sacrum.Repo
@@ -104,9 +105,14 @@ defmodule Sacrum.Accounts.StepExecutions do
 
   @doc """
   Update an existing step execution.
+
+  A status change first waits until every session-log event accepted for the
+  execution is persisted, so its history and usage counters are complete when
+  the status is applied.
   """
   @spec update(StepExecution.t(), map()) ::
-          {:ok, StepExecution.t()} | {:error, Ecto.Changeset.t()}
+          {:ok, StepExecution.t()}
+          | {:error, Ecto.Changeset.t() | :not_found | :session_logs_pending}
   def update(%StepExecution{} = execution, attrs) do
     require Logger
 
@@ -115,7 +121,8 @@ defmodule Sacrum.Accounts.StepExecutions do
     )
 
     result =
-      with :ok <- prevent_human_input_resume_bypass(execution, attrs) do
+      with :ok <- prevent_human_input_resume_bypass(execution, attrs),
+           {:ok, execution} <- flush_session_logs(execution, attrs) do
         execution
         |> StepExecution.update_changeset(StructuredInference.prepare_update(execution, attrs))
         |> Repo.update()
@@ -136,6 +143,28 @@ defmodule Sacrum.Accounts.StepExecutions do
       {:error, reason} ->
         Logger.error("[StepExecutions.update] Failed: #{inspect(reason)}")
         {:error, reason}
+    end
+  end
+
+  defp flush_session_logs(execution, attrs) do
+    status = Map.get(attrs, :status) || Map.get(attrs, "status")
+
+    if is_nil(status) or status == execution.status do
+      {:ok, execution}
+    else
+      case Ingestion.flush(execution.id) do
+        :idle -> {:ok, execution}
+        # Reload the usage counters the flushed writes updated.
+        :flushed -> reload(execution)
+        {:error, :timeout} -> {:error, :session_logs_pending}
+      end
+    end
+  end
+
+  defp reload(execution) do
+    case Repo.get(StepExecution, execution.id) do
+      nil -> {:error, :not_found}
+      reloaded -> {:ok, reloaded}
     end
   end
 

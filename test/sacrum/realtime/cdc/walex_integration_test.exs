@@ -10,6 +10,7 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
 
   alias Ecto.Adapters.SQL.Sandbox
   alias Sacrum.Accounts
+  alias Sacrum.Accounts.SessionLogs.Ingestion
   alias Sacrum.Orchestrator.{ExecutionDispatcher, FSMData, PromptRenderer}
   alias Sacrum.Orchestrator.Routing.RouteStep
   alias Sacrum.Repo
@@ -1287,7 +1288,7 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
     end)
   end
 
-  test "text deltas are published directly and only the final snapshot is projected" do
+  test "text deltas are published directly and the final snapshot's CDC copy keeps its live id" do
     with_project(fn user, project ->
       {workflow, step, _next_step} = create_workflow_with_steps(user, project)
       task = create_task(project, "CDC text deltas", %{workflow_id: workflow.id})
@@ -1328,11 +1329,15 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
       snapshot = Sacrum.HarnessFixture.text("snapshot", "snapshot", "Hello", sequence: 3)
       assert {:ok, log} = ingest.(snapshot)
 
-      assert_project_broadcast(
-        "session_log_created",
-        %{id: log.id, content: snapshot.content, logical_key: snapshot.logical_key},
-        1_000
-      )
+      # Broadcast live on acceptance, then projected from the committed row
+      # with the same id, so clients replace the live entry.
+      for _copy <- [:live, :cdc] do
+        assert_project_broadcast(
+          "session_log_created",
+          %{id: log.id, content: snapshot.content, logical_key: snapshot.logical_key},
+          1_000
+        )
+      end
 
       refute_project_broadcast("session_log_created", 200)
 
@@ -1346,7 +1351,7 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
     end)
   end
 
-  test "immutable session log retries project only one created event" do
+  test "immutable session log retries are broadcast live and projected once" do
     with_project(fn user, project ->
       {workflow, step, _next_step} = create_workflow_with_steps(user, project)
       task = create_task(project, "CDC logical session log", %{workflow_id: workflow.id})
@@ -1382,17 +1387,19 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
       assert first_log["content"] == attrs.content
       assert first_log["logicalKey"] == attrs.logical_key
 
-      assert_project_broadcast(
-        "session_log_created",
-        %{
-          id: first_log["id"],
-          step_execution_id: execution.id,
-          project_id: project.id,
-          content: attrs.content,
-          logical_key: attrs.logical_key
-        },
-        1_000
-      )
+      for _copy <- [:live, :cdc] do
+        assert_project_broadcast(
+          "session_log_created",
+          %{
+            id: first_log["id"],
+            step_execution_id: execution.id,
+            project_id: project.id,
+            content: attrs.content,
+            logical_key: attrs.logical_key
+          },
+          1_000
+        )
+      end
 
       second_log =
         run_graphql!(user, """
@@ -1566,7 +1573,21 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
           Sacrum.HarnessFixture.text("parallel-final", "snapshot", "Héllo 🌍", sequence: 3)
 
         assert {:ok, final} = ingest.(snapshot)
-        assert_parallel_delivery(clients, [{project.id, "session_log_created", final.id}])
+        assert Ingestion.flush(execution.id) == :flushed
+
+        {:ok, snapshot_barrier} =
+          Accounts.Notifications.publish(user.id, project.id, %{
+            message: "Snapshot barrier",
+            severity: "info"
+          })
+
+        # The live broadcast and the committed row's CDC projection share an id.
+        assert_parallel_delivery(clients, [
+          {project.id, "session_log_created", final.id},
+          {project.id, "session_log_created", final.id},
+          {project.id, "notification_created", snapshot_barrier.id}
+        ])
+
         assert Repo.get!(Sacrum.Repo.Schemas.SessionLog, final.id).content == snapshot.content
 
         assert {:ok, repeated} = ingest.(snapshot)

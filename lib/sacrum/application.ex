@@ -18,6 +18,8 @@ defmodule Sacrum.Application do
       # Per-execution harness session-log ingestion; starts before and stops
       # after the Endpoint that serves its requests
       {Registry, keys: :unique, name: Sacrum.Accounts.SessionLogs.IngestionRegistry},
+      # Writer tasks outlive the ingestion processes that await them on shutdown
+      {Task.Supervisor, name: Sacrum.Accounts.SessionLogs.IngestionWriterSupervisor},
       {DynamicSupervisor, name: Sacrum.Accounts.SessionLogs.IngestionSupervisor},
       # Start to serve requests before Absinthe.Subscription
       SacrumWeb.Endpoint,
