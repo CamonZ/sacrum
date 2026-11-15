@@ -125,9 +125,16 @@ defmodule Sacrum.Repo.StepExecutionConfigMigrationTest do
     Code.put_compiler_option(:ignore_module_conflict, true)
 
     try do
+      Code.require_file(
+        Application.app_dir(
+          :sacrum,
+          "priv/repo/migrations/20260926120000_replace_step_execution_prompt_with_config.exs"
+        )
+      )
+
       Ecto.Migrator.run(
         Repo,
-        Application.app_dir(:sacrum, "priv/repo/migrations"),
+        [{@version, Sacrum.Repo.Migrations.ReplaceStepExecutionPromptWithConfig}],
         direction,
         [log: false, migration_lock: false] ++ opts
       )

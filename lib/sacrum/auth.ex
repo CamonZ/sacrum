@@ -36,6 +36,13 @@ defmodule Sacrum.Auth do
     end
   end
 
+  # Authentication runs on every request; recording use does not need to.
+  @last_used_interval_seconds 300
+
+  @doc "Seconds a token's `last_used_at` may lag behind its most recent use."
+  @spec last_used_interval_seconds() :: pos_integer()
+  def last_used_interval_seconds, do: @last_used_interval_seconds
+
   @doc """
   Verifies a token and returns the associated user.
 
@@ -51,13 +58,23 @@ defmodule Sacrum.Auth do
       {:error, :expired}
   """
   @spec verify_token(String.t()) :: {:ok, User.t()} | {:error, :invalid | :expired}
-  def verify_token(plaintext_token) when is_binary(plaintext_token) do
+  def verify_token(plaintext_token) do
+    with {:ok, token} <- verify_api_token(plaintext_token), do: {:ok, token.user}
+  end
+
+  @doc """
+  Verifies a token and returns it with its user preloaded, in one query.
+  Expiry is checked on every call.
+  """
+  @spec verify_api_token(String.t()) :: {:ok, ApiToken.t()} | {:error, :invalid | :expired}
+  def verify_api_token(plaintext_token) when is_binary(plaintext_token) do
     token_hash = hash_token(plaintext_token)
 
     query =
       from t in ApiToken,
+        join: u in assoc(t, :user),
         where: t.token_hash == ^token_hash,
-        preload: [:user]
+        preload: [user: u]
 
     case Repo.one(query) do
       nil ->
@@ -65,30 +82,36 @@ defmodule Sacrum.Auth do
 
       %ApiToken{expires_at: expires_at} = token when not is_nil(expires_at) ->
         if DateTime.compare(expires_at, DateTime.utc_now()) == :gt do
-          {:ok, token.user}
+          {:ok, token}
         else
           {:error, :expired}
         end
 
-      %ApiToken{user: user} ->
-        {:ok, user}
+      %ApiToken{} = token ->
+        {:ok, token}
     end
   end
 
-  @spec verify_token(term()) :: {:error, :invalid}
-  def verify_token(_), do: {:error, :invalid}
+  def verify_api_token(_), do: {:error, :invalid}
 
   @doc """
-  Updates the last_used_at timestamp for a token.
+  Records a verified token's use. `last_used_at` is written at most once per
+  #{@last_used_interval_seconds}-second interval: a token used within the
+  interval skips the write, and the conditional update keeps concurrent
+  requests from writing the same interval twice.
   """
-  @spec update_token_last_used(String.t()) :: :ok
-  def update_token_last_used(plaintext_token) when is_binary(plaintext_token) do
-    token_hash = hash_token(plaintext_token)
+  @spec touch_token_last_used(ApiToken.t(), DateTime.t()) :: :ok
+  def touch_token_last_used(%ApiToken{} = token, now \\ DateTime.utc_now()) do
+    threshold = DateTime.add(now, -@last_used_interval_seconds, :second)
 
-    Repo.update_all(
-      from(t in ApiToken, where: t.token_hash == ^token_hash),
-      set: [last_used_at: DateTime.utc_now()]
-    )
+    if is_nil(token.last_used_at) or DateTime.compare(token.last_used_at, threshold) != :gt do
+      Repo.update_all(
+        from(t in ApiToken,
+          where: t.id == ^token.id and (is_nil(t.last_used_at) or t.last_used_at <= ^threshold)
+        ),
+        set: [last_used_at: now]
+      )
+    end
 
     :ok
   end
