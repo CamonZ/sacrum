@@ -4,11 +4,12 @@ defmodule Sacrum.Repo.SessionLogConcurrencyTest do
   import Ecto.Query
   alias Ecto.Adapters.SQL.Sandbox
   alias Sacrum.Accounts
+  alias Sacrum.Accounts.SessionLogs.Ingestion
   alias Sacrum.Repo
   alias Sacrum.Repo.{Projects, SessionLogs, StepExecutions, Tasks, Users, Workflows}
   alias Sacrum.Repo.Schemas.{SessionLog, StepExecution}
 
-  test "the ingestion process serializes concurrent retries and out-of-order usage" do
+  test "ingestion accepts and broadcasts without the execution row lock and rolls up out-of-order usage" do
     context =
       Sandbox.unboxed_run(Repo, fn ->
         unique = System.unique_integer([:positive])
@@ -35,112 +36,129 @@ defmodule Sacrum.Repo.SessionLogConcurrencyTest do
       end)
 
     on_exit(fn -> Sandbox.unboxed_run(Repo, fn -> Repo.delete!(context.user) end) end)
+    :ok = SacrumWeb.Endpoint.subscribe("project:#{context.project.id}")
     owner = self()
-    events = [event("high", 8, 80), event("low", 2, 20), event("high", 8, 80)]
+    handler = {__MODULE__, make_ref()}
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:sacrum, :repo, :query],
+        fn _, _, metadata, _ -> send(owner, {:query, metadata.query}) end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    events = [
+      event("high", 8, 80),
+      event("low", 2, 20),
+      event("high", 8, 80),
+      event("tool", 1, nil),
+      event("later", 9, 30)
+    ]
 
     supervisor = start_supervised!({Task.Supervisor, []})
 
-    writers =
+    callers =
       Sandbox.unboxed_run(Repo, fn ->
-        {:ok, writers} =
+        {:ok, callers} =
           Repo.transaction(fn ->
+            # Another session holds the execution row; ingestion must not need it
+            # to accept, broadcast or reply.
             Repo.one!(
               from execution in StepExecution,
                 where: execution.id == ^context.execution.id,
                 lock: "FOR UPDATE"
             )
 
-            writers =
+            callers =
               Enum.map(events, fn event ->
                 Task.Supervisor.async_nolink(supervisor, fn ->
                   Sandbox.unboxed_run(Repo, fn ->
-                    %{rows: [[backend]]} = Repo.query!("SELECT pg_backend_pid()")
-                    send(owner, {:ready, self(), backend})
+                    result =
+                      Accounts.SessionLogs.insert(context.user.id, %{
+                        step_execution_id: context.execution.id,
+                        logical_key: "harness:" <> event["event_id"],
+                        content: Jason.encode!(event)
+                      })
 
+                    send(owner, {:replied, self(), result})
+
+                    # Writes run on the latest caller's behalf; stay alive until
+                    # they are flushed.
                     receive do
-                      :write -> :ok
+                      :done -> result
                     end
-
-                    Accounts.SessionLogs.insert(context.user.id, %{
-                      step_execution_id: context.execution.id,
-                      logical_key: "harness:" <> event["event_id"],
-                      content: Jason.encode!(event)
-                    })
                   end)
                 end)
               end)
 
-            backends =
-              for writer <- writers do
-                pid = writer.pid
-                assert_receive {:ready, ^pid, backend}, 5_000
-                backend
+            replies =
+              for caller <- callers do
+                pid = caller.pid
+                assert_receive {:replied, ^pid, result}, 5_000
+                result
               end
 
-            assert length(Enum.uniq(backends)) == 3
-            Enum.each(writers, &send(&1.pid, :write))
-            # Writers queue in the execution's ingestion process, so only the
-            # write it is handling reaches the row lock. That write cannot finish
-            # while the lock is held, so once the other two calls are queued
-            # behind it no further writer can reach the lock.
-            deadline = System.monotonic_time(:millisecond) + 5_000
+            assert Enum.all?(replies, &match?({:ok, %SessionLog{}}, &1))
 
-            await(deadline, "no writer reached the execution lock", fn ->
-              blocked_count(backends) > 0
-            end)
+            for _accepted <- 1..4 do
+              assert_receive %Phoenix.Socket.Broadcast{event: "session_log_created"}, 1_000
+            end
 
-            await(deadline, "the other writers did not queue in the ingestion process", fn ->
-              queued_calls(context.execution.id) == 2
-            end)
-
-            assert blocked_count(backends) == 1
-            writers
+            refute_received %Phoenix.Socket.Broadcast{event: "session_log_created"}
+            callers
           end)
 
-        writers
+        callers
       end)
 
-    results = Enum.map(writers, &Task.await(&1, 10_000))
-    assert Enum.all?(results, &match?({:ok, %SessionLog{}}, &1))
+    assert Ingestion.flush(context.execution.id, 5_000) == :flushed
+    Enum.each(callers, &send(&1.pid, :done))
+    Enum.each(callers, &Task.await(&1, 5_000))
+
+    queries = collect_queries([])
+    assert Enum.any?(queries, &(&1 =~ ~r/^UPDATE "step_executions"/))
+    assert Enum.count(queries, &(&1 =~ "FOR UPDATE")) == 1
 
     Sandbox.unboxed_run(Repo, fn ->
       logs = SessionLogs.all(conditions: [step_execution_id: context.execution.id])
-      assert Enum.sort(Enum.map(logs, & &1.logical_key)) == ["harness:high", "harness:low"]
+
+      assert Enum.sort(Enum.map(logs, & &1.logical_key)) ==
+               ["harness:high", "harness:later", "harness:low", "harness:tool"]
+
       execution = Repo.get!(StepExecution, context.execution.id)
-      assert execution.session_input_tokens == 100
-      assert execution.session_cache_read_input_tokens == 4
-      assert execution.session_output_tokens == 6
-      assert execution.session_total_tokens == 106
-      assert execution.context_window_input_tokens == 80
+      assert execution.session_input_tokens == 130
+      assert execution.session_cache_read_input_tokens == 6
+      assert execution.session_output_tokens == 9
+      assert execution.session_total_tokens == 139
+      assert execution.context_window_input_tokens == 30
       assert execution.context_window_cache_read_input_tokens == 2
-      assert execution.context_window_total_tokens == 83
+      assert execution.context_window_total_tokens == 33
     end)
   end
 
-  defp await(deadline, message, done?) do
-    unless done?.() do
-      assert System.monotonic_time(:millisecond) < deadline, message
-      await(deadline, message, done?)
+  defp collect_queries(queries) do
+    receive do
+      {:query, query} -> collect_queries([query | queries])
+    after
+      0 -> Enum.reverse(queries)
     end
   end
 
-  defp queued_calls(execution_id) do
-    case Registry.lookup(Sacrum.Accounts.SessionLogs.IngestionRegistry, execution_id) do
-      [{pid, _value}] -> pid |> Process.info(:message_queue_len) |> elem(1)
-      [] -> 0
-    end
-  end
-
-  defp blocked_count(backends) do
-    Repo.query!("SELECT pg_stat_clear_snapshot()")
-
-    %{rows: [[count]]} =
-      Repo.query!(
-        "SELECT count(*) FROM pg_stat_activity WHERE pid = ANY($1) AND wait_event_type = 'Lock'",
-        [backends]
-      )
-
-    count
+  defp event(id, sequence, nil) do
+    %{
+      "version" => 1,
+      "event_id" => id,
+      "stream_id" => "race",
+      "sequence" => sequence,
+      "timestamp" => "2026-10-04T00:00:00Z",
+      "semantics" => "snapshot",
+      "type" => "tool_call",
+      "correlation" => %{"tool_call_id" => id},
+      "data" => %{"name" => "bash"}
+    }
   end
 
   defp event(id, sequence, input) do

@@ -4,6 +4,7 @@ defmodule Sacrum.Repo.HarnessSessionLogsTest do
   import ExUnit.CaptureLog
 
   alias Sacrum.Accounts
+  alias Sacrum.Accounts.SessionLogs.Ingestion
   alias Sacrum.Repo
   alias Sacrum.Repo.{Projects, SessionLogs, StepExecutions, Tasks, Users, Workflows}
   alias Sacrum.Repo.Schemas.{SessionLog, StepExecution}
@@ -160,6 +161,7 @@ defmodule Sacrum.Repo.HarnessSessionLogsTest do
 
     assert {:error, :event_identity_conflict} = insert_harness(context, conflicting)
 
+    flush(context.execution.id)
     assert [persisted] = SessionLogs.all(conditions: [step_execution_id: context.execution.id])
     assert persisted.id == first.id
     assert persisted.content == first.content
@@ -181,6 +183,7 @@ defmodule Sacrum.Repo.HarnessSessionLogsTest do
              })
 
     assert %{format: ["is invalid"]} = errors_on(changeset)
+    flush(context.execution.id)
     assert Repo.get!(SessionLog, first.id).format == "harness"
     assert reload(context.execution).session_total_tokens == 5
   end
@@ -245,6 +248,8 @@ defmodule Sacrum.Repo.HarnessSessionLogsTest do
       harness_event("valid-after-malformed", "stream-1", 5, turn_delta: usage(7, 2, 4, 1, 9))
 
     assert {:ok, _log} = insert_harness(context, valid)
+
+    flush(context.execution.id)
 
     assert length(SessionLogs.all(conditions: [step_execution_id: context.execution.id])) ==
              1
@@ -393,30 +398,28 @@ defmodule Sacrum.Repo.HarnessSessionLogsTest do
            ]
   end
 
-  test "rollup failure rolls back the event and keeps the ingestion process", context do
+  test "a failed background write is retried until the event is persisted", context do
     Repo.query!(
       "ALTER TABLE step_executions ADD CONSTRAINT injected_rollup_failure CHECK (session_total_tokens <= 5)"
     )
 
-    event = harness_event("rollback", "stream", 1, turn_delta: usage(10, 2, 3, 1, 5))
+    event = harness_event("retried", "stream", 1, turn_delta: usage(10, 2, 3, 1, 5))
 
     log =
       capture_log(fn ->
-        assert {:error, :ingestion_failed} = insert_harness(context, event)
+        assert {:ok, %SessionLog{id: id}} = insert_harness(context, event)
+        assert {:error, :timeout} = Ingestion.flush(context.execution.id, 300)
+        assert SessionLogs.all(conditions: [step_execution_id: context.execution.id]) == []
+
+        Repo.query!("ALTER TABLE step_executions DROP CONSTRAINT injected_rollup_failure")
+        flush(context.execution.id)
+
+        assert [%SessionLog{id: ^id}] =
+                 SessionLogs.all(conditions: [step_execution_id: context.execution.id])
       end)
 
-    assert log =~ "Ecto.ConstraintError"
-    assert SessionLogs.all(conditions: [step_execution_id: context.execution.id]) == []
-    assert reload(context.execution).session_total_tokens == nil
-
-    [{ingestion, _value}] =
-      Registry.lookup(Sacrum.Accounts.SessionLogs.IngestionRegistry, context.execution.id)
-
-    assert {:ok, _log} = insert_harness(context, harness_event("after", "stream", 2))
-    assert reload(context.execution).session_total_tokens == 2
-
-    assert [{^ingestion, _value}] =
-             Registry.lookup(Sacrum.Accounts.SessionLogs.IngestionRegistry, context.execution.id)
+    assert log =~ "retrying"
+    assert reload(context.execution).session_total_tokens == 13
   end
 
   test "accepts the existing daemon mutation with a nullable logicalKey variable", context do
@@ -465,6 +468,8 @@ defmodule Sacrum.Repo.HarnessSessionLogsTest do
       assert Enum.any?(errors, &String.contains?(&1.message, "logical_key"))
     end
 
+    flush(context.execution.id)
+
     assert [%SessionLog{id: ^id}] =
              SessionLogs.all(conditions: [step_execution_id: context.execution.id])
   end
@@ -497,15 +502,25 @@ defmodule Sacrum.Repo.HarnessSessionLogsTest do
     [{ingestion, _value}] =
       Registry.lookup(Sacrum.Accounts.SessionLogs.IngestionRegistry, context.execution.id)
 
-    queries =
-      for {pid, query} <- collect_queries([]), pid in [owner, ingestion], do: query
+    flush(context.execution.id)
 
-    # Authorization SELECT, the ingestion process's one-time history read, and
-    # four persistence/rollup statements. Sandbox wraps the transaction with
-    # SAVEPOINT/RELEASE, equivalent to BEGIN/COMMIT.
-    statements = Enum.reject(queries, &Regex.match?(~r/^(begin|commit|savepoint|release)/i, &1))
-    assert length(statements) == 6
-    assert length(queries) == 8
+    {reply_path, writer} =
+      collect_queries([])
+      |> Enum.reject(fn {_pid, query} ->
+        Regex.match?(~r/^(begin|commit|savepoint|release)/i, query)
+      end)
+      |> Enum.split_with(fn {pid, _query} -> pid in [owner, ingestion] end)
+
+    # The reply waits only on the authorization SELECT and the ingestion
+    # process's one-time history read; the writer task inserts the row and
+    # writes the counters without locking the execution.
+    assert [authorization, history] = Enum.map(reply_path, &elem(&1, 1))
+    assert authorization =~ ~s(FROM "step_executions")
+    assert history =~ ~s(FROM "session_logs")
+    assert [insert, update] = Enum.map(writer, &elem(&1, 1))
+    assert insert =~ ~r/^INSERT INTO "session_logs"/
+    assert update =~ ~r/^UPDATE "step_executions"/
+    refute Enum.any?(reply_path ++ writer, fn {_pid, query} -> query =~ "FOR UPDATE" end)
   end
 
   defp collect_queries(queries) do
@@ -574,7 +589,12 @@ defmodule Sacrum.Repo.HarnessSessionLogsTest do
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
-  defp reload(execution), do: Repo.get!(StepExecution, execution.id)
+  defp reload(execution) do
+    flush(execution.id)
+    Repo.get!(StepExecution, execution.id)
+  end
+
+  defp flush(execution_id), do: assert(Ingestion.flush(execution_id) in [:idle, :flushed])
 
   defp assert_session(execution, expected) do
     assert execution.session_input_tokens == Keyword.fetch!(expected, :input)

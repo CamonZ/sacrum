@@ -25,7 +25,8 @@ defmodule Sacrum.Accounts.SessionLogs.HarnessEventV1 do
          {:ok, data} <- Map.fetch(event, "data"),
          true <- logical_key == "harness:" <> event["event_id"],
          true <- payload?(event["type"], data),
-         true <- text_delta_identity?(event) do
+         true <- text_delta_identity?(event),
+         true <- tool_delta_identity?(event) do
       {:ok, event}
     else
       _ -> :error
@@ -56,6 +57,14 @@ defmodule Sacrum.Accounts.SessionLogs.HarnessEventV1 do
 
   defp text_delta_identity?(%{"type" => "text", "semantics" => "delta"}), do: false
   defp text_delta_identity?(_event), do: true
+
+  # Tool deltas (streamed input, progress output) are never stored either, so
+  # each one must name its tool call.
+  defp tool_delta_identity?(%{"type" => type, "semantics" => "delta", "data" => data})
+       when type in ["tool_call", "tool_output"],
+       do: is_map(data) and nonempty_string?(data["tool_call_id"])
+
+  defp tool_delta_identity?(_event), do: true
 
   defp payload?("usage", %{} = data) do
     optional?(data, "turn_delta", &usage?(&1, :turn)) and

@@ -38,7 +38,20 @@ defmodule Sacrum.DataCase do
   """
   def setup_sandbox(tags) do
     pid = Ecto.Adapters.SQL.Sandbox.start_owner!(Sacrum.Repo, shared: not tags[:async])
-    on_exit(fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(pid) end)
+
+    on_exit(fn ->
+      drain_session_log_ingestion()
+      Ecto.Adapters.SQL.Sandbox.stop_owner(pid)
+    end)
+  end
+
+  # Session-log writes run in the background on the test's connection; let
+  # queued writes finish before the sandbox owner stops. `drain/2` leaves
+  # other tests' open items open.
+  defp drain_session_log_ingestion do
+    Sacrum.Accounts.SessionLogs.IngestionRegistry
+    |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
+    |> Enum.each(&Sacrum.Accounts.SessionLogs.Ingestion.drain(&1, 1_000))
   end
 
   @doc """

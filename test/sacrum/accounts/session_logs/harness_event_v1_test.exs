@@ -8,7 +8,9 @@ defmodule Sacrum.Accounts.SessionLogs.HarnessEventV1Test do
   test "non-usage payloads and metadata remain opaque and unchanged" do
     for type <- ["tool_call", "control_requested", "turn_finished", "future_v1_event"],
         data <- [nil, "opaque", [1, 2], %{"usage" => "client-owned"}] do
-      event = event(type, data) |> Map.put("future_metadata", 42)
+      event =
+        event(type, data) |> Map.put("semantics", "snapshot") |> Map.put("future_metadata", 42)
+
       assert {:ok, ^event} = decode(event)
     end
 
@@ -28,6 +30,21 @@ defmodule Sacrum.Accounts.SessionLogs.HarnessEventV1Test do
           Map.put(delta, "data", "Hel")
         ] do
       assert :error = decode(invalid)
+    end
+  end
+
+  test "tool deltas require a tool call id" do
+    for type <- ["tool_call", "tool_output"] do
+      delta = event(type, %{"tool_call_id" => "call-1", "output" => %{"kind" => "progress"}})
+      assert {:ok, ^delta} = decode(delta)
+
+      for invalid <- [
+            Map.put(delta, "data", %{"output" => "x"}),
+            put_in(delta, ["data", "tool_call_id"], ""),
+            Map.put(delta, "data", "opaque")
+          ] do
+        assert :error = decode(invalid)
+      end
     end
   end
 
