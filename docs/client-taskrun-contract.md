@@ -114,7 +114,7 @@ See [Domain Model: StepExecution.status](domain-model.md#stepexecutionstatus) fo
 
 ### Run History
 
-Use `taskRuns(taskId)` for a task-local run history and `taskRunTrace(rootTaskRunId)` for one run's directly attached executions and logs. The `rootTaskRunId` argument name is legacy; clients should pass the specific `TaskRun` ID they want to inspect.
+Use `projectRunHistory(projectId)` for a project-wide, paginated run history (one request per page, independent of the project's task count), `taskRuns(taskId)` for a task-local run history, and `taskRunTrace(rootTaskRunId)` for one run's directly attached executions and logs. The `rootTaskRunId` argument name is legacy; clients should pass the specific `TaskRun` ID they want to inspect.
 
 Do not infer TaskRun parentage from task hierarchy. Parent/child run lineage is explicit:
 
@@ -336,6 +336,42 @@ query TaskRuns($taskId: Uuid4!) {
   }
 }
 ```
+
+### Project Run History
+
+```graphql
+query History($projectId: Uuid4!, $afterUpdatedAt: Datetime, $afterId: Uuid4) {
+  projectRunHistory(
+    projectId: $projectId
+    afterUpdatedAt: $afterUpdatedAt
+    afterId: $afterId
+    limit: 50
+    includeCompleted: false
+    search: "parser"
+  ) {
+    hasMore
+    hiddenCompletedCount
+    entries {
+      taskRun { id taskId status updatedAt parentTaskRunId rootTaskRunId }
+      task { id title level parentId workflowId workflowName completedAt }
+    }
+  }
+}
+```
+
+Entries are ordered by `updatedAt`, then `id`, descending. To resume, pass the
+`updatedAt` and `id` of the last entry already held (both or neither); keep the
+cursor from the fetched page, because realtime updates move a cached run's
+`updatedAt`. `limit` is 1 to 200 (default 50). Runs of archived tasks are never
+history. Without `includeCompleted`, runs of completed tasks and runs that
+finished `completed` or `stopped` are skipped; `hiddenCompletedCount` counts the
+matching finished runs of open tasks that the filter hid (zero with
+`includeCompleted`). `search` is trimmed and case-insensitive, matching a run or
+task id prefix or a task title substring. History entries expose a scalar-only `taskRun` snapshot; association fields,
+`workspace`, and `maxConcurrency` are unavailable, keeping query count fixed.
+
+Apply `task_run_changed` events to cached pages and reload loaded pages after a
+websocket reconnect rather than refetching per task.
 
 ### Single Run Trace
 

@@ -60,9 +60,16 @@ defmodule Sacrum.Repo.TaskIdentifiersMigrationTest do
     Code.put_compiler_option(:ignore_module_conflict, true)
 
     try do
+      Code.require_file(
+        Application.app_dir(
+          :sacrum,
+          "priv/repo/migrations/20261031165811_add_task_identifiers.exs"
+        )
+      )
+
       Ecto.Migrator.run(
         Repo,
-        Application.app_dir(:sacrum, "priv/repo/migrations"),
+        [{@version, Sacrum.Repo.Migrations.AddTaskIdentifiers}],
         direction,
         [log: false, migration_lock: false] ++ opts
       )

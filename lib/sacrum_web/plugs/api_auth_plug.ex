@@ -73,13 +73,13 @@ defmodule SacrumWeb.Plugs.ApiAuthPlug do
   end
 
   defp authenticate_account(conn, token) do
-    case Auth.verify_token(token) do
-      {:ok, user} ->
-        Auth.update_token_last_used(token)
+    case Auth.verify_api_token(token) do
+      {:ok, api_token} ->
+        Auth.touch_token_last_used(api_token)
 
         {:ok,
          conn
-         |> assign(:current_user, user)
+         |> assign(:current_user, api_token.user)
          |> assign(:api_token, token)}
 
       {:error, reason} ->

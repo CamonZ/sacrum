@@ -222,6 +222,60 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
     field :session_logs, list_of(:session_log)
   end
 
+  object :task_run_history_task do
+    description("The task fields the run-history sidebar needs to label and group a run.")
+
+    field :id, :id
+    field :title, :string
+    field :level, :string
+    field :parent_id, :id
+    field :workflow_id, :id
+    field :workflow_name, :string
+    field :completed_at, :datetime
+  end
+
+  object :task_run_history_run do
+    description("Scalar run snapshot for project history; fields never fetch associations.")
+    field :id, :id
+    field :task_id, :id
+    field :project_id, :id
+
+    field :status, :string do
+      resolve(fn run, _, _ -> {:ok, TaskRunStatus.wire_value(run.status)} end)
+    end
+
+    field :started_at, :datetime
+    field :ended_at, :datetime
+    field :stop_requested_at, :datetime
+    field :latest_step_execution_id, :id
+    field :outcome_kind, :string
+    field :outcome_context, :json
+    field :parent_task_run_id, :id
+    field :root_task_run_id, :id
+    field :triggered_by_step_execution_id, :id
+    field :inserted_at, :datetime
+    field :updated_at, :datetime
+  end
+
+  object :task_run_history_entry do
+    field :task_run, :task_run_history_run
+    field :task, :task_run_history_task
+  end
+
+  object :task_run_history_page do
+    field :entries, list_of(:task_run_history_entry)
+
+    field :has_more, :boolean do
+      description("True when more entries follow the last returned one.")
+    end
+
+    field :hidden_completed_count, :integer do
+      description(
+        "Matching finished runs of open tasks hidden by the completed filter; zero when completed history is included."
+      )
+    end
+  end
+
   object :execution_queries do
     field :active_run, :task_run do
       arg(:task_id, non_null(:uuid4))
@@ -252,6 +306,36 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
       resolve(fn %{task_id: task_id}, %{context: %{current_user: user}} ->
         with {:ok, _task} <- Accounts.Tasks.find(user.id, task_id) do
           {:ok, Accounts.TaskRuns.list_by(user.id, conditions: [task_id: task_id])}
+        end
+      end)
+    end
+
+    @desc """
+    Project run history ordered by updatedAt, then id, descending. Pass the
+    updatedAt and id of the last entry already held to resume after it. Runs
+    of archived tasks are not history. Without
+    includeCompleted, runs of completed tasks and runs that finished completed
+    or stopped are skipped. search matches a run or task id prefix or a task
+    title substring, case-insensitively.
+    """
+    field :project_run_history, :task_run_history_page do
+      arg(:project_id, non_null(:uuid4))
+      arg(:after_updated_at, :datetime)
+      arg(:after_id, :uuid4)
+      arg(:limit, :integer)
+      arg(:include_completed, :boolean, default_value: false)
+      arg(:search, :string)
+
+      resolve(fn %{project_id: project_id} = args, %{context: %{current_user: user}} ->
+        with {:ok, cursor} <- history_cursor(args) do
+          user.id
+          |> Accounts.TaskRuns.list_history_for_project(project_id,
+            cursor: cursor,
+            limit: Map.get(args, :limit),
+            include_completed: args.include_completed,
+            search: Map.get(args, :search)
+          )
+          |> history_result()
         end
       end)
     end
@@ -568,4 +652,22 @@ defmodule SacrumWeb.Graphql.Types.ExecutionTypes do
     defp operation_name(:run_workflow), do: "runWorkflow"
     defp operation_name(:orchestrate_task), do: "orchestrateTask"
   end
+
+  defp history_cursor(args) do
+    case {Map.get(args, :after_updated_at), Map.get(args, :after_id)} do
+      {nil, nil} ->
+        {:ok, nil}
+
+      {updated_at, id} when not is_nil(updated_at) and not is_nil(id) ->
+        {:ok, %{updated_at: updated_at, id: id}}
+
+      _ ->
+        {:error, "afterUpdatedAt and afterId must be provided together"}
+    end
+  end
+
+  defp history_result({:error, :invalid_limit}),
+    do: {:error, "limit must be between 1 and #{Accounts.TaskRuns.max_history_page_size()}"}
+
+  defp history_result(result), do: result
 end
