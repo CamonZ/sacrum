@@ -76,7 +76,7 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
   @step_event_payload_keys [:schema_version | @step_payload_keys]
 
   @step_transition_payload_keys ~w(
-    id from_step_id to_step_id label project_id inserted_at updated_at
+    id from_step_id to_step_id label session project_id inserted_at updated_at
   )a
 
   @step_transition_event_payload_keys [:schema_version | @step_transition_payload_keys]
@@ -424,6 +424,21 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
       payload_keys: @step_transition_event_payload_keys,
       schema_version: @schema_version,
       completeness: "Complete step-edge projection for pipeline graph updates."
+    },
+    %{
+      event: "step_transition_updated",
+      classification: @relation_change,
+      source_changes: [
+        %{
+          table: "step_transitions",
+          operation: :update,
+          after_image_fields: @step_transition_payload_keys
+        }
+      ],
+      payload_keys: @step_transition_event_payload_keys,
+      schema_version: @schema_version,
+      completeness:
+        "Complete step-edge projection after an in-place label or session directive change."
     },
     %{
       event: "step_transition_deleted",

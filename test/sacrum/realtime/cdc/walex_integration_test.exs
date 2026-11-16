@@ -14,7 +14,16 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
   alias Sacrum.Orchestrator.{ExecutionDispatcher, FSMData, PromptRenderer}
   alias Sacrum.Orchestrator.Routing.RouteStep
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.{ChatCatalogEntry, CodeRef, StepExecution, Task, TaskRun}
+
+  alias Sacrum.Repo.Schemas.{
+    ChatCatalogEntry,
+    CodeRef,
+    StepExecution,
+    StepTransition,
+    Task,
+    TaskRun
+  }
+
   alias Sacrum.Routing.RouteConfig
 
   alias Sacrum.Repo.{
@@ -811,7 +820,25 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
         1_000
       )
 
-      {:ok, _deleted_transition} = Repo.delete(transition)
+      {:ok, updated_transition} =
+        transition
+        |> StepTransition.update_changeset(%{label: "resume", session: %{"mode" => "fork"}})
+        |> StepTransitions.update()
+
+      assert_project_broadcast(
+        "step_transition_updated",
+        %{
+          id: transition.id,
+          from_step_id: from_step.id,
+          to_step_id: to_step.id,
+          label: "resume",
+          session: %{"mode" => "fork"},
+          project_id: project.id
+        },
+        1_000
+      )
+
+      {:ok, _deleted_transition} = Repo.delete(updated_transition)
 
       assert_project_broadcast(
         "step_transition_deleted",

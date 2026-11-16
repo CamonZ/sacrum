@@ -216,6 +216,16 @@ defmodule SacrumWeb.ProjectChannel do
     )
   end
 
+  @spec broadcast_step_transition_updated(String.t(), map()) :: :ok | {:error, term()}
+  def broadcast_step_transition_updated(project_id, transition) do
+    broadcast_project(
+      project_id,
+      "step_transition_updated",
+      step_transition_payload(transition),
+      transition
+    )
+  end
+
   @spec broadcast_step_transition_deleted(String.t(), map()) :: :ok | {:error, term()}
   def broadcast_step_transition_deleted(project_id, transition) do
     broadcast_project(
@@ -689,6 +699,7 @@ defmodule SacrumWeb.ProjectChannel do
       from_step_id: transition.from_step_id,
       to_step_id: transition.to_step_id,
       label: transition.label,
+      session: transition.session,
       project_id: transition.project_id,
       inserted_at: transition.inserted_at,
       updated_at: transition.updated_at

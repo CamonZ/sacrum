@@ -553,6 +553,10 @@ defmodule SacrumWeb.ProjectChannelTest do
         SacrumWeb.ProjectChannel.broadcast_step_transition_created(project.id, step_transition)
       end)
 
+      assert_broadcast_payload_keys("step_transition_updated", fn ->
+        SacrumWeb.ProjectChannel.broadcast_step_transition_updated(project.id, step_transition)
+      end)
+
       assert_broadcast_payload_keys("step_transition_deleted", fn ->
         SacrumWeb.ProjectChannel.broadcast_step_transition_deleted(project.id, step_transition)
       end)
@@ -918,6 +922,7 @@ defmodule SacrumWeb.ProjectChannelTest do
       from_step_id: Ecto.UUID.generate(),
       to_step_id: Ecto.UUID.generate(),
       label: "next",
+      session: %{"mode" => "fork"},
       project_id: project.id,
       inserted_at: now,
       updated_at: now

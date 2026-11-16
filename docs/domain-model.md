@@ -1016,7 +1016,7 @@ do not receive those imperative work commands. See
 | `task_dependency_created` / `task_dependency_deleted` | Dependency edge fields: `id`, `task_id`, `depends_on_id`, `project_id`, timestamps | Blocker/dependency relation changes |
 | `workflow_created` / `workflow_updated` / `workflow_deleted` | Workflow fields | Workflow lifecycle |
 | `step_created` / `step_updated` / `step_deleted` | Step fields including `harness`, `step_type`, and the lossless `config` document | WorkflowStep lifecycle |
-| `step_transition_created` / `step_transition_deleted` | Transition fields | Step-to-step edges |
+| `step_transition_created` / `step_transition_updated` / `step_transition_deleted` | Transition fields, including `label` and `session` | Step-to-step edges; `updated` reports in-place label or session directive changes |
 | `step_execution_created` | Execution fields | New execution started |
 | `step_execution_status_changed` | Execution fields including `harness`, `model_provider`, `context.route`, `transition_result`, and `handoff` | Status update (entered, completed, etc.) |
 | `task_run_created` / `task_run_updated` | TaskRun fields | TaskRun lifecycle changes |
