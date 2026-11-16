@@ -21,8 +21,8 @@ defmodule SacrumWeb.AccountProjectDeliveryTest do
      ["workflow_created", "workflow_updated", "workflow_deleted"]},
     {"workflow_steps", Schemas.WorkflowStep, [:insert, :update, :delete],
      ["step_created", "step_updated", "step_deleted"]},
-    {"step_transitions", Schemas.StepTransition, [:insert, :delete],
-     ["step_transition_created", "step_transition_deleted"]},
+    {"step_transitions", Schemas.StepTransition, [:insert, :update, :delete],
+     ["step_transition_created", "step_transition_updated", "step_transition_deleted"]},
     {"workflow_transitions", Schemas.WorkflowTransition, [:insert, :delete],
      ["workflow_transition_created", "workflow_transition_deleted"]},
     {"step_executions", Schemas.StepExecution, [:insert, :update],
@@ -43,7 +43,7 @@ defmodule SacrumWeb.AccountProjectDeliveryTest do
      ["notification_created", "notification_updated", "notification_deleted"]}
   ]
 
-  test "all 42 CDC event types have exact channel parity and preserve legacy filtering" do
+  test "all 43 CDC event types have exact channel parity and preserve legacy filtering" do
     {user, project, task} = fixture()
     account = client(user, "accounts:me", %{"user_id" => Ecto.UUID.generate()})
     sibling = client(user, "accounts:me")
@@ -86,7 +86,7 @@ defmodule SacrumWeb.AccountProjectDeliveryTest do
           MapSet.union(seen, MapSet.new(expected))
       end
 
-    assert MapSet.size(seen) == 42
+    assert MapSet.size(seen) == 43
     assert seen == MapSet.new(Contract.regular_event_names())
   end
 

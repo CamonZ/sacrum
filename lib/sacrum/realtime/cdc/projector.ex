@@ -79,6 +79,7 @@ defmodule Sacrum.Realtime.Cdc.Projector do
     "step_updated" => :broadcast_step_updated,
     "step_deleted" => :broadcast_step_deleted,
     "step_transition_created" => :broadcast_step_transition_created,
+    "step_transition_updated" => :broadcast_step_transition_updated,
     "step_transition_deleted" => :broadcast_step_transition_deleted,
     "workflow_transition_created" => :broadcast_workflow_transition_created,
     "workflow_transition_deleted" => :broadcast_workflow_transition_deleted,
@@ -272,6 +273,15 @@ defmodule Sacrum.Realtime.Cdc.Projector do
        }) do
     transition = record_to_struct!("step_transitions", record)
     [projection("step_transition_created", transition.project_id, transition)]
+  end
+
+  defp projections(%WalEx.Event{
+         source: %{table: "step_transitions"},
+         type: :update,
+         new_record: record
+       }) do
+    transition = record_to_struct!("step_transitions", record)
+    [projection("step_transition_updated", transition.project_id, transition)]
   end
 
   defp projections(%WalEx.Event{
