@@ -160,6 +160,52 @@ defmodule Sacrum.ChatCatalog.CatalogTest do
     assert Enum.map(entries, & &1.chat_id) == ["other-parent", "parent"]
   end
 
+  test "parent tombstones leave other parents and catalog scopes live", c do
+    other_machine = Ecto.UUID.generate()
+    {:ok, _} = ChatCatalog.register(c.u, other_machine)
+    suffix = System.unique_integer([:positive])
+
+    {:ok, other_owner} =
+      Sacrum.Repo.Users.insert(%{
+        email: "cascade-owner-#{suffix}@example.com",
+        username: "cascadeowner#{suffix}",
+        password: "password123"
+      })
+
+    {:ok, foreign_project} = Projects.insert(other_owner.id, %{name: "Foreign catalog"})
+    {:ok, _} = ChatCatalog.register(other_owner.id, c.m)
+    {:ok, _} = put(c, "parent", 0, %{})
+
+    survivors =
+      for {scope, parent} <- [
+            {c, "other-parent"},
+            {%{c | p: c.p2}, "other-project-parent"},
+            {%{c | m: other_machine}, "parent"},
+            {%{c | u: other_owner.id, p: foreign_project.id}, "parent"}
+          ] do
+        {:ok, _} = put(scope, parent, 0, %{})
+        thread = create_review_thread(scope, parent)
+
+        {:ok, %{entry: discussion}} =
+          put(scope, "discussion-#{parent}", 0, discussion_payload(thread))
+
+        {thread, discussion}
+      end
+
+    assert {:ok, %{status: "accepted"}} = put(c, "parent", 1, %{"deleted" => true})
+
+    for {thread, discussion} <- survivors do
+      assert Repo.get_by!(ReviewThread,
+               id: thread.id,
+               user_id: thread.user_id,
+               project_id: thread.project_id,
+               installation_id: thread.installation_id
+             ) == thread
+
+      assert Repo.get!(ChatCatalogEntry, discussion.id) == discussion
+    end
+  end
+
   defp create_review_thread(c, parent_chat_id) do
     %ReviewThread{user_id: c.u, project_id: c.p, installation_id: c.m}
     |> ReviewThread.changeset(%{

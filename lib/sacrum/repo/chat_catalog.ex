@@ -2,6 +2,7 @@ defmodule Sacrum.Repo.ChatCatalog do
   @moduledoc "Catalog database primitives. Ownership is always part of every key."
   import Ecto.Query
   alias Sacrum.Repo
+  alias Sacrum.Repo.ReviewThreads
   alias Sacrum.Repo.Schemas.{ChatCatalogEntry, ChatInstallation, Task}
 
   @spec register(String.t(), String.t()) :: {:ok, ChatInstallation.t()} | {:error, :not_found}
@@ -58,11 +59,15 @@ defmodule Sacrum.Repo.ChatCatalog do
       lock = Enum.join([user_id, installation_id, chat_id], ":")
       Repo.query!("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [lock])
 
+      # Match the cascade's thread-before-discussion lock ordering on relinks.
+      lock_discussion_thread(user_id, project_id, installation_id, payload)
+
+      # Keep foreign-key checks for concurrent discussion inserts compatible with this lock.
       current =
         Repo.one(
           from e in scope(user_id, project_id, installation_id),
             where: e.chat_id == ^chat_id,
-            lock: "FOR UPDATE"
+            lock: "FOR NO KEY UPDATE"
         )
 
       entry = %ChatCatalogEntry{
@@ -75,6 +80,21 @@ defmodule Sacrum.Repo.ChatCatalog do
       apply_write(current, entry, revision, mutation_id, payload)
     end)
   end
+
+  defp lock_discussion_thread(_user_id, _project_id, _installation_id, %{"deleted" => true}),
+    do: :ok
+
+  defp lock_discussion_thread(user_id, project_id, installation_id, %{"review_thread_id" => id})
+       when not is_nil(id) do
+    Repo.one(
+      from thread in ReviewThreads.scope(user_id, project_id, installation_id),
+        where: thread.id == ^id,
+        select: thread.id,
+        lock: "FOR SHARE"
+    )
+  end
+
+  defp lock_discussion_thread(_user_id, _project_id, _installation_id, _payload), do: :ok
 
   defp apply_write(%{mutation_id: id} = current, _entry, _revision, id, _payload),
     do: %{status: "accepted", entry: current}
