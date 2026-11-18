@@ -49,7 +49,7 @@ defmodule Sacrum.ChatCatalog.CatalogTest do
           %{"metadata" => %{"kind" => nil}},
           %{"metadata" => %{"kind" => "unknown"}}
         ] do
-      assert {:error, "invalid catalog payload"} = put(c, "invalid", 0, payload)
+      assert {:error, :invalid_payload} = put(c, "invalid", 0, payload)
     end
 
     for metadata <- [%{"title" => "Existing chat"}, %{"kind" => "chat"}] do
@@ -247,7 +247,7 @@ defmodule Sacrum.ChatCatalog.CatalogTest do
     end)
 
     for invalid <- [nil, true, "busy", "open", []] do
-      assert {:error, "invalid catalog payload"} =
+      assert {:error, :invalid_payload} =
                put(c, "invalid-status", 0, %{"status" => invalid})
     end
 
@@ -485,13 +485,13 @@ defmodule Sacrum.ChatCatalog.CatalogTest do
             "result",
             "association"
           ] do
-        assert {:error, "invalid catalog payload"} =
+        assert {:error, :invalid_payload} =
                  put(c, "bad", 0, Map.put(payload, key, "SECRET"))
 
-        assert {:error, "invalid catalog payload"} =
+        assert {:error, :invalid_payload} =
                  put(c, "bad", 0, Map.put(payload, "metadata", %{key => "SECRET"}))
 
-        assert {:error, "invalid catalog payload"} =
+        assert {:error, :invalid_payload} =
                  put(
                    c,
                    "bad",

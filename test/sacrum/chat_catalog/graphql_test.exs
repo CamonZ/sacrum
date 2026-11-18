@@ -1,8 +1,17 @@
 defmodule Sacrum.ChatCatalog.GraphqlTest do
   use SacrumWeb.ConnCase, async: true
-  alias Sacrum.Accounts.{ChatCatalog, Projects, Tasks}
+  alias Sacrum.Accounts.{ChatCatalog, Projects, ReviewThreads, Tasks}
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{ChatCatalogEntry, StepExecution, TaskRun}
+
+  @put_catalog """
+  mutation($p: Uuid4!, $m: Uuid4!, $id: String!, $mutation: Uuid4!, $revision: Int!, $payload: Json!) {
+    putChatCatalog(projectId: $p, installationId: $m, chatId: $id, mutationId: $mutation,
+      expectedRevision: $revision, payload: $payload) {
+      status entry { chatId revision payload updatedAt }
+    }
+  }
+  """
 
   setup %{conn: conn} do
     user = create_user()
@@ -159,9 +168,6 @@ defmodule Sacrum.ChatCatalog.GraphqlTest do
 
     assert registered["data"]["registerChatInstallation"]["id"] == c.machine
 
-    mutation =
-      "mutation($p: Uuid4!, $m: Uuid4!, $id: String!, $mutation: Uuid4!, $revision: Int!, $payload: Json!) { putChatCatalog(projectId:$p,installationId:$m,chatId:$id,mutationId:$mutation,expectedRevision:$revision,payload:$payload) { status entry { chatId revision payload updatedAt } } }"
-
     args = %{
       p: c.project.id,
       m: c.machine,
@@ -176,15 +182,17 @@ defmodule Sacrum.ChatCatalog.GraphqlTest do
         })
     }
 
-    first = run(c.conn, mutation, args)["data"]["putChatCatalog"]
+    first = run(c.conn, @put_catalog, args)["data"]["putChatCatalog"]
     assert first["status"] == "accepted"
     assert first["entry"]["revision"] == 1
     assert first["entry"]["payload"]["metadata"]["title"] == "Persistent"
     assert first["entry"]["payload"]["task_id"] == task.id
-    assert run(c.conn, mutation, args)["data"]["putChatCatalog"] == first
+    assert run(c.conn, @put_catalog, args)["data"]["putChatCatalog"] == first
 
     conflict =
-      run(c.conn, mutation, %{args | mutation: Ecto.UUID.generate()})["data"]["putChatCatalog"]
+      run(c.conn, @put_catalog, %{args | mutation: Ecto.UUID.generate()})["data"][
+        "putChatCatalog"
+      ]
 
     assert conflict["status"] == "conflict"
     assert conflict["entry"] == first["entry"]
@@ -201,15 +209,92 @@ defmodule Sacrum.ChatCatalog.GraphqlTest do
     assert [%ChatCatalogEntry{}] = Sacrum.Repo.all(ChatCatalogEntry)
 
     invalid =
-      run(c.conn, mutation, %{
+      run(c.conn, @put_catalog, %{
         args
         | id: "old-field",
           mutation: Ecto.UUID.generate(),
           payload: Jason.encode!(%{entity_id: task.id})
       })
 
-    assert invalid["errors"]
+    assert_rejection(invalid, "invalid_payload")
     assert [%ChatCatalogEntry{}] = Sacrum.Repo.all(ChatCatalogEntry)
+  end
+
+  test "catalog write preconditions return coded errors and a tombstone still conflicts", c do
+    assert_rejection(put_catalog(c, "chat", 0, %{}), "not_found")
+    {:ok, _} = ChatCatalog.register(c.user.id, c.machine)
+
+    for {id, revision, payload, code} <- [
+          {"chat", -1, %{}, "invalid_payload"},
+          {"", 0, %{}, "invalid_payload"},
+          {"missing", 1, %{}, "not_found"},
+          {"child", 0, %{"parent_chat_id" => "missing"}, "not_found"}
+        ] do
+      assert_rejection(put_catalog(c, id, revision, payload), code)
+    end
+
+    assert %{"data" => %{"putChatCatalog" => %{"status" => "accepted", "entry" => tombstone}}} =
+             put_catalog(c, "chat", 0, %{"deleted" => true})
+
+    result = put_catalog(c, "chat", tombstone["revision"], %{})
+    refute result["errors"]
+    assert result["data"]["putChatCatalog"] == %{"status" => "conflict", "entry" => tombstone}
+  end
+
+  test "discussion writes distinguish invalid links from missing, mismatched, tombstoned and duplicate threads",
+       c do
+    {:ok, _} = ChatCatalog.register(c.user.id, c.machine)
+
+    for id <- ["parent", "other-parent"] do
+      {:ok, _} =
+        ChatCatalog.put(c.user.id, c.project.id, c.machine, id, 0, Ecto.UUID.generate(), %{})
+    end
+
+    thread = Ecto.UUID.generate()
+
+    discussion = %{
+      "metadata" => %{"kind" => "discussion"},
+      "parent_chat_id" => "parent",
+      "review_thread_id" => thread
+    }
+
+    assert_rejection(put_catalog(c, "discussion", 0, discussion), "not_found")
+
+    assert_rejection(
+      put_catalog(c, "discussion", 0, Map.delete(discussion, "review_thread_id")),
+      "invalid_payload"
+    )
+
+    {:ok, %{status: :accepted}} =
+      ReviewThreads.put(c.user.id, c.project.id, c.machine, thread, 0, Ecto.UUID.generate(), %{
+        "parent_chat_id" => "parent",
+        "path" => "lib/example.ex",
+        "side" => "RIGHT",
+        "home_kind" => "worktree",
+        "original_commit_id" => String.duplicate("a", 40),
+        "original_blob_id" => String.duplicate("b", 40),
+        "original_start_line" => 2,
+        "original_line" => 2,
+        "start_line" => 2,
+        "line" => 2
+      })
+
+    assert_rejection(
+      put_catalog(c, "discussion", 0, %{discussion | "parent_chat_id" => "other-parent"}),
+      "not_found"
+    )
+
+    assert %{"data" => %{"putChatCatalog" => %{"status" => "accepted"}}} =
+             put_catalog(c, "discussion", 0, discussion)
+
+    assert_rejection(put_catalog(c, "duplicate", 0, discussion), "not_found")
+
+    {:ok, %{status: :accepted}} =
+      ReviewThreads.put(c.user.id, c.project.id, c.machine, thread, 1, Ecto.UUID.generate(), %{
+        "deleted" => true
+      })
+
+    assert_rejection(put_catalog(c, "after-delete", 0, discussion), "not_found")
   end
 
   test "foreign account reads and writes reveal no protected catalog", c do
@@ -247,7 +332,27 @@ defmodule Sacrum.ChatCatalog.GraphqlTest do
         %{payload: "{}"}
       )
 
-    assert result["errors"]
+    assert_rejection(result, "not_found")
     refute inspect(result) =~ "SECRET"
+  end
+
+  defp put_catalog(c, id, revision, payload) do
+    run(c.conn, @put_catalog, %{
+      p: c.project.id,
+      m: c.machine,
+      id: id,
+      revision: revision,
+      mutation: Ecto.UUID.generate(),
+      payload: Jason.encode!(payload)
+    })
+  end
+
+  defp assert_rejection(result, code) do
+    assert result["data"]["putChatCatalog"] == nil
+
+    assert [%{"code" => ^code, "message" => message, "path" => ["putChatCatalog"]}] =
+             result["errors"]
+
+    assert is_binary(message)
   end
 end

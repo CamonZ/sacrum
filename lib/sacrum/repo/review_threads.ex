@@ -107,15 +107,7 @@ defmodule Sacrum.Repo.ReviewThreads do
         {:ok, entry}
 
       {:error, changeset} ->
-        {:error, write_error(changeset)}
+        {:error, Repo.WriteError.from_changeset(changeset)}
     end
-  end
-
-  defp write_error(changeset) do
-    if Enum.any?(changeset.errors, fn {_field, {_message, opts}} ->
-         opts[:constraint] in [:foreign, :unique]
-       end),
-       do: :not_found,
-       else: :invalid_payload
   end
 end

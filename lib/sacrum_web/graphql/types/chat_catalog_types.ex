@@ -2,6 +2,7 @@ defmodule SacrumWeb.Graphql.Types.ChatCatalogTypes do
   use Absinthe.Schema.Notation
   alias Sacrum.Accounts.ChatCatalog
   alias Sacrum.Repo.Schemas.ChatCatalogEntry
+  alias SacrumWeb.Graphql.ChatResult
 
   object :chat_installation do
     field :id, :uuid4
@@ -75,8 +76,8 @@ defmodule SacrumWeb.Graphql.Types.ChatCatalogTypes do
       arg(:payload, non_null(:json))
 
       resolve(fn args, %{context: %{current_user: user}} ->
-        ChatCatalog.put(
-          user.id,
+        user.id
+        |> ChatCatalog.put(
           args.project_id,
           args.installation_id,
           args.chat_id,
@@ -84,6 +85,7 @@ defmodule SacrumWeb.Graphql.Types.ChatCatalogTypes do
           args.mutation_id,
           args.payload
         )
+        |> ChatResult.format("chat catalog entry")
       end)
     end
   end

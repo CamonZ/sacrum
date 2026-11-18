@@ -4,6 +4,7 @@ defmodule SacrumWeb.Graphql.Types.ReviewThreadTypes do
   use Absinthe.Schema.Notation
 
   alias Sacrum.Accounts.ReviewThreads
+  alias SacrumWeb.Graphql.ChatResult
 
   object :review_thread_entry do
     field :thread_id, non_null(:uuid4)
@@ -39,7 +40,7 @@ defmodule SacrumWeb.Graphql.Types.ReviewThreadTypes do
           Map.get(args, :after),
           args.limit
         )
-        |> graphql_result()
+        |> ChatResult.format("review thread")
       end)
     end
   end
@@ -63,19 +64,8 @@ defmodule SacrumWeb.Graphql.Types.ReviewThreadTypes do
           args.mutation_id,
           args.payload
         )
-        |> graphql_result()
+        |> ChatResult.format("review thread")
       end)
     end
   end
-
-  defp graphql_result({:ok, %{status: status} = write}),
-    do: {:ok, %{write | status: Atom.to_string(status)}}
-
-  defp graphql_result({:ok, _} = result), do: result
-
-  defp graphql_result({:error, :invalid_payload}),
-    do: {:error, %{message: "Invalid review thread input", code: "invalid_payload"}}
-
-  defp graphql_result({:error, :not_found}),
-    do: {:error, %{message: "Review thread or its scope was not found", code: "not_found"}}
 end
