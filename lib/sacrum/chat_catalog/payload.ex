@@ -1,14 +1,20 @@
 defmodule Sacrum.ChatCatalog.Payload do
-  @moduledoc "Strict wire projection: local transcripts, Git data and inference bookkeeping are rejected."
+  @moduledoc """
+  Validates the machine chat catalog's wire payload.
+
+  Omitted top-level fields retain their stored values on update. Supplying
+  metadata replaces the whole map, so discussion metadata must retain its kind.
+  PostgreSQL validates discussion links against the resulting row.
+  """
   @metadata ~w(
-    label title titleStatus titleConfidence titleUserMessageCount
+    kind label title titleStatus titleConfidence titleUserMessageCount
     harness providerId model selectedModelId selectedReasoningEffort
     selectedSpeedTier selectedPersonality createdAt updatedAt
     providerResumeId providerParentResumeId threadTotalTokens messageCount
     hasUserMessage lifecycle status permissionMode entityLevel
   )
   @outer ~w(
-    status metadata task_id parent_chat_id gate_execution_id gate_task_run_id
+    status metadata task_id parent_chat_id review_thread_id gate_execution_id gate_task_run_id
     classifications deleted
   )
   @strings ~w(
@@ -54,7 +60,10 @@ defmodule Sacrum.ChatCatalog.Payload do
 
   defp links_valid?(payload),
     do:
-      Enum.all?(~w(task_id gate_execution_id gate_task_run_id), &uuid?(Map.get(payload, &1))) and
+      Enum.all?(
+        ~w(task_id review_thread_id gate_execution_id gate_task_run_id),
+        &uuid?(Map.get(payload, &1))
+      ) and
         nullable_string?(Map.get(payload, "parent_chat_id"), 200)
 
   defp keys?(map, allowed), do: Enum.all?(Map.keys(map), &(&1 in allowed))
@@ -68,6 +77,8 @@ defmodule Sacrum.ChatCatalog.Payload do
 
   defp metadata_value?({"titleConfidence", value}),
     do: is_nil(value) or (is_number(value) and value >= 0 and value <= 1)
+
+  defp metadata_value?({"kind", value}), do: value in ~w(chat discussion)
 
   defp metadata_value?({"hasUserMessage", value}), do: is_boolean(value) or is_nil(value)
 

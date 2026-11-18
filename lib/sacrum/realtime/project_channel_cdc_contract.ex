@@ -901,7 +901,7 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
                            do: :before_image_fields,
                            else: :after_image_fields
                          ),
-                         ~w(id user_id project_id installation_id chat_id status revision metadata classifications task_id parent_chat_id gate_execution_id gate_task_run_id deleted updated_at)a
+                         ~w(id user_id project_id installation_id chat_id status revision metadata classifications task_id parent_chat_id review_thread_id gate_execution_id gate_task_run_id deleted updated_at)a
                        )
                      ],
                      payload_keys: @chat_catalog_keys,
