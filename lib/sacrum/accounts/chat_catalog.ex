@@ -51,7 +51,7 @@ defmodule Sacrum.Accounts.ChatCatalog do
         payload
       )
     else
-      false -> {:error, "invalid revision"}
+      false -> {:error, :invalid_payload}
       error -> error
     end
   end

@@ -33,7 +33,7 @@ defmodule Sacrum.ChatCatalog.Payload do
     "permissionMode" => ~w(accept_edits auto bypass_permissions default dont_ask plan)
   }
 
-  @spec validate(term()) :: :ok | {:error, String.t()}
+  @spec validate(term()) :: :ok | {:error, :invalid_payload}
   def validate(payload) when is_map(payload) do
     if keys?(payload, @outer) and metadata_valid?(Map.get(payload, "metadata", %{})) and
          Map.get(payload, "status", "idle") in ~w(idle working) and
@@ -42,11 +42,11 @@ defmodule Sacrum.ChatCatalog.Payload do
          byte_size(Jason.encode!(payload)) <= 524_288 do
       :ok
     else
-      {:error, "invalid catalog payload"}
+      {:error, :invalid_payload}
     end
   end
 
-  def validate(_), do: {:error, "invalid catalog payload"}
+  def validate(_), do: {:error, :invalid_payload}
 
   defp metadata_valid?(metadata) when is_map(metadata),
     do: keys?(metadata, @metadata) and Enum.all?(metadata, &metadata_value?/1)
