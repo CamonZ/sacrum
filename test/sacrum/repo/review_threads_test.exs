@@ -39,8 +39,7 @@ defmodule Sacrum.Repo.ReviewThreadsTest do
       original_start_line: 2,
       original_line: 4,
       start_line: 3,
-      line: 5,
-      mutation_id: Ecto.UUID.generate()
+      line: 5
     }
 
     %{scope: scope, attrs: attrs}

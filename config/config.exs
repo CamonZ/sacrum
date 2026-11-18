@@ -34,6 +34,7 @@ config :sacrum, :cdc,
     "artifact_links",
     "daemons",
     "chat_catalog_entries",
+    "review_threads",
     "notifications"
   ],
   modules: [Sacrum.Realtime.Cdc.WalExConsumer]

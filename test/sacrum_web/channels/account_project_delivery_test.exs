@@ -11,6 +11,8 @@ defmodule SacrumWeb.AccountProjectDeliveryTest do
 
   @endpoint SacrumWeb.Endpoint
   @rows [
+    {"review_threads", Schemas.ReviewThread, [:insert, :update, :delete],
+     ["review_thread_created", "review_thread_updated", "review_thread_deleted"]},
     {"chat_catalog_entries", Schemas.ChatCatalogEntry, [:insert, :update, :delete],
      ["chat_catalog_created", "chat_catalog_updated", "chat_catalog_deleted"]},
     {"tasks", Schemas.Task, [:insert, :update, :delete],
@@ -43,7 +45,7 @@ defmodule SacrumWeb.AccountProjectDeliveryTest do
      ["notification_created", "notification_updated", "notification_deleted"]}
   ]
 
-  test "all 43 CDC event types have exact channel parity and preserve legacy filtering" do
+  test "all CDC event types have exact channel parity and preserve legacy filtering" do
     {user, project, task} = fixture()
     account = client(user, "accounts:me", %{"user_id" => Ecto.UUID.generate()})
     sibling = client(user, "accounts:me")
@@ -86,7 +88,6 @@ defmodule SacrumWeb.AccountProjectDeliveryTest do
           MapSet.union(seen, MapSet.new(expected))
       end
 
-    assert MapSet.size(seen) == 43
     assert seen == MapSet.new(Contract.regular_event_names())
   end
 
@@ -234,6 +235,9 @@ defmodule SacrumWeb.AccountProjectDeliveryTest do
       installation_id: Ecto.UUID.generate(),
       chat_id: "native-chat-id",
       revision: 1,
+      side: "RIGHT",
+      home_kind: "worktree",
+      origin_kind: "local",
       user_id: user.id,
       project_id: project.id,
       task_id: task && task.id,
@@ -273,5 +277,6 @@ defmodule SacrumWeb.AccountProjectDeliveryTest do
 
   defp row_status("task_runs"), do: :completed
   defp row_status("chat_catalog_entries"), do: "idle"
+  defp row_status("review_threads"), do: "open"
   defp row_status(_), do: "ready"
 end

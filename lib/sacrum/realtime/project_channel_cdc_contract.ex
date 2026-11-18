@@ -867,7 +867,7 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
     source_tables: ~w(
       projects workflows workflow_steps step_transitions workflow_transitions tasks task_runs
       step_executions session_logs task_sections task_dependencies code_refs artifacts artifact_links
-      notifications chat_catalog_entries
+      notifications chat_catalog_entries review_threads
     ),
     gui_projection:
       "Equivalent to the GraphQL task list/detail, pipeline summary, run trace, and section queries for the project. Include archived tasks when building a full local store."
@@ -908,6 +908,51 @@ defmodule Sacrum.Realtime.ProjectChannelCdcContract do
                      schema_version: @schema_version,
                      completeness:
                        "Complete machine-scoped catalog replacement; apply only to matching installation and project, monotonically by revision."
+                   }
+                 end
+               )
+  @review_thread_row_fields ~w(
+    id user_id project_id installation_id revision updated_at parent_chat_id path side home_kind
+    tool_use_id original_commit_id original_blob_id original_start_line original_line
+    start_line line status outdated_noted origin_kind origin_ref deleted
+  )a
+  @review_thread_sources %{
+    insert: %{
+      table: "review_threads",
+      operation: :insert,
+      after_image_fields: @review_thread_row_fields
+    },
+    update: %{
+      table: "review_threads",
+      operation: :update,
+      after_image_fields: @review_thread_row_fields
+    },
+    delete: %{
+      table: "review_threads",
+      operation: :delete,
+      before_image_fields: @review_thread_row_fields
+    }
+  }
+  @contracts @contracts ++
+               Enum.map(
+                 [
+                   {"review_thread_created", [:insert],
+                    "Complete replacement for a live thread insert."},
+                   {"review_thread_updated", [:update],
+                    "Complete replacement for a live thread update."},
+                   {"review_thread_deleted", [:insert, :update, :delete],
+                    "Complete tombstone for a soft deletion, or the last row image for a physical deletion. Apply review_thread_deleted as a removal at the same or a newer revision, regardless of payload.deleted."}
+                 ],
+                 fn {event, operations, completeness} ->
+                   %{
+                     event: event,
+                     classification: @entity_projection,
+                     source_changes:
+                       Enum.map(operations, &Map.fetch!(@review_thread_sources, &1)),
+                     payload_keys:
+                       ~w(schema_version project_id installation_id thread_id revision updated_at payload)a,
+                     schema_version: @schema_version,
+                     completeness: completeness
                    }
                  end
                )

@@ -7,6 +7,7 @@ defmodule SacrumWeb.ProjectChannel do
   alias Sacrum.Realtime.ProjectChannelCdcContract
   alias Sacrum.Repo
   alias Sacrum.Repo.Schemas.{ArtifactLinkMetadata, ChatCatalogEntry, Project, Task, WorkflowStep}
+  alias Sacrum.ReviewThreads.Projection, as: ReviewThreadProjection
   alias Sacrum.TaskRuns.RunControls
   alias Sacrum.TaskRuns.Status, as: TaskRunStatus
 
@@ -495,6 +496,26 @@ defmodule SacrumWeb.ProjectChannel do
     }
 
     broadcast_project(project_id, event, payload, entry)
+  end
+
+  @spec broadcast_review_thread_created(String.t(), Sacrum.Repo.Schemas.ReviewThread.t()) ::
+          :ok | {:error, term()}
+  def broadcast_review_thread_created(project_id, thread),
+    do: broadcast_review_thread(project_id, "review_thread_created", thread)
+
+  @spec broadcast_review_thread_updated(String.t(), Sacrum.Repo.Schemas.ReviewThread.t()) ::
+          :ok | {:error, term()}
+  def broadcast_review_thread_updated(project_id, thread),
+    do: broadcast_review_thread(project_id, "review_thread_updated", thread)
+
+  @spec broadcast_review_thread_deleted(String.t(), Sacrum.Repo.Schemas.ReviewThread.t()) ::
+          :ok | {:error, term()}
+  def broadcast_review_thread_deleted(project_id, thread),
+    do: broadcast_review_thread(project_id, "review_thread_deleted", thread)
+
+  defp broadcast_review_thread(project_id, event, thread) do
+    payload = thread |> ReviewThreadProjection.entry() |> version_payload()
+    broadcast_project(project_id, event, payload, thread)
   end
 
   # Notification broadcasts
