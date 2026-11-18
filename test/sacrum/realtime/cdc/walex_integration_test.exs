@@ -236,6 +236,136 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
     end)
   end
 
+  test "review thread CDC matches snapshots for writes, trigger revisions and cascade deletes" do
+    with_project(fn user, project ->
+      machine = Ecto.UUID.generate()
+      thread_id = Ecto.UUID.generate()
+      mutation_id = Ecto.UUID.generate()
+      {:ok, _} = Accounts.ChatCatalog.register(user.id, machine)
+
+      {:ok, %{entry: parent}} =
+        Accounts.ChatCatalog.put(
+          user.id,
+          project.id,
+          machine,
+          "parent",
+          0,
+          Ecto.UUID.generate(),
+          %{}
+        )
+
+      :ok = subscribe_project(project.id)
+      :ok = subscribe_account(user.id)
+      :ok = subscribe_account(Ecto.UUID.generate())
+
+      payload = %{
+        "parent_chat_id" => "parent",
+        "path" => "lib/example.ex",
+        "side" => "LEFT",
+        "home_kind" => "tool_call",
+        "tool_use_id" => "tool-1",
+        "original_commit_id" => String.duplicate("a", 40),
+        "original_blob_id" => String.duplicate("b", 64),
+        "original_start_line" => 2,
+        "original_line" => 4,
+        "start_line" => 3,
+        "line" => 5
+      }
+
+      writers =
+        for normalize <- [&Function.identity/1, &String.upcase/1] do
+          Elixir.Task.async(fn ->
+            committed_db(fn ->
+              Accounts.ReviewThreads.put(
+                user.id,
+                project.id,
+                normalize.(machine),
+                normalize.(thread_id),
+                0,
+                normalize.(mutation_id),
+                payload
+              )
+            end)
+          end)
+        end
+
+      assert [
+               {:ok, %{status: :accepted, entry: %{revision: 1} = original}},
+               {:ok, %{status: :accepted, entry: duplicate}}
+             ] = Elixir.Task.await_many(writers)
+
+      assert duplicate == original
+
+      assert {:ok, %{entries: [^original]}} =
+               Accounts.ReviewThreads.list(user.id, project.id, machine, nil, 100)
+
+      assert_review_thread_broadcasts(user.id, project.id, "review_thread_created", original)
+
+      query = Sacrum.Repo.ReviewThreads.scope(user.id, project.id, machine)
+      assert {1, _} = Repo.update_all(query, set: [outdated_noted: true])
+
+      assert {:ok, %{entries: [%{revision: 2} = updated]}} =
+               Accounts.ReviewThreads.list(user.id, project.id, machine, nil, 100)
+
+      assert_review_thread_broadcasts(user.id, project.id, "review_thread_updated", updated)
+
+      assert {:ok, %{status: :accepted, entry: ^updated}} =
+               Accounts.ReviewThreads.put(
+                 user.id,
+                 project.id,
+                 machine,
+                 thread_id,
+                 0,
+                 mutation_id,
+                 payload
+               )
+
+      assert {1, _} = Repo.update_all(query, set: [deleted: true])
+
+      assert {:ok, %{entries: [%{revision: 3} = tombstone]}} =
+               Accounts.ReviewThreads.list(user.id, project.id, machine, nil, 100)
+
+      assert tombstone.payload["deleted"]
+      assert_review_thread_broadcasts(user.id, project.id, "review_thread_deleted", tombstone)
+
+      assert {:ok, %{status: :accepted, entry: live}} =
+               Accounts.ReviewThreads.put(
+                 user.id,
+                 project.id,
+                 machine,
+                 Ecto.UUID.generate(),
+                 0,
+                 Ecto.UUID.generate(),
+                 payload
+               )
+
+      refute live.payload["deleted"]
+      assert_review_thread_broadcasts(user.id, project.id, "review_thread_created", live)
+
+      Repo.delete!(parent)
+      assert_review_thread_broadcasts(user.id, project.id, "review_thread_deleted", tombstone)
+      assert_review_thread_broadcasts(user.id, project.id, "review_thread_deleted", live)
+
+      assert {:ok, %{entries: []}} =
+               Accounts.ReviewThreads.list(user.id, project.id, machine, nil, 100)
+
+      for event <- ~w(review_thread_created review_thread_updated review_thread_deleted) do
+        refute_receive %Phoenix.Socket.Broadcast{event: ^event}
+      end
+    end)
+  end
+
+  defp assert_review_thread_broadcasts(user_id, project_id, event, entry) do
+    expected = Map.put(entry, :schema_version, 1)
+    project_topic = "project:#{project_id}"
+    account_topic = "account:#{user_id}"
+
+    for topic <- [project_topic, account_topic] do
+      assert_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: ^event, payload: ^expected},
+                     1_000
+    end
+  end
+
   test "committed daemon lifecycle mutations are projected to every owner client" do
     with_project(fn user, _project ->
       :ok = subscribe_account(user.id)

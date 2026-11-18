@@ -8,7 +8,7 @@ defmodule Sacrum.Repo.Schemas.ReviewThread do
   @scope_fields [:user_id, :project_id, :installation_id]
   @anchor_fields ~w(path side home_kind tool_use_id original_commit_id original_blob_id original_start_line original_line)a
   @immutable_fields [:id, :parent_chat_id | @anchor_fields]
-  @mutable_fields ~w(start_line line status outdated_noted origin_kind origin_ref deleted mutation_id)a
+  @mutable_fields ~w(start_line line status outdated_noted origin_kind origin_ref deleted)a
   @object_id ~r/\A(?:[0-9a-f]{40}|[0-9a-f]{64})\z/
 
   schema "review_threads" do
@@ -33,7 +33,6 @@ defmodule Sacrum.Repo.Schemas.ReviewThread do
     field :origin_ref, :string
     field :deleted, :boolean, default: false
     field :revision, :integer, default: 1, read_after_writes: true
-    field :mutation_id, :binary_id
     timestamps(type: :utc_datetime_usec)
   end
 
@@ -45,7 +44,7 @@ defmodule Sacrum.Repo.Schemas.ReviewThread do
     |> validate_immutable()
     |> validate_required(
       @scope_fields ++
-        ~w(id parent_chat_id path side home_kind original_commit_id original_blob_id original_start_line original_line status outdated_noted origin_kind deleted mutation_id)a
+        ~w(id parent_chat_id path side home_kind original_commit_id original_blob_id original_start_line original_line status outdated_noted origin_kind deleted)a
     )
     |> validate_length(:parent_chat_id, max: 200, count: :codepoints)
     |> validate_length(:path, max: 4096, count: :codepoints)

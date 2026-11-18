@@ -17,6 +17,7 @@ defmodule Sacrum.Realtime.Cdc.Config do
     artifact_links
     daemons
     chat_catalog_entries
+    review_threads
     notifications
   )
 

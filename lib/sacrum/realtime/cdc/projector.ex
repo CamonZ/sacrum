@@ -20,6 +20,7 @@ defmodule Sacrum.Realtime.Cdc.Projector do
     CodeRef,
     Daemon,
     Notification,
+    ReviewThread,
     SessionLog,
     StepExecution,
     StepTransition,
@@ -45,6 +46,7 @@ defmodule Sacrum.Realtime.Cdc.Projector do
 
   @schema_by_table %{
     "chat_catalog_entries" => ChatCatalogEntry,
+    "review_threads" => ReviewThread,
     "tasks" => Task,
     "workflows" => Workflow,
     "workflow_steps" => WorkflowStep,
@@ -63,6 +65,9 @@ defmodule Sacrum.Realtime.Cdc.Projector do
   }
 
   @channel_broadcasts %{
+    "review_thread_created" => :broadcast_review_thread_created,
+    "review_thread_updated" => :broadcast_review_thread_updated,
+    "review_thread_deleted" => :broadcast_review_thread_deleted,
     "chat_catalog_created" => :broadcast_chat_catalog_created,
     "chat_catalog_updated" => :broadcast_chat_catalog_updated,
     "chat_catalog_deleted" => :broadcast_chat_catalog_deleted,
@@ -498,6 +503,21 @@ defmodule Sacrum.Realtime.Cdc.Projector do
     [projection("chat_catalog_" <> suffix, entry.project_id, entry)]
   end
 
+  defp projections(%WalEx.Event{source: %{table: "review_threads"}, type: type} = event)
+       when type in [:insert, :update, :delete] do
+    record = if type == :delete, do: event.old_record, else: event.new_record
+    thread = record_to_struct!("review_threads", record)
+
+    name =
+      cond do
+        type == :delete or thread.deleted -> "review_thread_deleted"
+        type == :insert -> "review_thread_created"
+        true -> "review_thread_updated"
+      end
+
+    [projection(name, thread.project_id, thread)]
+  end
+
   defp projections(%WalEx.Event{}), do: []
 
   defp projection_context(events) do
@@ -697,10 +717,23 @@ defmodule Sacrum.Realtime.Cdc.Projector do
     attrs =
       schema
       |> schema_fields()
-      |> Map.new(fn field -> {field, value(record, field)} end)
+      |> Map.new(fn field -> {field, record_field(schema, field, value(record, field))} end)
 
     struct(schema, attrs)
   end
+
+  defp record_field(ReviewThread, field, value) do
+    case ReviewThread.__schema__(:type, field) do
+      {:parameterized, {Ecto.Enum, _}} = type ->
+        {:ok, loaded} = Ecto.Type.load(type, value)
+        loaded
+
+      _ ->
+        value
+    end
+  end
+
+  defp record_field(_schema, _field, value), do: value
 
   defp schema_fields(schema), do: schema.__schema__(:fields) ++ schema.__schema__(:embeds)
 

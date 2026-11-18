@@ -21,9 +21,11 @@ defmodule SacrumWeb.Graphql.Schema do
   import_types(SacrumWeb.Graphql.Types.NotificationTypes)
 
   import_types(SacrumWeb.Graphql.Types.ChatCatalogTypes)
+  import_types(SacrumWeb.Graphql.Types.ReviewThreadTypes)
 
   query do
     import_fields(:chat_catalog_queries)
+    import_fields(:review_thread_queries)
     import_fields(:project_queries)
     import_fields(:workflow_queries)
     import_fields(:workflow_step_queries)
@@ -37,6 +39,7 @@ defmodule SacrumWeb.Graphql.Schema do
 
   mutation do
     import_fields(:chat_catalog_mutations)
+    import_fields(:review_thread_mutations)
     import_fields(:project_mutations)
     import_fields(:artifact_mutations)
     import_fields(:workflow_mutations)
