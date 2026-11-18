@@ -236,6 +236,77 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
     end)
   end
 
+  test "committed discussion catalog updates broadcast the thread and parent links" do
+    with_project(fn user, project ->
+      machine = Ecto.UUID.generate()
+      thread_id = Ecto.UUID.generate()
+      {:ok, _} = Accounts.ChatCatalog.register(user.id, machine)
+
+      put_chat = fn chat_id, revision, payload ->
+        Accounts.ChatCatalog.put(
+          user.id,
+          project.id,
+          machine,
+          chat_id,
+          revision,
+          Ecto.UUID.generate(),
+          payload
+        )
+      end
+
+      assert {:ok, _} = put_chat.("parent", 0, %{})
+
+      assert {:ok, %{status: :accepted}} =
+               Accounts.ReviewThreads.put(
+                 user.id,
+                 project.id,
+                 machine,
+                 thread_id,
+                 0,
+                 Ecto.UUID.generate(),
+                 %{
+                   "parent_chat_id" => "parent",
+                   "path" => "lib/example.ex",
+                   "side" => "RIGHT",
+                   "home_kind" => "worktree",
+                   "original_commit_id" => String.duplicate("a", 40),
+                   "original_blob_id" => String.duplicate("b", 40),
+                   "original_start_line" => 2,
+                   "original_line" => 2,
+                   "start_line" => 2,
+                   "line" => 2
+                 }
+               )
+
+      :ok = subscribe_project(project.id)
+
+      assert {:ok, %{status: "accepted", entry: %{revision: 1}}} =
+               put_chat.("discussion", 0, %{
+                 "metadata" => %{"kind" => "discussion"},
+                 "parent_chat_id" => "parent",
+                 "review_thread_id" => thread_id
+               })
+
+      assert {:ok, %{status: "accepted", entry: %{revision: 2}}} =
+               put_chat.("discussion", 1, %{"status" => "working"})
+
+      broadcast =
+        assert_project_broadcast(
+          "chat_catalog_updated",
+          %{chat_id: "discussion", installation_id: machine, revision: 2, status: "working"},
+          1_000
+        )
+
+      assert %{
+               "metadata" => %{"kind" => "discussion"} = metadata,
+               "parent_chat_id" => "parent",
+               "review_thread_id" => ^thread_id
+             } = broadcast.payload
+
+      refute Map.has_key?(metadata, "title")
+    end)
+  end
+
   test "review thread CDC matches snapshots for writes, trigger revisions and cascade deletes" do
     with_project(fn user, project ->
       machine = Ecto.UUID.generate()

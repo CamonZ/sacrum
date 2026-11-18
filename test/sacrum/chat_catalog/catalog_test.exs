@@ -2,7 +2,7 @@ defmodule Sacrum.ChatCatalog.CatalogTest do
   use Sacrum.DataCase, async: true
   alias Sacrum.Accounts.{ChatCatalog, Projects, Tasks}
   alias Sacrum.Repo
-  alias Sacrum.Repo.Schemas.{ChatCatalogEntry, TaskRun, StepExecution}
+  alias Sacrum.Repo.Schemas.{ChatCatalogEntry, ReviewThread, TaskRun, StepExecution}
 
   setup do
     n = System.unique_integer([:positive])
@@ -23,6 +23,168 @@ defmodule Sacrum.ChatCatalog.CatalogTest do
 
   defp put(c, chat, rev, payload, mutation \\ Ecto.UUID.generate()),
     do: ChatCatalog.put(c.u, c.p, c.m, chat, rev, mutation, payload)
+
+  test "discussions require a known kind, thread UUID and parent while missing kind remains compatible",
+       c do
+    {:ok, _} = put(c, "parent", 0, %{})
+    thread = create_review_thread(c, "parent")
+    discussion = discussion_payload(thread)
+
+    for payload <- [
+          Map.delete(discussion, "review_thread_id"),
+          Map.delete(discussion, "parent_chat_id"),
+          Map.delete(discussion, "metadata"),
+          %{discussion | "review_thread_id" => nil},
+          %{discussion | "parent_chat_id" => nil},
+          %{discussion | "parent_chat_id" => " "},
+          %{discussion | "metadata" => %{"kind" => "chat"}},
+          %{"review_thread_id" => thread.id}
+        ] do
+      assert {:error, changeset} = put(c, "invalid", 0, payload)
+      assert errors_on(changeset).metadata == ["kind and discussion links are inconsistent"]
+    end
+
+    for payload <- [
+          %{discussion | "review_thread_id" => "invalid-uuid"},
+          %{"metadata" => %{"kind" => nil}},
+          %{"metadata" => %{"kind" => "unknown"}}
+        ] do
+      assert {:error, "invalid catalog payload"} = put(c, "invalid", 0, payload)
+    end
+
+    for metadata <- [%{"title" => "Existing chat"}, %{"kind" => "chat"}] do
+      {:ok, %{entry: chat}} =
+        put(c, Ecto.UUID.generate(), 0, %{
+          "metadata" => metadata,
+          "parent_chat_id" => "parent"
+        })
+
+      assert %{"metadata" => ^metadata, "review_thread_id" => nil, "parent_chat_id" => "parent"} =
+               ChatCatalogEntry.payload(Repo.get!(ChatCatalogEntry, chat.id))
+    end
+  end
+
+  test "discussion links roundtrip and survive unrelated partial updates", c do
+    {:ok, _} = put(c, "parent", 0, %{})
+    thread = create_review_thread(c, "parent")
+    discussion = discussion_payload(thread)
+
+    assert {:ok, %{entry: created}} = put(c, "discussion", 0, discussion)
+
+    assert {:ok, %{entry: working}} =
+             put(c, "discussion", created.revision, %{"status" => "working"})
+
+    metadata = %{
+      "kind" => "discussion",
+      "title" => "New title",
+      "providerResumeId" => "new-transcript"
+    }
+
+    assert {:ok, %{entry: updated}} =
+             put(c, "discussion", working.revision, %{"metadata" => metadata})
+
+    for patch <- [
+          %{"parent_chat_id" => nil},
+          %{"review_thread_id" => nil},
+          %{"metadata" => %{"title" => "Missing kind"}}
+        ] do
+      assert {:error, changeset} = put(c, "discussion", updated.revision, patch)
+      assert errors_on(changeset).metadata == ["kind and discussion links are inconsistent"]
+    end
+
+    assert Repo.get!(ChatCatalogEntry, created.id) == updated
+    assert working.revision == created.revision + 1
+
+    assert Map.take(ChatCatalogEntry.payload(updated), Map.keys(discussion)) ==
+             %{discussion | "metadata" => metadata}
+  end
+
+  test "each review thread can have only one catalog discussion", c do
+    {:ok, _} = put(c, "parent", 0, %{})
+    thread = create_review_thread(c, "parent")
+    discussion = discussion_payload(thread)
+
+    assert {:ok, %{entry: first}} = put(c, "discussion", 0, discussion)
+    assert {:error, changeset} = put(c, "duplicate", 0, discussion)
+    assert errors_on(changeset).review_thread_id == ["has already been taken"]
+
+    assert {:ok, %{entries: [%{chat_id: "discussion", id: id}, %{chat_id: "parent"}]}} =
+             ChatCatalog.list(c.u, c.p, c.m)
+
+    assert id == first.id
+  end
+
+  test "discussion foreign key matches the parent and full scope", c do
+    {:ok, _} = put(c, "parent", 0, %{})
+    {:ok, _} = put(c, "other-parent", 0, %{})
+    thread = create_review_thread(c, "parent")
+    discussion = discussion_payload(thread)
+
+    assert {:error, changeset} =
+             put(c, "discussion", 0, %{discussion | "parent_chat_id" => "other-parent"})
+
+    assert errors_on(changeset).review_thread_id == ["does not exist"]
+
+    other_machine = Ecto.UUID.generate()
+    {:ok, _} = ChatCatalog.register(c.u, other_machine)
+
+    n = System.unique_integer([:positive])
+
+    {:ok, other_owner} =
+      Sacrum.Repo.Users.insert(%{
+        email: "foreign-discussion#{n}@example.com",
+        username: "foreigndiscussion#{n}",
+        password: "password123"
+      })
+
+    {:ok, other_project} = Projects.insert(other_owner.id, %{name: "Foreign catalog"})
+    {:ok, _} = ChatCatalog.register(other_owner.id, c.m)
+
+    for {scope, parent} <- [
+          {%{c | p: c.p2}, "parent-in-other-project"},
+          {%{c | m: other_machine}, "parent"},
+          {%{c | u: other_owner.id, p: other_project.id}, "parent"}
+        ] do
+      {:ok, _} = put(scope, parent, 0, %{})
+
+      assert {:error, changeset} =
+               put(scope, "discussion", 0, %{discussion | "parent_chat_id" => parent})
+
+      assert errors_on(changeset).review_thread_id == ["does not exist"]
+
+      assert {:ok, %{entries: [%{chat_id: ^parent}]}} =
+               ChatCatalog.list(scope.u, scope.p, scope.m)
+    end
+
+    assert {:ok, %{entries: entries}} = ChatCatalog.list(c.u, c.p, c.m)
+    assert Enum.map(entries, & &1.chat_id) == ["other-parent", "parent"]
+  end
+
+  defp create_review_thread(c, parent_chat_id) do
+    %ReviewThread{user_id: c.u, project_id: c.p, installation_id: c.m}
+    |> ReviewThread.changeset(%{
+      id: Ecto.UUID.generate(),
+      parent_chat_id: parent_chat_id,
+      path: "lib/example.ex",
+      side: "RIGHT",
+      home_kind: :worktree,
+      original_commit_id: String.duplicate("a", 40),
+      original_blob_id: String.duplicate("b", 40),
+      original_start_line: 2,
+      original_line: 2,
+      start_line: 2,
+      line: 2
+    })
+    |> Repo.insert!()
+  end
+
+  defp discussion_payload(thread) do
+    %{
+      "metadata" => %{"kind" => "discussion"},
+      "parent_chat_id" => thread.parent_chat_id,
+      "review_thread_id" => thread.id
+    }
+  end
 
   test "activity status roundtrips independently of open/closed metadata and rejects invalid values",
        c do
