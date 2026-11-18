@@ -426,6 +426,164 @@ defmodule Sacrum.Realtime.Cdc.WalExIntegrationTest do
     end)
   end
 
+  test "chat and thread tombstones cascade once and publish committed revisions" do
+    with_project(fn user, project ->
+      machine = Ecto.UUID.generate()
+      {:ok, _} = Accounts.ChatCatalog.register(user.id, machine)
+
+      put_chat = fn id, revision, mutation_id, payload ->
+        Accounts.ChatCatalog.put(user.id, project.id, machine, id, revision, mutation_id, payload)
+      end
+
+      put_thread = fn id, revision, mutation_id, payload ->
+        Accounts.ReviewThreads.put(
+          user.id,
+          project.id,
+          machine,
+          id,
+          revision,
+          mutation_id,
+          payload
+        )
+      end
+
+      {:ok, %{entry: parent}} = put_chat.("parent", 0, Ecto.UUID.generate(), %{})
+
+      {direct_thread, direct_discussion} =
+        create_review_discussion(put_chat, put_thread, "direct-discussion")
+
+      {cascaded_thread, cascaded_discussion} =
+        create_review_discussion(put_chat, put_thread, "cascaded-discussion")
+
+      :ok = subscribe_project(project.id)
+      project_topic = "project:#{project.id}"
+      delete = %{"deleted" => true}
+      direct_mutation = Ecto.UUID.generate()
+
+      assert {:ok, %{status: :accepted, entry: %{revision: 2, payload: tombstoned_payload}}} =
+               put_thread.(direct_thread, 1, direct_mutation, delete)
+
+      assert tombstoned_payload["deleted"]
+      assert Repo.get!(ChatCatalogEntry, parent.id) == parent
+      assert %{deleted: true, revision: 2} = Repo.get!(ChatCatalogEntry, direct_discussion.id)
+
+      assert {:ok, %{status: :accepted, entry: %{revision: 2, payload: %{"deleted" => true}}}} =
+               put_thread.(direct_thread, 1, direct_mutation, delete)
+
+      assert {:error, changeset} =
+               put_chat.("late-discussion", 0, Ecto.UUID.generate(), %{
+                 "metadata" => %{"kind" => "discussion"},
+                 "parent_chat_id" => "parent",
+                 "review_thread_id" => direct_thread
+               })
+
+      assert {"does not exist", _} = changeset.errors[:review_thread_id]
+
+      parent_mutation = Ecto.UUID.generate()
+
+      for _ <- 1..2 do
+        assert {:ok, %{status: "accepted", entry: %{revision: 2, deleted: true}}} =
+                 put_chat.("parent", 1, parent_mutation, delete)
+      end
+
+      assert {:error, :not_found} =
+               put_thread.(
+                 Ecto.UUID.generate(),
+                 0,
+                 Ecto.UUID.generate(),
+                 %{tombstoned_payload | "deleted" => false}
+               )
+
+      for {thread_id, discussion} <- [
+            {direct_thread, direct_discussion},
+            {cascaded_thread, cascaded_discussion}
+          ] do
+        assert %{deleted: true, revision: 2} =
+                 Repo.get_by!(Sacrum.Repo.Schemas.ReviewThread,
+                   id: thread_id,
+                   user_id: user.id,
+                   project_id: project.id,
+                   installation_id: machine
+                 )
+
+        assert %{deleted: true, revision: 2, mutation_id: mutation_id} =
+                 Repo.get!(ChatCatalogEntry, discussion.id)
+
+        assert mutation_id != discussion.mutation_id
+
+        assert_receive %Phoenix.Socket.Broadcast{
+                         topic: ^project_topic,
+                         event: "review_thread_deleted",
+                         payload: %{thread_id: ^thread_id, revision: 2}
+                       },
+                       1_000
+
+        chat_id = discussion.chat_id
+
+        assert_receive %Phoenix.Socket.Broadcast{
+                         topic: ^project_topic,
+                         event: "chat_catalog_updated",
+                         payload: %{chat_id: ^chat_id, revision: 2, payload: %{"deleted" => true}}
+                       },
+                       1_000
+      end
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       topic: ^project_topic,
+                       event: "chat_catalog_updated",
+                       payload: %{chat_id: "parent", revision: 2, payload: %{"deleted" => true}}
+                     },
+                     1_000
+
+      for {thread_id, count} <- [{direct_thread, 2}, {cascaded_thread, 1}] do
+        assert %{rows: [[^count]]} =
+                 Repo.query!(
+                   "SELECT count(*) FROM review_thread_mutations WHERE thread_id = $1",
+                   [
+                     Ecto.UUID.dump!(thread_id)
+                   ]
+                 )
+      end
+
+      refute_receive %Phoenix.Socket.Broadcast{
+        topic: ^project_topic,
+        event: "review_thread_deleted"
+      }
+
+      refute_receive %Phoenix.Socket.Broadcast{
+        topic: ^project_topic,
+        event: "chat_catalog_updated"
+      }
+    end)
+  end
+
+  defp create_review_discussion(put_chat, put_thread, chat_id) do
+    thread_id = Ecto.UUID.generate()
+
+    {:ok, %{status: :accepted}} =
+      put_thread.(thread_id, 0, Ecto.UUID.generate(), %{
+        "parent_chat_id" => "parent",
+        "path" => "lib/example.ex",
+        "side" => "RIGHT",
+        "home_kind" => "worktree",
+        "original_commit_id" => String.duplicate("a", 40),
+        "original_blob_id" => String.duplicate("b", 40),
+        "original_start_line" => 2,
+        "original_line" => 2,
+        "start_line" => 2,
+        "line" => 2
+      })
+
+    {:ok, %{entry: discussion}} =
+      put_chat.(chat_id, 0, Ecto.UUID.generate(), %{
+        "metadata" => %{"kind" => "discussion"},
+        "parent_chat_id" => "parent",
+        "review_thread_id" => thread_id
+      })
+
+    {thread_id, discussion}
+  end
+
   defp assert_review_thread_broadcasts(user_id, project_id, event, entry) do
     expected = Map.put(entry, :schema_version, 1)
     project_topic = "project:#{project_id}"
