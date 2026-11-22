@@ -56,6 +56,36 @@ defmodule SacrumWeb.Graphql.Types.ChatCatalogTypes do
         )
       end)
     end
+
+    field :chat_catalog_history, :chat_catalog_page do
+      description("""
+      Live chat history ordered by updatedAt descending, then chatId descending.
+      Pass nextCursor as after with the same scope and filters. Each page reads current data,
+      so activity changes and deletions can change which entries appear on later pages.
+      """)
+
+      arg(:project_id, non_null(:uuid4))
+      arg(:installation_id, non_null(:uuid4))
+      arg(:after, :string, description: "Opaque cursor from a previous history page.")
+      arg(:limit, :integer, default_value: 100, description: "Page size from 1 to 200.")
+
+      arg(:include_completed, non_null(:boolean),
+        default_value: false,
+        description:
+          "Include chats and discussions linked directly or through a discussion parent to completed tasks."
+      )
+
+      resolve(fn args, %{context: %{current_user: user}} ->
+        ChatCatalog.history(
+          user.id,
+          args.project_id,
+          args.installation_id,
+          Map.get(args, :after),
+          args.limit,
+          args.include_completed
+        )
+      end)
+    end
   end
 
   object :chat_catalog_mutations do

@@ -13,6 +13,16 @@ defmodule Sacrum.ChatCatalog.GraphqlTest do
   }
   """
 
+  @history """
+  query($p: Uuid4!, $m: Uuid4!, $after: String, $limit: Int = 100, $completed: Boolean = false) {
+    chatCatalogHistory(projectId: $p, installationId: $m, after: $after,
+      limit: $limit, includeCompleted: $completed) {
+      entries { chatId updatedAt }
+      nextCursor
+    }
+  }
+  """
+
   setup %{conn: conn} do
     user = create_user()
     {:ok, project} = Projects.insert(user.id, %{name: "GraphQL catalog"})
@@ -265,19 +275,7 @@ defmodule Sacrum.ChatCatalog.GraphqlTest do
       "invalid_payload"
     )
 
-    {:ok, %{status: :accepted}} =
-      ReviewThreads.put(c.user.id, c.project.id, c.machine, thread, 0, Ecto.UUID.generate(), %{
-        "parent_chat_id" => "parent",
-        "path" => "lib/example.ex",
-        "side" => "RIGHT",
-        "home_kind" => "worktree",
-        "original_commit_id" => String.duplicate("a", 40),
-        "original_blob_id" => String.duplicate("b", 40),
-        "original_start_line" => 2,
-        "original_line" => 2,
-        "start_line" => 2,
-        "line" => 2
-      })
+    create_thread(c, thread, "parent")
 
     assert_rejection(
       put_catalog(c, "discussion", 0, %{discussion | "parent_chat_id" => "other-parent"}),
@@ -334,6 +332,187 @@ defmodule Sacrum.ChatCatalog.GraphqlTest do
 
     assert_rejection(result, "not_found")
     refute inspect(result) =~ "SECRET"
+  end
+
+  describe "chatCatalogHistory" do
+    setup c do
+      {:ok, _} = ChatCatalog.register(c.user.id, c.machine)
+      :ok
+    end
+
+    test "returns bounded pages with microsecond activity ordering and stable ties", c do
+      older = ~U[2026-11-22 10:00:00.000001Z]
+      newer = ~U[2026-11-22 10:00:00.000002Z]
+      fixtures = [{"b", newer}, {"z", older}, {"a", newer}, {"m", newer}]
+
+      for {id, time} <- fixtures do
+        c |> insert_chat(id) |> Ecto.Changeset.change(updated_at: time) |> Repo.update!()
+      end
+
+      expected =
+        fixtures
+        |> Enum.sort_by(fn {id, time} -> {DateTime.to_unix(time, :microsecond), id} end, :desc)
+        |> Enum.map(&elem(&1, 0))
+
+      for size <- [1, 2, 3, 4, 200] do
+        assert history_ids(c, size) == expected, "incorrect history for page size #{size}"
+      end
+
+      for size <- [0, 201, nil] do
+        result = history(c, %{limit: size})
+        assert [%{"message" => "limit must be between 1 and 200"}] = result["errors"]
+      end
+
+      for cursor <- ["", "b", String.duplicate("A", 2049) | encoded_invalid_cursors()] do
+        result = history(c, %{after: cursor})
+        assert [%{"message" => "invalid chat history cursor"}] = result["errors"]
+      end
+    end
+
+    test "filters tombstones and direct or inherited completion before paginating", c do
+      insert_completion_fixtures(c)
+
+      assert Enum.sort(history_ids(c, 1)) == ["child-of-done", "open", "open-discussion"]
+
+      assert Enum.sort(history_ids(c, 2, true)) == [
+               "child-of-done",
+               "done",
+               "done-discussion",
+               "open",
+               "open-discussion"
+             ]
+    end
+
+    test "leaves snapshot ordering, cursors, tombstones and direct-only completion unchanged",
+         c do
+      insert_completion_fixtures(c)
+
+      snapshot = fn args ->
+        run(c.conn, """
+        { chatCatalog(projectId: "#{c.project.id}", installationId: "#{c.machine}", #{args})
+          { entries { chatId } nextCursor } }
+        """)["data"]["chatCatalog"]
+      end
+
+      assert snapshot.("limit: 10") == %{
+               "entries" =>
+                 Enum.map(
+                   ["child-of-done", "deleted", "done-discussion", "open", "open-discussion"],
+                   &%{"chatId" => &1}
+                 ),
+               "nextCursor" => nil
+             }
+
+      assert snapshot.(~s(after: "deleted", limit: 2)) == %{
+               "entries" => [%{"chatId" => "done-discussion"}, %{"chatId" => "open"}],
+               "nextCursor" => "open"
+             }
+    end
+
+    test "isolates authenticated user, project and installation even when including completed",
+         c do
+      insert_chat(c, "in-scope")
+
+      {:ok, other_project} = Projects.insert(c.user.id, %{name: "Other project"})
+      insert_chat(%{c | project: other_project}, "other-project")
+
+      installation = Ecto.UUID.generate()
+      {:ok, _} = ChatCatalog.register(c.user.id, installation)
+      insert_chat(%{c | machine: installation}, "other-installation")
+
+      other =
+        create_user(%{
+          email: "history-other@example.com",
+          username: "history_other",
+          password: "password123"
+        })
+
+      assert history_ids(c, 1, true) == ["in-scope"]
+      foreign = %{c | conn: Phoenix.ConnTest.build_conn() |> authenticate(other)}
+      assert history_ids(foreign, 1, true) == []
+    end
+  end
+
+  defp history(c, args) do
+    run(c.conn, @history, Map.merge(%{p: c.project.id, m: c.machine}, args))
+  end
+
+  defp history_ids(c, size, completed \\ false) do
+    pages =
+      Stream.unfold({:page, nil}, fn
+        :done ->
+          nil
+
+        {:page, cursor} ->
+          result = history(c, %{limit: size, completed: completed, after: cursor})
+          refute result["errors"]
+
+          %{"entries" => entries, "nextCursor" => next_cursor} =
+            result["data"]["chatCatalogHistory"]
+
+          assert length(entries) <= size
+          assert next_cursor == nil or length(entries) == size
+          assert next_cursor == nil or next_cursor != cursor
+
+          {Enum.map(entries, & &1["chatId"]),
+           if(next_cursor, do: {:page, next_cursor}, else: :done)}
+      end)
+      |> Enum.take(20)
+
+    assert length(pages) < 20, "history did not terminate"
+    Enum.concat(pages)
+  end
+
+  defp encoded_invalid_cursors do
+    for value <- [[2, 0, "b"], [1, "bad timestamp", "b"], [1, 0, ""], [1, 0, <<0>>]] do
+      value |> Jason.encode!() |> Base.url_encode64(padding: false)
+    end
+  end
+
+  defp insert_completion_fixtures(c) do
+    {:ok, done} = Tasks.insert(c.user.id, c.project.id, %{title: "Done"})
+    Repo.update!(Ecto.Changeset.change(done, completed_at: DateTime.utc_now()))
+    {:ok, open} = Tasks.insert(c.user.id, c.project.id, %{title: "Open"})
+
+    insert_chat(c, "done", %{"task_id" => done.id})
+    insert_chat(c, "open", %{"task_id" => open.id})
+    # A non-discussion child does not inherit its parent's task completion.
+    insert_chat(c, "child-of-done", %{"parent_chat_id" => "done"})
+    insert_chat(c, "deleted", %{"deleted" => true})
+
+    for parent <- ["done", "open"] do
+      thread = Ecto.UUID.generate()
+      create_thread(c, thread, parent)
+
+      insert_chat(c, "#{parent}-discussion", %{
+        "metadata" => %{"kind" => "discussion"},
+        "parent_chat_id" => parent,
+        "review_thread_id" => thread
+      })
+    end
+  end
+
+  defp insert_chat(c, id, payload \\ %{}) do
+    {:ok, %{status: "accepted", entry: entry}} =
+      ChatCatalog.put(c.user.id, c.project.id, c.machine, id, 0, Ecto.UUID.generate(), payload)
+
+    entry
+  end
+
+  defp create_thread(c, thread, parent) do
+    {:ok, %{status: :accepted}} =
+      ReviewThreads.put(c.user.id, c.project.id, c.machine, thread, 0, Ecto.UUID.generate(), %{
+        "parent_chat_id" => parent,
+        "path" => "lib/example.ex",
+        "side" => "RIGHT",
+        "home_kind" => "worktree",
+        "original_commit_id" => String.duplicate("a", 40),
+        "original_blob_id" => String.duplicate("b", 40),
+        "original_start_line" => 2,
+        "original_line" => 2,
+        "start_line" => 2,
+        "line" => 2
+      })
   end
 
   defp put_catalog(c, id, revision, payload) do

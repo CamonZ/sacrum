@@ -42,6 +42,55 @@ defmodule Sacrum.Repo.ChatCatalog do
     Repo.all(from e in query, order_by: [asc: e.chat_id], limit: ^limit)
   end
 
+  @spec history(
+          String.t(),
+          String.t(),
+          String.t(),
+          {DateTime.t(), String.t()} | nil,
+          pos_integer(),
+          boolean()
+        ) :: [ChatCatalogEntry.t()]
+  def history(user_id, project_id, installation_id, cursor, limit, include_completed) do
+    query =
+      user_id
+      |> scope(project_id, installation_id)
+      |> where([entry], not entry.deleted)
+      |> filter_completed_tasks(include_completed)
+      |> filter_completed_parent_tasks(include_completed)
+      |> before_history_cursor(cursor)
+
+    Repo.all(
+      from entry in query, order_by: [desc: entry.updated_at, desc: entry.chat_id], limit: ^limit
+    )
+  end
+
+  defp before_history_cursor(query, nil), do: query
+
+  defp before_history_cursor(query, {updated_at, chat_id}) do
+    # A row comparison lets PostgreSQL seek chat_catalog_entries_history_index to the cursor.
+    where(
+      query,
+      [entry],
+      fragment("(?, ?) < (?, ?)", entry.updated_at, entry.chat_id, ^updated_at, ^chat_id)
+    )
+  end
+
+  defp filter_completed_parent_tasks(query, true), do: query
+
+  defp filter_completed_parent_tasks(query, false) do
+    from entry in query,
+      left_join: parent in ChatCatalogEntry,
+      on:
+        not is_nil(entry.review_thread_id) and parent.chat_id == entry.parent_chat_id and
+          parent.user_id == entry.user_id and parent.project_id == entry.project_id and
+          parent.installation_id == entry.installation_id,
+      left_join: task in Task,
+      on:
+        task.id == parent.task_id and task.project_id == parent.project_id and
+          task.user_id == parent.user_id,
+      where: is_nil(task.completed_at)
+  end
+
   defp filter_completed_tasks(query, true), do: query
 
   defp filter_completed_tasks(query, false) do
