@@ -12,6 +12,7 @@ defmodule Sacrum.ChatCatalog.Payload do
     selectedSpeedTier selectedPersonality createdAt updatedAt
     providerResumeId providerParentResumeId threadTotalTokens messageCount
     hasUserMessage lifecycle status permissionMode entityLevel
+    pr_host pr_owner pr_repo pr_number
   )
   @outer ~w(
     status metadata task_id parent_chat_id review_thread_id gate_execution_id gate_task_run_id
@@ -84,6 +85,14 @@ defmodule Sacrum.ChatCatalog.Payload do
 
   defp metadata_value?({key, value}) when key in ["createdAt", "updatedAt"],
     do: is_nil(value) or (is_binary(value) and match?({:ok, _, _}, DateTime.from_iso8601(value)))
+
+  defp metadata_value?({"pr_host", value}), do: nullable_string?(value, 255)
+
+  defp metadata_value?({key, value}) when key in ["pr_owner", "pr_repo"],
+    do: nullable_string?(value, 100)
+
+  defp metadata_value?({"pr_number", value}),
+    do: is_nil(value) or (is_integer(value) and value > 0)
 
   defp metadata_value?({key, value}) when key in @strings do
     case Map.get(@enums, key) do

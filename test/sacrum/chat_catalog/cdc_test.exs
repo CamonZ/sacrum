@@ -17,9 +17,17 @@ defmodule Sacrum.ChatCatalog.CdcTest do
     machine = Ecto.UUID.generate()
     {:ok, _} = ChatCatalog.register(user.id, machine)
 
+    pr_metadata = %{
+      "title" => "Title",
+      "pr_host" => "github.com",
+      "pr_owner" => "CamonZ",
+      "pr_repo" => "sacrum",
+      "pr_number" => 267
+    }
+
     {:ok, %{entry: entry}} =
       ChatCatalog.put(user.id, project.id, machine, "chat", 0, Ecto.UUID.generate(), %{
-        "metadata" => %{"title" => "Title"},
+        "metadata" => pr_metadata,
         "status" => "working"
       })
 
@@ -47,7 +55,7 @@ defmodule Sacrum.ChatCatalog.CdcTest do
     assert payload.chat_id == "chat"
     assert payload.status == "working"
     assert payload.payload["status"] == "working"
-    assert payload.payload["metadata"] == %{"title" => "Title"}
+    assert payload.payload["metadata"] == pr_metadata
     refute Map.has_key?(payload, :user_id)
 
     assert_receive %Phoenix.Socket.Broadcast{
