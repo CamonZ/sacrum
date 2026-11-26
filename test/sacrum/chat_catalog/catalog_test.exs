@@ -824,6 +824,78 @@ defmodule Sacrum.ChatCatalog.CatalogTest do
     assert owner == c.u
   end
 
+  test "linked GitHub PR metadata validates bounds, persists verbatim and rejects invalid values",
+       c do
+    valid_cases = [
+      {"pr-full",
+       %{
+         "title" => "PR linked",
+         "pr_host" => "github.com",
+         "pr_owner" => "CamonZ",
+         "pr_repo" => "sacrum",
+         "pr_number" => 42
+       }},
+      {"pr-nulls",
+       %{
+         "pr_host" => nil,
+         "pr_owner" => nil,
+         "pr_repo" => nil,
+         "pr_number" => nil
+       }},
+      {"pr-bounds",
+       %{
+         "pr_host" => String.duplicate("h", 255),
+         "pr_owner" => String.duplicate("o", 100),
+         "pr_repo" => String.duplicate("r", 100),
+         "pr_number" => 1
+       }}
+    ]
+
+    for {chat_id, metadata} <- valid_cases do
+      assert {:ok, %{status: "accepted", entry: entry}} =
+               put(c, chat_id, 0, %{"metadata" => metadata}),
+             "expected valid PR metadata to be accepted: #{inspect(metadata)}"
+
+      assert entry.metadata == metadata
+
+      assert ChatCatalogEntry.payload(Repo.get!(ChatCatalogEntry, entry.id))["metadata"] ==
+               metadata
+    end
+
+    {:ok, %{entries: listed}} = ChatCatalog.list(c.u, c.p, c.m)
+    {:ok, %{entries: history}} = ChatCatalog.history(c.u, c.p, c.m, nil, 100, false)
+    expected_by_id = Map.new(valid_cases)
+
+    assert Map.new(listed, &{&1.chat_id, &1.metadata}) == expected_by_id
+    assert Map.new(history, &{&1.chat_id, &1.metadata}) == expected_by_id
+
+    invalid_metadata =
+      Enum.map([0, -1, -999, 1.0, 1.5, "1", true, false, [], %{}], &%{"pr_number" => &1}) ++
+        Enum.map(
+          [String.duplicate("h", 256), String.duplicate("é", 128), 123, 1.5, true, [], %{}],
+          &%{"pr_host" => &1}
+        ) ++
+        for(
+          key <- ["pr_owner", "pr_repo"],
+          bad <- [String.duplicate("a", 101), String.duplicate("é", 51), 123, 1.5, true, [], %{}],
+          do: %{key => bad}
+        ) ++
+        [
+          %{"prHost" => "github.com"},
+          %{"prOwner" => "CamonZ"},
+          %{"prRepo" => "sacrum"},
+          %{"prNumber" => 42}
+        ]
+
+    for metadata <- invalid_metadata do
+      assert {:error, :invalid_payload} == put(c, "pr-invalid", 0, %{"metadata" => metadata}),
+             "expected :invalid_payload for #{inspect(metadata)}"
+    end
+
+    assert {:ok, %{entries: after_invalid}} = ChatCatalog.list(c.u, c.p, c.m)
+    assert Map.new(after_invalid, &{&1.chat_id, &1.metadata}) == expected_by_id
+  end
+
   defp drain(acc) do
     receive do
       {:query, q} -> drain([q | acc])

@@ -122,6 +122,77 @@ defmodule Sacrum.ChatCatalog.GraphqlTest do
     refute response["errors"]
   end
 
+  test "linked GitHub PR metadata roundtrips verbatim in putChatCatalog, chatCatalog and chatCatalogHistory",
+       c do
+    {:ok, _} = ChatCatalog.register(c.user.id, c.machine)
+
+    pr_metadata = %{
+      "title" => "PR chat",
+      "pr_host" => "github.com",
+      "pr_owner" => "CamonZ",
+      "pr_repo" => "sacrum",
+      "pr_number" => 42
+    }
+
+    null_pr_metadata = %{
+      "title" => "No PR chat",
+      "pr_host" => nil,
+      "pr_owner" => nil,
+      "pr_repo" => nil,
+      "pr_number" => nil
+    }
+
+    assert %{
+             "data" => %{
+               "putChatCatalog" => %{
+                 "status" => "accepted",
+                 "entry" => %{"payload" => %{"metadata" => ^pr_metadata}}
+               }
+             }
+           } = put_catalog(c, "pr-chat", 0, %{"metadata" => pr_metadata})
+
+    assert %{
+             "data" => %{
+               "putChatCatalog" => %{
+                 "status" => "accepted",
+                 "entry" => %{"payload" => %{"metadata" => ^null_pr_metadata}}
+               }
+             }
+           } = put_catalog(c, "null-pr-chat", 0, %{"metadata" => null_pr_metadata})
+
+    snapshot =
+      run(
+        c.conn,
+        "query($p: Uuid4!, $m: Uuid4!) { chatCatalog(projectId: $p, installationId: $m) { entries { chatId payload } } }",
+        %{p: c.project.id, m: c.machine}
+      )
+
+    refute snapshot["errors"]
+
+    assert Map.new(snapshot["data"]["chatCatalog"]["entries"], fn entry ->
+             {entry["chatId"], entry["payload"]["metadata"]}
+           end) == %{
+             "pr-chat" => pr_metadata,
+             "null-pr-chat" => null_pr_metadata
+           }
+
+    history =
+      run(
+        c.conn,
+        "query($p: Uuid4!, $m: Uuid4!) { chatCatalogHistory(projectId: $p, installationId: $m) { entries { chatId payload } } }",
+        %{p: c.project.id, m: c.machine}
+      )
+
+    refute history["errors"]
+
+    assert Map.new(history["data"]["chatCatalogHistory"]["entries"], fn entry ->
+             {entry["chatId"], entry["payload"]["metadata"]}
+           end) == %{
+             "pr-chat" => pr_metadata,
+             "null-pr-chat" => null_pr_metadata
+           }
+  end
+
   test "legacy deleteTask mutation clears catalog associations without deleting the chat", c do
     {:ok, task} = Tasks.insert(c.user.id, c.project.id, %{title: "Delete me"})
     history = %{user_id: c.user.id, project_id: c.project.id, task_id: task.id}
